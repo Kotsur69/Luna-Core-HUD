@@ -9,10 +9,13 @@
 //                    one that has no usefulness score yet.
 //   healthLine       "Memory health 78/100 - ..." on top of the list of all
 //                    memories, every part in words.
-//   conflictEntry    two memories that contradict each other: keep A, keep B
-//                    or keep both. The loser is superseded, never deleted.
+//   conflictEntry    two memories that contradict each other, or two confirmed
+//                    ones that say nearly the same: keep A, keep B, keep both
+//                    or merge (the inbox edit form, prefilled). The loser, or
+//                    both merged ones, are superseded, never deleted.
 //   memoriesPanel    the "All memories" list of one project, its Scan button
-//                    and the scan's progress, archived memories with Restore.
+//                    and the scan's progress, archived memories with Restore,
+//                    and a History expander per memory (memoryhistory.js).
 //
 // Memory text is free text from a model: textContent only, never markup.
 // ============================================================================
@@ -20,6 +23,7 @@
 'use strict';
 
 import { t } from './util.js';
+import { historyBlock } from './memoryhistory.js';
 
 /** Characters of a body shown in a list. */
 const PREVIEW_CHARS = 280;
@@ -132,25 +136,46 @@ function conflictSide(label, item) {
   return box;
 }
 
+/** Why a pair is listed, in words: the scan's reason, the cheap check, or near-duplicates. */
+export function pairWhy(item) {
+  if (item.source === 'duplicate') return t('mem.brain.dup.why');
+  if (item.source === 'scan') return item.note ? t('mem.brain.conflict.scanWhy', { note: item.note }) : t('mem.brain.conflict.scan');
+  return t('mem.brain.conflict.check');
+}
+
+/** The text a merge starts from: A's title, and both bodies joined. */
+export function mergeDraft(item) {
+  return { title: item.a.title, body: `${item.a.body}\n\n${item.b.body}` };
+}
+
 /**
- * Two memories that contradict each other.
- * @param {object} item a conflict of memory:inbox ({id, source, note, a, b})
- * @param {{off: boolean, error: string|null, onKeep: (keep: 'a'|'b'|'both') => void}} ctx
- *   error = an i18n key of the last failed action, or null
+ * Two memories that contradict each other, or say nearly the same (source 'duplicate').
+ * @param {object} item a pair of memory:inbox's conflicts ({id, source, note, a, b})
+ * @param {{off: boolean, error: string|null, onKeep: (keep: 'a'|'b'|'both') => void,
+ *   onMerge?: () => void, form?: HTMLElement|null}} ctx
+ *   error = an i18n key of the last failed action, or null; form = the open merge
+ *   draft (the inbox edit form), shown instead of the buttons
  */
-export function conflictEntry(item, { off, error, onKeep }) {
-  const card = el('li', 'mem-inbox__item mem-brain__conflict');
+export function conflictEntry(item, { off, error, onKeep, onMerge = null, form = null }) {
+  const duplicate = item.source === 'duplicate';
+  const card = el('li', `mem-inbox__item ${duplicate ? 'mem-brain__duplicate' : 'mem-brain__conflict'}`);
   card.dataset.key = item.id;
-  card.append(el('h3', 'mem-inbox__title', t('mem.brain.conflict.title')));
-  const why = item.source === 'scan' ? (item.note ? t('mem.brain.conflict.scanWhy', { note: item.note }) : t('mem.brain.conflict.scan')) : t('mem.brain.conflict.check');
-  card.append(el('p', 'mem-inbox__note mem-inbox__note--warn', why), conflictSide('A', item.a), conflictSide('B', item.b), el('p', 'hint', t('mem.brain.conflict.hint')));
-  const actions = el('div', 'mem-inbox__actions');
-  const keepA = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepA'), () => onKeep('a'));
-  const keepB = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepB'), () => onKeep('b'));
-  const keepBoth = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepBoth'), () => onKeep('both'));
-  for (const b of [keepA, keepB, keepBoth]) b.disabled = off;
-  actions.append(keepA, keepB, keepBoth);
-  card.append(actions);
+  card.append(el('h3', 'mem-inbox__title', t(duplicate ? 'mem.brain.dup.title' : 'mem.brain.conflict.title')));
+  card.append(el('p', duplicate ? 'mem-inbox__note' : 'mem-inbox__note mem-inbox__note--warn', pairWhy(item)), conflictSide('A', item.a), conflictSide('B', item.b));
+  card.append(el('p', 'hint', t(duplicate ? 'mem.brain.dup.hint' : 'mem.brain.conflict.hint')));
+  if (form) {
+    card.append(el('p', 'hint', t('mem.brain.merge.formHint')), form);
+  } else {
+    const actions = el('div', 'mem-inbox__actions');
+    const keepA = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepA'), () => onKeep('a'));
+    const keepB = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepB'), () => onKeep('b'));
+    const keepBoth = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepBoth'), () => onKeep('both'));
+    const merge = onMerge ? button('port-btn mem-inbox__btn', t('mem.brain.merge'), onMerge) : null;
+    const buttons = [keepA, keepB, keepBoth, ...(merge ? [merge] : [])];
+    for (const b of buttons) b.disabled = off;
+    actions.append(...buttons);
+    card.append(actions);
+  }
   if (error) {
     const err = el('p', 'hint is-fail', t(error));
     err.setAttribute('role', 'alert');
@@ -175,6 +200,8 @@ function memoryItem(item, { off, error, onRestore }) {
     actions.append(restore);
     card.append(actions);
   }
+  // Where it came from and what happened to it, read only when opened.
+  card.append(historyBlock(item.key));
   const problem = error(item.key);
   if (problem) {
     const err = el('p', 'hint is-fail', t(problem));

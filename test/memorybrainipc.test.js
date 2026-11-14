@@ -328,3 +328,173 @@ test('the score and health strings exist in Polish and English, and the inbox ch
   // The wiring hands the log reads and the project folders to the list of all memories.
   assert.match(read('src/main.js'), /registerMemoryBrainIpc\(\{[\s\S]*?read: \(\) => memoryLogOf\(\)\.read\(\)[\s\S]*?roots: memoryRoots,\s*\}\);/);
 });
+
+// ---- merge and the History expander (memory:merge, memory:provenance) ------------------
+
+const { MAX_CHAIN_DEPTH, sourceOf } = require('../src/memoryprovenance.js');
+
+function withLog(t, records, events = []) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-brainipc-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  for (const r of records) writeRecord(dir, r);
+  const handlers = {};
+  const added = [];
+  let changed = 0;
+  registerMemoryBrainIpc({
+    ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) },
+    dir: () => dir,
+    scanner: { start: () => ({ ok: true }), status: () => ({}) },
+    onChanged: () => changed++,
+    now: () => NOW,
+    log: { add: (e) => added.push(e), read: () => events },
+  });
+  return { invoke: (channel, arg) => handlers[channel]({}, arg), added, changed: () => changed, stored: () => Object.fromEntries(scan(dir).records) };
+}
+
+const keyIn = (id) => `${PROJECT}/${id}`;
+
+test('memory:merge validates its payload, then writes one memory superseding both', (t) => {
+  const s = withLog(t, [rec('ci-first', { title: 'Run npm ci in package worktrees before the tests' }), rec('ci-before', { title: 'Run npm ci in package worktrees before tests' })]);
+  const a = keyIn('ci-before');
+  const b = keyIn('ci-first');
+  assert.deepEqual(s.invoke('memory:merge', null), { ok: false, reason: 'bad-request' });
+  assert.deepEqual(s.invoke('memory:merge', [a, b]), { ok: false, reason: 'bad-request' });
+  assert.deepEqual(s.invoke('memory:merge', { a: '../x', b, title: 'T', body: 'B' }), { ok: false, reason: 'bad-key' });
+  assert.deepEqual(s.invoke('memory:merge', { a, b: 'x'.repeat(500), title: 'T', body: 'B' }), { ok: false, reason: 'bad-key' });
+  assert.deepEqual(s.invoke('memory:merge', { a, b, title: { x: 1 }, body: 'B' }), { ok: false, reason: 'bad-edits' });
+  assert.deepEqual(s.invoke('memory:merge', { a, b, title: 'T', body: 'x'.repeat(20000) }), { ok: false, reason: 'bad-edits' });
+  assert.equal(s.changed(), 0);
+
+  const res = s.invoke('memory:merge', { a, b, title: 'Run npm ci first', body: 'Both, joined.' });
+  assert.deepEqual(res, { ok: true, key: keyIn('run-npm-ci-first'), superseded: [a, b] });
+  assert.equal(s.changed(), 1);
+  assert.deepEqual(s.stored()[res.key].supersedes, ['ci-before', 'ci-first']);
+  assert.ok(s.stored()[a] && s.stored()[b], 'the originals stay');
+  assert.deepEqual(s.added.map((e) => e.ev), ['merged', 'superseded', 'superseded']);
+});
+
+test('memory:provenance: source, the chain both ways with its depth cap, links and this PC log', (t) => {
+  // c0 supersedes c1, which supersedes c2 ... c7 supersedes a file that is gone.
+  const chain = Array.from({ length: 8 }, (_, i) => rec(`c${i}`, { title: `Chain ${i}`, supersedes: [i < 7 ? `c${i + 1}` : 'gone-one'] }));
+  const source = 'captured from session abcd1234 on WORKPC, read 2 outside source(s), suggested global';
+  const s = withLog(
+    t,
+    [
+      ...chain.slice(1),
+      { ...chain[0], source, links: ['note', 'missing-link'], conflicts: ['note'], last_verified: '2026-11-02', last_used: '2026-11-10', usefulness: 70, usefulness_note: 'Saves a red run.' },
+      rec('note', { title: 'A linked note' }),
+      rec('newer', { title: 'Newer, waiting', confidence: 'observed', supersedes: ['c0'] }),
+    ],
+    [
+      { at: NOW - 5000, ev: 'proposed', key: keyIn('c0'), type: 'gotcha' },
+      { at: NOW - 4000, ev: 'approved', key: keyIn('c0'), type: 'gotcha' },
+      { at: NOW - 3000, ev: 'search', project: PROJECT, hits: [keyIn('c0'), keyIn('note')] },
+      { at: NOW - 2500, ev: 'get', key: keyIn('c0') },
+      { at: NOW - 2000, ev: 'conflict', key: keyIn('note'), other: keyIn('c0'), note: 'They disagree.' },
+      { at: NOW - 1000, ev: 'merged', key: keyIn('later'), type: 'gotcha', from: [keyIn('c0'), keyIn('note')] },
+      { at: NOW - 500, ev: 'approved', key: keyIn('note'), type: 'gotcha' },
+    ],
+  );
+
+  const p = s.invoke('memory:provenance', keyIn('c0'));
+
+  assert.equal(p.ok, true);
+  assert.equal(p.title, 'Chain 0');
+  assert.deepEqual(p.source, { text: source, outside: 2, suggestedGlobal: true, autoAccepted: false, kind: 'session', ref: 'abcd1234', machine: 'WORKPC' });
+  assert.equal(p.last_verified, '2026-11-02');
+  assert.equal(p.last_used, '2026-11-10');
+  assert.equal(p.usefulness_note, 'Saves a red run.');
+  // Down: c1 ... c5, MAX_CHAIN_DEPTH levels, then cut.
+  const depth = (nodes) => (nodes.length ? 1 + depth(nodes[0].children) : 0);
+  assert.equal(MAX_CHAIN_DEPTH, 5);
+  assert.equal(depth(p.supersedes.nodes), MAX_CHAIN_DEPTH);
+  assert.equal(p.supersedes.nodes[0].title, 'Chain 1');
+  assert.equal(p.supersedes.cut, true);
+  // Up: the waiting memory that names it, marked as waiting.
+  assert.deepEqual(p.supersededBy, { nodes: [{ key: keyIn('newer'), id: 'newer', title: 'Newer, waiting', confirmed: false, children: [] }], cut: false });
+  assert.deepEqual(p.links, [
+    { id: 'note', key: keyIn('note'), title: 'A linked note' },
+    { id: 'missing-link', key: keyIn('missing-link'), title: null },
+  ]);
+  assert.deepEqual(p.conflicts.map((r) => r.title), ['A linked note']);
+  assert.deepEqual(p.compatible, []);
+  assert.deepEqual(
+    p.timeline.events.map((e) => [e.ev, e.other || e.into || null]),
+    [
+      ['proposed', null],
+      ['approved', null],
+      ['conflict', keyIn('note')],
+      ['merged', keyIn('later')],
+    ],
+  );
+  assert.deepEqual(p.timeline.reads, { found: 1, opened: 1, last: NOW - 2500 });
+  assert.equal(s.changed(), 0, 'read only');
+
+  // From the middle of the chain: both directions at once, a missing file without a title.
+  const mid = s.invoke('memory:provenance', keyIn('c6'));
+  assert.deepEqual(mid.supersedes.nodes.map((n) => [n.id, n.title]), [['c7', 'Chain 7']]);
+  assert.deepEqual(mid.supersedes.nodes[0].children.map((n) => [n.id, n.title, n.confirmed]), [['gone-one', null, null]]);
+  assert.equal(mid.supersededBy.nodes[0].id, 'c5');
+  assert.equal(depth(mid.supersededBy.nodes), MAX_CHAIN_DEPTH);
+  assert.equal(mid.supersededBy.cut, true, 'c0 and newer are past the cap');
+  assert.equal(mid.source.kind, null, 'no source: written by hand');
+});
+
+test('memory:provenance rejects bad keys and names an unknown memory', (t) => {
+  const s = withLog(t, [rec('a')]);
+  for (const bad of [undefined, 7, { key: keyIn('a') }, '../../etc/passwd', 'C:\\Windows', 'x'.repeat(500), `${PROJECT}/A B`]) {
+    assert.deepEqual(s.invoke('memory:provenance', bad), { ok: false, reason: 'bad-key' }, String(bad));
+  }
+  assert.deepEqual(s.invoke('memory:provenance', keyIn('nothing')), { ok: false, reason: 'not-found' });
+});
+
+test('provenance reads other sources apart: God Mode runs, merges, auto-memory', () => {
+  const run = sourceOf('captured from God Mode run gm-42 on HOME-PC, auto-accepted');
+  assert.deepEqual([run.kind, run.ref, run.machine, run.autoAccepted], ['godmode', 'gm-42', 'HOME-PC', true]);
+  assert.deepEqual([sourceOf('proposed in session s3 on LAPTOP').kind, sourceOf('proposed in session s3 on LAPTOP').machine], ['session', 'LAPTOP']);
+  assert.equal(sourceOf('merged by hand from a and b').ref, 'a, b');
+  assert.equal(sourceOf('claude auto-memory, session 1234').kind, 'auto-memory');
+  assert.deepEqual([sourceOf('typed in by hand').kind, sourceOf('typed in by hand').text], ['other', 'typed in by hand']);
+});
+
+test('preload and the window wire merge and History through one narrow function each', () => {
+  const preload = read('src/preload.js');
+  for (const [fn, channel] of [
+    ['memoryMerge', 'memory:merge'],
+    ['memoryProvenance', 'memory:provenance'],
+  ]) {
+    assert.match(preload, new RegExp(`\\b${fn}:`), `${fn} is missing in preload`);
+    assert.ok(preload.includes(`ipcRenderer.invoke('${channel}'`), `${channel} is missing in preload`);
+  }
+  assert.ok(read('src/renderer/modules/memoryinbox.js').includes("'memoryMerge'"));
+  const history = read('src/renderer/modules/memoryhistory.js');
+  assert.match(history, /window\.lunacore\.memoryProvenance\(key\)/);
+  assert.doesNotMatch(history, /innerHTML|outerHTML|insertAdjacentHTML/);
+  assert.match(read('src/renderer/modules/memorybrain.js'), /historyBlock\(item\.key\)/);
+});
+
+test('the memory window modules parse as ES modules', (t) => {
+  const { spawnSync } = require('child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-brain-syntax-'));
+  t.after(() => fs.promises.rm(tmp, { recursive: true, force: true, maxRetries: 5 }));
+  for (const name of ['memoryhistory', 'memorybrain', 'memoryinbox']) {
+    const file = path.join(tmp, `${name}.mjs`);
+    fs.writeFileSync(file, read(`src/renderer/modules/${name}.js`));
+    const res = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+    assert.equal(res.status, 0, `${name}.js: ${res.stderr}`);
+  }
+});
+
+test('every merge and History string exists in Polish and English, inside the mem.brain block', () => {
+  const lines = read('src/renderer/i18n.js').split('\n');
+  const files = ['memoryhistory.js', 'memorybrain.js'].map((f) => read(`src/renderer/modules/${f}`));
+  const keys = new Set(files.flatMap((text) => [...text.matchAll(/'(mem\.brain\.(?:history|dup|merge)[\w.]*)'/g)].map((m) => m[1])));
+  assert.ok(keys.size > 40, String(keys.size));
+  for (const key of keys) {
+    const at = lines.map((l, i) => (l.includes(`'${key}':`) ? i : -1)).filter((i) => i >= 0);
+    assert.equal(at.length, 2, `${key} must exist once in pl and once in en`);
+    assert.doesNotMatch(lines[at[0]], /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, `${key}: Polish UI strings carry no diacritics`);
+    // Next to the other mem.brain strings, not at the end of a language block.
+    for (const i of at) assert.match(lines[i - 1] + lines[i + 1], /'mem\.brain\./, `${key} sits outside the mem.brain block`);
+  }
+});

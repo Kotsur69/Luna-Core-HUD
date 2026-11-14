@@ -15,22 +15,31 @@
 //                                       settles a listed conflict (src/memoryconflict.js)
 //   memory:restore  (key)            -> {ok, key} | {ok:false, reason}
 //                                       brings an archived memory back (src/memorydecay.js)
+//   memory:merge    ({a, b, title, body}) -> {ok, key, superseded} | {ok:false, reason}
+//                                       merges a listed pair into one new confirmed memory
+//                                       (src/memoryconflict.js mergePair)
+//   memory:provenance (key)          -> {ok, ...} | {ok:false, reason}   read only: the History
+//                                       expander (src/memoryprovenance.js); the timeline is this PC's log
 //
 // The renderer is untrusted: every payload is checked here, keys by
-// splitKey() (never a path), a project by validProject(). A conflict can be
-// settled only while it is listed, and only an archived memory can be restored.
+// splitKey() (never a path), a project by validProject(). A conflict or a
+// merge suggestion can be settled only while it is listed, and only an
+// archived memory can be restored.
 // ============================================================================
 
 'use strict';
 
-const { validProject, splitKey, scoreOf, finalScore, byFinalScore, DATE_RE } = require('./memoryrecord');
+const { validProject, splitKey, scoreOf, finalScore, byFinalScore, DATE_RE, MAX_TITLE, MAX_BODY } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { supersededKeys, reviewList } = require('./memoryreview');
-const { resolveConflict, findConflicts, KEEP } = require('./memoryconflict');
+const { resolveConflict, findConflicts, mergePair, KEEP } = require('./memoryconflict');
+const { provenance } = require('./memoryprovenance');
 const { restore } = require('./memorydecay');
 const { recentUsage } = require('./memoryuse');
 
 const MAX_KEY_CHARS = 200;
+/** Merge text longer than this is refused before it is read; checkRecord applies the real limits. */
+const MERGE_LIMITS = Object.freeze({ title: MAX_TITLE * 2, body: MAX_BODY * 2 });
 const MAX_PROJECT_CHARS = 110;
 /** Memories one listing returns; the total says how many the project has. */
 const MAX_LIST_ITEMS = 300;
@@ -246,6 +255,30 @@ function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onC
     const key = keyArg(rawKey);
     if (!key) return { ok: false, reason: 'bad-key' };
     return guarded('restore', () => restore(dir(), key, isoDate(now())));
+  });
+
+  ipcMain.handle('memory:merge', (_event, req) => {
+    if (!isObject(req)) return { ok: false, reason: 'bad-request' };
+    const a = keyArg(req.a);
+    const b = keyArg(req.b);
+    if (!a || !b) return { ok: false, reason: 'bad-key' };
+    const text = (field) => (typeof req[field] === 'string' && req[field].length <= MERGE_LIMITS[field] ? req[field] : null);
+    const title = text('title');
+    const body = text('body');
+    if (title === null || body === null) return { ok: false, reason: 'bad-edits' };
+    return guarded('merge', () => mergePair(dir(), { a, b, title, body }, isoDate(now()), { log }));
+  });
+
+  // Read only: no onChanged, nothing is written.
+  ipcMain.handle('memory:provenance', (_event, rawKey) => {
+    const key = keyArg(rawKey);
+    if (!key) return { ok: false, reason: 'bad-key' };
+    try {
+      return provenance(scan(dir()).records, events(), key);
+    } catch (err) {
+      console.error('[memory] provenance failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
   });
 }
 

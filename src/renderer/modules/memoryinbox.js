@@ -26,7 +26,8 @@ import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
 import { COMMANDS, keyCommand, typingIn, moveSelection, keepSelection } from './memoryinboxkeys.js';
 import { autoSection } from './memoryautopanel.js';
-import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey } from './memorybrain.js';
+import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft } from './memorybrain.js';
+import { clearHistory } from './memoryhistory.js';
 
 /** Characters of a body shown before "show all". */
 export const PREVIEW_CHARS = 320;
@@ -95,7 +96,12 @@ function field(labelKey, control) {
   return label;
 }
 
-function editForm(item) {
+/**
+ * The edit form of a waiting entry, or of a merge draft (conflictItem).
+ * @param {{key: string, title: string, body: string}} item key = what busy, failed and editing name
+ * @param {(title: string, body: string) => Promise<boolean>} [onSave] defaults to correcting the entry
+ */
+function editForm(item, onSave = (title, body) => act(item.key, 'memoryInboxUpdate', item.key, { title, body })) {
   const form = el('form', 'mem-inbox__form');
   const title = el('input', 'mem-inbox__input');
   title.type = 'text';
@@ -120,7 +126,7 @@ function editForm(item) {
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     save.disabled = true;
-    act(item.key, 'memoryInboxUpdate', item.key, { title: title.value, body: body.value }).then((ok) => {
+    onSave(title.value, body.value).then((ok) => {
       if (ok) {
         editing = null;
         load(item.key);
@@ -411,12 +417,27 @@ function refocus(list, key, index, fallback) {
   else if (fallback) fallback.focus();
 }
 
-/** Two memories that contradict each other, as an inbox entry (memorybrain.js). */
+/**
+ * Two memories that contradict each other, or a merge suggestion, as an inbox
+ * entry (memorybrain.js). Merge opens the edit form on the pair (editing = its
+ * id), prefilled with A's title and both bodies; saving writes one new memory.
+ */
 function conflictItem(pair) {
+  const form =
+    editing === pair.id
+      ? editForm({ key: pair.id, ...mergeDraft(pair) }, (title, body) => act(pair.id, 'memoryMerge', pair.a.key, pair.b.key, { title, body }))
+      : null;
   return conflictEntry(pair, {
     off: busy.has(pair.id),
-    error: failed.has(pair.id) ? reasonKey(failed.get(pair.id)) : null,
+    // An open form shows its own refusal.
+    error: !form && failed.has(pair.id) ? reasonKey(failed.get(pair.id)) : null,
     onKeep: (keep) => decide(pair.id, 'memoryConflictResolve', pair.a.key, pair.b.key, keep),
+    onMerge: () => {
+      if (editing !== null) return;
+      editing = pair.id;
+      load();
+    },
+    form,
   });
 }
 
@@ -426,7 +447,8 @@ function listView(res, review, conflicts, graves) {
   const shown = tab === 'review' ? review : tab === 'graveyard' ? graves : res;
   // An entry that left the list (decided on another PC) takes its open draft or question with it:
   // a key that is still set would block every later repaint.
-  const listed = new Set(shown.items.map((item) => item.key));
+  // A merge draft is open on a pair: its id counts as listed while the pair is.
+  const listed = new Set([...shown.items.map((item) => item.key), ...(tab === 'inbox' ? conflicts.items.map((pair) => pair.id) : [])]);
   if (editing !== null && !listed.has(editing)) editing = null;
   if (confirming !== null && !listed.has(confirming)) confirming = null;
   // A decided entry hands the keyboard selection to the one that took its place.
@@ -746,6 +768,7 @@ export async function openMemoryInbox() {
         autoError = null;
         scanError = null;
         failed.clear();
+        clearHistory();
       },
     });
   }

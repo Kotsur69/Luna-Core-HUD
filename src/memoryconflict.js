@@ -21,15 +21,26 @@
 //   keep both  A's `compatible` keeps B's id: the pair is not shown again,
 //            by either way of finding it.
 //
+// Merge suggestions ride in the same list: two CONFIRMED memories of one
+// project that say nearly the same thing (memoryextract.nearDuplicate), not
+// already a conflict and not marked compatible. They take the same three
+// choices, and both kinds of pair take a fourth:
+//
+//   merge    Mati writes one memory from the two (the inbox edit form,
+//            prefilled). It is saved confirmed (he wrote it) with both ids in
+//            its `supersedes`; both originals stay on disk as history
+//            (decision 12). The log gets `merged`, and `superseded` per original.
+//
 // Only a pair that is listed right now can be settled, so the renderer cannot
 // use this to supersede an arbitrary memory.
 // ============================================================================
 
 'use strict';
 
-const { splitKey, scoreOf } = require('./memoryrecord');
+const { splitKey, scoreOf, checkRecord, keyOf } = require('./memoryrecord');
 const { scan, writeRecord } = require('./memorystore');
 const { supersededKeys } = require('./memoryreview');
+const { duplicateWords, sameWords, idFor } = require('./memoryextract');
 
 const KEEP = ['a', 'b', 'both'];
 /** Pairs one listing returns; the total says how many there are. */
@@ -113,6 +124,40 @@ function findConflicts(records) {
   return [...pairs.values()].sort((x, y) => x.id.localeCompare(y.id));
 }
 
+/**
+ * Merge suggestions: near-duplicate pairs of confirmed memories of one project.
+ * A pair marked compatible ('keep both') never comes back.
+ * @param {[string, object][]} records
+ * @returns {{id: string, a: string, b: string, source: 'duplicate'}[]} by id; a < b
+ */
+function findDuplicates(records) {
+  const byProject = new Map();
+  for (const [key, r] of activeRecords(records)) {
+    if (r.confidence !== 'confirmed') continue;
+    byProject.set(r.project, [...(byProject.get(r.project) || []), { key, r, words: duplicateWords(r) }]);
+  }
+  const pairs = [];
+  for (const list of byProject.values()) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const [x, y] = [list[i], list[j]];
+        if (compatiblePair(x.r, y.r) || !sameWords(x.words, y.words)) continue;
+        const id = pairId(x.key, y.key);
+        const [a, b] = id.split('|');
+        pairs.push({ id, a, b, source: 'duplicate' });
+      }
+    }
+  }
+  return pairs.sort((x, y) => x.id.localeCompare(y.id));
+}
+
+/** Every pair the inbox lists: conflicts first, then the merge suggestions that are no conflict. */
+function findPairs(records) {
+  const conflicts = findConflicts(records);
+  const known = new Set(conflicts.map((p) => p.id));
+  return [...conflicts, ...findDuplicates(records).filter((p) => !known.has(p.id))];
+}
+
 /** The scan's reason per pair, newest last wins, from the memory log. */
 function conflictNotes(events) {
   const notes = new Map();
@@ -125,7 +170,7 @@ function side(key, r) {
 }
 
 /**
- * The inbox's conflict entries.
+ * The inbox's conflict entries and merge suggestions (source 'duplicate').
  * @param {[string, object][]} records
  * @param {{events?: object[]}} [opts] events = the memory log (the scan's reasons)
  * @returns {{items: object[], total: number}}
@@ -133,7 +178,7 @@ function side(key, r) {
 function listConflicts(records, { events = [] } = {}) {
   const byKey = new Map(records);
   const notes = conflictNotes(events);
-  const pairs = findConflicts(records);
+  const pairs = findPairs(records);
   const items = pairs.slice(0, MAX_ITEMS).map((p) => ({
     id: p.id,
     source: p.source,
@@ -199,7 +244,7 @@ function resolveConflict(dir, { a, b, keep }, today, { log = null } = {}) {
   if (!splitKey(a) || !splitKey(b) || a === b) return { ok: false, reason: 'bad-key' };
   if (!KEEP.includes(keep)) return { ok: false, reason: 'bad-keep' };
   const { records } = scan(dir);
-  if (!findConflicts(records).some((p) => p.id === pairId(a, b))) return { ok: false, reason: 'not-conflict' };
+  if (!findPairs(records).some((p) => p.id === pairId(a, b))) return { ok: false, reason: 'not-conflict' };
   const byKey = new Map(records);
   const ra = byKey.get(a);
   const rb = byKey.get(b);
@@ -222,8 +267,68 @@ function resolveConflict(dir, { a, b, keep }, today, { log = null } = {}) {
   return { ok: true, kept: [winKey], superseded: loseKey };
 }
 
+/** The best usefulness score of the two, with its note and date, or nothing. */
+function bestScore(records) {
+  const best = records.filter((r) => Number.isInteger(r.usefulness)).sort((x, y) => y.usefulness - x.usefulness)[0];
+  if (!best) return {};
+  return {
+    usefulness: best.usefulness,
+    ...(best.usefulness_note ? { usefulness_note: best.usefulness_note } : {}),
+    ...(best.usefulness_at ? { usefulness_at: best.usefulness_at } : {}),
+  };
+}
+
+/**
+ * Merges one listed pair into a new memory Mati wrote: confirmed, superseding
+ * both. The originals are not touched: superseded, they are history.
+ * @param {string} dir
+ * @param {{a: string, b: string, title: unknown, body: unknown}} merge a and b are keys, as listed;
+ *   title and body are the edit form's text, checked by checkRecord like any record
+ * @param {string} today YYYY-MM-DD
+ * @param {{log?: {add: Function}}} [opts]
+ * @returns {{ok: true, key: string, superseded: string[]}|{ok: false, reason: string}}
+ */
+function mergePair(dir, { a, b, title, body }, today, { log = null } = {}) {
+  if (!splitKey(a) || !splitKey(b) || a === b) return { ok: false, reason: 'bad-key' };
+  const { records } = scan(dir);
+  if (!findPairs(records).some((p) => p.id === pairId(a, b))) return { ok: false, reason: 'not-conflict' };
+  const byKey = new Map(records);
+  const ra = byKey.get(a);
+  const rb = byKey.get(b);
+  // Every file of the project counts as taken, the superseded ones too: they stay on disk.
+  const taken = new Set(records.map(([k]) => k));
+  const id = (typeof title === 'string' && idFor(title, ra.project, taken)) || idFor(`${ra.id} merged`, ra.project, taken);
+  if (!id) return { ok: false, reason: 'id-taken' };
+  const res = checkRecord({
+    id,
+    type: ra.type,
+    project: ra.project,
+    ...(ra.area ? { area: ra.area } : {}),
+    title,
+    created: today,
+    last_verified: today,
+    source: `merged by hand from ${ra.id} and ${rb.id}`,
+    confidence: 'confirmed',
+    ...bestScore([ra, rb]),
+    supersedes: [ra.id, rb.id],
+    links: [...ra.links, ...rb.links].filter((x) => x !== ra.id && x !== rb.id),
+    body,
+  });
+  if (!res.record) return { ok: false, reason: res.error };
+  writeRecord(dir, res.record);
+  const key = keyOf(res.record);
+  if (log) {
+    log.add({ ev: 'merged', key, type: res.record.type, title: res.record.title, from: [a, b] });
+    for (const [k, r] of [[a, ra], [b, rb]]) log.add({ ev: 'superseded', key: k, type: r.type, title: r.title });
+  }
+  return { ok: true, key, superseded: [a, b] };
+}
+
 module.exports = {
   findConflicts,
+  findDuplicates,
+  findPairs,
+  mergePair,
   listConflicts,
   conflictCount,
   markConflicts,

@@ -10,6 +10,8 @@
 //   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?}
 //   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted" | "superseded" | "restored", "key", "type", "title"?, "usefulness"?}
 //                                  restored = brought back from the graveyard into the inbox (src/memorygraveyard.js)
+//   {"at": <ms>, "ev": "merged",   "key", "type", "title"?, "from": ["<key>", ...]}   Mati merged a pair into `key`
+//                                  (src/memoryconflict.js mergePair); each original also gets a `superseded` line
 //   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js);
 //                                  type = SCORE_SWITCH: the 'auto-save memories scored 90+' switch did
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
@@ -58,6 +60,8 @@ const MAX_MISSING = 20;
 const MAX_PATH = 200;
 const MAX_REASON = 40;
 const MAX_REJECTED_TITLES = 20;
+/** A merge joins one pair; a hand-edited line may name a few more, never many. */
+const MAX_MERGED_FROM = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The `type` of an `auto-off` line about the score switch (src/memoryautoaccept.js), not a memory type. */
 const SCORE_SWITCH = 'score';
@@ -138,6 +142,12 @@ function cleanEvent(raw) {
     if (!key || !type) return null;
     const title = line(raw.title, MAX_TITLE);
     return { at, ev, key, type, ...(title ? { title } : {}), ...scored(raw.usefulness) };
+  }
+  if (ev === 'merged') {
+    const from = Array.isArray(raw.from) ? [...new Set(raw.from.filter((k) => splitKey(k) && k !== key))].slice(0, MAX_MERGED_FROM) : [];
+    if (!key || !type || !from.length) return null;
+    const title = line(raw.title, MAX_TITLE);
+    return { at, ev, key, type, ...(title ? { title } : {}), from };
   }
   if (ev === 'search') {
     const hits = Array.isArray(raw.hits) ? raw.hits.filter((k) => splitKey(k)).slice(0, MAX_HITS) : [];
@@ -514,7 +524,8 @@ function memoryNotes({ records, events, since, project = null, label = '' }) {
   };
   for (const e of events) {
     if (e.at < since) continue;
-    if (e.ev === 'approved' || e.ev === 'auto-accepted') {
+    // A merge writes a new confirmed memory, as an approval does.
+    if (e.ev === 'approved' || e.ev === 'auto-accepted' || e.ev === 'merged') {
       add('confirmed', e.key, e);
       // Approving a memory that replaces others takes those off the card.
       const record = byKey.get(e.key);

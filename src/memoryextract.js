@@ -166,9 +166,20 @@ function jaccard(a, b) {
  * @param {{title: string, body: string}} b
  */
 function nearDuplicate(a, b) {
-  if (jaccard(wordsOf(a.title), wordsOf(b.title)) >= TITLE_DUPLICATE) return true;
-  return jaccard(wordsOf(`${a.title} ${a.body}`), wordsOf(`${b.title} ${b.body}`)) >= WHOLE_DUPLICATE;
+  return sameWords(duplicateWords(a), duplicateWords(b));
 }
+
+/**
+ * The word sets nearDuplicate compares, worked out once per memory: a caller
+ * that compares every pair of a project (memoryconflict.findDuplicates) cuts
+ * each text once, not once per pair.
+ * @param {{title: string, body: string}} record
+ * @returns {{title: Set<string>, whole: Set<string>}}
+ */
+const duplicateWords = (record) => ({ title: wordsOf(record.title), whole: wordsOf(`${record.title} ${record.body}`) });
+
+/** nearDuplicate over two duplicateWords() results. */
+const sameWords = (a, b) => jaccard(a.title, b.title) >= TITLE_DUPLICATE || jaccard(a.whole, b.whole) >= WHOLE_DUPLICATE;
 
 /**
  * What the digest is a digest of. A session is also asked for its "where we
@@ -368,6 +379,8 @@ module.exports = {
   candidatesFrom,
   idFor,
   nearDuplicate,
+  duplicateWords,
+  sameWords,
   wordsOf,
   outsideNote,
   withNote,
