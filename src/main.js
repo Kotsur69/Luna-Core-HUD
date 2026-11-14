@@ -1864,7 +1864,10 @@ function spawnInto(session, profile, launch = null) {
   session.watcher = isForeignCli ? null : new TranscriptWatcher(
     (metrics) => {
       // God Mode books its own worker tabs' tokens (orchestraUsage.js); other tabs are ignored there.
-      if (metrics && metrics.byModel) orchestraRuns.onSessionUsage(session.id, metrics.byModel);
+      // The context fill feeds a run's opt-in context guard (orchestraContextGuard.js).
+      if (metrics && metrics.byModel) {
+        orchestraRuns.onSessionUsage(session.id, metrics.byModel, { tokens: metrics.tokens, limit: metrics.limit });
+      }
       send('metrics:context', { sessionId: session.id, metrics });
     },
     {

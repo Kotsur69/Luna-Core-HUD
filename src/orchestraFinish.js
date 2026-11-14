@@ -348,6 +348,12 @@ async function finishPackage(pkg, deps = {}) {
     }
   }
 
+  // An A/B variant (orchestraVariants.js) stops here: verified, not pushed.
+  // Only the critic's pick is pushed, by its group package.
+  if (pkg.skipPush === true) {
+    return { ok: true, headSha: await headSha(pkg.root, execImpl), files: await changedFiles(pkg, execImpl), pushed: false };
+  }
+
   const push = await pushBranch();
   if (!push.ok) {
     // Every remote: line (GitHub names rule, file and commit there), redacted.

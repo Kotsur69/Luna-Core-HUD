@@ -34,6 +34,10 @@ const { normalizeStoredGuard } = require('./orchestraHybridGuard');
 const { storedWorkers } = require('./orchestraWorkers');
 const { normalizeStoredHybrid, normalizeStoredProfileId } = require('./orchestraHybrid');
 const { normalizeStoredFreeReview } = require('./orchestraFreeReview');
+// The three opt-in God Mode evolutions: A/B builds, self-heal, context guard.
+const { normalizeStoredAb, isParked, isUndecidedGroup } = require('./orchestraVariants');
+const { normalizeHeals } = require('./orchestraHeal');
+const { normalizeContextResume } = require('./orchestraContextGuard');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -173,10 +177,14 @@ const RESUME_TEXT = 'Continue the task you were working on - the usage limit has
  * @param {number} maxParallel
  */
 function readyToLaunch(packages, maxParallel) {
-  const free = maxParallel - packages.filter(isActive).length;
+  // A parked A/B variant (verified, waiting for its twin) holds no worker slot.
+  const free = maxParallel - packages.filter((p) => isActive(p) && !isParked(p)).length;
   if (free <= 0) return [];
   const pushed = new Set(packages.filter((p) => p.state === 'pushed').map((p) => p.id));
-  return packages.filter((p) => p.state === 'pending' && p.dependsOn.every((d) => pushed.has(d))).slice(0, free);
+  // An undecided A/B group never launches itself: its variants do (orchestraVariants.js).
+  return packages
+    .filter((p) => p.state === 'pending' && !isUndecidedGroup(p) && p.dependsOn.every((d) => pushed.has(d)))
+    .slice(0, free);
 }
 
 /**
@@ -258,6 +266,11 @@ const RUN_OPTION_FLAGS = ['sleepOnLimit', 'shutdownWhenDone'];
 // branches", orchestraFreeReview.js): an older run loads exactly as it was.
 const OPT_IN_FLAGS = ['freeReview'];
 const LIVE_OPTION_KEYS = [...RUN_OPTION_FLAGS, ...OPT_IN_FLAGS];
+// Fixed when the plan is made, from the God Mode settings (never a live
+// switch) and stored only while on: A/B builds (orchestraVariants.js),
+// self-healing workers (orchestraHeal.js), the context guard
+// (orchestraContextGuard.js). A plan made before them loads with all off.
+const PLAN_OPT_IN_FLAGS = ['abBuild', 'selfHeal', 'contextGuard'];
 
 /**
  * Run options with defaults; a legacy plan without them loads with every
@@ -272,6 +285,7 @@ function normalizeOptions(raw) {
   const out = { unattendedApprovalMin: valid ? Math.min(Math.round(min), MAX_APPROVAL_MIN) : DEFAULT_APPROVAL_MIN };
   for (const key of RUN_OPTION_FLAGS) out[key] = o[key] === true;
   for (const key of OPT_IN_FLAGS) if (o[key] === true) out[key] = true;
+  for (const key of PLAN_OPT_IN_FLAGS) if (o[key] === true) out[key] = true;
   // "Create a new release after finish": set at Approve only (with the merge
   // confirm), never a live switch. Absent means off, so older runs load as-is.
   if (o.releaseAfter === true) out.releaseAfter = true;
@@ -427,6 +441,8 @@ function liveOverlaps(packages) {
       const a = started[i];
       const b = started[j];
       if (a.dependsOn.includes(b.id) || b.dependsOn.includes(a.id)) continue;
+      // A/B twins build the same files on purpose; only one of them is kept.
+      if (a.abOf && a.abOf === b.abOf) continue;
       const bs = new Set(b.touched);
       const files = a.touched.filter((f) => bs.has(f));
       if (files.length) out.push({ a: a.id, b: b.id, files: files.slice(0, 20) });
@@ -789,6 +805,12 @@ function normalizePackage(raw) {
     ...(normalizeStoredGuard(raw.hybridGuard) ? { hybridGuard: normalizeStoredGuard(raw.hybridGuard) } : {}),
     // F6c/F6d: review result and hand-overs of a hybrid free package (the report shows them).
     ...(normalizeStoredHybrid(raw.hybrid) ? { hybrid: normalizeStoredHybrid(raw.hybrid) } : {}),
+    // A/B builds: a group's record, a variant's role and its parked build.
+    ...normalizeStoredAb(raw),
+    // Self-heal: the heal kinds already spent (one per kind, ever).
+    ...(normalizeHeals(raw.heals).length ? { heals: normalizeHeals(raw.heals) } : {}),
+    // Context guard: the next resume brief carries a progress summary.
+    ...(normalizeContextResume(raw.contextResume) ? { contextResume: normalizeContextResume(raw.contextResume) } : {}),
   };
 }
 
