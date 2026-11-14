@@ -7,7 +7,21 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildPrompt, candidatesFrom, nearDuplicate, outsideNote, sourceNotes, withoutSuggestedGlobal, MAX_CANDIDATES, USEFULNESS_FLOOR, LOW_USEFULNESS } = require('../src/memoryextract.js');
+const {
+  buildPrompt,
+  candidatesFrom,
+  nearDuplicate,
+  outsideNote,
+  sourceNotes,
+  withoutSuggestedGlobal,
+  captureScore,
+  scoreLane,
+  MAX_CANDIDATES,
+  AUTO_REJECT_BELOW,
+  AUTO_SAVE_FROM,
+  LOW_USEFULNESS,
+} = require('../src/memoryextract.js');
+const { finalScore } = require('../src/memoryrecord.js');
 
 const PROJECT = 'github.com/acme/hud';
 const CTX = { project: PROJECT, today: '2026-11-11', source: 'captured from session abc on PC1', existing: [] };
@@ -281,12 +295,12 @@ test('the usefulness score is kept, clamped, and left unknown when the model giv
   );
 });
 
-test(`a candidate scored under USEFULNESS_FLOOR (${USEFULNESS_FLOOR}) is dropped with its score and type`, () => {
+test(`a candidate scored under AUTO_REJECT_BELOW (${AUTO_REJECT_BELOW}) is set aside with its score and type`, () => {
   const { records, rejected } = candidatesFrom(
     {
       candidates: [
-        cand('Retry says busy after a sleep', { usefulness: USEFULNESS_FLOOR - 1 }),
-        cand('Package times out on battery power', { usefulness: USEFULNESS_FLOOR }),
+        cand('Retry says busy after a sleep', { usefulness: AUTO_REJECT_BELOW - 1 }),
+        cand('Package times out on battery power', { usefulness: AUTO_REJECT_BELOW }),
         cand('Release assets need dashes in the name', { usefulness: -20, type: 'how-to' }),
       ],
     },
@@ -295,12 +309,12 @@ test(`a candidate scored under USEFULNESS_FLOOR (${USEFULNESS_FLOOR}) is dropped
 
   assert.deepEqual(
     records.map((r) => [r.title, r.usefulness]),
-    [['Package times out on battery power', USEFULNESS_FLOOR]],
+    [['Package times out on battery power', AUTO_REJECT_BELOW]],
   );
   assert.deepEqual(
     rejected.map(({ record, ...rest }) => rest),
     [
-      { title: 'Retry says busy after a sleep', reason: LOW_USEFULNESS, type: 'gotcha', usefulness: USEFULNESS_FLOOR - 1 },
+      { title: 'Retry says busy after a sleep', reason: LOW_USEFULNESS, type: 'gotcha', usefulness: AUTO_REJECT_BELOW - 1 },
       { title: 'Release assets need dashes in the name', reason: LOW_USEFULNESS, type: 'how-to', usefulness: 0 },
     ],
   );
@@ -308,11 +322,53 @@ test(`a candidate scored under USEFULNESS_FLOOR (${USEFULNESS_FLOOR}) is dropped
   assert.deepEqual(
     rejected.map(({ record }) => [record.id, record.confidence, record.usefulness, record.body.length > 0]),
     [
-      ['retry-says-busy-after-a-sleep', 'observed', USEFULNESS_FLOOR - 1, true],
+      ['retry-says-busy-after-a-sleep', 'observed', AUTO_REJECT_BELOW - 1, true],
       ['release-assets-need-dashes-in-the-name', 'observed', 0, true],
     ],
   );
   assert.equal(LOW_USEFULNESS, 'low usefulness');
+});
+
+test('the score thresholds: under 50 graveyard, 50 to 89 inbox, 90 and up eligible for auto-save', () => {
+  assert.equal(AUTO_REJECT_BELOW, 50);
+  assert.equal(AUTO_SAVE_FROM, 90);
+  assert.deepEqual(
+    [null, 0, 40, 49, 50, 70, 89, 90, 95, 100].map(scoreLane),
+    ['inbox', 'graveyard', 'graveyard', 'graveyard', 'inbox', 'inbox', 'inbox', 'auto-save', 'auto-save', 'auto-save'],
+  );
+});
+
+test('the capture score is the usefulness part of the final score: an unread observed candidate has nothing else', () => {
+  const record = { usefulness: 95, confidence: 'observed' };
+  assert.equal(captureScore(record), 95);
+  assert.equal(captureScore(record), finalScore(record).parts.usefulness);
+  assert.equal(captureScore({ confidence: 'observed' }), null, 'no score stays unknown');
+});
+
+test('acceptance: 40 goes to the graveyard, 70 and 95 wait in the inbox as observed', () => {
+  const { records, rejected } = candidatesFrom(
+    {
+      candidates: [
+        cand('Retry says busy after a sleep', { usefulness: 40 }),
+        cand('Package times out on battery power', { usefulness: 70 }),
+        cand('Release assets need dashes in the name', { usefulness: 95 }),
+      ],
+    },
+    CTX,
+  );
+
+  assert.deepEqual(
+    rejected.map((r) => [r.title, r.reason, r.usefulness, Boolean(r.record)]),
+    [['Retry says busy after a sleep', LOW_USEFULNESS, 40, true]],
+  );
+  // The extractor never confirms: a 95 is only eligible, src/memoryautoaccept.js decides.
+  assert.deepEqual(
+    records.map((r) => [r.title, r.usefulness, r.confidence]),
+    [
+      ['Package times out on battery power', 70, 'observed'],
+      ['Release assets need dashes in the name', 95, 'observed'],
+    ],
+  );
 });
 
 test('a 0-1 fraction from the model counts as unknown instead of dropping the candidate', () => {
@@ -355,5 +411,7 @@ test('the prompt asks for a usefulness score judged by the keep rule, and names 
   assert.match(prompt, /"usefulness":75/);
   assert.match(prompt, /- usefulness: a whole number 0-100/);
   assert.match(prompt, /applicable \(would it change what the assistant/);
-  assert.match(prompt, new RegExp(`Under ${USEFULNESS_FLOOR} is dropped`));
+  assert.match(prompt, new RegExp(`Under ${AUTO_REJECT_BELOW} is set aside unread`));
+  // The auto-save bar is not the model's business: naming it would invite inflated scores.
+  assert.doesNotMatch(prompt, new RegExp(`\b${AUTO_SAVE_FROM}\b`));
 });

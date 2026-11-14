@@ -33,10 +33,20 @@
 // the file is deleted on every PC, the title goes back to the extractor as
 // "not wanted").
 //
+// One more switch, 'Auto-save memories scored 90+' (SCORE_SWITCH), also OFF
+// by default. With it on, a candidate whose capture score reaches
+// AUTO_SAVE_FROM (src/memoryextract.js, where every score threshold lives) is
+// treated as if its type were switched on: everything else above still holds
+// (this PC's evidence for the type, its rate, the exclusions), and it lands
+// the same way (confirmed, labelled, `auto-accepted` line, Undo). The switch
+// keeps its own numbers too (scoreStats: the auto-accepts scored 90+ and how
+// many were undone) and turns itself off under AUTO_OFF_RATE, like a type.
+//
 // The switches sync like the per-project memory switch (src/memoryprojects.js):
 //
-//   memory-autoaccept.local.json = {types: ["gotcha", ...]}
+//   memory-autoaccept.local.json = {types: ["gotcha", ...], score: true|false}
 //   config-scope unit              memory-auto:<type> = {on: true}
+//                                  memory-auto:score  = {on: true}
 // ============================================================================
 
 'use strict';
@@ -46,8 +56,8 @@ const path = require('path');
 const { readDoc, writeAtomic } = require('./projectsync');
 const { GLOBAL, checkRecord, splitKey } = require('./memoryrecord');
 const { scan, removeRecord } = require('./memorystore');
-const { CANDIDATE_TYPES, nearDuplicate, sourceNotes, withNote } = require('./memoryextract');
-const { DAY_MS } = require('./memorylog');
+const { CANDIDATE_TYPES, nearDuplicate, sourceNotes, withNote, captureScore, scoreLane, AUTO_SAVE_FROM } = require('./memoryextract');
+const { DAY_MS, SCORE_SWITCH } = require('./memorylog');
 
 /** Decisions a type needs in the window before its switch is offered. */
 const AUTO_MIN_DECISIONS = 20;
@@ -71,6 +81,8 @@ const AUTO_OFF_NOTICE_DAYS = 7;
 /** The note an auto-accepted memory's source ends in. */
 const AUTO_SUFFIX = ', auto-accepted';
 const PREFIX = 'memory-auto:';
+/** The config unit of the score switch; 'score' is no memory type, so it cannot clash with one. */
+const SCORE_UNIT = PREFIX + SCORE_SWITCH;
 const SETTINGS_FILE = 'memory-autoaccept.local.json';
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -80,12 +92,16 @@ const errText = (err) => (err && (err.code || err.message)) || 'error';
 
 // ---------------------------------------------------------------- the switches
 
-/** The switched-on types, sorted; throws when the file exists but is unreadable. */
-function readAutoStrict(file) {
+/** Every switch in the file: {types, score}; throws when the file exists but is unreadable. */
+function readSettingsStrict(file) {
   const doc = readDoc(file);
   const list = isObject(doc) && Array.isArray(doc.types) ? doc.types : [];
-  return [...new Set(list.filter((t) => CANDIDATE_TYPES.includes(t)))].sort();
+  // Only a literal true switches it on: anything else in a hand-edited file is off.
+  return { types: [...new Set(list.filter((t) => CANDIDATE_TYPES.includes(t)))].sort(), score: isObject(doc) && doc.score === true };
 }
+
+/** The switched-on types, sorted; throws when the file exists but is unreadable. */
+const readAutoStrict = (file) => readSettingsStrict(file).types;
 
 /** The switched-on types; an unreadable file reads as none (nothing is auto-accepted). */
 function readAuto(file) {
@@ -97,37 +113,60 @@ function readAuto(file) {
   }
 }
 
-function writeAuto(file, types) {
+/** Whether the score switch is on; an unreadable file reads as off. */
+function readScoreAuto(file) {
+  try {
+    return readSettingsStrict(file).score;
+  } catch (err) {
+    console.error('[memory] auto-accept settings unreadable, score switch off:', errText(err));
+    return false;
+  }
+}
+
+function writeSettings(file, { types, score }) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeAtomic(file, `${JSON.stringify({ types })}\n`);
+  writeAtomic(file, `${JSON.stringify({ types, score })}\n`);
 }
 
 /**
- * Switches auto-accept on or off for one type.
+ * Switches auto-accept on or off for one type. The score switch is kept as it is.
  * @returns {string[]} the switched-on types afterwards
  */
 function setAuto(file, type, on) {
   if (!CANDIDATE_TYPES.includes(type)) throw new Error('bad-type');
-  const rest = readAutoStrict(file).filter((t) => t !== type);
+  const settings = readSettingsStrict(file);
+  const rest = settings.types.filter((t) => t !== type);
   const next = on ? [...rest, type].sort() : rest;
-  writeAuto(file, next);
+  writeSettings(file, { types: next, score: settings.score });
   return next;
+}
+
+/**
+ * Switches 'Auto-save memories scored 90+' on or off. The type switches are kept as they are.
+ * @returns {boolean} the score switch afterwards
+ */
+function setScoreAuto(file, on) {
+  if (typeof on !== 'boolean') throw new Error('bad-switch');
+  writeSettings(file, { types: readAutoStrict(file), score: on });
+  return on;
 }
 
 /** The switches as a configsync.js provider (scope `config`), like memory-on:<project>. */
 function createAutoAcceptProvider(file) {
   return {
     name: 'memory-autoaccept',
-    owns: (k) => typeOf(k) !== null,
-    valid: (k, v) => (typeOf(k) && isObject(v) && v.on === true ? { on: true } : null),
+    owns: (k) => typeOf(k) !== null || k === SCORE_UNIT,
+    valid: (k, v) => ((typeOf(k) || k === SCORE_UNIT) && isObject(v) && v.on === true ? { on: true } : null),
     read(now) {
       const fresh = !fs.existsSync(file);
       const base = fresh ? 0 : Math.floor(Math.min(fs.statSync(file).mtimeMs, now));
+      const { types, score } = readSettingsStrict(file);
       // A missing file is a fresh PC, not "every type switched off".
-      return { units: readAutoStrict(file).map((t) => [PREFIX + t, { on: true }]), base, fresh };
+      const units = types.map((t) => [PREFIX + t, { on: true }]);
+      return { units: score ? [...units, [SCORE_UNIT, { on: true }]] : units, base, fresh };
     },
     write(units) {
-      writeAuto(file, units.map(([k]) => typeOf(k)).filter(Boolean).sort());
+      writeSettings(file, { types: units.map(([k]) => typeOf(k)).filter(Boolean).sort(), score: units.some(([k]) => k === SCORE_UNIT) });
     },
   };
 }
@@ -177,6 +216,32 @@ function typeStats(events, now) {
   return stats;
 }
 
+/** Whether a candidate's capture score makes it eligible for the score switch. */
+const isHighScore = (record) => scoreLane(captureScore(record)) === 'auto-save';
+
+/**
+ * What the score switch has done in the last AUTO_WINDOW_DAYS days on this PC:
+ * the auto-accepts scored AUTO_SAVE_FROM or more (whichever switch let them
+ * through: each says whether a 90+ score can be trusted) and how many of them
+ * were undone or retired since.
+ * @param {object[]} events memorylog readLog()
+ * @param {number} now ms
+ * @returns {{auto: number, undone: number, decisions: number, rate: number|null}}
+ *   auto = not undone; rate = auto / decisions
+ */
+function scoreStats(events, now) {
+  const since = now - AUTO_WINDOW_DAYS * DAY_MS;
+  const high = new Set();
+  let undone = 0;
+  for (const e of Array.isArray(events) ? events : []) {
+    if (!e || e.at < since) continue;
+    if (e.ev === 'auto-accepted' && Number.isInteger(e.usefulness) && e.usefulness >= AUTO_SAVE_FROM) high.add(e.key);
+    else if ((e.ev === 'rejected' || e.ev === 'retired') && high.delete(e.key)) undone++;
+  }
+  const decisions = high.size + undone;
+  return { auto: high.size, undone, decisions, rate: decisions ? high.size / decisions : null };
+}
+
 /** Whether a type's numbers earn it the switch. */
 const isOffered = (stat) => Boolean(stat) && stat.decisions >= AUTO_MIN_DECISIONS && stat.rate !== null && stat.rate >= AUTO_ON_RATE;
 /** Whether a switched-on type's numbers, on a big enough sample, have fallen under the bar that keeps it on. */
@@ -221,15 +286,19 @@ function exclusion(record, pending) {
 /**
  * Whether a captured candidate is auto-accepted.
  * @param {object} record
- * @param {{enabled: string[], stats: object, pending: object[]}} ctx
+ * @param {{enabled: string[], stats: object, pending: object[], scoreOn?: boolean, scoreStat?: object|null}} ctx
+ *   scoreOn = the score switch (readScoreAuto); scoreStat = scoreStats()
  * @returns {{accept: boolean, reason: string}} reason = 'auto', 'off', 'no-evidence', 'failing' or the exclusion
  */
-function decide(record, { enabled, stats, pending }) {
-  if (!record || !enabled.includes(record.type)) return { accept: false, reason: 'off' };
+function decide(record, { enabled, stats, pending, scoreOn = false, scoreStat = null }) {
+  if (!record) return { accept: false, reason: 'off' };
+  const byType = enabled.includes(record.type);
+  // The score switch stands in for the type's switch only: every rule below still applies.
+  if (!byType && !(scoreOn && isHighScore(record))) return { accept: false, reason: 'off' };
   const stat = stats[record.type];
   if (!hasEvidence(stat)) return { accept: false, reason: 'no-evidence' };
   // A rate that fell under the bar stops auto-accept even before the switch is turned off.
-  if (isFailing(stat)) return { accept: false, reason: 'failing' };
+  if (isFailing(stat) || (!byType && isFailing(scoreStat))) return { accept: false, reason: 'failing' };
   const why = exclusion(record, pending);
   return why ? { accept: false, reason: why } : { accept: true, reason: 'auto' };
 }
@@ -271,18 +340,18 @@ function createLanding({ file, dir, log, now }) {
   try {
     const events = log.read();
     enforceAutoOff({ file, events, now, log });
-    ctx = { enabled: readAuto(file), stats: typeStats(events, now), today: isoDate(now) };
+    ctx = { enabled: readAuto(file), stats: typeStats(events, now), scoreOn: readScoreAuto(file), scoreStat: scoreStats(events, now), today: isoDate(now) };
   } catch (err) {
     console.error('[memory] auto-accept unavailable, candidates wait:', errText(err));
     return waits;
   }
   return (record) => {
-    if (!ctx.enabled.includes(record.type)) return waits(record);
+    if (!ctx.enabled.includes(record.type) && !(ctx.scoreOn && isHighScore(record))) return waits(record);
     try {
       const pending = scan(dir)
         .records.map(([, r]) => r)
         .filter((r) => r.confidence !== 'confirmed');
-      const { accept } = decide(record, { enabled: ctx.enabled, stats: ctx.stats, pending });
+      const { accept } = decide(record, { ...ctx, pending });
       return accept ? { record: asAutoAccepted(record, ctx.today), auto: true } : waits(record);
     } catch (err) {
       console.error('[memory] auto-accept check failed, the candidate waits:', errText(err));
@@ -293,19 +362,27 @@ function createLanding({ file, dir, log, now }) {
 
 /**
  * Turns off every switched-on type whose rate fell under AUTO_OFF_RATE, and
- * logs it (the hub reads that line). Never throws: it runs on capture and on
- * every inbox read.
- * @returns {{type: string, rate: number}[]} the types turned off now
+ * the score switch when its own rate did, and logs it (the hub reads that
+ * line). Never throws: it runs on capture and on every inbox read.
+ * @returns {{type: string, rate: number}[]} the switches turned off now;
+ *   type = SCORE_SWITCH for the score switch
  */
 function enforceAutoOff({ file, events, now, log }) {
   try {
     const enabled = readAuto(file);
-    if (!enabled.length) return [];
+    const scoreOn = readScoreAuto(file);
+    if (!enabled.length && !scoreOn) return [];
     const stats = typeStats(events, now);
     const off = enabled.filter((type) => isFailing(stats[type])).map((type) => ({ type, rate: stats[type].rate }));
     for (const { type, rate } of off) {
       setAuto(file, type, false);
       if (log) log.add({ ev: 'auto-off', type, rate });
+    }
+    const score = scoreOn ? scoreStats(events, now) : null;
+    if (score && isFailing(score)) {
+      setScoreAuto(file, false);
+      if (log) log.add({ ev: 'auto-off', type: SCORE_SWITCH, rate: score.rate });
+      off.push({ type: SCORE_SWITCH, rate: score.rate });
     }
     return off;
   } catch (err) {
@@ -314,12 +391,15 @@ function enforceAutoOff({ file, events, now, log }) {
   }
 }
 
-/** The switches that turned themselves off lately, newest first: what the hub says. */
+/**
+ * The switches that turned themselves off lately, newest first: what the hub
+ * says. The score switch's notice carries its threshold as `from`.
+ */
 function recentAutoOffs(events, now) {
   const since = now - AUTO_OFF_NOTICE_DAYS * DAY_MS;
   return (Array.isArray(events) ? events : [])
     .filter((e) => e.ev === 'auto-off' && e.at >= since)
-    .map((e) => ({ type: e.type, rate: e.rate, at: e.at }))
+    .map((e) => ({ type: e.type, rate: e.rate, at: e.at, ...(e.type === SCORE_SWITCH ? { from: AUTO_SAVE_FROM } : {}) }))
     .reverse();
 }
 
@@ -360,8 +440,12 @@ function undoAutoAccept(dir, key, today, decided = () => {}) {
 module.exports = {
   readAuto,
   setAuto,
+  readScoreAuto,
+  setScoreAuto,
   createAutoAcceptProvider,
   typeStats,
+  scoreStats,
+  isHighScore,
   isOffered,
   autoStatus,
   exclusion,
@@ -384,5 +468,8 @@ module.exports = {
   AUTO_OFF_NOTICE_DAYS,
   AUTO_SUFFIX,
   PREFIX,
+  SCORE_SWITCH,
+  SCORE_UNIT,
+  AUTO_SAVE_FROM,
   SETTINGS_FILE,
 };

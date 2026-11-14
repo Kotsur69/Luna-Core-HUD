@@ -2,9 +2,10 @@
 // LunaCore - auto-accept section of the memory window (renderer)
 // ----------------------------------------------------------------------------
 // src/memoryautoaccept.js decides; this only shows it. Under the 'To approve'
-// list: one switch per memory type that this PC's numbers offer (or that is
-// already on), and the memories auto-accepted in the last days, each with an
-// Undo (= reject, deleted on every PC). Main re-checks every switch and undo
+// list: the 'Auto-save memories scored 90+' switch (off by default), one
+// switch per memory type that this PC's numbers offer (or that is already
+// on), and the memories auto-accepted in the last days, each with an Undo
+// (= reject, deleted on every PC). Main re-checks every switch and undo
 // (src/memoryipc.js memory:auto-set / memory:auto-undo).
 // Titles are model text: textContent only, never markup.
 // ============================================================================
@@ -52,6 +53,26 @@ function switchRow(row, { onToggle, disabled }) {
   return label;
 }
 
+/** The score switch's rules and its own numbers, with what main sent. */
+export function scoreHint(score, bar) {
+  return t('mem.auto.scoreHint', { min: bar.min, off: pct(bar.off), auto: score.auto, undone: score.undone });
+}
+
+/** The 'Auto-save memories scored 90+' switch; main names it (score.id) and re-checks it. */
+function scoreRow(score, bar, { onToggle, disabled }) {
+  const wrap = el('div', 'mem-auto__types');
+  const label = el('label', 'mem-auto__row');
+  const box = el('input', 'mem-auto__switch');
+  box.type = 'checkbox';
+  box.setAttribute('role', 'switch');
+  box.checked = score.on === true;
+  box.disabled = disabled;
+  box.addEventListener('change', () => onToggle(score.id, box.checked));
+  label.append(box, el('span', 'mem-auto__text', t('mem.auto.score', { from: bar.saveFrom })));
+  wrap.append(label, el('p', 'hint', scoreHint(score, bar)));
+  return wrap;
+}
+
 function recentRow(item, { onUndo, busy }) {
   const li = el('li', 'mem-auto__item');
   const undo = el('button', 'port-btn port-btn--kill mem-inbox__btn', t('mem.auto.undo'));
@@ -77,6 +98,8 @@ export function autoSection(auto, { onToggle, onUndo, busy, switching, error }) 
   const title = el('h3', 'mem-auto__heading', t('mem.auto.title'));
   title.id = 'mem-auto-title';
   section.append(title, el('p', 'hint', autoIntro(auto.bar)));
+  const score = auto.score;
+  if (score && typeof score.id === 'string' && Number.isInteger(auto.bar.saveFrom)) section.append(scoreRow(score, auto.bar, { onToggle, disabled: switching }));
   if (auto.types.length) {
     const list = el('div', 'mem-auto__types');
     for (const row of auto.types) list.append(switchRow(row, { onToggle, disabled: switching }));

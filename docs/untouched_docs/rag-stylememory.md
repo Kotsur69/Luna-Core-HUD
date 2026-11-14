@@ -631,6 +631,25 @@ Item 8 of the improvements above and question 4, answered as "(a), opt-in".
   candidates are not excluded; with auto-accept on for their type they skip the human
   review that used to catch that.
 
+**Score thresholds (2026-11-14).** A candidate's capture score is its final score at
+capture time, which is the extractor's usefulness (an `observed` memory nobody has read
+yet; `captureScore` in `src/memoryextract.js`, where all three thresholds are named
+constants). Under `AUTO_REJECT_BELOW` = 50 it goes to the local graveyard instead of the
+inbox (it used to be dropped under 30), and can be restored from there by hand. From 50
+to 89 it waits in the inbox, as before. From `AUTO_SAVE_FROM` = 90 it still waits, unless
+Mati has switched on "Auto-save memories scored 90+" in the memory window (off by
+default, synced as unit `memory-auto:score` next to the type switches, set through
+`memory:auto-set` with type `score`, which main validates). With that switch on, a 90+
+candidate is treated as if its type's switch were on and goes through the same
+`createLanding` / `decide` path: this PC still needs its 20 decisions for the type, a
+type whose rate fell under 80% still waits, the four exclusions still hold, and an
+auto-save lands `confirmed` with `, auto-accepted` in its source, an `auto-accepted` log
+line and Undo for 7 days. The switch also measures itself: of the auto-accepts scored 90+
+in the last 28 days, an undo or a retire counts against it, and under 80% kept on at
+least 5 it turns itself off, logs `auto-off` with type `score` and the hub says so.
+Decision 5 holds: nothing is confirmed behind Mati's back unless he switched it on. A
+0-1 fraction from the model still counts as no score (never buried, never auto-saved).
+
 ### Bonus, wanted by Mati on 2026-11-11: a live work map in LunaCore
 
 Mati wants a panel in the HUD that shows what the session in the active tab is doing,

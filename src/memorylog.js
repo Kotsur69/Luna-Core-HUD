@@ -10,7 +10,8 @@
 //   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?}
 //   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted" | "superseded" | "restored", "key", "type", "title"?, "usefulness"?}
 //                                  restored = brought back from the graveyard into the inbox (src/memorygraveyard.js)
-//   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js)
+//   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js);
+//                                  type = SCORE_SWITCH: the 'auto-save memories scored 90+' switch did
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
@@ -58,6 +59,8 @@ const MAX_PATH = 200;
 const MAX_REASON = 40;
 const MAX_REJECTED_TITLES = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** The `type` of an `auto-off` line about the score switch (src/memoryautoaccept.js), not a memory type. */
+const SCORE_SWITCH = 'score';
 
 // 'auto-accepted' = confirmed by the type's auto-accept switch (src/memoryautoaccept.js), not by hand.
 // 'restored' = a graveyard entry put back into the inbox by hand (src/memorygraveyard.js).
@@ -143,7 +146,8 @@ function cleanEvent(raw) {
   if (ev === 'get') return key ? { at, ev, key, ...tagged(raw.session) } : null;
   if (ev === 'auto-off') {
     const rate = Number.isFinite(raw.rate) && raw.rate >= 0 && raw.rate <= 1 ? raw.rate : null;
-    return type && rate !== null ? { at, ev, type, rate } : null;
+    const switched = type || (raw.type === SCORE_SWITCH ? SCORE_SWITCH : null);
+    return switched && rate !== null ? { at, ev, type: switched, rate } : null;
   }
   if (ev === 'get') return key ? { at, ev, key } : null;
   if (ev === 'conflict') {
@@ -559,5 +563,6 @@ module.exports = {
   MAX_LOG_BYTES,
   MAX_NOTE,
   DAY_MS,
+  SCORE_SWITCH,
   USEFULNESS_BANDS,
 };

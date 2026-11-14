@@ -339,7 +339,8 @@ test('memory:inbox carries the switches, the bar and the recent auto-accepts', (
   assert.equal(res.total, 1);
   assert.deepEqual(res.auto.types.map((r) => [r.type, r.on, r.offered]), [['gotcha', false, true]]);
   assert.deepEqual(res.auto.recent.map((r) => r.key), [`${PROJECT}/fresh`]);
-  assert.deepEqual(res.auto.bar, { min: 20, days: 28, on: 0.9, off: 0.8, undoDays: 7 });
+  assert.deepEqual(res.auto.bar, { min: 20, days: 28, on: 0.9, off: 0.8, undoDays: 7, saveFrom: 90 });
+  assert.deepEqual(res.auto.score, { id: 'score', on: false, auto: 0, undone: 0, decisions: 0, rate: null });
 });
 
 test('the switches sync as memory-auto:<type> config units, like memory-on:<project>', (t) => {
@@ -450,9 +451,145 @@ test('the window offers the switches and Undo through channels preload exposes, 
   assert.doesNotMatch(section, /innerHTML|outerHTML|insertAdjacentHTML/);
   const keys = new Set([...`${section}\n${panel}`.matchAll(/'(mem\.auto\.[\w.]+)'/g)].map((m) => m[1]));
   assert.ok(keys.size >= 8);
-  for (const key of [...keys, 'hub.item.memoryAutoOff']) {
+  assert.ok(keys.has('mem.auto.score') && keys.has('mem.auto.scoreHint'), 'the score switch has its strings');
+  for (const key of [...keys, 'hub.item.memoryAutoOff', 'hub.item.memoryScoreAutoOff']) {
     const lines = i18n.split('\n').filter((l) => l.includes(`'${key}':`));
     assert.equal(lines.length, 2, `${key} must exist once in pl and once in en`);
     assert.doesNotMatch(lines[0], /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, `${key}: Polish UI strings carry no diacritics`);
   }
+});
+
+// ---- 'Auto-save memories scored 90+' (the score switch) ------------------------------------
+
+/** An observed candidate as candidatesFrom returns it, scored. */
+const scoredRec = (id, usefulness, over = {}) => rec(id, { usefulness, ...over });
+/** `count` auto-accepts scored `usefulness`, a day ago; `undone` of them rejected since. */
+function highAutos(count, undone, usefulness = 95) {
+  const keys = Array.from({ length: count }, (_, i) => `${PROJECT}/h${i}`);
+  return [...keys.map((key) => ({ ...ev('auto-accepted', key), usefulness })), ...keys.slice(0, undone).map((key) => ev('rejected', key))];
+}
+
+test('the score switch is OFF by default and unreadable or junk settings read as off', (t) => {
+  const file = path.join(tmp(t, 'luna-score-def-'), auto.SETTINGS_FILE);
+  assert.equal(auto.readScoreAuto(file), false, 'no file');
+  fs.writeFileSync(file, JSON.stringify({ types: ['gotcha'], score: 'yes' }));
+  assert.equal(auto.readScoreAuto(file), false, 'only a literal true');
+  fs.writeFileSync(file, '{not json');
+  const quiet = t.mock.method(console, 'error', () => {});
+  assert.equal(auto.readScoreAuto(file), false, 'broken file');
+  assert.ok(quiet.mock.callCount() >= 1);
+});
+
+test('decide: a 95 with the score switch on is accepted under the per-type rules; off, or a 70, waits', () => {
+  const stats = auto.typeStats(decisions(20, 0), NOW);
+  const ctx = { enabled: [], stats, pending: [], scoreOn: true, scoreStat: auto.scoreStats([], NOW) };
+
+  assert.deepEqual(auto.decide(scoredRec('x', 95), ctx), { accept: true, reason: 'auto' });
+  assert.equal(auto.decide(scoredRec('x', 90), ctx).accept, true, '90 is the bar');
+  assert.equal(auto.decide(scoredRec('x', 89), ctx).reason, 'off');
+  assert.equal(auto.decide(scoredRec('x', 70), ctx).reason, 'off');
+  assert.equal(auto.decide(rec('x'), ctx).reason, 'off', 'no score, no auto-save');
+  assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, scoreOn: false }).reason, 'off');
+  // The per-type rules still hold.
+  assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, stats: auto.typeStats(decisions(10, 0), NOW) }).reason, 'no-evidence');
+  assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, stats: auto.typeStats(decisions(15, 5), NOW) }).reason, 'failing');
+  assert.equal(auto.decide(scoredRec('x', 95, { supersedes: ['old'] }), ctx).reason, 'supersedes');
+  assert.equal(auto.decide(scoredRec('x', 95, { source: 'captured on PC1, suggested global' }), ctx).reason, 'global');
+  assert.equal(auto.decide(scoredRec('x', 95, { source: 'captured on PC1, read 1 outside source(s)' }), ctx).reason, 'outside');
+  // The score switch's own rate fell before it was turned off: it stops at once.
+  assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, scoreStat: auto.scoreStats(highAutos(5, 2), NOW) }).reason, 'failing');
+});
+
+test('a 95 with the score switch on lands through the one landing path: confirmed, labelled, logged, undoable', async (t) => {
+  const s = runCapture(t, { on: [], candidates: [candidate('Scored high enough to save itself', { usefulness: 95 }), candidate('Scored in the middle', { usefulness: 70 })] });
+  auto.setScoreAuto(memoryPaths(s.configDir).autoAccept, true);
+
+  await s.go();
+
+  const byTitle = Object.fromEntries(scan(s.dir).records.map(([key, r]) => [r.title, { key, r }]));
+  const high = byTitle['Scored high enough to save itself'];
+  assert.equal(high.r.confidence, 'confirmed');
+  assert.equal(high.r.source, `captured from God Mode run ${RUN_ID} on PC1${auto.AUTO_SUFFIX}`);
+  assert.equal(byTitle['Scored in the middle'].r.confidence, 'observed');
+  assert.deepEqual(s.log.read().filter((e) => e.key === high.key).map((e) => e.ev), ['proposed', 'auto-accepted']);
+  assert.deepEqual(auto.recentAutoAccepted(scan(s.dir).records, TODAY).map((r) => r.key), [high.key]);
+  assert.deepEqual(auto.readAuto(memoryPaths(s.configDir).autoAccept), [], 'no type switch was needed or turned on');
+});
+
+test('score-based auto-saves measure the switch: undos under 80% turn it off, log it and the hub says so', (t) => {
+  assert.deepEqual(auto.scoreStats(highAutos(8, 2), NOW), { auto: 6, undone: 2, decisions: 8, rate: 0.75 });
+  // Auto-accepts under 90 and hand decisions are not the score switch's doing.
+  assert.equal(auto.scoreStats([...highAutos(4, 0, 70), ...decisions(5, 5)], NOW).decisions, 0);
+  // Retiring one later counts like an undo.
+  assert.equal(auto.scoreStats([...highAutos(1, 0), ev('retired', `${PROJECT}/h0`)], NOW).undone, 1);
+
+  // An undo through the window is what tips it: 4 of 5 kept is 80%, a second undo makes it 60%.
+  const s = ipcSetup(t, [autoRec('h4')], highAutos(5, 1));
+  auto.setScoreAuto(s.file, true);
+  assert.equal(s.invoke('memory:auto-undo', `${PROJECT}/h4`).ok, true);
+
+  assert.equal(auto.readScoreAuto(s.file), false);
+  const off = s.log.read().filter((e) => e.ev === 'auto-off');
+  assert.deepEqual(off.map((e) => [e.type, e.rate]), [['score', 0.6]]);
+  const notices = auto.recentAutoOffs(s.log.read(), NOW);
+  assert.deepEqual(notices.map((n) => [n.type, n.from]), [['score', 90]]);
+  const items = COLLECTORS.memory({ count: 0, now: NOW, autoOff: notices });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].key, 'hub.item.memoryScoreAutoOff');
+  assert.deepEqual(items[0].vars, { from: 90, rate: 60 });
+  // A score notice without its threshold is junk.
+  assert.deepEqual(COLLECTORS.memory({ count: 0, now: NOW, autoOff: [{ type: 'score', rate: 0.5, at: NOW - DAY_MS }] }), []);
+});
+
+test('enforceAutoOff turns off only the score switch when only its rate fell', (t) => {
+  const base = tmp(t, 'luna-score-off-');
+  const file = memoryPaths(base).autoAccept;
+  auto.setAuto(file, 'how-to', true);
+  auto.setScoreAuto(file, true);
+  const log = logWith(base, []);
+
+  assert.deepEqual(auto.enforceAutoOff({ file, events: highAutos(8, 2), now: NOW, log }), [{ type: 'score', rate: 0.75 }]);
+  assert.equal(auto.readScoreAuto(file), false);
+  assert.deepEqual(auto.readAuto(file), ['how-to'], 'the type switches are kept');
+  // 4 of 5 kept is exactly 80%: it stays on.
+  auto.setScoreAuto(file, true);
+  assert.deepEqual(auto.enforceAutoOff({ file, events: highAutos(5, 1), now: NOW, log }), []);
+  assert.equal(auto.readScoreAuto(file), true);
+});
+
+test('the score switch is set through memory:auto-set (validated in main) and synced as memory-auto:score', (t) => {
+  const s = ipcSetup(t, [], []);
+
+  assert.deepEqual(s.invoke('memory:auto-set', { type: 'score', on: true }), { ok: true, type: 'score', on: true });
+  assert.equal(auto.readScoreAuto(s.file), true);
+  for (const req of [{ type: 'score' }, { type: 'score', on: 1 }, { type: 'Score', on: true }, { type: 'memory-auto:score', on: true }]) {
+    assert.deepEqual(s.invoke('memory:auto-set', req), { ok: false, reason: 'bad-request' });
+  }
+  assert.equal(s.invoke('memory:inbox').auto.score.on, true);
+  assert.deepEqual(s.invoke('memory:auto-set', { type: 'score', on: false }), { ok: true, type: 'score', on: false });
+  assert.equal(s.settings(), 2, 'each change is synced');
+
+  const file = path.join(tmp(t, 'luna-score-sync-'), auto.SETTINGS_FILE);
+  const provider = auto.createAutoAcceptProvider(file);
+  auto.setAuto(file, 'gotcha', true);
+  auto.setScoreAuto(file, true);
+  auto.setAuto(file, 'how-to', true);
+  assert.equal(auto.readScoreAuto(file), true, 'a type switch keeps the score switch');
+  assert.deepEqual(provider.read(NOW).units, [
+    ['memory-auto:gotcha', { on: true }],
+    ['memory-auto:how-to', { on: true }],
+    ['memory-auto:score', { on: true }],
+  ]);
+  assert.equal(provider.owns('memory-auto:score'), true);
+  assert.deepEqual(provider.valid('memory-auto:score', { on: true, x: 1 }), { on: true });
+  assert.equal(provider.valid('memory-auto:score', { on: false }), null);
+  provider.write([['memory-auto:gotcha', { on: true }]]);
+  assert.equal(auto.readScoreAuto(file), false, 'a unit gone from the cloud switches it off');
+  provider.write([['memory-auto:score', { on: true }]]);
+  assert.deepEqual([auto.readAuto(file), auto.readScoreAuto(file)], [[], true]);
+});
+
+test('the log keeps an auto-off line of the score switch', () => {
+  assert.deepEqual(cleanEvent({ at: 1, ev: 'auto-off', type: 'score', rate: 0.6 }), { at: 1, ev: 'auto-off', type: 'score', rate: 0.6 });
+  assert.equal(cleanEvent({ at: 1, ev: 'auto-off', type: 'score', rate: 7 }), null);
 });
