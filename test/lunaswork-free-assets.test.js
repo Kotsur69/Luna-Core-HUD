@@ -1,0 +1,708 @@
+// ============================================================================
+// Luna's Work free library assets: search + import through the official APIs
+// of Poly Haven, Sketchfab, Poly Pizza, ambientCG and Freesound, each against
+// a fake fetch (no live call is possible here). The asset pipeline, the
+// downloader, the ledger and the credits are the real ones over a temp repo;
+// Unity is a fake recorder. Also: licenses and rips refused, keys never in an
+// error, the zip reader's guards, the Critic's ledger card, the key store.
+// ============================================================================
+
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const zlib = require('zlib');
+
+const P = require('../src/lunasworkAssetPipeline.js');
+const L = require('../src/lunasworkLicenses.js');
+const S = require('../src/lunasworkFreeSources.js');
+const F = require('../src/lunasworkFreeAssets.js');
+const Z = require('../src/lunasworkZip.js');
+const K = require('../src/lunasworkAssetKeys.js');
+const { createDownloader } = require('../src/lunasworkAssetTools.js');
+
+const ART = 'Assets/Game/Art';
+const pad = (head) => Buffer.concat([Buffer.isBuffer(head) ? head : Buffer.from(head, 'latin1'), Buffer.alloc(32, 7)]);
+const JPG = pad(Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+const HDR = pad('#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n');
+const FBX = pad('Kaydara FBX Binary  \0');
+const GLB = pad('glTF');
+const OGG = pad('OggS');
+// Fake keys are assembled at runtime: no key-shaped literal in the source.
+const fakeKey = (tag) => `${tag}${'k'.repeat(28)}`;
+const KEYS = { sketchfab: fakeKey('sf'), polypizza: fakeKey('pp'), freesound: fakeKey('fs') };
+
+// ---- fakes ------------------------------------------------------------------------------
+
+/** A Response-like object: JSON for objects, bytes for Buffers. */
+function reply(body, status = 200) {
+  const buf = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
+  return { status, ok: status >= 200 && status < 300, headers: { get: () => null }, body: null, arrayBuffer: async () => buf };
+}
+
+/**
+ * A fake fetch over a route table: exact URL -> body, or a function (url, init) -> Response.
+ * Records every call with its headers.
+ */
+function fakeFetch(routes) {
+  const calls = [];
+  const fn = async (url, init = {}) => {
+    calls.push({ url, headers: init.headers || {}, redirect: init.redirect });
+    const hit = routes[url];
+    if (hit === undefined) return reply({ detail: 'not found' }, 404);
+    return typeof hit === 'function' ? hit(url, init) : reply(hit);
+  };
+  return { fn, calls };
+}
+
+const lookup = async () => [{ address: '93.184.216.34', family: 4 }];
+
+function tempRepo() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'lw-free-assets-'));
+}
+
+/** The real executor over a temp repo, a fake Unity and the given fake fetch. */
+function library(dir, fetch, { keys = KEYS } = {}) {
+  const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return { ok: true }; } };
+  const logged = [];
+  const pipe = P.createAssetPipeline({ repoPath: dir, artRoot: ART, unity, recordSpend: () => ({ ok: true }), logAsset: (e) => logged.push(e), now: () => 1 });
+  const keyStore = { get: (s) => keys[s] || null, secrets: () => Object.values(keys) };
+  const lib = F.createFreeAssets({
+    shared: pipe.shared,
+    artRoot: pipe.artRoot,
+    sources: S.createFreeSources({ fetch, keys: keyStore }),
+    download: createDownloader({ fetch, lookup }),
+    secrets: keyStore.secrets,
+  });
+  return { lib, unity, logged };
+}
+
+const read = (dir, rel) => fs.readFileSync(path.join(dir, ...rel.split('/')), 'utf8');
+const exists = (dir, rel) => fs.existsSync(path.join(dir, ...rel.split('/')));
+const ledgerRows = (dir) => L.parseLedger(read(dir, L.LEDGER_FILE)).rows;
+
+/** A zip built here: stored or deflated entries. */
+function makeZip(entries) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const { name, data, deflate = true } of entries) {
+    const body = deflate ? zlib.deflateRawSync(data) : data;
+    const nameBuf = Buffer.from(name, 'utf8');
+    const crc = Z.crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(deflate ? 8 : 0, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(body.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(deflate ? 8 : 0, 10);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(body.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(local, nameBuf, body);
+    centrals.push(central, nameBuf);
+    offset += local.length + nameBuf.length + body.length;
+  }
+  const cen = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cen.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cen, end]);
+}
+
+// ---- Poly Haven -------------------------------------------------------------------------
+
+const PH = 'https://api.polyhaven.com';
+const polyHavenRoutes = {
+  [`${PH}/assets?type=hdris`]: {
+    dusk_sky: { name: 'Dusk Sky', type: 0, tags: ['sky', 'sunset'], categories: ['outdoor'], authors: { 'Greg Zaal': 'All' }, download_count: 5 },
+    studio: { name: 'Studio', type: 0, tags: ['indoor'], categories: [], authors: {}, download_count: 9 },
+  },
+  [`${PH}/info/dusk_sky`]: { name: 'Dusk Sky', type: 0, tags: ['sky'], categories: ['outdoor'], authors: { 'Greg Zaal': 'All' } },
+  [`${PH}/files/dusk_sky`]: { hdri: { '1k': { hdr: { url: 'https://dl.polyhaven.org/file/dusk_sky_1k.hdr' } }, '2k': { hdr: { url: 'https://dl.polyhaven.org/file/dusk_sky_2k.hdr' } } } },
+  'https://dl.polyhaven.org/file/dusk_sky_2k.hdr': () => reply(HDR),
+  [`${PH}/info/old_crate`]: { name: 'Old Crate', type: 2, tags: ['wood'], categories: ['props'], authors: { 'Jane Doe': 'All' } },
+  [`${PH}/files/old_crate`]: {
+    fbx: { '2k': { fbx: { url: 'https://dl.polyhaven.org/file/old_crate.fbx', include: { 'textures/old_crate_diff_2k.jpg': { url: 'https://dl.polyhaven.org/file/old_crate_diff_2k.jpg' } } } } },
+  },
+  'https://dl.polyhaven.org/file/old_crate.fbx': () => reply(FBX),
+  'https://dl.polyhaven.org/file/old_crate_diff_2k.jpg': () => reply(JPG),
+};
+
+test('Poly Haven: search filters by the query, import writes the HDRI, its ledger row and imports it', async () => {
+  const dir = tempRepo();
+  const fake = fakeFetch(polyHavenRoutes);
+  const { lib, unity, logged } = library(dir, fake.fn);
+
+  const found = await lib.search({ source: 'polyhaven', query: 'sunset', type: 'hdri' });
+  assert.equal(found.ok, true, JSON.stringify(found));
+  assert.deepEqual(found.results.map((r) => [r.id, r.license, r.author]), [['dusk_sky', 'CC0', 'Greg Zaal']]);
+  // API calls never follow a redirect.
+  assert.ok(fake.calls.every((c) => c.redirect === 'error' || c.url.startsWith('https://dl.')));
+
+  const res = await lib.importAsset({ source: 'polyhaven', id: 'dusk_sky', name: 'Dusk Sky', kind: 'texture' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Textures/dusk-sky.hdr`]);
+  assert.equal(read(dir, `${ART}/Textures/dusk-sky.hdr`).startsWith('#?RADIANCE'), true);
+  assert.deepEqual(ledgerRows(dir), [{ name: 'Dusk Sky', source: 'https://polyhaven.com/a/dusk_sky', author: 'Greg Zaal', license: 'CC0', path: `${ART}/Textures/dusk-sky.hdr` }]);
+  assert.match(read(dir, L.LEDGER_FILE), /^# Asset licenses/);
+  assert.equal(res.credits, null, 'CC0 only: no credits file');
+  assert.deepEqual(unity.calls.map((c) => c.command), ['assets import']);
+  assert.equal(logged[0].tool, 'library');
+});
+
+test('Poly Haven: a model comes with its textures into one folder; the folder is the ledger path', async () => {
+  const dir = tempRepo();
+  const { lib, unity } = library(dir, fakeFetch(polyHavenRoutes).fn);
+  const res = await lib.importAsset({ source: 'polyhaven', id: 'old_crate', name: 'Old Crate', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Props/old-crate/old_crate.fbx`, `${ART}/Props/old-crate/textures/old_crate_diff_2k.jpg`]);
+  assert.equal(res.main, `${ART}/Props/old-crate/old_crate.fbx`);
+  assert.equal(ledgerRows(dir)[0].path, `${ART}/Props/old-crate/`);
+  // The texture is imported before the model, then the model gets its prefab.
+  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [
+    ['assets import', `${ART}/Props/old-crate/textures/old_crate_diff_2k.jpg`],
+    ['assets import', `${ART}/Props/old-crate/old_crate.fbx`],
+    ['prefab create', `${ART}/Props/old-crate/old_crate.prefab`],
+  ]);
+  // Importing it again never overwrites: -v2.
+  const again = await lib.importAsset({ source: 'polyhaven', id: 'old_crate', name: 'Old Crate', kind: 'prop' });
+  assert.equal(again.main, `${ART}/Props/old-crate-v2/old_crate.fbx`);
+  assert.equal(ledgerRows(dir).length, 2);
+});
+
+// ---- Sketchfab --------------------------------------------------------------------------
+
+const SF = 'https://api.sketchfab.com/v3';
+const UID = 'a'.repeat(32);
+const NC_UID = 'b'.repeat(32);
+const RIP_UID = 'c'.repeat(32);
+const sfModel = (uid, name, slug, label, extra = {}) => ({ uid, name, isDownloadable: true, viewerUrl: `https://sketchfab.com/3d-models/x-${uid}`, user: { displayName: 'Modeler' }, license: { slug, label }, tags: [{ name: 'katana' }], ...extra });
+
+function sketchfabRoutes() {
+  const downloadCalls = [];
+  return {
+    downloadCalls,
+    routes: {
+      [`${SF}/search?type=models&downloadable=true&count=10&q=katana`]: { results: [sfModel(UID, 'Katana Sword', 'by', 'CC Attribution'), sfModel(NC_UID, 'Fancy Katana', 'by-nc', 'CC Attribution-NonCommercial'), sfModel(RIP_UID, 'Kurumi Tokisaki katana (game rip)', 'by', 'CC Attribution')] },
+      [`${SF}/models/${UID}`]: sfModel(UID, 'Katana Sword', 'by', 'CC Attribution'),
+      [`${SF}/models/${NC_UID}`]: sfModel(NC_UID, 'Fancy Katana', 'by-nc', 'CC Attribution-NonCommercial'),
+      [`${SF}/models/${RIP_UID}`]: sfModel(RIP_UID, 'Kurumi Tokisaki katana', 'by', 'CC Attribution'),
+      [`${SF}/models/${UID}/download`]: (url, init) => {
+        downloadCalls.push(init.headers);
+        return reply({ glb: { url: 'https://sketchfab-prod-media.s3.amazonaws.com/archives/katana.glb?sig=abc', size: 36 } });
+      },
+      'https://sketchfab-prod-media.s3.amazonaws.com/archives/katana.glb?sig=abc': () => reply(GLB),
+    },
+  };
+}
+
+test('Sketchfab: NC and game-rip results are refused in search; a CC-BY model is imported with its credit', async () => {
+  const dir = tempRepo();
+  const sf = sketchfabRoutes();
+  const fake = fakeFetch(sf.routes);
+  const { lib } = library(dir, fake.fn);
+
+  const found = await lib.search({ source: 'sketchfab', query: 'katana' });
+  assert.equal(found.ok, true, JSON.stringify(found));
+  assert.deepEqual(found.results.map((r) => [r.id, r.license]), [[UID, 'CC-BY 4.0']]);
+  assert.equal(found.refused.length, 2);
+  assert.match(found.refused.find((r) => r.id === NC_UID).reason, /non-commercial/);
+  assert.match(found.refused.find((r) => r.id === RIP_UID).reason, /kurumi.*reference/);
+
+  const res = await lib.importAsset({ source: 'sketchfab', id: UID, name: 'Katana Sword', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Props/katana-sword.glb`]);
+  assert.equal(res.license, 'CC-BY 4.0');
+  // The token goes only to the API's download endpoint, never to the file host.
+  assert.equal(sf.downloadCalls[0].Authorization, `Token ${KEYS.sketchfab}`);
+  const fileCall = fake.calls.find((c) => c.url.includes('s3.amazonaws.com'));
+  assert.equal(JSON.stringify(fileCall.headers).includes(KEYS.sketchfab), false);
+  // CC-BY: the ledger row feeds the in-game credits.
+  assert.equal(res.credits, L.CREDITS_FILE);
+  const credits = read(dir, L.CREDITS_FILE);
+  assert.match(credits, /"Katana Sword" by Modeler - CC-BY 4\.0 - https:\/\/sketchfab\.com\/3d-models\/x-a{32}/);
+});
+
+test('Sketchfab: import re-reads the license - an NC model and a rip are refused with nothing written', async () => {
+  const dir = tempRepo();
+  const { lib } = library(dir, fakeFetch(sketchfabRoutes().routes).fn);
+  const nc = await lib.importAsset({ source: 'sketchfab', id: NC_UID, kind: 'prop' });
+  assert.equal(nc.ok, false);
+  assert.equal(nc.error, 'licenseRefused');
+  assert.match(nc.detail, /non-commercial \(NC\)/);
+  const rip = await lib.importAsset({ source: 'sketchfab', id: RIP_UID, kind: 'prop' });
+  assert.equal(rip.error, 'ripRefused');
+  assert.match(rip.detail, /reference of this game, never a source/);
+  assert.equal(exists(dir, 'Assets'), false);
+  assert.equal(exists(dir, L.LEDGER_FILE), false);
+});
+
+test('Sketchfab: no stored token -> noKey with where to add it; nothing downloaded', async () => {
+  const dir = tempRepo();
+  const sf = sketchfabRoutes();
+  const { lib } = library(dir, fakeFetch(sf.routes).fn, { keys: {} });
+  const res = await lib.importAsset({ source: 'sketchfab', id: UID, kind: 'prop' });
+  assert.equal(res.error, 'noKey');
+  assert.match(res.detail, /Asset library keys/);
+  assert.equal(sf.downloadCalls.length, 0);
+});
+
+// ---- Poly Pizza -------------------------------------------------------------------------
+
+const PP = 'https://api.poly.pizza/v1.1';
+const ppModel = (id, title, licence) => ({ ID: id, Title: title, Creator: { Username: 'lowpoly_jo' }, Licence: licence, Download: `https://static.poly.pizza/${id}.glb`, Tags: ['tree'] });
+
+test('Poly Pizza: search and import send the key header; CC-BY 3.0 is credited, an unknown license refused', async () => {
+  const dir = tempRepo();
+  const routes = {
+    [`${PP}/search/pine%20tree?Limit=10`]: { total: 2, results: [ppModel('pine1', 'Pine Tree', 'CC-BY 3.0'), ppModel('odd1', 'Odd Tree', 'All rights reserved')] },
+    [`${PP}/model/pine1`]: ppModel('pine1', 'Pine Tree', 'CC-BY 3.0'),
+    [`${PP}/model/odd1`]: ppModel('odd1', 'Odd Tree', 'All rights reserved'),
+    'https://static.poly.pizza/pine1.glb': () => reply(GLB),
+  };
+  const fake = fakeFetch(routes);
+  const { lib } = library(dir, fake.fn);
+  const found = await lib.search({ source: 'polypizza', query: 'pine tree' });
+  assert.deepEqual(found.results.map((r) => r.id), ['pine1']);
+  assert.match(found.refused[0].reason, /not on the allowed list/);
+  assert.equal(fake.calls[0].headers['x-auth-token'], KEYS.polypizza);
+
+  const res = await lib.importAsset({ source: 'polypizza', id: 'pine1', kind: 'environment' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Environments/pine-tree.glb`]);
+  assert.match(read(dir, L.CREDITS_FILE), /"Pine Tree" by lowpoly_jo - CC-BY 3\.0 - https:\/\/poly\.pizza\/m\/pine1/);
+  const odd = await lib.importAsset({ source: 'polypizza', id: 'odd1', kind: 'prop' });
+  assert.equal(odd.error, 'licenseRefused');
+  assert.deepEqual(ledgerRows(dir).map((r) => r.name), ['Pine Tree']);
+});
+
+// ---- ambientCG --------------------------------------------------------------------------
+
+const ACG = 'https://ambientcg.com/api/v2/full_json';
+
+test('ambientCG: a zipped texture set is unpacked (only maps, no DirectX normal), ledgered as one folder', async () => {
+  const dir = tempRepo();
+  const zip = makeZip([
+    { name: 'Bricks001_2K-JPG_Color.jpg', data: JPG },
+    { name: 'Bricks001_2K-JPG_NormalGL.jpg', data: JPG },
+    { name: 'Bricks001_2K-JPG_NormalDX.jpg', data: JPG },
+    { name: 'Bricks001_2K-JPG.usda', data: Buffer.from('#usda 1.0'), deflate: false },
+  ]);
+  const record = {
+    assetId: 'Bricks001', displayName: 'Bricks 001', dataType: 'Material', tags: ['brick', 'wall'],
+    downloadFolders: { default: { downloadFiletypeCategories: { zip: { downloads: [
+      { attribute: '1K-JPG', fileName: 'Bricks001_1K-JPG.zip', downloadLink: 'https://ambientcg.com/get?file=Bricks001_1K-JPG.zip' },
+      { attribute: '2K-JPG', fileName: 'Bricks001_2K-JPG.zip', downloadLink: 'https://ambientcg.com/get?file=Bricks001_2K-JPG.zip' },
+    ] } } } },
+  };
+  const routes = {
+    [`${ACG}?q=brick&type=Material,Decal,Atlas&limit=10&include=tagData`]: { foundAssets: [{ assetId: 'Bricks001', displayName: 'Bricks 001', dataType: 'Material', tags: ['brick'] }] },
+    [`${ACG}?id=Bricks001&include=tagData,downloadData`]: { foundAssets: [record] },
+    // The download link redirects to the CDN, as ambientCG's does.
+    'https://ambientcg.com/get?file=Bricks001_2K-JPG.zip': () => ({ status: 302, ok: false, headers: { get: (h) => (h === 'location' ? 'https://cdn.ambientcg.com/Bricks001_2K-JPG.zip' : null) }, body: null }),
+    'https://cdn.ambientcg.com/Bricks001_2K-JPG.zip': () => reply(zip),
+  };
+  const { lib, unity } = library(dir, fakeFetch(routes).fn, { keys: {} });
+  const found = await lib.search({ source: 'ambientcg', query: 'brick', type: 'texture' });
+  assert.deepEqual(found.results.map((r) => [r.id, r.license]), [['Bricks001', 'CC0']]);
+
+  const res = await lib.importAsset({ source: 'ambientcg', id: 'Bricks001', name: 'Brick Wall', kind: 'texture' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Textures/brick-wall/Bricks001_2K-JPG_Color.jpg`, `${ART}/Textures/brick-wall/Bricks001_2K-JPG_NormalGL.jpg`]);
+  assert.deepEqual(ledgerRows(dir), [{ name: 'Brick Wall', source: 'https://ambientcg.com/view?id=Bricks001', author: 'ambientCG', license: 'CC0', path: `${ART}/Textures/brick-wall/` }]);
+  // The color map is the main file: it gets the material.
+  assert.equal(unity.calls.at(-1).command, 'material create');
+  assert.equal(unity.calls.at(-1).parameters.texture, `${ART}/Textures/brick-wall/Bricks001_2K-JPG_Color.jpg`);
+});
+
+// ---- Freesound --------------------------------------------------------------------------
+
+const FS = 'https://freesound.org/apiv2';
+const FIELDS = 'id,name,username,license,url,tags,previews';
+const fsSound = (id, name, license) => ({ id, name, username: 'foley_kat', license, url: `https://freesound.org/people/foley_kat/sounds/${id}/`, tags: ['sword'], previews: { 'preview-hq-ogg': `https://cdn.freesound.org/previews/${id}-hq.ogg` } });
+
+test('Freesound: the key goes in a header (never the URL), the HQ OGG preview is imported and credited', async () => {
+  const dir = tempRepo();
+  const routes = {
+    [`${FS}/search/text/?query=sword%20slash&page_size=10&fields=${FIELDS}&filter=${encodeURIComponent('license:("Creative Commons 0" OR "Attribution")')}`]: { results: [fsSound(101, 'Sword Slash', 'https://creativecommons.org/licenses/by/4.0/'), fsSound(102, 'Swish', 'http://creativecommons.org/licenses/by-nc/3.0/')] },
+    [`${FS}/sounds/101/?fields=${FIELDS}`]: fsSound(101, 'Sword Slash', 'https://creativecommons.org/licenses/by/4.0/'),
+    'https://cdn.freesound.org/previews/101-hq.ogg': () => reply(OGG),
+  };
+  const fake = fakeFetch(routes);
+  const { lib } = library(dir, fake.fn);
+  const found = await lib.search({ source: 'freesound', query: 'sword slash' });
+  assert.deepEqual(found.results.map((r) => [r.id, r.license]), [['101', 'CC-BY 4.0']]);
+  assert.equal(found.refused[0].id, '102');
+  assert.ok(fake.calls.every((c) => !c.url.includes(KEYS.freesound)), 'the key is never in a URL');
+  assert.equal(fake.calls[0].headers.Authorization, `Token ${KEYS.freesound}`);
+
+  const res = await lib.importAsset({ source: 'freesound', id: '101', kind: 'audio' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Audio/sword-slash.ogg`]);
+  assert.match(res.note, /HQ OGG preview/);
+  assert.match(read(dir, L.CREDITS_FILE), /"Sword Slash" by foley_kat - CC-BY 4\.0/);
+  // The preview CDN never sees the key.
+  assert.equal(JSON.stringify(fake.calls.find((c) => c.url.includes('cdn.freesound.org')).headers).includes(KEYS.freesound), false);
+});
+
+// ---- keys never in an error -------------------------------------------------------------
+
+test('a key never appears in an error: thrown fetch errors, 401 answers and bad replies are redacted', async () => {
+  const dir = tempRepo();
+  const echo = (url, init) => { throw new Error(`socket hang up for ${init.headers.Authorization}`); };
+  const routes = {
+    [`${FS}/sounds/7/?fields=${FIELDS}`]: echo,
+    [`${FS}/sounds/8/?fields=${FIELDS}`]: () => reply({ detail: 'Invalid token' }, 401),
+    [`${PP}/model/x1`]: (url, init) => reply(Buffer.from(`not json ${init.headers['x-auth-token']}`)),
+  };
+  const { lib } = library(dir, fakeFetch(routes).fn);
+  const results = [
+    await lib.importAsset({ source: 'freesound', id: '7', kind: 'audio' }),
+    await lib.importAsset({ source: 'freesound', id: '8', kind: 'audio' }),
+    await lib.importAsset({ source: 'polypizza', id: 'x1', kind: 'prop' }),
+    await lib.search({ source: 'freesound', query: 'anything' }),
+  ];
+  for (const r of results) {
+    assert.equal(r.ok, false);
+    const text = JSON.stringify(r);
+    for (const key of Object.values(KEYS)) assert.equal(text.includes(key), false, `key leaked in ${text}`);
+  }
+  assert.match(results[0].detail, /Freesound is not reachable \(socket hang up for Token \[key\]\)/);
+  assert.equal(results[1].error, 'keyRefused');
+  assert.equal(S.redact(`a ${KEYS.sketchfab} b`, Object.values(KEYS)), 'a [key] b');
+});
+
+test('no official API: Kenney and OpenGameArt answer noApi; bad ids never reach a URL', async () => {
+  const dir = tempRepo();
+  const fake = fakeFetch({});
+  const { lib } = library(dir, fake.fn);
+  assert.equal((await lib.search({ source: 'kenney', query: 'tiles' })).error, 'noApi');
+  assert.match((await lib.importAsset({ source: 'opengameart', id: '1', kind: 'sprite' })).detail, /no official API/);
+  assert.equal((await lib.importAsset({ source: 'polyhaven', id: '../etc', kind: 'texture' })).error, 'badId');
+  assert.equal((await lib.importAsset({ source: 'sketchfab', id: 'x/y', kind: 'prop' })).error, 'badId');
+  assert.equal(fake.calls.length, 0);
+});
+
+test('a download whose bytes are not what the name says is refused and nothing is written', async () => {
+  const dir = tempRepo();
+  const routes = { ...polyHavenRoutes, 'https://dl.polyhaven.org/file/dusk_sky_2k.hdr': () => reply(Buffer.from('<html>login</html>')) };
+  const { lib } = library(dir, fakeFetch(routes).fn);
+  const res = await lib.importAsset({ source: 'polyhaven', id: 'dusk_sky', kind: 'texture' });
+  assert.equal(res.error, 'downloadFailed');
+  assert.match(res.detail, /not a real \.hdr file/);
+  assert.equal(exists(dir, L.LEDGER_FILE), false);
+});
+
+// ---- licenses ---------------------------------------------------------------------------
+
+test('classifyLicense: CC0 and CC-BY pass; NC, ND, SA, Sampling+ and unknown are refused with a reason', () => {
+  const ok = (raw) => L.classifyLicense(raw);
+  assert.deepEqual(ok('CC0 1.0'), { ok: true, license: 'CC0', attribution: false });
+  assert.deepEqual(ok('https://creativecommons.org/publicdomain/zero/1.0/'), { ok: true, license: 'CC0', attribution: false });
+  assert.deepEqual(ok('Creative Commons 0'), { ok: true, license: 'CC0', attribution: false });
+  assert.deepEqual(ok('http://creativecommons.org/licenses/by/3.0/'), { ok: true, license: 'CC-BY 3.0', attribution: true });
+  assert.deepEqual(ok('CC Attribution'), { ok: true, license: 'CC-BY', attribution: true });
+  assert.deepEqual(ok('Attribution'), { ok: true, license: 'CC-BY', attribution: true });
+  assert.deepEqual(ok(L.FREE_COMMERCIAL), { ok: true, license: L.FREE_COMMERCIAL, attribution: false });
+  for (const [raw, why] of [
+    ['CC Attribution-NonCommercial', /NC/],
+    ['http://creativecommons.org/licenses/by-nd/4.0/', /ND/],
+    ['CC BY-SA 4.0', /SA/],
+    ['Sampling+', /Sampling/],
+    ['Editorial', /editorial/],
+    ['Standard', /not on the allowed list/],
+    ['', /no license/],
+    [null, /no license/],
+  ]) {
+    const res = L.classifyLicense(raw);
+    assert.equal(res.ok, false, String(raw));
+    assert.match(res.reason, why);
+  }
+});
+
+test('ripReason: the art references and commercial games are refused by title or tag, everyday words are not', () => {
+  assert.match(L.ripReason({ name: 'Katana Zero Dragon sprite' }), /katana zero/);
+  assert.match(L.ripReason({ name: 'Anime girl', tags: ['ZZZ', 'fanart'] }), /zzz/);
+  assert.match(L.ripReason({ name: 'Black Rock Shooter figure' }), /black rock shooter/);
+  assert.match(L.ripReason({ name: 'Hero model', tags: ['Genshin Impact'] }), /genshin/);
+  assert.match(L.ripReason({ name: 'Ripped from the game' }), /ripped/);
+  assert.equal(L.ripReason({ name: 'Golden halo VFX', tags: ['portal', 'katana', 'zero gravity'] }), null);
+});
+
+test('the ledger: created with its header, a re-ledgered path replaces its row, text around the table kept', () => {
+  const first = L.withLedgerRows(null, [{ name: 'A | B', source: 'https://x.test/a', author: 'Ann', license: 'CC0', path: 'Assets/G/Art/a.png' }]);
+  assert.match(first, /^# Asset licenses\n/);
+  assert.match(first, /\| Name \| Source URL \| Author \| License \| Path \|/);
+  assert.equal(L.parseLedger(first).rows[0].name, 'A | B', 'a pipe in a cell is escaped and read back');
+  const edited = `${first}\nNotes kept.\n`;
+  const second = L.withLedgerRows(edited, [{ name: 'A2', source: 'https://x.test/a', author: 'Ann', license: 'CC-BY 4.0', path: 'Assets/G/Art/a.png' }, { name: 'C', source: '', author: 'Cy', license: 'CC0', path: 'Assets/G/Art/c/' }]);
+  assert.deepEqual(L.parseLedger(second).rows.map((r) => r.name), ['A2', 'C']);
+  assert.match(second, /Notes kept\./);
+  assert.equal(L.creditsText(L.parseLedger(second).rows).includes('"A2" by Ann - CC-BY 4.0 - https://x.test/a'), true);
+  assert.equal(L.creditsText([{ name: 'C', author: 'Cy', license: 'CC0', path: 'p' }]), null);
+});
+
+// ---- Critic -----------------------------------------------------------------------------
+
+test('Critic: an art file without a ledger row gets one high card; prefabs, .meta and ledgered folders are covered', () => {
+  const dir = tempRepo();
+  const write = (rel, data = 'x') => {
+    fs.mkdirSync(path.dirname(path.join(dir, ...rel.split('/'))), { recursive: true });
+    fs.writeFileSync(path.join(dir, ...rel.split('/')), data);
+  };
+  write(`${ART}/Props/crate.fbx`);
+  write(`${ART}/Props/crate.prefab`);
+  write(`${ART}/Props/crate.fbx.meta`);
+  write(`${ART}/Textures/brick/brick_color.jpg`);
+  write(`${ART}/Sprites/mystery.png`);
+  write('Assets/Scripts/Player.cs');
+  write(L.LEDGER_FILE, L.withLedgerRows(null, [
+    { name: 'Crate', source: 'art/blender/crate.blend', author: 'LunaCore', license: L.GENERATED_LICENSE, path: `${ART}/Props/crate.fbx` },
+    { name: 'Brick', source: 'https://ambientcg.com/view?id=B', author: 'ambientCG', license: 'CC0', path: `${ART}/Textures/brick/` },
+  ]));
+  assert.deepEqual(L.unledgeredArt(dir), [`${ART}/Sprites/mystery.png`]);
+  const cards = L.ledgerCards(dir, []);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].severity, 'high');
+  assert.match(cards[0].text, /^Asset license: 1 art file\(s\) have no row in design\/ASSET_LICENSES\.md/);
+  assert.match(cards[0].details, /mystery\.png/);
+  // An open card about it is updated, not doubled.
+  assert.equal(L.ledgerCards(dir, [{ at: 77, text: 'Asset license: 3 art file(s) have no row in design/ASSET_LICENSES.md' }])[0].updatesCardId, 77);
+  write(L.LEDGER_FILE, L.withLedgerRows(read(dir, L.LEDGER_FILE), [{ name: 'Mystery', source: 'https://x.test/m', author: 'Me', license: 'CC0', path: `${ART}/Sprites/mystery.png` }]));
+  assert.deepEqual(L.ledgerCards(dir, []), []);
+});
+
+// ---- zip --------------------------------------------------------------------------------
+
+test('zip: only allowed files come out, flat; a path outside its folder and a damaged entry are refused', async () => {
+  const ok = await Z.readZip(makeZip([{ name: 'maps/a.jpg', data: JPG }, { name: 'b.usda', data: Buffer.from('x') }]), { allowExt: ['jpg'] });
+  assert.deepEqual(ok.map((e) => e.name), ['a.jpg']);
+  assert.deepEqual(ok[0].data, JPG);
+  await assert.rejects(() => Z.readZip(makeZip([{ name: '../evil.jpg', data: JPG }]), { allowExt: ['jpg'] }), /outside its folder/);
+  await assert.rejects(() => Z.readZip(makeZip([{ name: 'C:/evil.jpg', data: JPG }]), { allowExt: ['jpg'] }), /outside its folder/);
+  const damaged = makeZip([{ name: 'a.jpg', data: JPG, deflate: false }]);
+  damaged[30 + 'a.jpg'.length] ^= 0xff;
+  await assert.rejects(() => Z.readZip(damaged, { allowExt: ['jpg'] }), /damaged/);
+  await assert.rejects(() => Z.readZip(makeZip([{ name: 'big.jpg', data: Buffer.alloc(5000, 1) }]), { allowExt: ['jpg'], maxFileBytes: 100 }), /larger than/);
+  await assert.rejects(() => Z.readZip(Buffer.from('not a zip at all, definitely not')), /not a zip/);
+});
+
+test('zip keepDirs: a glTF set keeps its safe folders; device names and deep paths are skipped', async () => {
+  const gltf = Buffer.from(JSON.stringify({ asset: { version: '2.0' } }));
+  const entries = await Z.readZip(makeZip([
+    { name: 'scene.gltf', data: gltf },
+    { name: 'textures/Body_baseColor.png', data: JPG },
+    { name: 'textures/con.png', data: JPG },
+    { name: 'a/b/c/d/e.png', data: JPG },
+    { name: 'license.txt', data: Buffer.from('CC-BY') },
+  ]), { allowExt: ['gltf', 'png'], keepDirs: true });
+  assert.deepEqual(entries.map((e) => e.name), ['scene.gltf', 'textures/Body_baseColor.png']);
+  assert.equal(Z.isSafeName('NUL.txt'), false);
+  assert.equal(Z.isSafeName('trailing.'), false);
+  assert.equal(Z.isSafeName('Body_baseColor.png'), true);
+});
+
+// ---- review hardening -------------------------------------------------------------------
+
+test('classifyLicense: free text that only mentions a free license is refused; library text cannot claim LunaCore labels', () => {
+  for (const raw of ['Attribution, personal use only', 'CC0 NonCommercial', 'CC-BY for non commercial projects', 'Free for personal use', 'CC0 but no commercial use', 'see CC0 in readme']) {
+    assert.equal(L.classifyLicense(raw).ok, false, raw);
+  }
+  assert.equal(L.classifyLicense(L.GENERATED_LICENSE).ok, true, 'the pipeline labels its own generated files');
+  assert.equal(L.classifyLicense(L.GENERATED_LICENSE, { library: true }).ok, false);
+  assert.equal(L.classifyLicense(L.FREE_COMMERCIAL, { library: true }).ok, false);
+  assert.equal(L.classifyLicense('CC-BY 4.0', { library: true }).license, 'CC-BY 4.0');
+});
+
+test('ripReason reads the description too', () => {
+  assert.match(L.ripReason({ name: 'Sword', tags: ['blade'], description: 'Extracted from Zenless Zone Zero game files' }), /zenless zone zero/);
+  assert.equal(L.ripReason({ name: 'Sword', tags: ['blade'], description: 'A plain low-poly sword I made in Blender.' }), null);
+});
+
+test('the ledger rewrite keeps hand-added columns, rows without a path and CRLF; cells lose markdown and tags', () => {
+  const hand = [
+    '# Licenses',
+    '',
+    '| Name | Source URL | Author | License | Path | Notes |',
+    '|---|---|---|---|---|---|',
+    '| Old | https://x.test/o | Ann | CC0 | Assets/G/Art/old.png | bought 2025 |',
+    '| Pack notes | | | | | see the pack readme |',
+    '',
+  ].join('\r\n');
+  const next = L.withLedgerRows(hand, [
+    { name: 'Old v2', source: 'https://x.test/o', author: 'Ann', license: 'CC0', path: 'Assets/G/Art/old.png' },
+    { name: '[click](https://evil.test) <b>x</b>', source: 'https://x.test/n', author: '`Bob`', license: 'CC-BY 4.0', path: 'Assets/G/Art/new.png' },
+  ]);
+  assert.equal(next.includes('\r\n'), true);
+  assert.equal(next.split('\r\n').every((line) => !line.includes('\n')), true, 'no bare LF mixed in');
+  assert.match(next, /\| Old v2 \| https:\/\/x\.test\/o \| Ann \| CC0 \| Assets\/G\/Art\/old\.png \| bought 2025 \|/);
+  assert.match(next, /\| Pack notes \| \| \| \| \| see the pack readme \|/);
+  const added = next.split('\r\n').find((line) => line.includes('new.png'));
+  assert.equal(/[[\]<>`]/.test(added), false, added);
+  assert.equal(added.split('|').length, 8, 'six cells, as in the header');
+  assert.equal(L.creditsText(L.parseLedger(next).rows).includes('<'), false);
+});
+
+test('a replaced path drops its stale duplicate rows, so an old CC-BY credit cannot survive', () => {
+  const hand = L.withLedgerRows(null, [{ name: 'Tree', source: 'https://x.test/t', author: 'Ann', license: 'CC-BY 4.0', path: 'Assets/G/Art/tree.glb' }]);
+  const doubled = hand.replace(/(\| Tree .*\n)/, '$1$1');
+  assert.equal(L.parseLedger(doubled).rows.length, 2);
+  const next = L.withLedgerRows(doubled, [{ name: 'Tree', source: 'https://x.test/t2', author: 'Bo', license: 'CC0', path: 'Assets/G/Art/tree.glb' }]);
+  assert.deepEqual(L.parseLedger(next).rows.map((r) => r.license), ['CC0']);
+  assert.equal(L.creditsText(L.parseLedger(next).rows), null);
+});
+
+test('a Critic scan cut off by its depth cap still holds SHIP with a card', () => {
+  const dir = tempRepo();
+  const deep = ['Assets', 'Art', ...Array.from({ length: 18 }, (_, i) => `d${i}`)];
+  fs.mkdirSync(path.join(dir, ...deep), { recursive: true });
+  fs.writeFileSync(path.join(dir, ...deep, 'hidden.png'), 'x');
+  const cards = L.ledgerCards(dir, []);
+  assert.equal(cards.length, 1);
+  assert.match(cards[0].text, /art scan of Assets\/ was cut off/);
+  assert.match(cards[0].details, /by hand/);
+});
+
+test('the Critic card says a folder row covers a whole pack', () => {
+  const dir = tempRepo();
+  fs.mkdirSync(path.join(dir, ...`${ART}/Sprites`.split('/')), { recursive: true });
+  fs.writeFileSync(path.join(dir, ...`${ART}/Sprites/a.png`.split('/')), 'x');
+  assert.match(L.ledgerCards(dir, [])[0].details, /path ending in "\/".*covers every file under it/);
+});
+
+test('import never reuses a name whose prefab or material is there; a dots-only query is refused', async () => {
+  const dir = tempRepo();
+  fs.mkdirSync(path.join(dir, ...`${ART}/Props`.split('/')), { recursive: true });
+  fs.writeFileSync(path.join(dir, ...`${ART}/Props/katana-sword.prefab`.split('/')), 'hand-made prefab');
+  const { lib } = library(dir, fakeFetch(sketchfabRoutes().routes).fn);
+  const res = await lib.importAsset({ source: 'sketchfab', id: UID, name: 'Katana Sword', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Props/katana-sword-v2.glb`]);
+  assert.equal(read(dir, `${ART}/Props/katana-sword.prefab`), 'hand-made prefab');
+  assert.equal((await lib.search({ source: 'sketchfab', query: '...' })).error, 'badQuery');
+});
+
+test('Sketchfab without a GLB: the glTF zip comes in with its folders, the .gltf is the main file', async () => {
+  const dir = tempRepo();
+  const gltf = Buffer.from(JSON.stringify({ asset: { version: '2.0' }, images: [{ uri: 'textures/Body_baseColor.png' }] }));
+  const zip = makeZip([
+    { name: 'scene.gltf', data: gltf },
+    { name: 'scene.bin', data: Buffer.alloc(16, 3) },
+    { name: 'textures/Body_baseColor.png', data: pad(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+    { name: 'license.txt', data: Buffer.from('CC-BY') },
+  ]);
+  const sf = sketchfabRoutes();
+  const routes = {
+    ...sf.routes,
+    [`${SF}/models/${UID}/download`]: () => reply({ gltf: { url: 'https://sketchfab-prod-media.s3.amazonaws.com/archives/katana.zip?sig=abc' } }),
+    'https://sketchfab-prod-media.s3.amazonaws.com/archives/katana.zip?sig=abc': () => reply(zip),
+  };
+  const { lib, unity } = library(dir, fakeFetch(routes).fn);
+  const res = await lib.importAsset({ source: 'sketchfab', id: UID, name: 'Katana Sword', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const root = `${ART}/Props/katana-sword`;
+  assert.deepEqual(res.files, [`${root}/scene.gltf`, `${root}/scene.bin`, `${root}/textures/Body_baseColor.png`]);
+  assert.equal(res.main, `${root}/scene.gltf`);
+  assert.equal(ledgerRows(dir)[0].path, `${root}/`);
+  // A .gltf gets its prefab like any model.
+  assert.deepEqual(unity.calls.at(-1), { command: 'prefab create', parameters: unity.calls.at(-1).parameters });
+  assert.equal(unity.calls.at(-1).parameters.path, `${root}/scene.prefab`);
+});
+
+test('a credits file that cannot be written restores the ledger and takes the files and their folders out', async () => {
+  const dir = tempRepo();
+  // A folder where the credits file should go: the write fails.
+  fs.mkdirSync(path.join(dir, ...L.CREDITS_FILE.split('/')), { recursive: true });
+  const sf = sketchfabRoutes();
+  const gltf = Buffer.from(JSON.stringify({ asset: { version: '2.0' } }));
+  const zip = makeZip([{ name: 'scene.gltf', data: gltf }, { name: 'textures/t.jpg', data: JPG }]);
+  const routes = {
+    ...sf.routes,
+    [`${SF}/models/${UID}/download`]: () => reply({ gltf: { url: 'https://sketchfab-prod-media.s3.amazonaws.com/archives/k.zip' } }),
+    'https://sketchfab-prod-media.s3.amazonaws.com/archives/k.zip': () => reply(zip),
+  };
+  const { lib } = library(dir, fakeFetch(routes).fn);
+  const res = await lib.importAsset({ source: 'sketchfab', id: UID, name: 'Katana Sword', kind: 'prop' });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'ledgerFailed', JSON.stringify(res));
+  assert.equal(exists(dir, L.LEDGER_FILE), false, 'a CC-BY row never stays without its credit');
+  assert.equal(exists(dir, `${ART}/Props/katana-sword`), false, 'the files and the folders they made are gone');
+});
+
+test('two imports at once never pick the same name', async () => {
+  const dir = tempRepo();
+  const { lib } = library(dir, fakeFetch(polyHavenRoutes).fn);
+  const [a, b] = await Promise.all([
+    lib.importAsset({ source: 'polyhaven', id: 'dusk_sky', name: 'Sky', kind: 'texture' }),
+    lib.importAsset({ source: 'polyhaven', id: 'dusk_sky', name: 'Sky', kind: 'texture' }),
+  ]);
+  assert.deepEqual([a.main, b.main].sort(), [`${ART}/Textures/sky-v2.hdr`, `${ART}/Textures/sky.hdr`]);
+  assert.equal(ledgerRows(dir).length, 2);
+});
+
+// ---- the key store ----------------------------------------------------------------------
+
+/** A fake safeStorage: reversible, but never the plain text on disk. */
+function fakeSafeStorage({ available = true, backend = 'dpapi' } = {}) {
+  return {
+    isEncryptionAvailable: () => available,
+    getSelectedStorageBackend: () => backend,
+    encryptString: (s) => Buffer.from(Buffer.from(s, 'utf8').map((b) => b ^ 0x5a)),
+    decryptString: (b) => Buffer.from(b.map((x) => x ^ 0x5a)).toString('utf8'),
+  };
+}
+
+test('key store: keys are encrypted on disk, status is booleans only, a bad key or source is refused', () => {
+  const dir = tempRepo();
+  const store = K.createAssetKeyStore({ dir: () => dir, safeStorage: () => fakeSafeStorage() });
+  assert.deepEqual(store.set('freesound', KEYS.freesound), { ok: true });
+  assert.equal(store.get('freesound'), KEYS.freesound);
+  const onDisk = fs.readFileSync(path.join(dir, K.STORE_FILE), 'utf8');
+  assert.equal(onDisk.includes(KEYS.freesound), false);
+  assert.deepEqual(store.status(), { ok: true, keys: { sketchfab: false, polypizza: false, freesound: true }, persisted: true });
+  assert.equal(store.set('freesound', 'short').ok, false);
+  assert.equal(store.set('kenney', KEYS.freesound).reason, 'bad-source');
+  assert.deepEqual(store.secrets(), [KEYS.freesound]);
+  // A fresh store reads the encrypted file back.
+  assert.equal(K.createAssetKeyStore({ dir: () => dir, safeStorage: () => fakeSafeStorage() }).get('freesound'), KEYS.freesound);
+  assert.deepEqual(store.set('freesound', null), { ok: true });
+  assert.equal(store.get('freesound'), null);
+});
+
+test('key store: without real encryption (basic_text) a key lives in memory only, never in a plain file', () => {
+  const dir = tempRepo();
+  const store = K.createAssetKeyStore({ dir: () => dir, safeStorage: () => fakeSafeStorage({ backend: 'basic_text' }) });
+  store.set('sketchfab', KEYS.sketchfab);
+  assert.equal(store.get('sketchfab'), KEYS.sketchfab);
+  assert.equal(fs.existsSync(path.join(dir, K.STORE_FILE)), false);
+  assert.equal(store.status().persisted, false);
+});
+
+test('key IPC: status never carries a key; a malformed request is refused', async () => {
+  const handlers = {};
+  const ipcMain = { handle: (ch, fn) => { handlers[ch] = fn; } };
+  const dir = tempRepo();
+  K.registerAssetKeyIpc({ ipcMain, keys: K.createAssetKeyStore({ dir: () => dir, safeStorage: () => fakeSafeStorage() }) });
+  const saved = await handlers['lunaswork:setAssetKey'](null, { source: 'polypizza', key: KEYS.polypizza });
+  assert.equal(saved.keys.polypizza, true);
+  assert.equal(JSON.stringify(saved).includes(KEYS.polypizza), false);
+  assert.equal(JSON.stringify(await handlers['lunaswork:assetKeys']()).includes(KEYS.polypizza), false);
+  assert.equal((await handlers['lunaswork:setAssetKey'](null, { source: 'polypizza', key: 42 })).reason, 'bad-request');
+  assert.equal((await handlers['lunaswork:setAssetKey'](null, 'x')).reason, 'bad-request');
+  // What preload sends for a key that is neither a string nor null.
+  assert.equal((await handlers['lunaswork:setAssetKey'](null, { source: 'polypizza', key: undefined })).reason, 'bad-request');
+  assert.equal(K.createAssetKeyStore({ dir: () => dir, safeStorage: () => fakeSafeStorage() }).get('polypizza'), KEYS.polypizza, 'the stored key was not cleared');
+});

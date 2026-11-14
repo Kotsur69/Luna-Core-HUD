@@ -25,6 +25,7 @@ import { mountHubSettings, refreshHubSyncLine } from './hubsettings.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountOrchestraSettings } from './orchestrasettings.js';
 import { mountLunasWorkSettings } from './lunaswork.js';
+import { mountLunasWorkKeys } from './lunasworkKeys.js';
 import { mountMailSettings } from './mailsettings.js';
 import { mountSurfaceAlpha } from './surfacealpha.js';
 import { mountLmStudioSettings } from './lmstudiomodels.js';
@@ -603,6 +604,7 @@ export async function initTermcustomSettings() {
 
   // Luna's Work pane (own IPC, own settings file - God Mode's prefs untouched).
   mountLunasWorkSettings(termcustomEl);
+  mountLunasWorkKeys(termcustomEl);
 
   // Setup Center (top of the overlay) + the optional-module switches, which
   // also apply the hide-* attributes right now, before Settings ever opens.

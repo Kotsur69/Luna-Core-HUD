@@ -63,6 +63,7 @@ const {
 } = require('./lunasworkCriticPrompt');
 const { formatLogEntry, writePack } = require('./lunasworkCriticPack');
 const { designMatchCards } = require('./lunasworkDesignMatch');
+const { ledgerCards } = require('./lunasworkLicenses');
 
 const CRITIC_EFFORT = 'high';
 const CRITIC_BUDGET_USD = 3;
@@ -729,13 +730,17 @@ async function runCritic(opts) {
     // LW 2.19a: the design-match cards; one the model already rewrites that card is left to it.
     const taken = new Set(critique.cards.map((c) => c.updatesCardId).filter((at) => at !== null));
     const designCards = designMatchCards(report.designMatch, open).filter((c) => c.updatesCardId === null || !taken.has(c.updatesCardId));
+    // Art under Assets/**/Art/ without a design/ASSET_LICENSES.md row (src/lunasworkLicenses.js).
+    // The SHIP hold comes from the files on disk, so it holds even when the model rewrote the open license card itself.
+    const allLicenseCards = ledgerCards(o.repoDir, open);
+    const licenseCards = allLicenseCards.filter((c) => c.updatesCardId === null || !taken.has(c.updatesCardId));
     // LW 2.13: read after the Director's tick, so new cards land in the epic now being worked on.
     const epic = pack.activeEpic(pack.parseRoadmap(pack.readPackFile(o.repoDir, 'ROADMAP.md')));
-    const applied = safeApplyCards(o.todoStore, [...critique.cards, ...designCards], tag, { epic: epic ? epic.slug : null });
+    const applied = safeApplyCards(o.todoStore, [...critique.cards, ...designCards, ...licenseCards], tag, { epic: epic ? epic.slug : null });
     if (applied.error) log('critic could not save cards', applied.error);
     const date = new Date(now()).toISOString().slice(0, 10);
-    // Cards that were not saved are work nobody will do: never ship past them.
-    const verdict = applied.error ? 'continue' : critique.verdict;
+    // Cards that were not saved are work nobody will do, and unlicensed art must not ship: never ship past either.
+    const verdict = applied.error || allLicenseCards.length ? 'continue' : critique.verdict;
     const packResult = writePack(o.repoDir, { ...critique, verdict }, {
       iteration: o.iteration,
       date,

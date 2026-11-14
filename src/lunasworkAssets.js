@@ -319,7 +319,7 @@ const renderBase = (row) => `${pack.DESIGN_DIR}/${RENDERS_DIR}/${slugOf(row)}`;
 const HOW = Object.freeze({
   generated: 'Generate it with an available generation API (for example Higgsfield, or image-to-3D for a model). Use the spec as the prompt.',
   blender: 'Make it in Blender through the Blender MCP (generate_3d, or model it with execute_blender_code), then export it (FBX or GLB for a model).',
-  library: 'Take it from an asset library (Blender MCP search_assets / import_asset: Poly Haven, Sketchfab, Poly Pizza). Check that its license allows use in the game.',
+  library: 'Take it from a free asset library through its official API (Poly Haven, ambientCG, Sketchfab downloadable models, Poly Pizza, Freesound; Blender MCP search_assets / import_asset reaches the first three). Only CC0, CC-BY or an explicit free-for-commercial license; never assets ripped from existing games. Add its row (name, source URL, author, license, path) to design/ASSET_LICENSES.md and credit CC-BY assets.',
 });
 
 /**

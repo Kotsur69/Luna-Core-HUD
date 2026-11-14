@@ -107,6 +107,11 @@ test('a Blender asset card -> .blend + FBX in the repo, then Unity import and pr
   assert.equal(res.prefab, `${ART}/Characters/ronin-hero.prefab`);
   assert.equal(logged.length, 1);
   assert.deepEqual([logged[0].tool, logged[0].path, logged[0].costUsd, logged[0].seed, logged[0].imported], ['blender', `${ART}/Characters/ronin-hero.fbx`, 0, null, true]);
+  // A generated asset gets its license row too, so the Critic's ledger check passes.
+  assert.equal(res.ledger, 'design/ASSET_LICENSES.md');
+  const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
+  assert.match(ledger, /\| Ronin Hero \| art\/blender\/ronin-hero\.blend \| LunaCore asset worker \(Blender\) \| Own work \(generated\) \| Assets\/BladeBullet\/Art\/Characters\/ronin-hero\.fbx \|/);
+  assert.equal(exists(dir, 'Assets/StreamingAssets/CREDITS.txt'), false, 'no CC-BY row, no credits file');
 });
 
 test('a Blender export that wrote nothing (or not an FBX) fails before any Unity call', async () => {

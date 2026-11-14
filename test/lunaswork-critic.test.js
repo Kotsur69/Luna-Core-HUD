@@ -241,6 +241,20 @@ test('SHIP stands when every gate passed', async () => {
   assert.equal(res.verdict, 'ship');
 });
 
+test('art under Assets/**/Art/ without a design/ASSET_LICENSES.md row gets a license card and holds SHIP', async () => {
+  const report = { ...SKELETON_PASSED, scores: [...SKELETON_PASSED.scores, score('Core flows', 'A quote can be made end to end', 9)].filter((s) => s.score !== 3) };
+  const repoDir = fakeRepo();
+  fs.mkdirSync(path.join(repoDir, 'Assets', 'Game', 'Art', 'Sprites'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'Assets', 'Game', 'Art', 'Sprites', 'ripped-hero.png'), 'x');
+  const store = memStore();
+  const res = await C.runCritic(baseOpts({ repoDir, todoStore: store, runClaude: fakeClaude(envelope(critique({ verdict: 'SHIP' }))).run, report }));
+  assert.equal(res.allPassed, true);
+  assert.equal(res.verdict, 'continue', 'unlicensed art never ships');
+  const licenseCard = res.cards.created.find((c) => c.text.startsWith('Asset license:'));
+  assert.ok(licenseCard, JSON.stringify(res.cards.created.map((c) => c.text)));
+  assert.match(licenseCard.details, /Assets\/Game\/Art\/Sprites\/ripped-hero\.png/);
+});
+
 test('bugs and blockers are created first', async () => {
   const raw = critique({
     cards: [

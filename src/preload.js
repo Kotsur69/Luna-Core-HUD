@@ -507,6 +507,11 @@ contextBridge.exposeInMainWorld('lunacore', {
   lunasworkSaveSettings: (projectId, patch) => ipcRenderer.invoke('lunaswork:saveSettings', { ...(patch && typeof patch === 'object' ? patch : {}), projectId }),
   /** Creates the missing design/ pack files. Promise<{ok, created, skipped, failed, pack}>. */
   lunasworkScaffoldPack: (projectId) => ipcRenderer.invoke('lunaswork:scaffoldPack', { projectId }),
+  // Asset library API keys (src/lunasworkAssetKeys.js): write-only from here; a key never comes back.
+  /** Promise<{ok, keys:{sketchfab, polypizza, freesound: boolean}, persisted:boolean} | {ok:false, reason}>. */
+  lunasworkAssetKeys: () => ipcRenderer.invoke('lunaswork:assetKeys'),
+  /** key: the API key, or null to remove it (anything else is refused by main). Same answer as lunasworkAssetKeys, or {ok:false, reason}. */
+  lunasworkSetAssetKey: (source, key) => ipcRenderer.invoke('lunaswork:setAssetKey', { source: typeof source === 'string' ? source : '', key: typeof key === 'string' || key === null ? key : undefined }),
   /** Promise<{ok, pack:{complete, missing, empty}} | {ok:false, reason}>. */
   lunasworkPackStatus: (projectId) => ipcRenderer.invoke('lunaswork:packStatus', { projectId }),
   /** Scaffolds design/ and opens the interview tab. Promise<{ok, pack} | {ok:false, reason}>. */

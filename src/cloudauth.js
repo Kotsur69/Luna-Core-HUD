@@ -232,4 +232,5 @@ function createCloudAuth({ config, sessionFile, safeStorage, shell, createClient
   };
 }
 
-module.exports = { createCloudAuth };
+// encryptedStorage is reused by the asset library keys (src/lunasworkAssetKeys.js).
+module.exports = { createCloudAuth, encryptedStorage };
