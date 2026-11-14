@@ -38,6 +38,8 @@ import { onLangChange } from './bus.js';
 import { crossfade } from './motion.js';
 // DOM-free at module scope too: it only builds SVG when called.
 import { widgetIconSvg } from './widgeticons.js';
+// DOM-free at module scope: the window and target are passed in per gesture.
+import { armGestureEnd } from './gestureend.js';
 
 /** Narrowest a panel may be dragged, and the widest a fixed track may grow. */
 export const MIN_TRACK_PX = 140;
@@ -242,6 +244,8 @@ let currentTracks = null;
  *  see with everything open, and the only thing ever written to layoutSizes. */
 let currentBaseTracks = null;
 let splitters = [];
+/** Ends the splitter drag in flight (see wireSplitter), or null when none is. */
+let endSplitterDrag = null;
 
 function app() {
   if (!appEl) appEl = document.querySelector('.app');
@@ -916,6 +920,11 @@ function positionSplitters() {
 }
 
 function removeSplitters() {
+  // A rebuild mid-drag (layout switch, rail toggle) detaches the handle that
+  // holds the gesture, so its pointerup would never arrive and body.is-resizing
+  // would stay up for good. End it first - without committing, because by now
+  // currentLayout may already be the NEW layout.
+  if (endSplitterDrag) endSplitterDrag('removed');
   for (const el of splitters) el.remove();
   splitters = [];
 }
@@ -975,11 +984,22 @@ function wireSplitter(el, boundary) {
 
   el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    // An older drag still live at this point lost its release somewhere; the
+    // capture-phase pointerdown armGestureEnd added has already ended it.
     drag = beginDrag(el, boundary, e.clientX, e.pointerId);
     if (!drag) return;
-    el.setPointerCapture(e.pointerId);
     el.classList.add('is-dragging');
     document.body.classList.add('is-resizing');
+    // Armed before the capture: if setPointerCapture throws (the pointer is
+    // already gone), the gesture still has a way to end.
+    endSplitterDrag = armGestureEnd({ win: window, target: el, pointerId: e.pointerId, onEnd: end });
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      // Pointer already released: nothing will ever arrive for this drag.
+      endSplitterDrag('lost');
+      return;
+    }
     e.preventDefault();
   });
 
@@ -994,24 +1014,35 @@ function wireSplitter(el, boundary) {
     });
   });
 
-  const end = () => {
-    if (!drag) return;
+  // The one cleanup, run once per drag by armGestureEnd: pointerup, cancel,
+  // lost capture, window blur, Escape, a fresh press, or the handle being torn
+  // down. The tracks on screen are already the dragged ones, so most endings
+  // keep them. Escape is the user abandoning the drag: put the widths back and
+  // persist nothing. A teardown persists nothing either, because currentLayout
+  // may already be a different one.
+  function end(reason) {
+    endSplitterDrag = null;
+    const was = drag;
+    drag = null;
     if (frame) {
       cancelAnimationFrame(frame);
       frame = 0;
     }
-    try {
-      el.releasePointerCapture(drag.pointerId);
-    } catch {
-      /* the capture is already gone on a cancel */
-    }
-    drag = null;
     el.classList.remove('is-dragging');
     document.body.classList.remove('is-resizing');
+    if (!was) return;
+    try {
+      if (el.hasPointerCapture(was.pointerId)) el.releasePointerCapture(was.pointerId);
+    } catch {
+      /* the capture is already gone (cancel, or the handle was detached) */
+    }
+    if (reason === 'removed') return;
+    if (reason === 'escape') {
+      applyTracks(was.startTracks);
+      return;
+    }
     if (currentLayout) commitTracks();
-  };
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
+  }
 
   // Double-click resets THIS layout to the widths its preset was authored with.
   el.addEventListener('dblclick', () => {

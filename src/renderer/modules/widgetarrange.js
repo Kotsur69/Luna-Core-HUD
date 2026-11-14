@@ -33,6 +33,7 @@
 
 import { onLangChange } from './bus.js';
 import { getWidget, listWidgets } from './registry.js';
+import { armGestureEnd } from './gestureend.js';
 
 /**
  * Widgets a layout may place but this feature must never move. `terminal` is
@@ -373,7 +374,11 @@ function clearFlip() {
 let drag = null;
 
 function startDrag(event, section) {
-  if (drag || event.button !== 0) return;
+  if (event.button !== 0) return;
+  // A drag still live here lost its release (a pen whose pointerup never came,
+  // say). armGestureEnd's capture-phase pointerdown normally ends it first;
+  // this is the belt to that brace, so a stale gesture can never block a new one.
+  if (drag) endDrag(false);
 
   const rect = section.getBoundingClientRect();
   const placeholder = document.createElement('div');
@@ -400,11 +405,18 @@ function startDrag(event, section) {
     // handle, not the whole title), but a plain click on it must not rewrite
     // prefs - this flips true only once the placeholder actually relocates.
     moved: false,
+    disarm: null,
   };
 
   window.addEventListener('pointermove', onMove);
-  window.addEventListener('pointerup', onUp);
-  window.addEventListener('pointercancel', onCancel);
+  // Only a real pointerup drops the tile; blur, Escape, a cancel or a new press
+  // put it back where it started - and every one of them clears the lifted,
+  // pointer-events:none tile that would otherwise cover the bars underneath.
+  drag.disarm = armGestureEnd({
+    win: window,
+    pointerId: event.pointerId,
+    onEnd: (reason) => endDrag(reason === 'up'),
+  });
 }
 
 function paint() {
@@ -445,24 +457,15 @@ function onMove(event) {
   });
 }
 
-function onUp(event) {
-  if (drag && event.pointerId !== drag.pointerId) return;
-  endDrag(true);
-}
-
-function onCancel(event) {
-  if (drag && event.pointerId !== drag.pointerId) return;
-  endDrag(false);
-}
-
 function endDrag(commit) {
   if (!drag) return;
   const g = drag;
   drag = null;
   if (g.frame) cancelAnimationFrame(g.frame);
   window.removeEventListener('pointermove', onMove);
-  window.removeEventListener('pointerup', onUp);
-  window.removeEventListener('pointercancel', onCancel);
+  // Re-enters endDrag() through onEnd when called from anywhere but there;
+  // `drag` is already null, so that second call is a no-op.
+  if (g.disarm) g.disarm('manual');
 
   // On commit the section moves to wherever the placeholder ended up; on cancel
   // it stays where it started. Resolve the drop point BEFORE removing the
@@ -472,16 +475,24 @@ function endDrag(commit) {
   const target = land ? g.placeholder.parentNode : null;
   let ref = land ? g.placeholder.nextElementSibling : null;
   if (ref === g.section) ref = g.section.nextElementSibling;
-  g.placeholder.remove();
-  g.section.classList.remove('is-arranging');
-  g.section.style.width = '';
-  g.section.style.left = '';
-  g.section.style.top = '';
-  if (target) target.insertBefore(g.section, ref);
-  clearFlip();
-  document.body.classList.remove('is-arranging');
+  let landed = false;
+  try {
+    g.placeholder.remove();
+    if (target) target.insertBefore(g.section, ref);
+    landed = Boolean(target);
+    clearFlip();
+  } finally {
+    // Whatever the DOM moves above did, the tile must come back down: left
+    // lifted it is position:fixed with pointer-events:none at z-index 60, and
+    // the title bar it was grabbed by can no longer be clicked.
+    g.section.classList.remove('is-arranging');
+    g.section.style.width = '';
+    g.section.style.left = '';
+    g.section.style.top = '';
+    document.body.classList.remove('is-arranging');
+  }
 
-  if (commit && g.moved && currentLayout) {
+  if (landed && currentLayout) {
     const entries = regionScrolls().map(({ name, scroll }) => ({
       region: name,
       ids: [...scroll.querySelectorAll(':scope > [data-widget]')].map((n) => n.dataset.widget),
@@ -513,6 +524,9 @@ function resetCurrentLayout() {
  * region.
  */
 export function applyWidgetArrange(layout) {
+  // A layout rebuilt under a live drag: the regions it was hunting through are
+  // gone, so put the tile down where it is rather than leave it lifted.
+  if (drag) endDrag(false);
   currentLayout = layout;
   decorateAll();
 }
