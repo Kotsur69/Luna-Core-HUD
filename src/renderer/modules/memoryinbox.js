@@ -12,6 +12,9 @@
 // reads; unknown last; src/memoryinbox.js listInbox). The score is shown,
 // never acted on.
 //
+// The Graveyard tab lists the candidates capture dropped under the usefulness
+// floor (src/memorygraveyard.js, local only): restore one to the inbox, or delete it.
+//
 // Opened from the notification hub item "N memories to review"
 // (hubpanel.js openMemoryInbox). A memory is named to main only by its key.
 // Memory text is free text from a model: textContent only, never markup.
@@ -37,7 +40,7 @@ let editing = null;
 const expanded = new Set();
 /** key -> reason of the last failed action, shown on that entry. */
 const failed = new Map();
-/** Which list shows: 'inbox' (to approve) or 'review' (to check). Null until the first paint picks one. */
+/** Which list shows: 'inbox', 'review', 'all' or 'graveyard'. Null until the first paint picks one. */
 let tab = null;
 /** The key whose "Retire" waits for a second click, or null. */
 let confirming = null;
@@ -281,6 +284,43 @@ function reviewEntry(item) {
   return card;
 }
 
+/** Why a graveyard entry was dropped, in words: the usefulness floor with its score, or main's reason. */
+export function graveLine(item) {
+  if (item.reason === 'low usefulness') return t('mem.grave.low', { score: Number.isInteger(item.usefulness) ? item.usefulness : '?' });
+  return t('mem.grave.reason', { reason: String(item.reason || '') });
+}
+
+/** One dropped candidate: restore it to the inbox, or delete it. Model text: textContent only. */
+function graveyardEntry(item) {
+  const card = cardFor(item);
+  const head = el('div', 'mem-inbox__head');
+  const day = Number.isFinite(item.at) ? new Date(item.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
+  head.append(el('span', 'mem-inbox__type', item.type), el('span', 'mem-inbox__project', projectLabel(item.project)), scoreChip(item), el('span', 'mem-inbox__date', day));
+  const shown = expanded.has(item.key) ? { text: item.body, cut: false } : preview(item.body);
+  card.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', shown.text));
+  if (shown.cut) {
+    card.append(
+      button('gm-sum__link mem-inbox__more', t('mem.inbox.showAll'), () => {
+        expanded.add(item.key);
+        load(item.key);
+      }),
+    );
+  }
+  card.append(el('p', 'mem-inbox__note', graveLine(item)));
+  const restore = button('port-btn mem-inbox__btn mem-inbox__btn--approve', t('mem.grave.restore'), () => decide(item.key, 'memoryGraveyardRestore'));
+  const remove = button('port-btn port-btn--kill mem-inbox__btn mem-inbox__btn--reject', t('mem.grave.delete'), () => decide(item.key, 'memoryGraveyardDelete'));
+  for (const b of [restore, remove]) b.disabled = busy.has(item.key);
+  const actions = el('div', 'mem-inbox__actions');
+  actions.append(restore, remove);
+  card.append(actions);
+  if (failed.has(item.key)) {
+    const err = el('p', 'hint is-fail', t(reasonKey(failed.get(item.key))));
+    err.setAttribute('role', 'alert');
+    card.append(err);
+  }
+  return card;
+}
+
 /** What capture proposed in the last week and what became of it, or '' when there is nothing to say. */
 export function statsLine(stats) {
   if (!stats || !(stats.proposed || stats.approved || stats.rejected)) return '';
@@ -292,7 +332,14 @@ const TABS = [
   ['inbox', 'mem.inbox.tab.inbox'],
   ['review', 'mem.inbox.tab.review'],
   ['all', 'mem.inbox.tab.all'],
+  ['graveyard', 'mem.inbox.tab.graveyard'],
 ];
+/** Per list tab: its intro, its empty text and how one entry is drawn. 'all' has its own view. */
+const LIST_VIEWS = {
+  inbox: { intro: 'mem.inbox.intro', empty: 'mem.inbox.empty', entry: (item) => entry(item) },
+  review: { intro: 'mem.inbox.review.intro', empty: 'mem.inbox.review.empty', entry: (item) => reviewEntry(item) },
+  graveyard: { intro: 'mem.grave.intro', empty: 'mem.grave.empty', entry: (item) => graveyardEntry(item) },
+};
 const PANEL_ID = 'mem-inbox-panel';
 
 function switchTab(name) {
@@ -373,10 +420,10 @@ function conflictItem(pair) {
   });
 }
 
-/** The inbox (conflicts first) or the review list. @returns {{nodes: HTMLElement[], list: HTMLElement|null}} */
-function listView(res, review, conflicts) {
-  const reviewing = tab === 'review';
-  const shown = reviewing ? review : res;
+/** The inbox (conflicts first), the review list or the graveyard. @returns {{nodes: HTMLElement[], list: HTMLElement|null}} */
+function listView(res, review, conflicts, graves) {
+  const view = LIST_VIEWS[tab] || LIST_VIEWS.inbox;
+  const shown = tab === 'review' ? review : tab === 'graveyard' ? graves : res;
   // An entry that left the list (decided on another PC) takes its open draft or question with it:
   // a key that is still set would block every later repaint.
   const listed = new Set(shown.items.map((item) => item.key));
@@ -386,15 +433,15 @@ function listView(res, review, conflicts) {
   shownItems = shown.items;
   selected = keepSelection(shown.items.map((item) => item.key), selected, selectedIndex);
   selectedIndex = Math.max(0, shown.items.findIndex((item) => item.key === selected));
-  const nodes = [el('p', 'hint mem-inbox__intro', t(reviewing ? 'mem.inbox.review.intro' : 'mem.inbox.intro'))];
-  const pairs = reviewing ? [] : conflicts.items;
+  const nodes = [el('p', 'hint mem-inbox__intro', t(view.intro))];
+  const pairs = tab === 'inbox' ? conflicts.items : [];
   if (!shown.items.length && !pairs.length) {
-    nodes.push(el('p', 'mem-inbox__empty', t(reviewing ? 'mem.inbox.review.empty' : 'mem.inbox.empty')));
+    nodes.push(el('p', 'mem-inbox__empty', t(view.empty)));
     return { nodes, list: null };
   }
   const list = el('ul', 'mem-inbox__list');
   for (const pair of pairs) list.append(conflictItem(pair));
-  for (const item of shown.items) list.append(reviewing ? reviewEntry(item) : entry(item));
+  for (const item of shown.items) list.append(view.entry(item));
   // Keyboard focus moving into an entry (Tab, or the refocus after a keyboard decision)
   // selects it. Mouse focus does not: a selection the user never made would take the
   // first Esc, and Esc must still close the window for a mouse user.
@@ -442,9 +489,10 @@ const NO_CONFLICTS = { items: [], total: 0 };
  * @param {object} res the inbox (memory:inbox), with its conflicts
  * @param {{items: object[], total: number}} review the review list (memory:review)
  * @param {object|null} all one project's memories (memory:list), read only for that tab
+ * @param {{items: object[], total: number}} graves the graveyard (memory:graveyard)
  * @param {boolean} [focusTab] put the keyboard focus on the selected tab
  */
-function render(res, review, all, focusKey, focusIndex, focusTab) {
+function render(res, review, all, graves, focusKey, focusIndex, focusTab) {
   const conflicts = res.conflicts && Array.isArray(res.conflicts.items) ? res.conflicts : NO_CONFLICTS;
   // Same count as the inbox tab: waiting memories plus conflicts.
   const waiting = res.total + conflicts.total;
@@ -457,16 +505,16 @@ function render(res, review, all, focusKey, focusIndex, focusTab) {
   panel.id = PANEL_ID;
   panel.setAttribute('role', 'tabpanel');
   panel.setAttribute('aria-labelledby', `mem-inbox-tab-${tab}`);
-  const { nodes, list } = tab === 'all' ? allView(all) : listView(res, review, conflicts);
+  const { nodes, list } = tab === 'all' ? allView(all) : listView(res, review, conflicts, graves);
   panel.append(...nodes);
-  const bar = tabBar({ inbox: waiting, review: review.total });
+  const bar = tabBar({ inbox: waiting, review: review.total, graveyard: graves.total });
   const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
   const stats = statsLine(res.stats);
   const search = searchLine(res.search);
   // Keywords only is worth a second look: a question in Polish finds little that way.
   const searchNote = search ? el('p', res.search.mode === 'meaning' ? 'hint' : 'mem-inbox__note', search) : null;
-  // The keyboard commands work on the inbox and review lists, not on "All memories".
-  const keys = tab === 'all' ? null : el('p', 'hint mem-inbox__keys', t(tab === 'review' ? 'mem.inbox.keys.review' : 'mem.inbox.keys.inbox'));
+  // The keyboard commands work on the inbox and review lists; the graveyard takes only the arrows.
+  const keys = tab === 'all' || tab === 'graveyard' ? null : el('p', 'hint mem-inbox__keys', t(tab === 'review' ? 'mem.inbox.keys.review' : 'mem.inbox.keys.inbox'));
   // An open draft locks the section: its repaint would throw the typed text away.
   const autoPart = tab !== 'inbox' ? null : autoSection(res.auto, { onToggle: toggleAuto, onUndo: undoAuto, busy, switching: switching || editing !== null, error: autoError });
   overlay.body.replaceChildren(bar, panel, ...(autoPart ? [autoPart] : []), foot, ...(stats ? [el('p', 'hint', stats)] : []), ...(searchNote ? [searchNote] : []), ...(keys ? [keys] : []));
@@ -476,16 +524,18 @@ function render(res, review, all, focusKey, focusIndex, focusTab) {
 }
 
 const NO_REVIEW = { items: [], total: 0 };
+const NO_GRAVES = { items: [], total: 0 };
 /** Counts load() calls, so a slow answer can tell that a newer one was asked for. */
 let loadSeq = 0;
 
 /** Reads both lists and repaints. `focusKey` / `focusIndex` / `focusTab` say where the keyboard focus goes. */
 async function load(focusKey, focusIndex, focusTab) {
   const seq = ++loadSeq;
-  const [res, review, all] = await Promise.all([
+  const [res, review, all, graves] = await Promise.all([
     call('memoryInbox'),
     call('memoryReview'),
     tab === 'all' ? call('memoryList', brainProject) : Promise.resolve(null),
+    call('memoryGraveyard'),
   ]);
   // Only the newest read paints: an older answer arriving late must not undo its focus.
   if (seq !== loadSeq || !overlay || !overlay.isOpen()) return;
@@ -493,8 +543,9 @@ async function load(focusKey, focusIndex, focusTab) {
     overlay.body.replaceChildren(el('p', 'hint is-fail', t('mem.inbox.err.load')));
     return;
   }
-  // The review list failing must not take the inbox down with it.
-  render(res, review && review.ok && Array.isArray(review.items) ? review : NO_REVIEW, all, focusKey, focusIndex, focusTab);
+  // The review list or the graveyard failing must not take the inbox down with it.
+  const okList = (v, empty) => (v && v.ok && Array.isArray(v.items) ? v : empty);
+  render(res, okList(review, NO_REVIEW), all, okList(graves, NO_GRAVES), focusKey, focusIndex, focusTab);
 }
 
 /** One call for one entry. @returns {Promise<object|null>} main's answer, null when it failed */
@@ -518,7 +569,7 @@ async function act(key, fn, ...args) {
 let settling = 0;
 
 /**
- * Approve, reject, settle a conflict or restore: the entry leaves the list and
+ * Approve, reject, settle a conflict, restore, or a graveyard restore / delete: the entry leaves the list and
  * focus moves to its neighbour. `args` default to the key itself.
  */
 async function decide(key, fn, ...args) {

@@ -162,7 +162,8 @@ function hubSources({ runsDir, orchestra, update, now, machine = null, peers = n
     approval: () => ({ views: typeof o.views === 'function' ? safeGet(o.views)() || [] : [] }),
     // Luna Core Memory phase 4 (file, slow): how many captured memories wait for approval.
     // Plus the auto-accept switches that turned themselves off lately (src/memoryautoaccept.js).
-    memory: () => ({ count: safeGet(acc.memoryInbox)() || 0, autoOff: safeGet(acc.memoryAutoOff)() || [] }),
+    // And this ISO week's memory digest (memorylog.weeklyCounts plus the open conflicts).
+    memory: () => ({ count: safeGet(acc.memoryInbox)() || 0, autoOff: safeGet(acc.memoryAutoOff)() || [], digest: safeGet(acc.memoryDigest)() || null }),
     ...readers,
   };
   const collectors = { ...COLLECTORS, peers: collectPeers };

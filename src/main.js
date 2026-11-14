@@ -266,7 +266,8 @@ const { listInbox: listMemoryInbox } = require('./memoryinbox');
 const { registerMemoryIpc, reviewCount: memoryReviewCount } = require('./memoryipc');
 const { runJob: runMemoryJob } = require('./missionrunner');
 // Phase 5: the capture and usage log, and the review list of confirmed memories.
-const { createLog: createMemoryLog, logPath: memoryLogPath, forSession: forMemorySession } = require('./memorylog');
+const { createLog: createMemoryLog, logPath: memoryLogPath, forSession: forMemorySession, weeklyCounts: memoryWeeklyCounts } = require('./memorylog');
+const { graveyardPath: memoryGraveyardPath } = require('./memorygraveyard');
 const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
 const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOffs } = require('./memoryautoaccept');
 // The usefulness scan, conflicts, decay to the archive, and memory in God Mode
@@ -3475,6 +3476,8 @@ function registerIpc() {
     // Auto-accept per type (src/memoryautoaccept.js): the switches sync in the config scope.
     autoFile: () => memoryPaths(userDir()).autoAccept,
     onSettingsChanged: () => configSync && configSync.soon(),
+    // The local graveyard of candidates dropped under the usefulness floor (never synced).
+    graveyardFile: () => memoryGraveyardPath(userDir()),
   });
   // The memory window's list of all memories, the usefulness scan (Sonnet,
   // through the same headless runner as capture), conflicts and the archive.
@@ -3539,6 +3542,12 @@ function registerIpc() {
       },
       // Auto-accept switches that turned themselves off lately (checked here too, src/memoryautoaccept.js).
       memoryAutoOff: () => memoryAutoOffNotices(),
+      // This ISO week's memory digest: this PC's log, the archive and the open conflicts.
+      memoryDigest: () => {
+        const dir = memoryPaths(userDir()).dir;
+        const records = scanMemory(dir).records.map(([, r]) => r);
+        return { ...memoryWeeklyCounts(memoryLogOf().read(), { now: Date.now(), records }), conflicts: memoryConflictCount(dir) };
+      },
       hostOn: () => {
         const control = require('./hostmain').hostControl();
         return Boolean(control && control.status().on);

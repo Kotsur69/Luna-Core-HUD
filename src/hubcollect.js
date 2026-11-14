@@ -534,11 +534,46 @@ function autoOffItems(list) {
   return items;
 }
 
+const DIGEST_WEEK_RE = /^\d{4}-\d{2}$/;
+/** The counts of the weekly memory digest, in the order its text names them. */
+const DIGEST_FIELDS = ['proposed', 'approved', 'rejected', 'autoAccepted', 'graveyard', 'archived', 'conflicts'];
+const MAX_DIGEST_COUNT = 9999;
+
+/**
+ * The weekly memory digest (memorylog.weeklyCounts plus the open conflicts):
+ * ONE brief per ISO week, every count in words. Nothing when all are 0, or
+ * when the state is not a digest.
+ * @param {unknown} digest {week: 'yyyy-ww', start: ms, proposed, approved, rejected,
+ *   autoAccepted, graveyard, archived, conflicts}
+ */
+function digestItems(digest) {
+  if (!isObject(digest) || typeof digest.week !== 'string' || !DIGEST_WEEK_RE.test(digest.week) || !isTime(digest.start)) return [];
+  const vars = {};
+  for (const name of DIGEST_FIELDS) {
+    const n = digest[name];
+    vars[name] = Number.isSafeInteger(n) && n > 0 ? Math.min(n, MAX_DIGEST_COUNT) : 0;
+  }
+  if (DIGEST_FIELDS.every((name) => vars[name] === 0)) return [];
+  const v = vars;
+  return [{
+    id: `memory:digest:${digest.week}`,
+    kind: 'brief',
+    source: 'memory',
+    title: `Memory this week: ${v.proposed} proposed, ${v.approved} approved, ${v.rejected} rejected, ${v.autoAccepted} auto-accepted`,
+    key: 'hub.item.memoryDigest',
+    detail: `${v.graveyard} to the graveyard, ${v.archived} archived by decay, ${v.conflicts} conflicts open`,
+    detailKey: 'hub.item.memoryDigestDetail',
+    vars,
+    at: digest.start,
+    primary: { action: 'openMemoryInbox' },
+  }];
+}
+
 /**
  * Luna Core Memory, phase 4: memories capture proposed that wait for approval
  * (src/memoryinbox.js). Keyed by the count, so a new candidate brings a
- * dismissed item back.
- * @param {{count:number, now:number, autoOff?: {type: string, rate: number, at: number}[]}} state
+ * dismissed item back. Plus the auto-accept switch-offs and the weekly digest.
+ * @param {{count:number, now:number, autoOff?: {type: string, rate: number, at: number}[], digest?: object|null}} state
  */
 function collectMemory(state) {
   if (!isObject(state) || !isTime(state.now)) return [];
@@ -553,7 +588,7 @@ function collectMemory(state) {
     at: midnight(state.now),
     primary: { action: 'openMemoryInbox' },
   }];
-  return [...waiting, ...autoOffItems(state.autoOff)];
+  return [...waiting, ...autoOffItems(state.autoOff), ...digestItems(state.digest)];
 }
 
 /** Source name -> collector. src/hubipc.js builds one state per name. */
@@ -604,6 +639,8 @@ module.exports = {
   collectTodo,
   collectWeekly,
   collectApproval,
+  collectMemory,
+  digestItems,
   CLOUD_ERROR_GRACE_MS,
   WEEKLY_READY_MS,
   manualFromReport,

@@ -351,3 +351,105 @@ test('the inbox styles use theme tokens only', () => {
   assert.ok(rules.length > 5);
   for (const rule of rules) assert.doesNotMatch(rule, /#[0-9a-fA-F]{3,8}\b|rgb\(/, rule);
 });
+
+// ---- the graveyard (src/memorygraveyard.js) --------------------------------------
+
+const graveyard = require('../src/memorygraveyard.js');
+const { LOW_USEFULNESS } = require('../src/memoryextract.js');
+
+function graveSetup(t) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-memipc-grave-'));
+  t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const dir = path.join(base, 'memory');
+  const file = graveyard.graveyardPath(base);
+  const handlers = {};
+  let changed = 0;
+  const log = createLog(logPath(base), { now: () => NOW });
+  registerMemoryIpc({
+    ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) },
+    dir: () => dir,
+    onChanged: () => changed++,
+    now: () => NOW,
+    log,
+    graveyardFile: () => file,
+  });
+  const dropped = (id) => ({ title: `Title of ${id}`, reason: LOW_USEFULNESS, record: rec(id, { usefulness: 9 }) });
+  graveyard.bury(file, [dropped('weak-one'), dropped('weak-two')], NOW);
+  return { dir, file, log, invoke: (channel, arg) => handlers[channel]({}, arg), changed: () => changed };
+}
+
+test('memory:graveyard lists the entries under their entry id', (t) => {
+  const s = graveSetup(t);
+  const res = s.invoke('memory:graveyard');
+  assert.equal(res.ok, true);
+  assert.equal(res.total, 2);
+  assert.deepEqual(res.items.map((i) => [i.title, i.usefulness, i.reason]).sort(), [
+    ['Title of weak-one', 9, LOW_USEFULNESS],
+    ['Title of weak-two', 9, LOW_USEFULNESS],
+  ]);
+  for (const item of res.items) assert.equal(graveyard.isEntryId(item.key), true);
+});
+
+test('memory:graveyard-restore puts the entry in the inbox as observed and logs `restored`', (t) => {
+  const s = graveSetup(t);
+  const [item] = s.invoke('memory:graveyard').items;
+
+  const res = s.invoke('memory:graveyard-restore', item.key);
+
+  const restoredKey = `${PROJECT}/${item.title === 'Title of weak-one' ? 'weak-one' : 'weak-two'}`;
+  assert.deepEqual(res, { ok: true, key: restoredKey });
+  assert.equal(s.changed(), 1, 'the mirror changed: sync and repaint');
+  assert.deepEqual(s.invoke('memory:inbox').items.map((i) => i.key), [restoredKey]);
+  assert.equal(Object.fromEntries(scan(s.dir).records)[restoredKey].confidence, 'observed');
+  assert.equal(s.invoke('memory:graveyard').total, 1);
+  assert.deepEqual(s.log.read().map(({ at, ...e }) => e), [{ ev: 'restored', key: restoredKey, type: 'gotcha', title: item.title, usefulness: 9 }]);
+});
+
+test('memory:graveyard-delete removes one entry and touches nothing else', (t) => {
+  const s = graveSetup(t);
+  const [item] = s.invoke('memory:graveyard').items;
+
+  assert.deepEqual(s.invoke('memory:graveyard-delete', item.key), { ok: true, key: item.key });
+  assert.equal(s.invoke('memory:graveyard').total, 1);
+  assert.deepEqual(scan(s.dir).records, []);
+  assert.equal(s.changed(), 0, 'a local delete syncs nothing');
+});
+
+test('the graveyard channels refuse a bad key or index from the renderer', (t) => {
+  const s = graveSetup(t);
+  const bad = [undefined, null, 0, 1, -1, '', '../memory-log.local.jsonl', `${PROJECT}/weak-one`, 'ABC-0000beef', 'a'.repeat(500), { key: 'x' }, ['x']];
+  for (const key of bad) {
+    assert.deepEqual(s.invoke('memory:graveyard-restore', key), { ok: false, reason: 'bad-key' }, `restore ${JSON.stringify(key)}`);
+    assert.deepEqual(s.invoke('memory:graveyard-delete', key), { ok: false, reason: 'bad-key' }, `delete ${JSON.stringify(key)}`);
+  }
+  assert.deepEqual(s.invoke('memory:graveyard-restore', 'zzz-00000000'), { ok: false, reason: 'not-found' });
+  assert.deepEqual(s.invoke('memory:graveyard-delete', 'zzz-00000000'), { ok: false, reason: 'not-found' });
+  assert.equal(s.invoke('memory:graveyard').total, 2);
+  assert.deepEqual(scan(s.dir).records, []);
+});
+
+test('without a graveyard file the list is empty and the actions fail softly', (t) => {
+  const handlers = {};
+  registerMemoryIpc({ ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) }, dir: () => os.tmpdir(), now: () => NOW });
+  assert.deepEqual(handlers['memory:graveyard']({}), { ok: true, items: [], total: 0 });
+  assert.deepEqual(handlers['memory:graveyard-delete']({}, 'zzz-00000000'), { ok: false, reason: 'failed' });
+});
+
+test('the graveyard tab uses channels preload exposes; its strings exist in Polish and English', () => {
+  const panel = read('src/renderer/modules/memoryinbox.js');
+  const preload = read('src/preload.js');
+  const i18n = read('src/renderer/i18n.js');
+
+  const used = [...panel.matchAll(/'(memoryGraveyard\w*)'/g)].map((m) => m[1]);
+  assert.deepEqual([...new Set(used)].sort(), ['memoryGraveyard', 'memoryGraveyardDelete', 'memoryGraveyardRestore']);
+  for (const fn of used) assert.match(preload, new RegExp(`\\b${fn}:`), `${fn} is missing in preload`);
+  for (const channel of ['memory:graveyard', 'memory:graveyard-restore', 'memory:graveyard-delete']) assert.ok(preload.includes(`'${channel}'`));
+  assert.match(panel, /\['graveyard', 'mem\.inbox\.tab\.graveyard'\]/);
+  const keys = new Set([...panel.matchAll(/'(mem\.grave\.[\w.]+)'/g)].map((m) => m[1]));
+  assert.ok(keys.size >= 5);
+  for (const key of [...keys, 'mem.inbox.tab.graveyard', 'hub.item.memoryDigest', 'hub.item.memoryDigestDetail']) {
+    const lines = i18n.split('\n').filter((l) => l.includes(`'${key}':`));
+    assert.equal(lines.length, 2, `${key} must exist once in pl and once in en`);
+    assert.doesNotMatch(lines[0], /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, `${key}: Polish UI strings carry no diacritics`);
+  }
+});

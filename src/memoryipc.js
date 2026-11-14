@@ -34,6 +34,15 @@
 //   memory:auto-set  ({type, on})    -> {ok, type, on} | {ok:false, reason}   'not-offered' = the numbers do not allow it
 //   memory:auto-undo (key)           -> {ok, key} | {ok:false, reason}        'not-auto' = not a recent auto-accept
 //
+// The graveyard (src/memorygraveyard.js): candidates dropped under the
+// usefulness floor, kept in a LOCAL file. An entry is named by its entry id
+// (never a memory key, never a path); main checks its shape and that it is in
+// the file.
+//
+//   memory:graveyard         ()    -> {ok, items, total}
+//   memory:graveyard-restore (key) -> {ok, key} | {ok:false, reason}   key = the new inbox key; logs `restored`
+//   memory:graveyard-delete  (key) -> {ok, key} | {ok:false, reason}
+//
 // The renderer names a memory only by its key. src/memoryinbox.js checks the
 // key (splitKey: never a path) and refuses anything that is not waiting, so
 // these channels cannot touch a confirmed memory. Edited text is rebuilt by
@@ -51,6 +60,7 @@ const { captureStats, decisionEvent, DAY_MS } = require('./memorylog');
 const auto = require('./memoryautoaccept');
 const { CANDIDATE_TYPES } = require('./memoryextract');
 const { listConflicts } = require('./memoryconflict');
+const graveyard = require('./memorygraveyard');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -61,6 +71,8 @@ const EDIT_LIMITS = { title: MAX_TITLE * 2, body: MAX_BODY * 2, type: 20, area: 
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 const keyOf = (v) => (typeof v === 'string' && v.length <= MAX_KEY_CHARS ? v : '');
+/** A graveyard entry id from the renderer, or '' (refused as 'bad-key'). */
+const entryIdOf = (v) => (graveyard.isEntryId(v) ? v : '');
 
 /** Only the four editable fields, strings of a sane length; anything else is dropped. */
 function cleanEdits(raw) {
@@ -132,6 +144,7 @@ function registerMemoryIpc({
   searchStatus = () => null,
   autoFile = () => null,
   onSettingsChanged = () => {},
+  graveyardFile = () => null,
 }) {
   /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
   const decided = (ev, record) => {
@@ -270,6 +283,37 @@ function registerMemoryIpc({
       return { ok: false, reason: 'failed' };
     }
   });
+  // The graveyard. Restore writes to the mirror (onChanged: sync, repaint);
+  // delete touches only the local file, so nothing is synced.
+  ipcMain.handle('memory:graveyard', () => {
+    try {
+      const file = graveyardFile();
+      return { ok: true, ...(file ? graveyard.listGraveyard(file, now()) : { items: [], total: 0 }) };
+    } catch (err) {
+      console.error('[memory] graveyard failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  });
+  ipcMain.handle('memory:graveyard-restore', (_event, key) => {
+    const id = entryIdOf(key);
+    if (!id) return { ok: false, reason: 'bad-key' };
+    return guarded('graveyard-restore', () => {
+      const file = graveyardFile();
+      return file ? graveyard.restoreEntry({ file, dir: dir(), id, now: now(), log }) : { ok: false, reason: 'failed' };
+    });
+  });
+  ipcMain.handle('memory:graveyard-delete', (_event, key) => {
+    const id = entryIdOf(key);
+    if (!id) return { ok: false, reason: 'bad-key' };
+    try {
+      const file = graveyardFile();
+      return file ? graveyard.removeEntry(file, id, now()) : { ok: false, reason: 'failed' };
+    } catch (err) {
+      console.error('[memory] graveyard delete failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  });
+
   ipcMain.handle('memory:auto-undo', (_event, key) => {
     const res = guarded('auto-undo', () => auto.undoAutoAccept(dir(), keyOf(key), isoDate(now()), decided));
     // An undo counts as a rejection: the type's rate may have fallen under the bar.

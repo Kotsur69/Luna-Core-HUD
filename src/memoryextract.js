@@ -259,7 +259,8 @@ function idFor(title, project, taken) {
  * @param {{project: string, today: string, source: string, existing: object[]}} ctx
  *   existing = every record of this project and of `global` in the mirror
  * @returns {{records: object[], rejected: {title: string, reason: string, type?: string, usefulness?: number}[]}}
- *   type and usefulness are set on a LOW_USEFULNESS rejection only
+ *   type, usefulness and record (the checked record) are set on a LOW_USEFULNESS rejection only:
+ *   the record goes to the graveyard (src/memorygraveyard.js), never to the log
  */
 function candidatesFrom(answer, { project, today, source, existing }) {
   const raw = isObject(answer) && Array.isArray(answer.candidates) ? answer.candidates.filter(isObject).slice(0, MAX_RAW_CANDIDATES) : [];
@@ -312,7 +313,7 @@ function candidatesFrom(answer, { project, today, source, existing }) {
     }
     // After the secret check: this rejection carries the title into the memory log.
     if (record.usefulness !== undefined && record.usefulness < USEFULNESS_FLOOR) {
-      rejected.push({ title: record.title, reason: LOW_USEFULNESS, type: record.type, usefulness: record.usefulness });
+      rejected.push({ title: record.title, reason: LOW_USEFULNESS, type: record.type, usefulness: record.usefulness, record });
       continue;
     }
     // A corrected version of a memory is meant to resemble the one it replaces.

@@ -405,3 +405,23 @@ test('the inbox sorts by final score: reads on this PC lift an entry, a tie fall
     ['more-useful', 'read-often', 'same-new', 'same-old', 'unrated'],
   );
 });
+
+test('a graveyard entry restored to the inbox is an ordinary waiting entry: listed, approvable', (t) => {
+  const { graveyardPath, bury, readGraveyard, restoreEntry } = require('../src/memorygraveyard.js');
+  const { LOW_USEFULNESS } = require('../src/memoryextract.js');
+  const dir = mirror(t, []);
+  const file = graveyardPath(path.dirname(dir));
+  t.after(() => fs.promises.rm(file, { force: true }));
+  const now = Date.parse('2026-11-11T12:00:00Z');
+  bury(file, [{ title: 'Low score but right', reason: LOW_USEFULNESS, record: rec('low-but-right', 'Low score but right', { usefulness: 20 }) }], now);
+  const [entry] = readGraveyard(file, now);
+
+  const res = restoreEntry({ file, dir, id: entry.id, now });
+
+  assert.deepEqual(res, { ok: true, key: `${PROJECT}/low-but-right` });
+  const { items } = listInbox(dir);
+  assert.deepEqual(items.map((i) => [i.key, i.usefulness]), [[`${PROJECT}/low-but-right`, 20]]);
+  assert.equal(pendingCount(dir, PROJECT), 1);
+  assert.equal(approve(dir, res.key, '2026-11-12').ok, true);
+  assert.equal(scan(dir).records[0][1].confidence, 'confirmed');
+});

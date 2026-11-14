@@ -390,3 +390,64 @@ test('memory notes escape markdown in titles, so a title cannot become a link or
   const bare = memoryNotes({ records: [memo('bare', { title: 'See https://evil.example and www.evil.example' })], events: [{ at: since + DAY_MS, ev: 'approved', key: key('bare'), type: 'gotcha' }], since });
   assert.ok(bare.includes('- See https:\\/\\/evil.example and www\\.evil.example'), bare);
 });
+
+// ---- the graveyard restore and the weekly digest ---------------------------------
+
+const { isoWeek, weeklyCounts } = require('../src/memorylog.js');
+
+test('`restored` is a logged event with its key, type, title and score', (t) => {
+  const { log } = setup(t);
+  assert.equal(log.add({ ev: 'restored', key: key('back'), type: 'gotcha', title: 'Came back', usefulness: 12, junk: 'x' }), true);
+  assert.equal(log.add({ ev: 'restored', key: '../x', type: 'gotcha' }), false, 'a bad key is not logged');
+  assert.deepEqual(log.read(), [{ at: NOW, ev: 'restored', key: key('back'), type: 'gotcha', title: 'Came back', usefulness: 12 }]);
+});
+
+test('isoWeek names the ISO week and its Monday, across year ends', () => {
+  const at = (y, m, d, h = 12) => new Date(y, m - 1, d, h).getTime();
+  assert.deepEqual(isoWeek(at(2026, 11, 14)), { key: '2026-46', start: at(2026, 11, 9, 0) });
+  assert.equal(isoWeek(at(2026, 11, 9, 0)).key, '2026-46', 'Monday midnight starts the week');
+  assert.equal(isoWeek(at(2026, 11, 8, 23)).key, '2026-45', 'Sunday ends the week before');
+  assert.equal(isoWeek(at(2025, 12, 29)).key, '2026-01', 'a late December day can be week 1 of the next year');
+  assert.equal(isoWeek(at(2027, 1, 3)).key, '2026-53', 'an early January day can be the last week of the year before');
+  assert.equal(isoWeek(at(2021, 1, 3)).key, '2020-53');
+});
+
+test('weeklyCounts counts this week only: proposed, approved, rejected, auto-accepted, graveyard, archived', () => {
+  const now = new Date(2026, 10, 14, 12).getTime(); // Saturday of week 2026-46
+  const monday = new Date(2026, 10, 9, 0).getTime();
+  const ev = (at, e, over = {}) => ({ at, ev: e, key: key('m'), type: 'gotcha', ...over });
+  const events = [
+    ev(monday - 1, 'proposed'), // last week
+    ev(monday, 'proposed'),
+    ev(monday + 1, 'proposed'),
+    ev(now - 5, 'approved'),
+    ev(now - 4, 'rejected', { title: 'No' }),
+    ev(now - 3, 'auto-accepted'),
+    { at: now - 2, ev: 'dropped', project: PROJECT, reason: 'low usefulness', title: 'Weak', usefulness: 3 },
+    ev(now - 1, 'restored'),
+    { at: now - 1, ev: 'search', project: PROJECT, hits: [] },
+    ev(now + 1000, 'approved'), // after now: not counted
+    null,
+    { at: 'x', ev: 'proposed' },
+  ];
+  const records = [
+    { archived: '2026-11-10' },
+    { archived: '2026-11-08' }, // last week
+    { archived: null },
+    {},
+    null,
+  ];
+
+  assert.deepEqual(weeklyCounts(events, { now, records }), {
+    week: '2026-46',
+    start: monday,
+    proposed: 2,
+    approved: 1,
+    rejected: 1,
+    autoAccepted: 1,
+    graveyard: 1,
+    archived: 1,
+  });
+  assert.deepEqual(weeklyCounts([], { now }), { week: '2026-46', start: monday, proposed: 0, approved: 0, rejected: 0, autoAccepted: 0, graveyard: 0, archived: 0 });
+  assert.deepEqual(weeklyCounts(null, { now, records: 'x' }).proposed, 0, 'broken input counts nothing');
+});
