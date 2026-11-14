@@ -86,6 +86,7 @@ export function mountLunasWorkSettings(root) {
     start: root.querySelector('#lw-start'),
     url: root.querySelector('#lw-url'),
     unityUrl: root.querySelector('#lw-unity-url'),
+    unitySubdir: root.querySelector('#lw-unity-subdir'),
     scene: root.querySelector('#lw-scene'),
     timeout: root.querySelector('#lw-timeout'),
     check: root.querySelector('#lw-check'),
@@ -146,6 +147,7 @@ export function mountLunasWorkSettings(root) {
     el.start.value = (p && p.startCommand) || '';
     el.url.value = (p && p.url) || '';
     el.unityUrl.value = (p && p.unityMcpUrl) || '';
+    el.unitySubdir.value = (p && p.unityProjectSubdir) || '';
     el.scene.value = (p && p.scene) || '';
     el.timeout.value = p ? String(p.readyTimeoutSec) : '';
     el.check.value = p ? p.checkCommand : '';
@@ -161,7 +163,10 @@ export function mountLunasWorkSettings(root) {
       adapter,
       ...(adapter === 'unity' ? {} : { startCommand: el.start.value }),
       ...(adapter === 'web' ? opt('url', el.url) : {}),
-      ...(adapter === 'unity' ? { ...opt('unityMcpUrl', el.unityUrl), ...opt('scene', el.scene) } : {}),
+      // An empty unityMcpUrl is left out: main then uses the official Unity MCP (Pipeline).
+      ...(adapter === 'unity'
+        ? { ...opt('unityMcpUrl', el.unityUrl), ...opt('unityProjectSubdir', el.unitySubdir), ...opt('scene', el.scene) }
+        : {}),
       ...(timeout ? { readyTimeoutSec: Number(timeout) } : {}),
       checkCommand: el.check.value,
     };

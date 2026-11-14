@@ -37,7 +37,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { validateUnityProfile } = require('./lunasworkAdapterProfiles');
+const { validateUnityProfile, unitySubdirField } = require('./lunasworkAdapterProfiles');
 const { bridgeTools, noTools } = require('./lunasworkBridge');
 const { runTag } = require('./todorows');
 const { saveScreenshot } = require('../helpers/playtest-bridge/bridge');
@@ -45,7 +45,6 @@ const { UNITY_TRANSPORTS, DRIVER_GROUP, isPlaying } = require('../helpers/playte
 const { PIPELINE_ERROR, isTransientPipelineError, pipelineCommandDidNotRun } = require('../helpers/playtest-bridge/pipeline-http');
 
 const PLAY_POLL_MS = 500;
-const MAX_SUBDIR_CHARS = 260;
 // err.code of a wait that ran out of readyTimeoutSec.
 const WAIT_TIMEOUT = 'LUNA_UNITY_WAIT_TIMEOUT';
 // HTTP statuses that mean the editor did not let LunaCore in: not the driver's fault.
@@ -54,8 +53,6 @@ const CONSOLE_FILE = 'unity-console.json';
 const STATE_FILE = 'unity-state.json';
 const FINAL_SHOT = 'final.png';
 const MAX_EVIDENCE_CHARS = 512 * 1024;
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -138,34 +135,33 @@ function playtestDriverCard({ runId } = {}) {
 // ---- transport ------------------------------------------------------------------------
 
 /**
- * 'pipeline' unless the profile names a legacy MCP for Unity server. Read from
- * the profile as given: validation fills in a default unityMcpUrl.
+ * 'pipeline' unless the profile names a legacy MCP for Unity server; a blank
+ * unityMcpUrl counts as none (validation drops it).
  * @param {unknown} raw
  * @returns {'pipeline'|'mcp'}
  */
 function unityTransport(raw) {
-  return isObj(raw) && raw.unityMcpUrl !== undefined ? 'mcp' : 'pipeline';
+  return isObj(raw) && typeof raw.unityMcpUrl === 'string' && raw.unityMcpUrl.trim() ? 'mcp' : 'pipeline';
 }
 
 /**
  * The Unity project the editor has open: the repo dir, or the profile's
- * optional unityProjectSubdir inside it (a later profile field, so it is read
- * defensively here).
+ * optional unityProjectSubdir inside it. validateUnityProfile already checked
+ * the field; it is re-checked here against the resolved path.
  * @param {string} repoDir absolute
  * @param {unknown} raw the profile
  * @returns {{dir:string|null, reason:string|null}}
  */
 function unityProjectDir(repoDir, raw) {
   const root = path.resolve(repoDir);
-  const sub = isObj(raw) ? raw.unityProjectSubdir : undefined;
-  if (sub === undefined || sub === null || (typeof sub === 'string' && !sub.trim())) return { dir: root, reason: null };
-  const bad = { dir: null, reason: 'unityProjectSubdir must be a relative folder inside the project' };
-  if (typeof sub !== 'string' || sub.length > MAX_SUBDIR_CHARS || CONTROL_CHARS.test(sub)) return bad;
-  const rel = sub.trim().replace(/\\/g, '/');
-  if (rel.includes(':') || rel.startsWith('/') || rel.split('/').includes('..')) return bad;
-  const dir = path.resolve(root, rel);
+  const { subdir, reason } = unitySubdirField(isObj(raw) ? raw.unityProjectSubdir : undefined);
+  if (reason) return { dir: null, reason };
+  if (!subdir) return { dir: root, reason: null };
+  const dir = path.resolve(root, subdir);
   const back = path.relative(root, dir);
-  if (back === '..' || back.startsWith(`..${path.sep}`) || path.isAbsolute(back)) return bad;
+  if (back === '..' || back.startsWith(`..${path.sep}`) || path.isAbsolute(back)) {
+    return { dir: null, reason: 'unityProjectSubdir must be a relative folder inside the project' };
+  }
   return { dir, reason: null };
 }
 
@@ -201,13 +197,13 @@ function createUnityAdapter(ctx) {
   let stopping = null;
 
   /** The profile's transport, or a thrown "invalid project profile". */
-  function targetFor(raw, valid) {
-    const transport = unityTransport(raw);
+  function targetFor(valid) {
+    const transport = unityTransport(valid);
     const { calls, invoke } = UNITY_TRANSPORTS[transport];
     if (transport === 'mcp') {
       return { calls, invoke, connect: () => ctx.connectUnity(valid.unityMcpUrl), bridgeArgs: ['--unity-url', valid.unityMcpUrl] };
     }
-    const { dir, reason } = unityProjectDir(ctx.projectDir, raw);
+    const { dir, reason } = unityProjectDir(ctx.projectDir, valid);
     if (!dir) throw new Error(`invalid project profile: ${reason}`);
     return { calls, invoke, connect: () => ctx.connectPipeline(dir), bridgeArgs: ['--unity-project', dir] };
   }
@@ -290,7 +286,7 @@ function createUnityAdapter(ctx) {
     if (profile) throw new Error('unity adapter is already started');
     const { profile: valid, reason } = validateUnityProfile(raw);
     if (!valid) throw new Error(`invalid project profile: ${reason}`);
-    target = targetFor(raw, valid);
+    target = targetFor(valid);
     profile = valid;
     try {
       await session(async (call) => checkDriver(call, await enterPlayMode(call)));

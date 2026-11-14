@@ -9,8 +9,12 @@
 //   electron  {adapter, startCommand, readyTimeoutSec, checkCommand}
 //             startCommand starts the app (`npx electron .`, `npm start`);
 //             the adapter adds the in-process wrapper to it.
-//   unity     {adapter, unityMcpUrl, scene?, readyTimeoutSec, checkCommand}
-//             unityMcpUrl = the editor's MCP server (loopback http only);
+//   unity     {adapter, unityMcpUrl?, unityProjectSubdir?, scene?, readyTimeoutSec, checkCommand}
+//             unityMcpUrl absent = the official Unity MCP (com.unity.pipeline),
+//             found through the descriptor in the Unity project's Library;
+//             set = a legacy MCP for Unity server (loopback http only);
+//             unityProjectSubdir = the Unity project's folder inside the repo
+//             (relative, no `..`; absent = the repo root);
 //             scene = the Assets/... .unity scene to open before play.
 //
 // TRUST BOUNDARY: like every profile these come only from LunaCore's local
@@ -27,8 +31,11 @@ const {
 } = require('./lunasworkSettings');
 const { isLoopbackHttpUrl } = require('../helpers/playtest-bridge/mcp-http');
 
-const DEFAULT_UNITY_MCP_URL = 'http://127.0.0.1:8080/mcp';
+// No default unityMcpUrl is filled in: a profile without one uses the official Pipeline.
 const MAX_URL_CHARS = 500;
+const MAX_SUBDIR_CHARS = 260;
+const URL_REASON = 'unityMcpUrl must be an http URL on 127.0.0.1 or localhost';
+const SUBDIR_REASON = 'unityProjectSubdir must be a relative folder inside the project';
 // A project-relative scene: Assets/<folders>/<name>.unity, no `..`.
 const SCENE_RE = /^Assets\/(?:[A-Za-z0-9 _.-]+\/)*[A-Za-z0-9 _.-]+\.unity$/;
 const MAX_SCENE_CHARS = 260;
@@ -75,16 +82,47 @@ function validateElectronProfile(raw) {
 }
 
 /**
+ * The optional legacy MCP for Unity URL: '' when absent or blank (= Pipeline).
+ * @returns {{url?:string, reason?:string}}
+ */
+function unityUrlField(value) {
+  if (value === undefined || value === null) return { url: '' };
+  if (typeof value !== 'string' || value.length > MAX_URL_CHARS) return { reason: URL_REASON };
+  const url = value.trim();
+  if (url && !isLoopbackHttpUrl(url)) return { reason: URL_REASON };
+  return { url };
+}
+
+/**
+ * The optional Unity project folder inside the repo, normalized to forward
+ * slashes without empty or `.` segments: '' when absent or blank (= the repo
+ * root). Relative only: no drive, no leading slash, no `..` segment, and no
+ * segment ending in a dot or a space - Windows trims those, so `.. ` would
+ * act as `..`.
+ * @returns {{subdir?:string, reason?:string}}
+ */
+function unitySubdirField(value) {
+  if (value === undefined || value === null) return { subdir: '' };
+  if (typeof value !== 'string' || value.length > MAX_SUBDIR_CHARS || CONTROL_CHARS.test(value)) return { reason: SUBDIR_REASON };
+  const rel = value.trim().replace(/\\/g, '/');
+  if (!rel) return { subdir: '' };
+  if (rel.includes(':') || rel.startsWith('/')) return { reason: SUBDIR_REASON };
+  const parts = rel.split('/').filter((p) => p !== '' && p !== '.');
+  if (parts.some((p) => p.endsWith('.') || p.endsWith(' '))) return { reason: SUBDIR_REASON };
+  return { subdir: parts.join('/') };
+}
+
+/**
  * @param {unknown} raw
- * @returns {{profile:{adapter:'unity', unityMcpUrl:string, scene?:string, readyTimeoutSec:number, checkCommand:string}|null, reason:string|null}}
+ * @returns {{profile:{adapter:'unity', unityMcpUrl?:string, unityProjectSubdir?:string, scene?:string, readyTimeoutSec:number, checkCommand:string}|null, reason:string|null}}
  */
 function validateUnityProfile(raw) {
   if (!isObj(raw)) return invalid('profile must be an object');
   if (raw.adapter !== 'unity') return invalid(`profile adapter is '${String(raw.adapter)}', not 'unity'`);
-  const url = raw.unityMcpUrl === undefined ? DEFAULT_UNITY_MCP_URL : raw.unityMcpUrl;
-  if (typeof url !== 'string' || url.length > MAX_URL_CHARS || !isLoopbackHttpUrl(url.trim())) {
-    return invalid('unityMcpUrl must be an http URL on 127.0.0.1 or localhost');
-  }
+  const { url, reason: urlProblem } = unityUrlField(raw.unityMcpUrl);
+  if (urlProblem) return invalid(urlProblem);
+  const { subdir, reason: subdirProblem } = unitySubdirField(raw.unityProjectSubdir);
+  if (subdirProblem) return invalid(subdirProblem);
   let scene;
   if (raw.scene !== undefined && raw.scene !== '') {
     const s = typeof raw.scene === 'string' ? raw.scene.trim().replace(/\\/g, '/') : '';
@@ -96,13 +134,19 @@ function validateUnityProfile(raw) {
   const common = commonFields(raw);
   if (!common.fields) return invalid(common.reason);
   return {
-    profile: { adapter: 'unity', unityMcpUrl: url.trim(), ...(scene ? { scene } : {}), ...common.fields },
+    profile: {
+      adapter: 'unity',
+      ...(url ? { unityMcpUrl: url } : {}),
+      ...(subdir ? { unityProjectSubdir: subdir } : {}),
+      ...(scene ? { scene } : {}),
+      ...common.fields,
+    },
     reason: null,
   };
 }
 
 module.exports = {
-  DEFAULT_UNITY_MCP_URL,
+  unitySubdirField,
   validateElectronProfile,
   validateUnityProfile,
 };

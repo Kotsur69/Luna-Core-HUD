@@ -116,13 +116,35 @@ test('an electron profile keeps its start command and drops web-only fields', ()
   }
 });
 
-test('a unity profile needs a loopback MCP URL and a project scene path', () => {
-  const r = S.validateProfile({ adapter: 'unity', scene: 'Assets\\Scenes\\Main.unity' });
+test('{adapter:"unity"} alone validates to a Pipeline-transport profile (no unityMcpUrl filled in)', () => {
+  const r = S.validateProfile({ adapter: 'unity' });
+  assert.equal(r.reason, null);
+  assert.deepEqual(r.profile, { adapter: 'unity', readyTimeoutSec: 60, checkCommand: '' });
+  for (const unityMcpUrl of ['', '   ', null]) {
+    assert.deepEqual(S.validateProfile({ adapter: 'unity', unityMcpUrl }).profile, r.profile, `unityMcpUrl=${JSON.stringify(unityMcpUrl)}`);
+  }
+});
+
+test('unityProjectSubdir is a relative folder inside the repo, normalized; blank = the repo root', () => {
+  const sub = (unityProjectSubdir) => S.validateProfile({ adapter: 'unity', unityProjectSubdir });
+  assert.equal(sub('Game\\Unity\\').profile.unityProjectSubdir, 'Game/Unity');
+  assert.equal(sub('./Game//Unity').profile.unityProjectSubdir, 'Game/Unity');
+  assert.equal(sub('..game').profile.unityProjectSubdir, '..game', 'a folder named ..game is inside');
+  for (const blank of ['', '  ', '.', undefined]) assert.equal('unityProjectSubdir' in sub(blank).profile, false, String(blank));
+  for (const bad of ['..', '.. ', 'Game/.. /../x', 'Game/... ', 'Game.', 'Game /Unity', '../outside', 'Game/../../x', 'Game\\..\\..', 'C:\\Windows', 'C:game', '/etc', '\\\\server\\share', 7, 'a\u0000b', 'x'.repeat(300)]) {
+    const r = sub(bad);
+    assert.equal(r.profile, null, `unityProjectSubdir=${JSON.stringify(bad)}`);
+    assert.match(r.reason, /^unityProjectSubdir/);
+  }
+});
+
+test('a unity profile: an optional loopback MCP URL and a project scene path', () => {
+  const r = S.validateProfile({ adapter: 'unity', unityMcpUrl: ' http://127.0.0.1:8080/mcp ', scene: 'Assets\\Scenes\\Main.unity' });
   assert.equal(r.reason, null);
   assert.deepEqual(r.profile, {
     adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', scene: 'Assets/Scenes/Main.unity', readyTimeoutSec: 60, checkCommand: '',
   });
-  for (const unityMcpUrl of ['http://example.com/mcp', 'file:///c:/x', 'not a url', 7]) {
+  for (const unityMcpUrl of ['http://example.com/mcp', 'http://192.168.1.5:8080/mcp', 'https://127.0.0.1.evil.com/mcp', 'file:///c:/x', 'not a url', 7]) {
     const bad = S.validateProfile({ adapter: 'unity', unityMcpUrl });
     assert.equal(bad.profile, null, `unityMcpUrl=${String(unityMcpUrl)}`);
     assert.match(bad.reason, /^unityMcpUrl/);
@@ -143,7 +165,10 @@ test('profileSummary lists the launch fields each adapter has', () => {
     'Adapter: electron', 'Start command: npm start',
   ]);
   assert.deepEqual(lines(S.validateProfile({ adapter: 'unity', scene: 'Assets/Main.unity' }).profile), [
-    'Adapter: unity', 'Unity MCP URL: http://127.0.0.1:8080/mcp', 'Scene: Assets/Main.unity',
+    'Adapter: unity', 'Unity transport: Pipeline (official)', 'Scene: Assets/Main.unity',
+  ]);
+  assert.deepEqual(lines(S.validateProfile({ adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', unityProjectSubdir: 'Game' }).profile), [
+    'Adapter: unity', 'Unity transport: http://127.0.0.1:8080/mcp', 'Unity project folder: Game',
   ]);
   assert.deepEqual(S.profileSummary(null), []);
 });

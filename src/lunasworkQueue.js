@@ -30,7 +30,7 @@
 
 const fs = require('fs');
 const paths = require('./paths');
-const { validateProfile } = require('./lunasworkSettings');
+const { validateProfile, UNITY_PIPELINE_LABEL } = require('./lunasworkSettings');
 
 const VERSION = 1;
 const FILE_NAME = 'lunaswork-queue.local.json';
@@ -139,16 +139,24 @@ function moveEntry(queue, projectId, delta) {
   return { queue: { ...q, entries }, reason: null };
 }
 
+/** The address a queued profile is shown with. */
+function displayUrl(profile) {
+  if (profile.url) return profile.url;
+  if (profile.adapter !== 'unity') return '';
+  return profile.unityMcpUrl || `Unity ${UNITY_PIPELINE_LABEL}`;
+}
+
 /** The renderer's copy: names and the pinned commands Mati confirmed, never a path. */
 function publicQueue(queue, isKnownProject = () => true) {
   return normalizeQueue(queue)
     .entries.filter((e) => isKnownProject(e.projectId))
-    // A unity profile has no start command, and its address is the editor's MCP URL.
+    // A unity profile has no start command; its address is the legacy MCP URL,
+    // or the official Pipeline when it has none.
     .map((e) => ({
       projectId: e.projectId,
       label: e.label,
       startCommand: e.profile.startCommand || '',
-      url: e.profile.url || e.profile.unityMcpUrl || '',
+      url: displayUrl(e.profile),
       addedAt: e.addedAt,
     }));
 }
