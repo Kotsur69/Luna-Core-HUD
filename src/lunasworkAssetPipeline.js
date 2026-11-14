@@ -32,6 +32,12 @@
 // to import through its own Unity MCP. Every made asset is logged once
 // (logAsset: tool, kind, name, prompt, seed, cost, path) for the run report.
 //
+// Every made file also gets its row in design/ASSET_LICENSES.md (license
+// "Own work (generated)", src/lunasworkLicenses.js), so the Critic's ledger
+// check passes; a ledger that cannot be written is a note, never a lost asset.
+// The library imports (src/lunasworkFreeAssets.js) reuse this executor's
+// guarded repo files, Unity import, asset log and ledger (the `shared` pieces).
+//
 // Boundaries: every path is built here from a validated kind and slug; a model
 // or a tool never names a file. Writes stay inside the project repo
 // (lunasworkToolkit.isWritablePath, which resolves junctions) and go through
@@ -46,6 +52,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { isWritablePath } = require('./lunasworkToolkit');
 const comfyLib = require('./lunasworkComfy');
+const licenses = require('./lunasworkLicenses');
 const { UNITY_PIPELINE_ASSETS, pipelineCall } = require('../helpers/playtest-bridge/unity');
 
 const DEFAULT_ART_ROOT = 'Assets/BladeBullet/Art';
@@ -97,7 +104,7 @@ const MAX_SEED = Number.MAX_SAFE_INTEGER;
 const RESULT_EXTS = Object.freeze(['png', 'jpg', 'webp', 'glb']);
 const IMAGE_EXTS = Object.freeze(['png', 'jpg', 'webp']);
 // Files Unity imports as a model, so they get a prefab.
-const MODEL_EXTS = Object.freeze(['fbx', 'glb']);
+const MODEL_EXTS = Object.freeze(['fbx', 'glb', 'gltf']);
 // "<slug>", "<slug>-v2" ... "<slug>-v50": a made asset never overwrites an earlier one.
 const MAX_VERSIONS = 50;
 const HEAD_BYTES = 64;
@@ -202,7 +209,10 @@ function blenderExportScript(blendAbs, fbxAbs) {
 
 // ---- the asset log ------------------------------------------------------------------------
 
-const ASSET_TOOLS = Object.freeze(['blender', 'comfyui', 'higgsfield']);
+// 'library': a free asset imported from an asset library (src/lunasworkFreeAssets.js).
+const ASSET_TOOLS = Object.freeze(['blender', 'comfyui', 'higgsfield', 'library']);
+const MAX_LEDGER_BYTES = 2 * 1024 * 1024;
+const NO_CREDITS_TEXT = 'Third-party assets\n\nNone yet.\n';
 const MAX_LOG_PATH_CHARS = 300;
 
 /** One run-report entry, validated (it may come back from a stored run). Null when unusable. */
@@ -381,6 +391,72 @@ function createAssetPipeline(deps) {
 
   const importNote = (imp) => (imp.ok ? null : `Unity import failed (${imp.error}): the file is in the project; import it with your Unity MCP.`);
 
+  /** Deletes a repo file this pipeline wrote (guarded); a missing file is fine. */
+  function removeRepoFile(rel) {
+    try {
+      fsx.unlinkSync(guardPath(rel));
+    } catch (err) {
+      if (err && err.code !== 'ENOENT') throw err;
+    }
+  }
+
+  /** Removes a repo folder (guarded) only when it is empty; false when it is not there or not empty. */
+  function removeEmptyDir(rel) {
+    try {
+      fsx.rmdirSync(guardPath(rel));
+      return true;
+    } catch (err) {
+      if (err && ['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(err.code)) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * Adds rows to design/ASSET_LICENSES.md (created with its header when
+   * missing) and rewrites the CC-BY credits from it, one update per repo at a
+   * time. Rejects when the ledger could not be written.
+   * @param {{name:string, source:string, author:string, license:string, path:string}[]} rows
+   * @returns {Promise<{ledger:string, credits:string|null}>}
+   */
+  function updateLedger(rows) {
+    return licenses.withLedgerLock(repoPath, () => {
+      const current = statOf(licenses.LEDGER_FILE) ? readRepoFile(licenses.LEDGER_FILE, MAX_LEDGER_BYTES).toString('utf8') : null;
+      const next = licenses.withLedgerRows(current, rows);
+      writeRepoFile(licenses.LEDGER_FILE, next);
+      const credits = licenses.creditsText(licenses.parseLedger(next).rows);
+      if (credits === null && !statOf(licenses.CREDITS_FILE)) return { ledger: licenses.LEDGER_FILE, credits: null };
+      try {
+        writeRepoFile(licenses.CREDITS_FILE, credits || NO_CREDITS_TEXT);
+      } catch (err) {
+        // A CC-BY row without its credit would break the license: put the ledger back as it was.
+        restoreLedger(current, err);
+        throw err;
+      }
+      return { ledger: licenses.LEDGER_FILE, credits: licenses.CREDITS_FILE };
+    });
+  }
+
+  /** The ledger as it was before an update whose credits failed; a failed restore is added to `err`. */
+  function restoreLedger(previous, err) {
+    try {
+      if (previous === null) removeRepoFile(licenses.LEDGER_FILE);
+      else writeRepoFile(licenses.LEDGER_FILE, previous);
+    } catch (restoreErr) {
+      if (err instanceof Error) err.message += ` (and ${licenses.LEDGER_FILE} could not be restored: ${errText(restoreErr)})`;
+    }
+  }
+
+  /** The ledger rows of generated files. Never throws: a failure is a note for the worker. */
+  async function ledgerGenerated(tool, job, files, source) {
+    const author = `LunaCore asset worker (${tool})`;
+    try {
+      await updateLedger(files.map((rel) => ({ name: job.name, source, author, license: licenses.GENERATED_LICENSE, path: rel })));
+      return null;
+    } catch (err) {
+      return `${licenses.LEDGER_FILE} was not updated (${oneLine(errText(err), 200)}): add the row(s) by hand.`;
+    }
+  }
+
   // ---- Blender -------------------------------------------------------------------------
 
   /** Throws unless Blender wrote `rel` now (new, or changed since `before`) with the right header. */
@@ -420,9 +496,11 @@ function createAssetPipeline(deps) {
     } catch (err) {
       return fail('blenderFailed', `Blender did not write the files: ${errText(err)}`);
     }
+    const ledgerNote = await ledgerGenerated('Blender', job, [fbxRel], blendRel);
     const imp = await importToUnity(fbxRel, job.kind);
     log({ tool: 'blender', kind: job.kind, name: job.name, prompt: job.prompt, seed: null, costUsd: 0, path: fbxRel, sources: [blendRel], imported: imp.ok });
-    return { ok: true, files: [fbxRel], sources: [blendRel], prefab: imp.ok ? fbxRel.replace(/\.fbx$/, '.prefab') : null, unity: imp, note: importNote(imp) };
+    const note = [importNote(imp), ledgerNote].filter(Boolean).join(' ') || null;
+    return { ok: true, files: [fbxRel], sources: [blendRel], prefab: imp.ok ? fbxRel.replace(/\.fbx$/, '.prefab') : null, unity: imp, ledger: ledgerNote ? null : licenses.LEDGER_FILE, note };
   }
 
   // ---- ComfyUI -------------------------------------------------------------------------
@@ -478,13 +556,15 @@ function createAssetPipeline(deps) {
     } catch (err) {
       return { ...fail('writeFailed', errText(err)), files };
     }
+    const ledgerNote = await ledgerGenerated('ComfyUI', job, files, runRel);
     const imports = [];
     for (const rel of files) imports.push(await importToUnity(rel, job.kind));
     for (const [i, rel] of files.entries()) {
       log({ tool: 'comfyui', kind: job.kind, name: job.name, prompt: job.prompt, seed, costUsd: 0, path: rel, sources: [loaded.rel, runRel], imported: imports[i].ok });
     }
     const failed = imports.find((imp) => !imp.ok);
-    return { ok: true, files, sources: [loaded.rel, runRel], seed, seeded: seeded.seeded, warnings, unity: imports, note: failed ? importNote(failed) : null };
+    const note = [failed ? importNote(failed) : null, ledgerNote].filter(Boolean).join(' ') || null;
+    return { ok: true, files, sources: [loaded.rel, runRel], seed, seeded: seeded.seeded, warnings, unity: imports, ledger: ledgerNote ? null : licenses.LEDGER_FILE, note };
   }
 
   // ---- Higgsfield ----------------------------------------------------------------------
@@ -594,6 +674,8 @@ function createAssetPipeline(deps) {
     } catch (err) {
       notes.push(`the files are saved, but ${record} could not be updated: ${oneLine(errText(err), 200)}`);
     }
+    const ledgerNote = await ledgerGenerated('Higgsfield', job, files, record);
+    if (ledgerNote) notes.push(ledgerNote);
     const imports = [];
     for (const rel of files) imports.push(await importToUnity(rel, job.kind));
     // The cost is booked once; it is logged on the first file of the generation.
@@ -602,7 +684,7 @@ function createAssetPipeline(deps) {
     }
     const failed = imports.find((imp) => !imp.ok);
     if (failed) notes.push(importNote(failed));
-    return { ok: true, files, sources: [record], costUsd: paid.costUsd, credits: paid.credits, jobId: gen.jobId, unity: imports, note: notes.length ? notes.join(' ') : null };
+    return { ok: true, files, sources: [record], costUsd: paid.costUsd, credits: paid.credits, jobId: gen.jobId, unity: imports, ledger: ledgerNote ? null : licenses.LEDGER_FILE, note: notes.length ? notes.join(' ') : null };
   }
 
   /** Validate -> estimate + book against the cap -> generate -> save (saveHiggsfield). */
@@ -627,7 +709,16 @@ function createAssetPipeline(deps) {
     return saveHiggsfield(job, request, paid, gen);
   }
 
-  return { blenderModel, comfyDraft, higgsfieldFinal, artRoot, usdPerCredit };
+  // The pieces src/lunasworkFreeAssets.js builds the library imports on.
+  const shared = {
+    repoPath,
+    files: { write: writeRepoFile, read: readRepoFile, stat: statOf, remove: removeRepoFile, removeDir: removeEmptyDir, head: readHead },
+    importToUnity,
+    importNote,
+    log,
+    updateLedger,
+  };
+  return { blenderModel, comfyDraft, higgsfieldFinal, artRoot, usdPerCredit, shared };
 }
 
 // ---- per-PC settings ----------------------------------------------------------------------
@@ -658,6 +749,8 @@ function normalizeAssetTools(raw) {
 // Blade & Bullet docs/ART_DIRECTION.md (not in this repo): the rule every 3D asset follows.
 const ART_DIRECTION_RULE = 'Art direction (docs/ART_DIRECTION.md of the game - read it when the repo has it): 3D toon / cel-shaded characters and props on a 2D plane. Model in 3D, keep gameplay on one plane (X/Y, side-on camera, no depth movement), toon shading with clean outlines, no photoreal materials.';
 const AMD_GPU_RULE = 'ComfyUI runs on an AMD GPU: use only models and nodes that run on it (ROCm / DirectML builds such as SD 1.5 and SDXL checkpoints); no CUDA-only nodes (xformers, TensorRT, NVIDIA-only custom nodes).';
+const LIBRARY_RULE = 'Free library assets: luna_asset_search {source, query} finds CC0 / CC-BY assets on Poly Haven and ambientCG (no key), Sketchfab (downloadable models only), Poly Pizza and Freesound (keys come from LunaCore, never ask for one); luna_asset_import {source, id, name, kind} reads the license again from the source API, refuses non-commercial, no-derivatives, share-alike and unknown licenses and game rips, imports the files into Unity and writes the design/ASSET_LICENSES.md row and the CC-BY credits. The Blender MCP search_assets / import_asset (Poly Haven, Sketchfab, Poly Pizza) is fine for browsing or for placing an asset in a Blender scene, but an asset that ends up in the game is brought in with luna_asset_import, so it has its ledger row. Kenney and OpenGameArt have no official API: LunaCore does not fetch from them.';
+const NO_RIPS_RULE = `Never assets ripped from existing games. Katana Zero, Zenless Zone Zero (ZZZ), Kurumi and Black Rock Shooter are art references, not sources: no fan rips, nothing extracted from a commercial game. Every file under Assets/**/Art/ needs a row in ${licenses.LEDGER_FILE} (name, source URL, author, license, path); the luna_asset_* tools write it, and the Critic files a card for any file without one.`;
 
 /**
  * The Unity part of an asset card's details: where the files go, which tool
@@ -670,7 +763,8 @@ function unityAssetBrief({ kind, slug, source, artRoot }) {
   const k = own(KINDS, kind) ? kind : 'other';
   const root = artRootOf(artRoot);
   const model = KINDS[k].model === true;
-  const make = source === 'blender' || model
+  const library = `Take it from a free asset library: luna_asset_search, then luna_asset_import {source, id, name, kind: "${k}"}; it lands under ${root}/${KINDS[k].dir}/.`;
+  const make = source === 'library' ? library : source === 'blender' || model
     ? `Make it in Blender through the Blender MCP (Blender must be running with its MCP add-on; load the blender-game-assets skill), then call the lunacore tool luna_asset_blender {name, kind: "${k}"}: it saves art/blender/${slug}.blend, exports ${root}/${KINDS[k].dir}/${slug}.fbx for Unity and makes the prefab.`
     : `Drafts: the lunacore tool luna_asset_comfy {name, kind: "${k}", prompt, workflow} runs a workflow from ${COMFY_WORKFLOW_DIR}/ (API format, "{{prompt}}" placeholder) on the local ComfyUI and saves the workflow and seed under ${SOURCE_DIRS.comfyRuns}/. Finals: luna_asset_higgsfield {name, kind: "${k}", prompt, model} (load the higgsfield-media skill).`;
   return [
@@ -678,6 +772,8 @@ function unityAssetBrief({ kind, slug, source, artRoot }) {
     make,
     'Paid generation goes ONLY through luna_asset_higgsfield: it books the cost against this run\'s Higgsfield budget first. Use the higgsfield CLI / higgsfield-bridge directly only to look up models. When a tool answers capReached, stop using Higgsfield for this run.',
     'The luna_asset_* tools import the result into Unity through the Unity Pipeline (asset import, prefab for a model, material for a texture). When a result says the import failed, import it with your Unity MCP.',
+    LIBRARY_RULE,
+    NO_RIPS_RULE,
     ART_DIRECTION_RULE,
     AMD_GPU_RULE,
   ];
@@ -718,6 +814,8 @@ module.exports = {
   unityAssetBrief,
   ART_DIRECTION_RULE,
   AMD_GPU_RULE,
+  LIBRARY_RULE,
+  NO_RIPS_RULE,
   cleanAssetEntry,
   createAssetPipeline,
   assetReportLines,

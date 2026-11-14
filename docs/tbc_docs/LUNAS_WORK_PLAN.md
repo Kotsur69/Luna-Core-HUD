@@ -292,6 +292,44 @@ blender-game-assets / higgsfield-media skills.
   the paid tools (the brief's contract). A stricter fallback (git only) is a
   one-line change if preferred.
 
+### Free library assets and the license ledger (`src/lunasworkFreeAssets.js`, `src/lunasworkLicenses.js`)
+
+Two more tools for the same worker: `luna_asset_search {source, query}` and
+`luna_asset_import {source, id, name, kind}`, on the official JSON APIs only
+(`src/lunasworkFreeSources.js`): Poly Haven (CC0; HDRI, texture maps, FBX
+models), ambientCG (CC0 textures / HDRIs, zips unpacked by
+`src/lunasworkZip.js`), Sketchfab (downloadable models, per-model license, GLB
+through the download API with the token, else the glTF zip with its folders), Poly Pizza (GLB, CC0 / CC-BY, key)
+and Freesound (CC0 / CC-BY, key; the key only grants the HQ OGG preview, the
+original needs OAuth2). Kenney and OpenGameArt have no official API and are
+not fetched. The Blender MCP's own search_assets / import_asset stays usable
+for browsing, but a game asset comes in through `luna_asset_import`.
+- Import re-reads the license from the API: CC0, CC-BY or an explicit
+  free-for-commercial license pass; NC, ND, SA, Sampling+, editorial and
+  unknown are refused with the reason. Titles / tags naming the art
+  references (Katana Zero, ZZZ, Kurumi, Black Rock Shooter) or a commercial
+  game, or saying "ripped", in the title, tags or description, are refused as
+  fan rips (best effort: a rip under neutral words is not caught). The worker
+  brief says it.
+- Every import, and every generated asset of the pipeline above, gets a row in
+  the game repo's `design/ASSET_LICENSES.md` (Name, Source URL, Author,
+  License, Path; a set of files is one folder row). A ledger that cannot be
+  written takes the imported files back out. CC-BY rows are rewritten into
+  `Assets/StreamingAssets/CREDITS.txt` for the in-game credits; when that
+  fails the ledger is put back and the import undone. Hand-added columns and
+  rows of the ledger are kept. A name whose file, folder, prefab or material
+  exists gets -v2; imports into one repo run one at a time.
+- The Critic files one `missing`/high card for files under `Assets/**/Art/`
+  that no row covers (a prefab / material shares its source's row) and holds
+  SHIP while there are any.
+- Keys: Settings -> Luna's Work -> Asset library keys; stored with safeStorage
+  in `asset-keys.local.json` (cloudauth's `encryptedStorage`; memory only
+  without real encryption), write-only from the renderer, redacted from every
+  error text, sent only as a header to the API host, never to a file host.
+- Not verified against the live APIs (no network calls in tests): the reply
+  shapes follow the public API docs; Poly Pizza's v1.1 field names in
+  particular are read tolerantly.
+
 ## Reuse from God Mode
 
 | Need | Existing piece |

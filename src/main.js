@@ -170,6 +170,7 @@ const { createGodModeBuilder } = require('./lunasworkBuild');
 const { createToolsFor: createLunasworkToolsFor } = require('./lunasworkToolkitLaunch');
 const { readSettings: readLunasworkSettings, assetToolsFor: lunasworkAssetToolsFor } = require('./lunasworkSettings');
 const { createAssetToolsFor: createLunasworkAssetTools } = require('./lunasworkAssetTools');
+const { createAssetKeyStore: createLunasworkAssetKeys, registerAssetKeyIpc } = require('./lunasworkAssetKeys');
 const { isUnityProject } = require('./lunasworkScene');
 const { createSecretStore, createSecretGate } = require('./lunasworkErrorTracking');
 const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDecisionSync } = require('./lunasworkWiring');
@@ -1308,9 +1309,12 @@ const intakeServer = new IntakeServer({
 });
 
 // Luna's Work asset tools (src/lunasworkAssetTools.js): luna_asset_blender /
-// _comfy / _higgsfield. Built per request from the per-PC assetTools settings.
+// _comfy / _higgsfield / _search / _import. Built per request from the per-PC
+// assetTools settings; the library keys come from safeStorage (lunasworkAssetKeys).
+const lunasworkAssetKeys = createLunasworkAssetKeys({ dir: () => userDir() });
 const lunasworkAssetTools = createLunasworkAssetTools({
   assetTools: () => lunasworkAssetToolsFor(readLunasworkSettings()),
+  keys: lunasworkAssetKeys,
   env: () => orchestraToolEnv(),
   log: (line) => console.info(line),
 });
@@ -3400,6 +3404,8 @@ function registerIpc() {
   require('./claudesetupipc').registerClaudeSetupIpc({ ipcMain, getEnv: () => withClaudeOnPath({ ...process.env }) });
   // Settings -> Host mode: host mode inside this HUD, no restart (src/hostswitch.js).
   require('./hostmodeipc').registerHostModeIpc({ ipcMain, control: require('./hostmain').hostControl() });
+  // Settings -> Luna's Work -> Asset library keys: status (booleans) and set only.
+  registerAssetKeyIpc({ ipcMain, keys: lunasworkAssetKeys });
   registerLunasworkIpc({
     ipcMain,
     projects: () => projects,

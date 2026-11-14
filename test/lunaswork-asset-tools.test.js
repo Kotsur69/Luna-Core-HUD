@@ -253,7 +253,11 @@ test('only a store with the asset pipeline lists and answers the luna_asset_* to
     higgsfieldFinal: async () => { throw new Error('boom'); },
   };
   const listed = handleRpc(rpc('tools/list'), store({ assets }));
-  assert.deepEqual(listed.result.tools.filter((t) => t.name.startsWith('luna_asset_')).map((t) => t.name), [T.BLENDER_TOOL, T.COMFY_TOOL, T.HIGGSFIELD_TOOL]);
+  assert.deepEqual(listed.result.tools.filter((t) => t.name.startsWith('luna_asset_')).map((t) => t.name), [T.BLENDER_TOOL, T.COMFY_TOOL, T.HIGGSFIELD_TOOL, T.SEARCH_TOOL, T.IMPORT_TOOL]);
+  // A store whose pipeline lacks the library runners answers toolDown, never a crash.
+  const noLibrary = await handleRpc(rpc('tools/call', { name: T.SEARCH_TOOL, arguments: { source: 'polyhaven', query: 'x' } }), store({ assets }));
+  assert.equal(noLibrary.result.isError, true);
+  assert.match(noLibrary.result.content[0].text, /toolDown/);
 
   const made = await handleRpc(rpc('tools/call', { name: T.BLENDER_TOOL, arguments: { name: 'Crate', kind: 'prop' } }), store({ assets }));
   assert.equal(made.result.isError, undefined);

@@ -2561,6 +2561,38 @@
                 </span>
               </label>
             </div>
+            <!-- Asset library keys (modules/lunasworkKeys.js): write-only; main never sends a key back. -->
+            <div id="lw-keys" class="termcustom__group">
+              <h3 class="termcustom__section" data-i18n="lw.keys.section">Klucze bibliotek assetow</h3>
+              <p class="termcustom__hint" data-i18n="lw.keys.hint">Klucze API darmowych bibliotek (Sketchfab, Poly Pizza, Freesound) dla workera assetow. Zostaja na tym komputerze, zaszyfrowane (safeStorage); nigdy nie wracaja do panelu ani do repo. Poly Haven i ambientCG nie potrzebuja klucza.</p>
+              <div class="ui-field" data-lw-key="sketchfab">
+                <span class="ui-field__label">Sketchfab <span class="termcustom__hint" data-lw-key-status></span></span>
+                <div class="termcustom__bgimage-row">
+                  <input class="mc-input" type="password" maxlength="200" spellcheck="false" autocomplete="off" aria-label="Sketchfab API token" data-lw-key-input data-i18n-ph="lw.keys.ph" placeholder="wklej klucz API" />
+                  <button type="button" class="pad-send" data-lw-key-clear data-i18n="lw.keys.clear">Usun</button>
+                </div>
+              </div>
+              <div class="ui-field" data-lw-key="polypizza">
+                <span class="ui-field__label">Poly Pizza <span class="termcustom__hint" data-lw-key-status></span></span>
+                <div class="termcustom__bgimage-row">
+                  <input class="mc-input" type="password" maxlength="200" spellcheck="false" autocomplete="off" aria-label="Poly Pizza API key" data-lw-key-input data-i18n-ph="lw.keys.ph" placeholder="wklej klucz API" />
+                  <button type="button" class="pad-send" data-lw-key-clear data-i18n="lw.keys.clear">Usun</button>
+                </div>
+              </div>
+              <div class="ui-field" data-lw-key="freesound">
+                <span class="ui-field__label">Freesound <span class="termcustom__hint" data-lw-key-status></span></span>
+                <div class="termcustom__bgimage-row">
+                  <input class="mc-input" type="password" maxlength="200" spellcheck="false" autocomplete="off" aria-label="Freesound API key" data-lw-key-input data-i18n-ph="lw.keys.ph" placeholder="wklej klucz API" />
+                  <button type="button" class="pad-send" data-lw-key-clear data-i18n="lw.keys.clear">Usun</button>
+                </div>
+              </div>
+              <p id="lw-keys-note" class="termcustom__hint" role="status" hidden data-i18n="lw.keys.memoryOnly">Brak szyfrowania na tym komputerze: klucze zyja tylko do restartu.</p>
+              <p id="lw-keys-error" class="termcustom__hint lw-error" role="alert" hidden></p>
+              <div class="termcustom__bgimage-row">
+                <button type="button" id="lw-keys-save" class="pad-send" data-i18n="lw.keys.save">Zapisz klucze</button>
+                <span id="lw-keys-saved" class="termcustom__hint" role="status" hidden data-i18n="lw.profile.saved">Zapisano.</span>
+              </div>
+            </div>
           </section>
           <p id="termcustom-empty" class="termcustom__empty" role="status" hidden></p>
         </div>

@@ -3,12 +3,15 @@
 // ----------------------------------------------------------------------------
 // The asset worker of a Luna's Work build on a Unity project (the scene worker
 // package, lunasworkScene.SCENE_WORKER_ID) reaches the asset pipeline
-// (src/lunasworkAssetPipeline.js) through three tools on the MCP server every
+// (src/lunasworkAssetPipeline.js) through five tools on the MCP server every
 // LunaCore tab already has (src/intake.js), next to luna_todo_* and memory_*:
 //
 //   luna_asset_blender      save the open Blender scene + FBX export + prefab
 //   luna_asset_comfy        a ComfyUI draft from a repo workflow (art/comfyui/)
 //   luna_asset_higgsfield   a paid Higgsfield final, booked against the run's cap
+//   luna_asset_search       free CC0 / CC-BY assets on a library's official API
+//   luna_asset_import       one of them, license checked again, ledgered
+//                           (src/lunasworkFreeAssets.js, src/lunasworkFreeSources.js)
 //
 // Only a God Mode worker tab of the project Luna's Work is building gets them
 // (main.js decides, then createAssetToolsFor); every other tab never sees
@@ -51,10 +54,14 @@ const childProcess = require('child_process');
 const { createAssetPipeline, KINDS, MODEL_KINDS, IMAGE_KINDS } = require('./lunasworkAssetPipeline');
 const { createComfyClient, readCappedBody } = require('./lunasworkComfy');
 const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-http');
+const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
+const { createFreeSources, SOURCE_IDS, TYPES: LIBRARY_TYPES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
 
 const BLENDER_TOOL = 'luna_asset_blender';
 const COMFY_TOOL = 'luna_asset_comfy';
 const HIGGSFIELD_TOOL = 'luna_asset_higgsfield';
+const SEARCH_TOOL = 'luna_asset_search';
+const IMPORT_TOOL = 'luna_asset_import';
 const BLENDER_HOST = '127.0.0.1';
 const DEFAULT_BLENDER_PORT = 9876;
 const BLENDER_TIMEOUT_MS = 5 * 60 * 1000;
@@ -155,20 +162,60 @@ const ASSET_TOOLS = Object.freeze([
       },
     },
   },
+  {
+    name: SEARCH_TOOL,
+    description: "Luna's Work asset library search: FREE assets through official APIs - polyhaven (CC0 HDRIs, textures, models), ambientcg (CC0 textures, HDRIs), sketchfab (downloadable models, per-model license), polypizza (CC0 / CC-BY low-poly models), freesound (CC0 / CC-BY sounds). Results whose license is not CC0 / CC-BY / free for commercial use, or that look like a rip of a commercial game, come back under `refused` with the reason. Kenney and OpenGameArt have no official API and are not searchable.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['source', 'query'],
+      properties: {
+        source: { type: 'string', enum: [...SOURCE_IDS] },
+        query: { type: 'string', description: 'A few words, e.g. "rusty metal" or "katana slash".' },
+        type: { type: 'string', enum: [...LIBRARY_TYPES], description: 'Optional: only this asset type (polyhaven and ambientcg have several).' },
+        limit: { type: 'integer', minimum: 1, maximum: 10 },
+      },
+    },
+  },
+  {
+    name: IMPORT_TOOL,
+    description: "Luna's Work asset library import: one luna_asset_search result into the game. Reads the license again from the library's API and refuses anything not CC0 / CC-BY / free for commercial use, or a game rip; downloads it under the art root (never overwriting: a used name gets -v2), imports it into Unity, adds its row to design/ASSET_LICENSES.md and rewrites the CC-BY credits (Assets/StreamingAssets/CREDITS.txt).",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['source', 'id', 'kind'],
+      properties: {
+        source: { type: 'string', enum: [...SOURCE_IDS] },
+        id: { type: 'string', description: 'The id of a luna_asset_search result.' },
+        name: NAME_PROP,
+        kind: { type: 'string', enum: [...new Set(Object.values(KINDS_BY_TYPE).flat())], description: 'models: character, prop, environment, model; textures: texture, sprite, ui, vfx, other; HDRIs: texture, other; sounds: audio.' },
+        resolution: { type: 'string', enum: [...RESOLUTIONS], description: 'Textures, HDRIs and Poly Haven models; default 2k.' },
+      },
+    },
+  },
 ]);
 const TOOL_NAMES = new Set(ASSET_TOOLS.map((t) => t.name));
+const RUNNER_OF = Object.freeze({
+  [BLENDER_TOOL]: 'blenderModel',
+  [COMFY_TOOL]: 'comfyDraft',
+  [HIGGSFIELD_TOOL]: 'higgsfieldFinal',
+  [SEARCH_TOOL]: 'librarySearch',
+  [IMPORT_TOOL]: 'libraryImport',
+});
 
 /**
  * One asset tool call. Null for a name that is not an asset tool.
  * @param {string} name
  * @param {object} args untrusted: the pipeline validates every field
- * @param {{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function}} assets
+ * @param {{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function,
+ *   librarySearch?:Function, libraryImport?:Function}} assets
  * @returns {null|Promise<{ok:true, payload:object}|{ok:false, error:object}>}
  */
 function callAssetTool(name, args, assets) {
   if (!TOOL_NAMES.has(name)) return null;
   const a = isObj(args) ? args : {};
-  const run = name === BLENDER_TOOL ? assets.blenderModel : name === COMFY_TOOL ? assets.comfyDraft : assets.higgsfieldFinal;
+  const fn = assets[RUNNER_OF[name]];
+  const run = typeof fn === 'function' ? fn : () => ({ ok: false, error: 'toolDown', detail: `${name} is not available in this tab` });
   return Promise.resolve()
     .then(() => run(a))
     .then((res) => (isObj(res) && res.ok ? { ok: true, payload: res } : { ok: false, error: isObj(res) ? res : { ok: false, error: 'failed' } }))
@@ -447,15 +494,34 @@ function createDownloader(opts = {}) {
 /**
  * The asset tools of one worker tab, or null when it gets none.
  * @param {{assetTools:()=>{comfyuiPort:number, blenderPort:number, higgsfieldUsdPerCredit:number, artRoot:string},
+ *   keys?:{get:(source:string)=>string|null, secrets:()=>string[]},
  *   net?:object, execFile?:Function, fetch?:Function, lookup?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void}} deps
+ *   keys = the asset library keys (src/lunasworkAssetKeys.js); none -> the keyed libraries answer noKey
  * @returns {(ctx:{repoPath:string, recordSpend:Function, recordAsset:Function, cappedTools:Function}|null)
- *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function}}
+ *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function, librarySearch:Function, libraryImport:Function}}
  */
 function createAssetToolsFor(deps) {
   const log = deps.log || (() => {});
+  const keys = isObj(deps.keys) ? deps.keys : { get: () => null, secrets: () => [] };
   return function assetsFor(ctx) {
     if (!isObj(ctx) || typeof ctx.repoPath !== 'string') return null;
-    // Built per call: changed settings (ports, credit rate) apply without a restart.
+    // A library call that throws (not one that answers a failure) still never shows a stored key.
+    const keyed = (fn) => Promise.resolve().then(fn).catch((err) => ({
+      ok: false,
+      error: 'failed',
+      detail: oneLine(redact(errText(err), keys.secrets())),
+    }));
+    // Built per call: changed settings (ports, credit rate) and keys apply without a restart.
+    const library = () => {
+      const made = pipeline();
+      return createFreeAssets({
+        shared: made.shared,
+        artRoot: made.artRoot,
+        sources: createFreeSources({ fetch: deps.fetch, keys }),
+        download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
+        secrets: () => keys.secrets(),
+      });
+    };
     const pipeline = () => {
       const cfg = deps.assetTools();
       return createAssetPipeline({
@@ -478,6 +544,8 @@ function createAssetToolsFor(deps) {
       blenderModel: (a) => pipeline().blenderModel(a),
       comfyDraft: (a) => pipeline().comfyDraft(a),
       higgsfieldFinal: (a) => pipeline().higgsfieldFinal(a),
+      librarySearch: (a) => keyed(() => library().search(a)),
+      libraryImport: (a) => keyed(() => library().importAsset(a)),
     };
   };
 }
@@ -487,6 +555,8 @@ module.exports = {
   BLENDER_TOOL,
   COMFY_TOOL,
   HIGGSFIELD_TOOL,
+  SEARCH_TOOL,
+  IMPORT_TOOL,
   DEFAULT_BLENDER_PORT,
   callAssetTool,
   createBlenderClient,
