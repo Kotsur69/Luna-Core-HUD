@@ -24,23 +24,32 @@
 //   Higgsfield  the `higgsfield` CLI: `generate cost` (credits) and `generate
 //               create --wait --json`. Every argument is a validated plain
 //               token; the prompt goes on stdin, never on a command line.
-//   download    a Higgsfield result: https only, no IP-literal or local host,
-//               size-capped, with a timeout.
+//   download    a Higgsfield result: https on port 443 only, no credentials,
+//               no IP literal or local name; the host must resolve to public
+//               addresses only (checked before every request, redirects
+//               followed by hand, at most 3, each hop checked again); the body
+//               is size-capped while it streams in, with one timeout for
+//               the lot. Not caught here: a DNS answer that changes between
+//               the check and the connect, and a proxy fetch is told to use
+//               (HTTPS_PROXY / NODE_USE_ENV_PROXY), which resolves the host
+//               itself. Either way the bytes must still prove to be an
+//               image or a GLB before the pipeline writes anything.
 //   ComfyUI     src/lunasworkComfy.js (loopback HTTP).
 //   Unity       helpers/playtest-bridge/pipeline-http.js (the editor of the
 //               worker's project folder).
 //
 // Per-PC settings (lunaswork-settings.local.json `assetTools`, normalized by
-// lunasworkToolkit.normalizeAssetTools): comfyuiPort, blenderPort,
+// lunasworkAssetPipeline.normalizeAssetTools): comfyuiPort, blenderPort,
 // higgsfieldUsdPerCredit, artRoot.
 // ============================================================================
 
 'use strict';
 
 const net = require('net');
+const dns = require('dns');
 const childProcess = require('child_process');
 const { createAssetPipeline, KINDS, MODEL_KINDS, IMAGE_KINDS } = require('./lunasworkAssetPipeline');
-const { createComfyClient } = require('./lunasworkComfy');
+const { createComfyClient, readCappedBody } = require('./lunasworkComfy');
 const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-http');
 
 const BLENDER_TOOL = 'luna_asset_blender';
@@ -59,7 +68,34 @@ const DOWNLOAD_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_URLS = 4;
 const MAX_SEARCH_DEPTH = 5;
-const CLI_TOKEN_RE = /^[\w:.-]{1,64}$/;
+const MAX_REDIRECTS = 3;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+// A plain token never starts with '-', so a value cannot read as a CLI flag.
+const CLI_TOKEN_RE = /^[A-Za-z0-9][\w:.-]{0,63}$/;
+const LOCAL_NAME_RE = /(^|\.)(localhost|local|internal|lan|home|localdomain|home\.arpa)$/;
+// Addresses a result download must never reach: unspecified, loopback,
+// private, carrier-grade NAT, link-local, documentation, benchmark,
+// multicast, reserved, unique-local. BlockList also matches IPv4-mapped IPv6.
+const NON_PUBLIC = (() => {
+  const list = new net.BlockList();
+  const v4 = [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]];
+  // IPv4-compatible (::/96), discard, Teredo, documentation and the local ranges.
+  const v6 = [['::', 96], ['::1', 128], ['100::', 64], ['2001::', 32], ['2001:db8::', 32], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]];
+  // A v4 subnet as the 16-bit groups of its first address.
+  const groups = (address) => {
+    const [a, b, c, e] = address.split('.').map(Number);
+    return [((a << 8) | b).toString(16), ((c << 8) | e).toString(16)];
+  };
+  for (const [address, prefix] of v4) {
+    list.addSubnet(address, prefix, 'ipv4');
+    const [hi, lo] = groups(address);
+    // The same v4 ranges embedded in NAT64 (64:ff9b::/96) and 6to4 (2002::/16) addresses.
+    list.addSubnet(`64:ff9b::${hi}:${lo}`, 96 + prefix, 'ipv6');
+    list.addSubnet(`2002:${hi}:${lo}::`, 16 + prefix, 'ipv6');
+  }
+  for (const [address, prefix] of v6) list.addSubnet(address, prefix, 'ipv6');
+  return list;
+})();
 const FAILED_STATUSES = new Set(['failed', 'error', 'nsfw', 'canceled', 'cancelled']);
 const CREDIT_KEYS = Object.freeze(['credits', 'total_credits', 'credit_cost', 'cost', 'price']);
 // Result URL keys that are previews, not the result itself.
@@ -105,7 +141,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: HIGGSFIELD_TOOL,
-    description: "Luna's Work asset pipeline: a paid FINAL from Higgsfield (concept art, textures, VFX, key art, or a GLB model). The cost is estimated and booked against this run's Higgsfield budget BEFORE it generates; \"capReached\" means stop using Higgsfield for this run. Saves, imports into Unity and logs prompt, seed and cost.",
+    description: "Luna's Work asset pipeline: a paid FINAL from Higgsfield (concept art, textures, VFX, key art, or a GLB model). The cost is estimated and booked against this run's Higgsfield budget BEFORE it generates; \"capReached\" means stop using Higgsfield for this run. Saves (a name already used gets -v2, never an overwrite), imports into Unity and logs prompt, seed and cost. When a paid result cannot be saved, the answer carries its job id and URLs.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -297,7 +333,10 @@ function createHiggsfieldCli(opts = {}) {
 
 // ---- download -------------------------------------------------------------------------
 
-/** True for a public https URL: no credentials, no IP literal, no local name. */
+/** The host of a parsed URL: lower case, no IPv6 brackets, no trailing root dot. */
+const hostOf = (u) => u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+
+/** True for a public https URL: port 443, no credentials, no IP literal, no local name. */
 function isPublicHttps(raw) {
   let u;
   try {
@@ -305,28 +344,101 @@ function isPublicHttps(raw) {
   } catch {
     return false;
   }
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (u.protocol !== 'https:' || u.username || u.password || !host.includes('.')) return false;
-  return !net.isIP(host) && !/(^|\.)(localhost|local|internal|lan|home)$/.test(host);
+  const host = hostOf(u);
+  // URL drops the default port, so '' is 443; any other port is refused.
+  if (u.protocol !== 'https:' || u.username || u.password || u.port !== '' || !host.includes('.')) return false;
+  return !net.isIP(host) && !LOCAL_NAME_RE.test(host);
+}
+
+/** True for a resolved address outside every non-public range. */
+function isPublicAddress(address) {
+  const family = net.isIP(typeof address === 'string' ? address : '');
+  return family !== 0 && !NON_PUBLIC.check(address, family === 6 ? 'ipv6' : 'ipv4');
+}
+
+/** `promise`, or a rejection as soon as `signal` aborts (dns.lookup itself takes no signal). */
+function untilAborted(promise, signal, what) {
+  if (signal.aborted) return Promise.reject(new Error(`${what} timed out`));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new Error(`${what} timed out`));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (err) => { signal.removeEventListener('abort', onAbort); reject(err); },
+    );
+  });
+}
+
+/** Throws unless every address `host` resolves to is public. */
+async function assertPublicHost(host, lookup, signal) {
+  let addresses;
+  try {
+    addresses = await untilAborted(Promise.resolve().then(() => lookup(host, { all: true, verbatim: true })), signal, `resolving ${host}`);
+  } catch (err) {
+    throw new Error(`cannot resolve ${host} (${err && err.code ? err.code : oneLine(errText(err), 80)})`);
+  }
+  const list = Array.isArray(addresses) ? addresses : [];
+  if (!list.length) throw new Error(`cannot resolve ${host}`);
+  if (!list.every((a) => isObj(a) && isPublicAddress(a.address))) throw new Error(`refused: ${host} resolves to a non-public address`);
+}
+
+/** Drops a body that will not be read (a redirect's); only frees the connection early. */
+function discardBody(res) {
+  if (res && res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {});
 }
 
 /**
- * @param {{fetch?:Function, timeoutMs?:number}} [opts]
+ * @param {{fetch?:Function, lookup?:(host:string, opts:object)=>Promise<{address:string, family:number}[]>, timeoutMs?:number}} [opts]
  * @returns {(url:string)=>Promise<Buffer>}
  */
 function createDownloader(opts = {}) {
   const fetchFn = opts.fetch || globalThis.fetch;
+  const lookup = opts.lookup || dns.promises.lookup;
   const timeoutMs = opts.timeoutMs || DOWNLOAD_TIMEOUT_MS;
+
+  const timedOut = (err) => !!err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+  const timeoutText = () => `download timed out after ${Math.round(timeoutMs / 1000)} s`;
+
+  async function fetchOnce(url, signal) {
+    try {
+      return await fetchFn(url, { redirect: 'manual', signal });
+    } catch (err) {
+      throw new Error(timedOut(err) ? timeoutText() : `download failed: ${oneLine(err && err.cause && err.cause.code ? err.cause.code : errText(err), 120)}`);
+    }
+  }
+
+  async function bodyOf(res) {
+    try {
+      return await readCappedBody(res, MAX_DOWNLOAD_BYTES);
+    } catch (err) {
+      if (err && err.code === 'BODY_TOO_LARGE') throw new Error('the result is too large');
+      throw new Error(timedOut(err) ? timeoutText() : `download broke off: ${oneLine(errText(err), 120)}`);
+    }
+  }
+
   return async function download(url) {
-    if (!isPublicHttps(url)) throw new Error('refused: a result URL must be public https');
-    const res = await fetchFn(url, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
-    if (res.url && !isPublicHttps(res.url)) throw new Error('refused: the result redirected off public https');
-    if (!res.ok) throw new Error(`download failed with HTTP ${res.status}`);
-    const declared = Number(res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : NaN);
-    if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) throw new Error('the result is too large');
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > MAX_DOWNLOAD_BYTES) throw new Error('the result is too large');
-    return buf;
+    // One budget for the whole download: every lookup, hop and the body read.
+    const signal = AbortSignal.timeout(timeoutMs);
+    let current = url;
+    for (let hop = 0; ; hop += 1) {
+      if (!isPublicHttps(current)) throw new Error(hop ? 'refused: the result redirected off public https' : 'refused: a result URL must be public https');
+      await assertPublicHost(hostOf(new URL(current)), lookup, signal);
+      const res = await fetchOnce(current, signal);
+      if (!REDIRECT_STATUSES.has(res.status)) {
+        if (res.ok) return bodyOf(res);
+        discardBody(res);
+        throw new Error(`download failed with HTTP ${res.status}`);
+      }
+      const location = res.headers && typeof res.headers.get === 'function' ? res.headers.get('location') : null;
+      discardBody(res);
+      if (hop >= MAX_REDIRECTS) throw new Error(`refused: more than ${MAX_REDIRECTS} redirects`);
+      if (!location) throw new Error(`download answered HTTP ${res.status} without a location`);
+      try {
+        current = new URL(location, current).href;
+      } catch {
+        throw new Error('refused: a redirect to an unreadable location');
+      }
+    }
   };
 }
 
@@ -335,7 +447,7 @@ function createDownloader(opts = {}) {
 /**
  * The asset tools of one worker tab, or null when it gets none.
  * @param {{assetTools:()=>{comfyuiPort:number, blenderPort:number, higgsfieldUsdPerCredit:number, artRoot:string},
- *   net?:object, execFile?:Function, fetch?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void}} deps
+ *   net?:object, execFile?:Function, fetch?:Function, lookup?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void}} deps
  * @returns {(ctx:{repoPath:string, recordSpend:Function, recordAsset:Function, cappedTools:Function}|null)
  *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function}}
  */
@@ -353,7 +465,7 @@ function createAssetToolsFor(deps) {
         comfy: createComfyClient({ port: cfg.comfyuiPort, fetch: deps.fetch }),
         blender: createBlenderClient({ port: cfg.blenderPort, net: deps.net }),
         higgsfield: createHiggsfieldCli({ execFile: deps.execFile, platform: deps.platform, env: deps.env ? deps.env() : undefined }),
-        download: createDownloader({ fetch: deps.fetch }),
+        download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
         unity: createPipelineClient({ projectDir: ctx.repoPath, fetch: deps.fetch }),
         recordSpend: ctx.recordSpend,
         cappedTools: ctx.cappedTools,
@@ -382,6 +494,7 @@ module.exports = {
   creditsOf,
   jobResultOf,
   isPublicHttps,
+  isPublicAddress,
   createDownloader,
   createAssetToolsFor,
 };

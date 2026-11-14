@@ -15,7 +15,8 @@
 //
 // Boundaries: the host is always 127.0.0.1 (loopback only), the port is a
 // validated integer (default 8188), redirects are refused, every request has
-// a timeout and every reply a size cap. Everything ComfyUI answers is
+// a timeout and every reply a size cap, enforced while the body streams in
+// (readCappedBody, shared with the Higgsfield downloader). Everything ComfyUI answers is
 // validated before use: the prompt id, the history shape, the output file
 // names (never used as local paths - the caller names its own files) and the
 // image bytes (PNG / JPEG / WEBP magic). Errors carry err.code (COMFY_ERROR).
@@ -137,6 +138,44 @@ function applyPrompt(workflow, prompt) {
 
 const randomSeed = () => crypto.randomInt(0, RANDOM_SEED_LIMIT);
 
+// ---- capped body read -------------------------------------------------------------------
+
+/**
+ * A fetch Response body as a Buffer, never more than `max` bytes in memory:
+ * a declared content-length over the cap is refused before reading, and the
+ * stream is read chunk by chunk and cancelled as soon as it passes the cap. A
+ * response without a readable stream (a test stand-in) falls back to
+ * arrayBuffer(), still checked. Throws err.code 'BODY_TOO_LARGE'.
+ * @param {{headers?:{get:Function}, body?:{getReader:Function}|null, arrayBuffer?:Function}} res
+ * @param {number} max
+ * @returns {Promise<Buffer>}
+ */
+async function readCappedBody(res, max) {
+  const tooLarge = (bytes) => Object.assign(new Error(`reply too large (${bytes} bytes, cap ${max})`), { code: 'BODY_TOO_LARGE' });
+  const declared = Number(res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : NaN);
+  if (Number.isFinite(declared) && declared > max) throw tooLarge(declared);
+  const reader = res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > max) throw tooLarge(buf.length);
+    return buf;
+  }
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      // Cancelling only frees the connection early; the size error is what the caller gets.
+      reader.cancel().catch(() => {});
+      throw tooLarge(size);
+    }
+    chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+  }
+  return Buffer.concat(chunks, size);
+}
+
 // ---- replies --------------------------------------------------------------------------
 
 /** The output images of one history entry, validated; [] when there are none. */
@@ -219,11 +258,12 @@ function createComfyClient(opts = {}) {
   }
 
   async function body(res, max) {
-    const declared = Number(res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : NaN);
-    if (Number.isFinite(declared) && declared > max) throw comfyError(COMFY_ERROR.badReply, `ComfyUI reply too large (${declared} bytes)`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > max) throw comfyError(COMFY_ERROR.badReply, `ComfyUI reply too large (${buf.length} bytes)`);
-    return buf;
+    try {
+      return await readCappedBody(res, max);
+    } catch (err) {
+      if (err && err.code === 'BODY_TOO_LARGE') throw comfyError(COMFY_ERROR.badReply, `ComfyUI ${err.message}`);
+      throw comfyError(COMFY_ERROR.unreachable, `ComfyUI reply broke off (${oneLine(err && err.message, 120)})`);
+    }
   }
 
   async function json(res, what) {
@@ -318,5 +358,6 @@ module.exports = {
   applyPrompt,
   randomSeed,
   outputFiles,
+  readCappedBody,
   createComfyClient,
 };

@@ -20,7 +20,11 @@
 //                    spend cap (recordSpend, src/lunasworkToolGuard.js) before
 //                    anything is generated. A refused booking stops Higgsfield
 //                    for the rest of the run (the guard files the card); no
-//                    further Higgsfield call is made, not even an estimate
+//                    further Higgsfield call is made, not even an estimate.
+//                    The record art/higgsfield/<kind>/<stem>.json is written
+//                    before the download, so a paid job is never lost; a
+//                    result that does not end as files is still logged with
+//                    its cost (unsaved). A used name gets -v2, -v3...
 //
 // Every made file is imported through the Unity Pipeline (the asset calls of
 // helpers/playtest-bridge/unity.js); a texture also gets a material. An editor
@@ -31,14 +35,15 @@
 // Boundaries: every path is built here from a validated kind and slug; a model
 // or a tool never names a file. Writes stay inside the project repo
 // (lunasworkToolkit.isWritablePath, which resolves junctions) and go through
-// tmp + rename. Tool output is validated before it is written: image / FBX /
-// .blend magic bytes, size caps, URL shapes.
+// a fresh random tmp file ('wx') + rename. Tool output is validated before it
+// is written: image / FBX / .blend magic bytes, size caps, URL shapes.
 // ============================================================================
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { isWritablePath } = require('./lunasworkToolkit');
 const comfyLib = require('./lunasworkComfy');
 const { UNITY_PIPELINE_ASSETS, pipelineCall } = require('../helpers/playtest-bridge/unity');
@@ -79,12 +84,23 @@ const MAX_WORKFLOW_BYTES = 1024 * 1024;
 const MAX_HIGGSFIELD_RESULTS = 4;
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
-const PARAM_KEY_RE = /^[a-z][a-z0-9_]{0,31}$/;
-const PARAM_VALUE_RE = /^[\w:.-]{1,40}$/;
+const PARAM_KEY_RE = /^[a-z][a-z0-9_]{1,31}$/;
+// Flags the pipeline sets itself or that would point the CLI at files, accounts or other output.
+const RESERVED_PARAM_KEYS = Object.freeze(new Set(['json', 'wait', 'wait_timeout', 'output', 'out', 'file', 'path', 'dir', 'download', 'save', 'config', 'profile', 'token', 'api_key', 'help', 'version']));
+// Never a leading '-': a value must not read as a CLI flag.
+const PARAM_VALUE_RE = /^[A-Za-z0-9][\w:.-]{0,39}$/;
 const MAX_PARAMS = 8;
 const WORKFLOW_FILE_RE = /^[\w-]{1,80}\.json$/;
 const JOB_ID_RE = /^[\w-]{1,100}$/;
 const MAX_SEED = Number.MAX_SAFE_INTEGER;
+// What a Higgsfield result can turn out to be; a free name must be free for each.
+const RESULT_EXTS = Object.freeze(['png', 'jpg', 'webp', 'glb']);
+const IMAGE_EXTS = Object.freeze(['png', 'jpg', 'webp']);
+// Files Unity imports as a model, so they get a prefab.
+const MODEL_EXTS = Object.freeze(['fbx', 'glb']);
+// "<slug>", "<slug>-v2" ... "<slug>-v50": a made asset never overwrites an earlier one.
+const MAX_VERSIONS = 50;
+const HEAD_BYTES = 64;
 
 const FBX_BINARY = Buffer.from('Kaydara FBX Binary', 'latin1');
 const BLEND_MAGICS = Object.freeze([Buffer.from('BLENDER', 'latin1'), Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), Buffer.from([0x1f, 0x8b])]);
@@ -114,6 +130,21 @@ function assetPath(artRoot, kind, slug, ext) {
   return `${artRootOf(artRoot)}/${KINDS[kind].dir}/${slug}.${ext}`;
 }
 
+/** The file stem of result `i` of `n`: "<stem>" alone, "<stem>-1", "<stem>-2"... in a set. */
+const resultStem = (stem, i, n) => (n > 1 ? `${stem}-${i + 1}` : stem);
+
+/** A result URL as a source record keeps it: origin + path, no query (a signed URL's token stays out of git). */
+function recordUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+const recordText = (record) => `${JSON.stringify(record, null, 2)}\n`;
+
 /**
  * A job's common fields, validated: a known kind (one of `allowed`), a name
  * that makes a slug, a one-line prompt.
@@ -137,7 +168,7 @@ function cleanParams(raw) {
   const out = {};
   for (const [k, v] of entries) {
     const value = typeof v === 'number' && Number.isFinite(v) ? String(v) : v;
-    if (!PARAM_KEY_RE.test(k) || typeof value !== 'string' || !PARAM_VALUE_RE.test(value)) return null;
+    if (!PARAM_KEY_RE.test(k) || RESERVED_PARAM_KEYS.has(k) || typeof value !== 'string' || !PARAM_VALUE_RE.test(value)) return null;
     out[k] = value;
   }
   return out;
@@ -192,6 +223,8 @@ function cleanAssetEntry(raw) {
     path: filePath,
     sources: (Array.isArray(raw.sources) ? raw.sources : []).slice(0, 4).map((s) => oneLine(s, MAX_LOG_PATH_CHARS)).filter(Boolean),
     imported: raw.imported === true,
+    // A paid generation whose result did not end up as files (path is then its record).
+    unsaved: raw.unsaved === true,
   };
 }
 
@@ -234,14 +267,38 @@ function createAssetPipeline(deps) {
     return target;
   }
 
-  /** mkdir -p, then the guard again (a junction made meanwhile), then tmp + rename. */
+  /** Removes our temp file after a failed write; a failed removal is added to the error. */
+  function dropTmp(err, tmp, tmpRel) {
+    try {
+      fsx.unlinkSync(tmp);
+    } catch (cleanupErr) {
+      if (cleanupErr && cleanupErr.code !== 'ENOENT') {
+        const why = ` (and ${tmpRel} could not be removed: ${errText(cleanupErr)})`;
+        return err instanceof Error ? Object.assign(err, { message: err.message + why }) : new Error(errText(err) + why);
+      }
+    }
+    return err;
+  }
+
+  /** mkdir -p, the guard again (a junction made meanwhile), then a fresh tmp file + rename. */
   function writeRepoFile(rel, data) {
     guardPath(rel);
     fsx.mkdirSync(path.dirname(abs(rel)), { recursive: true });
     const target = guardPath(rel);
-    const tmp = `${target}.${process.pid}.tmp`;
-    fsx.writeFileSync(tmp, data);
-    fsx.renameSync(tmp, target);
+    // A random name created with 'wx': never an existing file or a planted link.
+    const tmpRel = `${rel}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    const tmp = guardPath(tmpRel);
+    try {
+      fsx.writeFileSync(tmp, data, { flag: 'wx' });
+    } catch (err) {
+      // EEXIST: the name belongs to a file that is not ours; never delete it.
+      throw err && err.code === 'EEXIST' ? err : dropTmp(err, tmp, tmpRel);
+    }
+    try {
+      fsx.renameSync(tmp, target);
+    } catch (err) {
+      throw dropTmp(err, tmp, tmpRel);
+    }
     return rel;
   }
 
@@ -252,7 +309,41 @@ function createAssetPipeline(deps) {
     return fsx.readFileSync(target);
   }
 
-  /** Imports one file (and its prefab / material) into the open editor. Never throws. */
+  /** The stat of a repo path (guarded), or null when nothing is there. */
+  function statOf(rel) {
+    try {
+      return fsx.statSync(guardPath(rel));
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  /** The first HEAD_BYTES of a repo file: enough for every magic-byte check. */
+  function readHead(rel) {
+    const fd = fsx.openSync(guardPath(rel), 'r');
+    try {
+      const buf = Buffer.alloc(HEAD_BYTES);
+      return buf.subarray(0, fsx.readSync(fd, buf, 0, HEAD_BYTES, 0));
+    } finally {
+      fsx.closeSync(fd);
+    }
+  }
+
+  /** `base`, else `base-v2`, `base-v3`...: the first stem none of whose files exist yet. */
+  function freeStem(base, relsFor) {
+    for (let v = 1; v <= MAX_VERSIONS; v += 1) {
+      const stem = v === 1 ? base : `${base}-v${v}`;
+      if (!relsFor(stem).some((rel) => statOf(rel) !== null)) return stem;
+    }
+    throw new Error(`${MAX_VERSIONS} versions of ${base} exist already`);
+  }
+
+  /**
+   * Imports one file into the open editor. What follows depends on the file,
+   * not only the asked kind: a model file (FBX / GLB) gets a prefab, an image
+   * of a material kind (texture) a material. Never throws.
+   */
   async function importToUnity(rel, kind) {
     if (!d.unity || typeof d.unity.exec !== 'function') return { ok: false, calls: [], error: 'unity not connected' };
     const calls = [];
@@ -260,24 +351,31 @@ function createAssetPipeline(deps) {
       calls.push(entry[0]);
       return pipelineCall(d.unity, entry);
     };
+    const ext = path.posix.extname(rel).slice(1).toLowerCase();
+    const base = rel.slice(0, rel.length - ext.length - 1);
     try {
       await call(UNITY_PIPELINE_ASSETS.importAsset(rel));
-      const base = rel.replace(/\.[a-z0-9]+$/i, '');
-      if (KINDS[kind].model) await call(UNITY_PIPELINE_ASSETS.createPrefab(rel, `${base}.prefab`));
-      if (KINDS[kind].material) await call(UNITY_PIPELINE_ASSETS.createMaterial(rel, `${base}.mat`));
+      if (MODEL_EXTS.includes(ext)) await call(UNITY_PIPELINE_ASSETS.createPrefab(rel, `${base}.prefab`));
+      else if (KINDS[kind].material && IMAGE_EXTS.includes(ext)) await call(UNITY_PIPELINE_ASSETS.createMaterial(rel, `${base}.mat`));
       return { ok: true, calls };
     } catch (err) {
       return { ok: false, calls, error: oneLine(errText(err), 300) };
     }
   }
 
+  /**
+   * One run-report entry. Never throws: the asset itself is made and on disk.
+   * False when the entry could not be logged, so a caller whose entry is the
+   * only trace of a cost (paidUnsaved) can say so in its answer.
+   */
   function log(entry) {
     const clean = cleanAssetEntry({ at: now(), ...entry });
-    if (!clean || typeof d.logAsset !== 'function') return;
+    if (!clean || typeof d.logAsset !== 'function') return false;
     try {
       d.logAsset(clean);
+      return true;
     } catch {
-      // The report entry is best effort; the asset itself is made and on disk.
+      return false;
     }
   }
 
@@ -285,26 +383,40 @@ function createAssetPipeline(deps) {
 
   // ---- Blender -------------------------------------------------------------------------
 
-  /** Saves the open Blender scene and exports it to Unity as FBX + prefab. */
+  /** Throws unless Blender wrote `rel` now (new, or changed since `before`) with the right header. */
+  function checkExport(rel, before, isKind, what) {
+    const after = statOf(rel);
+    if (!after || !after.isFile()) throw new Error(`${rel} was not written`);
+    if (before && after.mtimeMs === before.mtimeMs && after.size === before.size) throw new Error(`${rel} is the earlier file, not a new export`);
+    if (!isKind(readHead(rel))) throw new Error(`${rel} is not ${what}`);
+  }
+
+  /**
+   * Saves the open Blender scene and exports it to Unity as FBX + prefab. A
+   * model of the same name is exported again in place (the editor keeps its
+   * GUID), unlike a paid Higgsfield final.
+   */
   async function blenderModel(raw) {
     const job = cleanJob(raw, MODEL_KINDS);
     if (!job.ok) return job;
     if (!d.blender || typeof d.blender.executeCode !== 'function') return fail('toolDown', 'blender not connected');
     const blendRel = `${SOURCE_DIRS.blender}/${job.slug}.blend`;
     const fbxRel = assetPath(artRoot, job.kind, job.slug, 'fbx');
+    let before;
     try {
       for (const rel of [blendRel, fbxRel]) {
         guardPath(rel);
         fsx.mkdirSync(path.dirname(abs(rel)), { recursive: true });
-        guardPath(rel);
       }
+      // statOf guards again after mkdir (a junction made meanwhile).
+      before = [statOf(blendRel), statOf(fbxRel)];
       await d.blender.executeCode(blenderExportScript(abs(blendRel), abs(fbxRel)));
     } catch (err) {
       return fail('blenderFailed', errText(err));
     }
     try {
-      if (!isBlend(readRepoFile(blendRel, MAX_DOWNLOAD_BYTES * 5))) return fail('blenderFailed', `${blendRel} is not a .blend file`);
-      if (!isFbx(readRepoFile(fbxRel, MAX_DOWNLOAD_BYTES * 5))) return fail('blenderFailed', `${fbxRel} is not an FBX file`);
+      checkExport(blendRel, before[0], isBlend, 'a .blend file');
+      checkExport(fbxRel, before[1], isFbx, 'an FBX file');
     } catch (err) {
       return fail('blenderFailed', `Blender did not write the files: ${errText(err)}`);
     }
@@ -349,45 +461,55 @@ function createAssetPipeline(deps) {
     }
     const images = (isObj(res) && Array.isArray(res.images) ? res.images : []).filter((i) => isObj(i) && comfyLib.imageKind(i.data));
     if (!images.length) return fail('comfyFailed', 'ComfyUI returned no image');
-    const stem = `${job.slug}-draft-${seed}`;
+    const warnings = [];
+    if (!seeded.seeded) warnings.push('the workflow has no numeric seed / noise_seed input: the seed is recorded but did not steer the image');
+    if (job.prompt && !prompted.replaced) warnings.push(`the workflow has no "${comfyLib.PROMPT_PLACEHOLDER}" placeholder: the prompt was not used`);
+    const runRelOf = (stem) => `${SOURCE_DIRS.comfyRuns}/${stem}.json`;
+    const imageRel = (stem, i) => assetPath(artRoot, job.kind, resultStem(stem, i, images.length), comfyLib.imageKind(images[i].data));
     const files = [];
-    const imports = [];
+    let runRel;
     try {
-      for (const [i, img] of images.entries()) {
-        const rel = assetPath(artRoot, job.kind, images.length > 1 ? `${stem}-${i + 1}` : stem, comfyLib.imageKind(img.data));
-        files.push(writeRepoFile(rel, img.data));
-      }
-      const record = { name: job.name, kind: job.kind, prompt: job.prompt, seed, workflow: loaded.rel, promptId: oneLine(res.promptId, 64), outputs: files, api: prompted.workflow };
-      const runRel = `${SOURCE_DIRS.comfyRuns}/${stem}.json`;
-      writeRepoFile(runRel, `${JSON.stringify(record, null, 2)}\n`);
-      for (const rel of files) imports.push(await importToUnity(rel, job.kind));
-      for (const [i, rel] of files.entries()) {
-        log({ tool: 'comfyui', kind: job.kind, name: job.name, prompt: job.prompt, seed, costUsd: 0, path: rel, sources: [loaded.rel, runRel], imported: imports[i].ok });
-      }
-      const failed = imports.find((imp) => !imp.ok);
-      return { ok: true, files, sources: [loaded.rel, runRel], seed, seeded: seeded.seeded, unity: imports, note: failed ? importNote(failed) : null };
+      const stem = freeStem(`${job.slug}-draft-${seed}`, (s) => [runRelOf(s), ...images.map((_, i) => imageRel(s, i))]);
+      for (const [i, img] of images.entries()) files.push(writeRepoFile(imageRel(stem, i), img.data));
+      runRel = writeRepoFile(runRelOf(stem), recordText({
+        name: job.name, kind: job.kind, prompt: job.prompt, seed, seedApplied: seeded.seeded > 0, promptApplied: prompted.replaced > 0,
+        workflow: loaded.rel, promptId: oneLine(res.promptId, 64), outputs: files, api: prompted.workflow,
+      }));
     } catch (err) {
-      return fail('writeFailed', errText(err));
+      return { ...fail('writeFailed', errText(err)), files };
     }
+    const imports = [];
+    for (const rel of files) imports.push(await importToUnity(rel, job.kind));
+    for (const [i, rel] of files.entries()) {
+      log({ tool: 'comfyui', kind: job.kind, name: job.name, prompt: job.prompt, seed, costUsd: 0, path: rel, sources: [loaded.rel, runRel], imported: imports[i].ok });
+    }
+    const failed = imports.find((imp) => !imp.ok);
+    return { ok: true, files, sources: [loaded.rel, runRel], seed, seeded: seeded.seeded, warnings, unity: imports, note: failed ? importNote(failed) : null };
   }
 
   // ---- Higgsfield ----------------------------------------------------------------------
 
   const cappedNow = () => (typeof d.cappedTools === 'function' ? d.cappedTools() : []);
 
-  /** Estimate -> book against the cap -> generate -> download -> save -> import -> log. */
-  async function higgsfieldFinal(raw) {
+  /** The validated job and CLI request of a Higgsfield final, or a failure. Nothing is called yet. */
+  function higgsfieldRequest(raw) {
     const job = cleanJob(raw, [...IMAGE_KINDS, ...MODEL_KINDS]);
     if (!job.ok) return job;
     if (higgsfieldStopped || cappedNow().includes('higgsfield')) return fail('capReached', higgsfieldStopped || 'the Higgsfield spend cap of this run is reached');
-    if (!d.higgsfield || typeof d.higgsfield.generate !== 'function') return fail('toolDown', 'higgsfield not connected');
+    const h = d.higgsfield;
+    if (!h || typeof h.estimate !== 'function' || typeof h.generate !== 'function') return fail('toolDown', 'higgsfield not connected');
+    // Checked before paying: a result that cannot be fetched must not be bought.
+    if (typeof d.download !== 'function') return fail('toolDown', 'no downloader for Higgsfield results');
     const model = isObj(raw) ? raw.model : undefined;
     if (typeof model !== 'string' || !MODEL_ID_RE.test(model)) return fail('badModel', 'model must be a Higgsfield model id such as gpt_image_2_6');
     const params = cleanParams(isObj(raw) ? raw.params : undefined);
-    if (!params) return fail('badParams', `params: at most ${MAX_PARAMS} plain key/value flags`);
+    if (!params) return fail('badParams', `params: at most ${MAX_PARAMS} plain key/value flags, each value starting with a letter or digit`);
     if (!job.prompt) return fail('badPrompt', 'a Higgsfield final needs a prompt');
-    const request = { model, prompt: job.prompt, params };
+    return { ok: true, job, request: { model, prompt: job.prompt, params } };
+  }
 
+  /** Estimate -> book against the run's cap. A refused booking stops Higgsfield for this pipeline. */
+  async function bookHiggsfield(request) {
     let credits;
     try {
       const est = await d.higgsfield.estimate(request);
@@ -403,40 +525,106 @@ function createAssetPipeline(deps) {
       higgsfieldStopped = `Higgsfield stopped for this run: the booking of $${costUsd.toFixed(2)} was refused (${reason})`;
       return fail(reason === 'capReached' ? 'capReached' : 'spendRefused', higgsfieldStopped);
     }
+    return { ok: true, credits, costUsd };
+  }
 
-    let gen;
-    try {
-      gen = await d.higgsfield.generate(request);
-    } catch (err) {
-      return fail('higgsfieldFailed', errText(err));
+  /** One downloaded result, checked: a Buffer under the cap that proves to be an image or a GLB. */
+  async function fetchResult(url) {
+    const data = await d.download(url);
+    if (!Buffer.isBuffer(data) || data.length > MAX_DOWNLOAD_BYTES) throw new Error('a result is missing or too large');
+    const ext = resultExt(data);
+    if (!ext) throw new Error('a result is not an image or a GLB model');
+    return { data, ext };
+  }
+
+  /**
+   * A booked generation that did not end as saved files. The record (when one
+   * was written) says why, the run report logs the cost, and the worker gets
+   * the job id and the result URLs to finish by hand.
+   */
+  function paidUnsaved(job, paid, info, detail) {
+    let text = detail;
+    if (info.record && info.recordData) {
+      try {
+        writeRepoFile(info.record, recordText({ ...info.recordData, status: 'notSaved', outputs: info.files || [], error: oneLine(detail, 300) }));
+      } catch (err) {
+        text += ` (the record could not be updated: ${errText(err)})`;
+      }
     }
-    const urls = (isObj(gen) && Array.isArray(gen.urls) ? gen.urls : []).filter((u) => typeof u === 'string').slice(0, MAX_HIGGSFIELD_RESULTS);
-    if (!urls.length) return fail('higgsfieldFailed', 'Higgsfield returned no result URL');
-    if (typeof d.download !== 'function') return fail('higgsfieldFailed', 'no downloader');
-    const jobId = isObj(gen) && typeof gen.jobId === 'string' && JOB_ID_RE.test(gen.jobId) ? gen.jobId : null;
-    const seed = isObj(gen) && Number.isSafeInteger(gen.seed) && gen.seed >= 0 ? gen.seed : null;
+    const logged = log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: info.seed, costUsd: paid.costUsd, credits: paid.credits, path: info.record || info.path, sources: info.record ? [info.record] : [], imported: false, unsaved: true });
+    return {
+      ...fail('higgsfieldFailed', text),
+      costUsd: paid.costUsd, credits: paid.credits, jobId: info.jobId || null, urls: info.urls || [], record: info.record || null, files: info.files || [],
+      ...(logged ? {} : { note: 'The run report could not log this cost; mention it in your hand-back.' }),
+    };
+  }
+
+  /**
+   * Record -> fetch every result -> write -> record again -> import -> log.
+   * The record goes first, so a paid job is never lost: its id and URLs are
+   * on disk before anything is downloaded. A name already used gets the next
+   * free version (-v2, -v3...): a paid final never overwrites another.
+   */
+  async function saveHiggsfield(job, request, paid, gen) {
+    const n = gen.urls.length;
+    const recordOf = (stem) => `${SOURCE_DIRS.higgsfield}/${job.kind}/${stem}.json`;
+    const fileOf = (stem, i, ext) => assetPath(artRoot, job.kind, resultStem(stem, i, n), ext);
+    const recordData = {
+      name: job.name, kind: job.kind, model: request.model, prompt: job.prompt, params: request.params, seed: gen.seed, jobId: gen.jobId,
+      credits: paid.credits, costUsd: paid.costUsd, urls: gen.urls.map(recordUrl).filter(Boolean), status: 'generated', outputs: [],
+    };
     const files = [];
-    const imports = [];
+    let record = null;
+    let stem;
     try {
-      for (const [i, url] of urls.entries()) {
-        const data = await d.download(url);
-        if (!Buffer.isBuffer(data) || data.length > MAX_DOWNLOAD_BYTES) throw new Error('a result is missing or too large');
-        const ext = resultExt(data);
-        if (!ext) throw new Error('a result is not an image or a GLB model');
-        files.push(writeRepoFile(assetPath(artRoot, job.kind, urls.length > 1 ? `${job.slug}-${i + 1}` : job.slug, ext), data));
-      }
-      const recordRel = `${SOURCE_DIRS.higgsfield}/${job.slug}.json`;
-      writeRepoFile(recordRel, `${JSON.stringify({ name: job.name, kind: job.kind, model, prompt: job.prompt, params, seed, jobId, credits, costUsd, outputs: files }, null, 2)}\n`);
-      for (const rel of files) imports.push(await importToUnity(rel, /\.glb$/.test(rel) ? 'model' : job.kind));
-      // The cost is booked once; it is logged on the first file of the generation.
-      for (const [i, rel] of files.entries()) {
-        log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed, costUsd: i === 0 ? costUsd : 0, credits: i === 0 ? credits : 0, path: rel, sources: [recordRel], imported: imports[i].ok });
-      }
-      const failed = imports.find((imp) => !imp.ok);
-      return { ok: true, files, sources: [recordRel], costUsd, credits, unity: imports, note: failed ? importNote(failed) : null };
+      stem = freeStem(job.slug, (s) => [recordOf(s), ...gen.urls.flatMap((_, i) => RESULT_EXTS.map((ext) => fileOf(s, i, ext)))]);
+      record = writeRepoFile(recordOf(stem), recordText(recordData));
+      // Every result is fetched and checked before the first asset file is written.
+      const results = [];
+      for (const url of gen.urls) results.push(await fetchResult(url));
+      for (const [i, r] of results.entries()) files.push(writeRepoFile(fileOf(stem, i, r.ext), r.data));
     } catch (err) {
-      return fail('higgsfieldFailed', `generated and paid, but not saved: ${errText(err)}`);
+      const where = record ? ` and in ${record}` : '';
+      const saved = files.length ? `only partially saved (${files.length} of ${n} files)` : 'not saved';
+      return paidUnsaved(job, paid, { ...gen, path: `higgsfield:${gen.jobId || request.model}`, record, recordData, files }, `generated and paid, but ${saved}: ${errText(err)}. The job id and result URLs are in this answer${where}.`);
     }
+    const notes = [];
+    try {
+      writeRepoFile(record, recordText({ ...recordData, status: 'saved', outputs: files }));
+    } catch (err) {
+      notes.push(`the files are saved, but ${record} could not be updated: ${oneLine(errText(err), 200)}`);
+    }
+    const imports = [];
+    for (const rel of files) imports.push(await importToUnity(rel, job.kind));
+    // The cost is booked once; it is logged on the first file of the generation.
+    for (const [i, rel] of files.entries()) {
+      log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: gen.seed, costUsd: i === 0 ? paid.costUsd : 0, credits: i === 0 ? paid.credits : 0, path: rel, sources: [record], imported: imports[i].ok });
+    }
+    const failed = imports.find((imp) => !imp.ok);
+    if (failed) notes.push(importNote(failed));
+    return { ok: true, files, sources: [record], costUsd: paid.costUsd, credits: paid.credits, jobId: gen.jobId, unity: imports, note: notes.length ? notes.join(' ') : null };
+  }
+
+  /** Validate -> estimate + book against the cap -> generate -> save (saveHiggsfield). */
+  async function higgsfieldFinal(raw) {
+    const req = higgsfieldRequest(raw);
+    if (!req.ok) return req;
+    const paid = await bookHiggsfield(req.request);
+    if (!paid.ok) return paid;
+    const { job, request } = req;
+    let out;
+    try {
+      out = await d.higgsfield.generate(request);
+    } catch (err) {
+      return paidUnsaved(job, paid, { seed: null, path: `higgsfield:${request.model}` }, `$${paid.costUsd.toFixed(2)} was booked, but the generation failed: ${errText(err)}`);
+    }
+    const gen = {
+      urls: (isObj(out) && Array.isArray(out.urls) ? out.urls : []).filter((u) => typeof u === 'string').slice(0, MAX_HIGGSFIELD_RESULTS),
+      jobId: isObj(out) && typeof out.jobId === 'string' && JOB_ID_RE.test(out.jobId) ? out.jobId : null,
+      seed: isObj(out) && Number.isSafeInteger(out.seed) && out.seed >= 0 ? out.seed : null,
+    };
+    if (!gen.urls.length) return paidUnsaved(job, paid, { ...gen, path: `higgsfield:${gen.jobId || request.model}` }, `$${paid.costUsd.toFixed(2)} was booked, but Higgsfield returned no result URL (job ${gen.jobId || 'unknown'})`);
+    return saveHiggsfield(job, request, paid, gen);
   }
 
   return { blenderModel, comfyDraft, higgsfieldFinal, artRoot, usdPerCredit };
@@ -504,7 +692,8 @@ function assetReportLines(entries) {
     const seed = e.seed === null ? '-' : String(e.seed);
     const cost = e.costUsd > 0 ? `$${e.costUsd.toFixed(2)}${e.credits !== null ? ` (${e.credits} credits)` : ''}` : '$0';
     const prompt = e.prompt ? `"${oneLine(e.prompt, 160)}"` : '-';
-    return `${e.tool} ${e.kind} "${e.name}": ${e.path} - prompt ${prompt}, seed ${seed}, cost ${cost}${e.imported ? '' : ', not imported'}`;
+    const state = e.unsaved ? ', PAID BUT NOT SAVED (job id and URLs in the record / the tool answer)' : e.imported ? '' : ', not imported';
+    return `${e.tool} ${e.kind} "${e.name}": ${e.path} - prompt ${prompt}, seed ${seed}, cost ${cost}${state}`;
   });
 }
 

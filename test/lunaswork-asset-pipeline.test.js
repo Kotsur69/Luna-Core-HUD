@@ -118,6 +118,19 @@ test('a Blender export that wrote nothing (or not an FBX) fails before any Unity
   assert.equal(logged.length, 0);
 });
 
+test('a Blender export that left the earlier files in place is not taken for a new one', async () => {
+  const dir = tempRepo();
+  const blender = fakeBlender();
+  const { p } = pipeline(dir, { blender });
+  assert.equal((await p.blenderModel({ name: 'Crate', kind: 'prop' })).ok, true);
+  // The add-on answers success but writes nothing this time.
+  const again = pipeline(dir, { blender: { executeCode: async () => ({ executed: true }) } });
+  const res = await again.p.blenderModel({ name: 'Crate', kind: 'prop' });
+  assert.deepEqual([res.ok, res.error], [false, 'blenderFailed']);
+  assert.match(res.detail, /earlier file, not a new export/);
+  assert.equal(again.unity.calls.length, 0);
+});
+
 test('a 2D kind is refused for Blender and an unknown kind everywhere', async () => {
   const { p } = pipeline(tempRepo(), { blender: fakeBlender() });
   assert.equal((await p.blenderModel({ name: 'x', kind: 'concept' })).error, 'badKind');
@@ -156,6 +169,23 @@ test('a ComfyUI draft without a seed gets a fresh one; a texture also gets a mat
   assert.equal(res.seed, 5);
   assert.deepEqual(unity.calls.map((c) => c.command), ['assets import', 'material create']);
   assert.equal(unity.calls[1].parameters.path, `${ART}/Textures/floor-draft-5.mat`);
+});
+
+test('a ComfyUI workflow the seed or prompt cannot reach is run with warnings; the same seed again gets -v2', async () => {
+  const dir = tempRepo();
+  fs.writeFileSync(path.join(dir, 'art', 'comfyui', 'fixed.json'), JSON.stringify({ 9: { class_type: 'SaveImage', inputs: { filename_prefix: 'x' } } }));
+  const comfy = { run: async () => ({ promptId: 'p', images: [{ data: PNG }] }) };
+  const { p } = pipeline(dir, { comfy });
+  const res = await p.comfyDraft({ name: 'Fog', kind: 'vfx', prompt: 'thin fog', workflow: 'fixed.json', seed: 8 });
+  assert.equal(res.ok, true);
+  assert.equal(res.warnings.length, 2);
+  assert.match(res.warnings.join(' '), /no numeric seed.*no "\{\{prompt\}\}" placeholder/);
+  const record = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'comfyui', 'runs', 'fog-draft-8.json'), 'utf8'));
+  assert.deepEqual([record.seedApplied, record.promptApplied], [false, false]);
+  const again = await p.comfyDraft({ name: 'Fog', kind: 'vfx', prompt: 'thin fog', workflow: 'concept.json', seed: 8 });
+  assert.deepEqual(again.files, [`${ART}/VFX/fog-draft-8-v2.png`]);
+  assert.deepEqual(again.warnings, []);
+  assert.ok(exists(dir, 'art/comfyui/runs/fog-draft-8-v2.json'));
 });
 
 test('a workflow outside art/comfyui/, a UI-format workflow and a non-image result are refused', async () => {
@@ -202,8 +232,10 @@ test('a Higgsfield generation is booked, saved, imported and logged with its cos
   assert.deepEqual(downloads, ['https://cdn.example.test/out.png']);
   assert.deepEqual(res.files, [`${ART}/KeyArt/key-art.png`]);
   assert.ok(exists(dir, `${ART}/KeyArt/key-art.png`));
-  const record = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'higgsfield', 'key-art.json'), 'utf8'));
-  assert.deepEqual([record.credits, record.costUsd, record.jobId, record.seed], [4, 1, 'job_1', 99]);
+  const record = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'higgsfield', 'keyart', 'key-art.json'), 'utf8'));
+  assert.deepEqual([record.credits, record.costUsd, record.jobId, record.seed, record.status], [4, 1, 'job_1', 99, 'saved']);
+  assert.deepEqual(record.outputs, [`${ART}/KeyArt/key-art.png`]);
+  assert.deepEqual(res.sources, ['art/higgsfield/keyart/key-art.json']);
   assert.deepEqual(unity.calls.map((c) => c.command), ['assets import']);
   assert.deepEqual([logged[0].tool, logged[0].costUsd, logged[0].credits, logged[0].seed, logged[0].prompt], ['higgsfield', 1, 4, 99, 'hero duel at dusk']);
   assert.match(P.assetReportLines(logged)[0], /^higgsfield keyart "Key Art": Assets\/BladeBullet\/Art\/KeyArt\/key-art\.png - prompt "hero duel at dusk", seed 99, cost \$1\.00 \(4 credits\)$/);
@@ -239,16 +271,104 @@ test('budget reached -> no more Higgsfield calls and one card filed', async () =
   assert.equal(fresh.calls.length, 0);
 });
 
-test('Higgsfield results are validated before they are written', async () => {
+test('Higgsfield results are validated before they are written; the paid job is kept and logged', async () => {
   const dir = tempRepo();
   const higgsfield = fakeHiggsfield(1);
   const { p, logged } = pipeline(dir, { higgsfield, download: async () => Buffer.from('MZ not an image at all') });
   const res = await p.higgsfieldFinal({ name: 'Bad', kind: 'concept', prompt: 'x', model: 'gpt_image_2_6' });
   assert.deepEqual([res.ok, res.error], [false, 'higgsfieldFailed']);
   assert.equal(exists(dir, `${ART}/Concepts`), false);
-  assert.equal(logged.length, 0);
+  // Paid, not saved: the worker gets the job and the URLs, the record says why, the report logs the cost.
+  assert.deepEqual([res.jobId, res.urls, res.record, res.costUsd], ['job_1', ['https://cdn.example.test/out.png'], 'art/higgsfield/concept/bad.json', 0.1]);
+  assert.match(res.detail, /generated and paid, but not saved: a result is not an image/);
+  const record = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'higgsfield', 'concept', 'bad.json'), 'utf8'));
+  assert.deepEqual([record.status, record.jobId, record.urls, record.outputs], ['notSaved', 'job_1', ['https://cdn.example.test/out.png'], []]);
+  assert.equal(logged.length, 1);
+  assert.deepEqual([logged[0].unsaved, logged[0].costUsd, logged[0].path, logged[0].imported], [true, 0.1, 'art/higgsfield/concept/bad.json', false]);
+  assert.match(P.assetReportLines(logged)[0], /cost \$0\.10 \(1 credits\), PAID BUT NOT SAVED/);
   assert.equal((await p.higgsfieldFinal({ name: 'x', kind: 'concept', prompt: 'x', model: 'a b; rm -rf' })).error, 'badModel');
-  assert.equal((await p.higgsfieldFinal({ name: 'x', kind: 'concept', prompt: 'x', model: 'm', params: { a: '$(x)' } })).error, 'badParams');
+  const withParams = async (params) => (await p.higgsfieldFinal({ name: 'x', kind: 'concept', prompt: 'x', model: 'm', params })).error;
+  assert.equal(await withParams({ style: '$(x)' }), 'badParams');
+  // A value that would read as a CLI flag is refused too, and so are the flags the pipeline owns or that name files.
+  assert.equal(await withParams({ style: '--help' }), 'badParams');
+  for (const key of ['json', 'wait', 'output', 'config', 'o']) assert.equal(await withParams({ [key]: 'x' }), 'badParams', key);
+  assert.equal(await withParams({ aspect_ratio: '16:9', resolution: '2k' }), 'higgsfieldFailed', 'plain flags pass validation (the download is what fails here)');
+});
+
+test('a paid set that is only partly written says so; a report that cannot log the cost is named in the answer', async () => {
+  const dir = tempRepo();
+  // The second file's rename fails (a full disk, a locked file).
+  const fsImpl = { ...fs, renameSync: (from, to) => (to.endsWith('-2.png') ? (() => { throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }); })() : fs.renameSync(from, to)) };
+  const higgsfield = { ...fakeHiggsfield(2), generate: async () => ({ jobId: 'job_2', urls: ['https://cdn.example.test/1.png', 'https://cdn.example.test/2.png'], seed: 1 }) };
+  const { p, logged } = pipeline(dir, { higgsfield, download: async () => PNG, fsImpl, logAsset: (e) => { logged.push(e); throw new Error('store locked'); } });
+  const res = await p.higgsfieldFinal({ name: 'Pair', kind: 'concept', prompt: 'x', model: 'm' });
+  assert.deepEqual([res.ok, res.files], [false, [`${ART}/Concepts/pair-1.png`]]);
+  assert.match(res.detail, /only partially saved \(1 of 2 files\): EBUSY/);
+  assert.match(res.note, /run report could not log this cost/);
+  const record = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'higgsfield', 'concept', 'pair.json'), 'utf8'));
+  assert.deepEqual([record.status, record.outputs], ['notSaved', [`${ART}/Concepts/pair-1.png`]]);
+  assert.deepEqual(fs.readdirSync(path.join(dir, ...`${ART}/Concepts`.split('/'))).filter((f) => f.endsWith('.tmp')), [], 'the failed write left no temp file');
+  assert.deepEqual([logged.length, logged[0].unsaved, logged[0].costUsd], [1, true, 0.2]);
+});
+
+test('a Higgsfield record is on disk before the download, without the URL query; a failed generation still logs its booked cost', async () => {
+  const dir = tempRepo();
+  const signed = 'https://cdn.example.test/out.png?X-Sig=abc&expires=9';
+  let seenRecord = null;
+  const higgsfield = { ...fakeHiggsfield(2), generate: async () => ({ jobId: 'job_9', urls: [signed], seed: 4 }) };
+  const download = async () => {
+    seenRecord = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'higgsfield', 'concept', 'gate.json'), 'utf8'));
+    throw new Error('download timed out after 120 s');
+  };
+  const { p, logged } = pipeline(dir, { higgsfield, download });
+  const res = await p.higgsfieldFinal({ name: 'Gate', kind: 'concept', prompt: 'torii', model: 'gpt_image_2_6' });
+  assert.deepEqual([seenRecord.status, seenRecord.jobId, seenRecord.urls], ['generated', 'job_9', ['https://cdn.example.test/out.png']]);
+  assert.deepEqual(res.urls, [signed], 'the tool answer keeps the full URL to finish by hand');
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'art', 'higgsfield', 'concept', 'gate.json'), 'utf8'), /X-Sig/);
+  assert.equal(logged[0].unsaved, true);
+
+  const broken = pipeline(tempRepo(), { higgsfield: { ...fakeHiggsfield(3), generate: async () => { throw new Error('job failed'); } }, download: async () => PNG });
+  const gone = await broken.p.higgsfieldFinal({ name: 'Lost', kind: 'concept', prompt: 'x', model: 'gpt_image_2_6' });
+  assert.match(gone.detail, /\$0\.30 was booked, but the generation failed: job failed/);
+  assert.deepEqual([broken.logged[0].unsaved, broken.logged[0].costUsd, broken.logged[0].path], [true, 0.3, 'higgsfield:gpt_image_2_6']);
+
+  // No downloader: refused before anything is estimated or paid.
+  const noDl = fakeHiggsfield(1);
+  const blind = pipeline(tempRepo(), { higgsfield: noDl });
+  assert.equal((await blind.p.higgsfieldFinal({ name: 'x', kind: 'concept', prompt: 'x', model: 'm' })).error, 'toolDown');
+  assert.equal(noDl.calls.length, 0);
+});
+
+test('a second paid final of the same name gets -v2 and never overwrites the first', async () => {
+  const dir = tempRepo();
+  const OTHER = Buffer.concat([PNG, Buffer.alloc(8, 7)]);
+  const bodies = [PNG, OTHER];
+  const { p } = pipeline(dir, { higgsfield: fakeHiggsfield(1), download: async () => bodies.shift() });
+  const first = await p.higgsfieldFinal({ name: 'Logo', kind: 'keyart', prompt: 'x', model: 'm' });
+  const second = await p.higgsfieldFinal({ name: 'Logo', kind: 'keyart', prompt: 'x', model: 'm' });
+  assert.deepEqual([first.files, second.files], [[`${ART}/KeyArt/logo.png`], [`${ART}/KeyArt/logo-v2.png`]]);
+  assert.deepEqual(second.sources, ['art/higgsfield/keyart/logo-v2.json']);
+  assert.deepEqual(fs.readFileSync(path.join(dir, ...first.files[0].split('/'))), PNG);
+  assert.deepEqual(fs.readFileSync(path.join(dir, ...second.files[0].split('/'))), OTHER);
+  // No temp file is left behind by any write.
+  const left = fs.readdirSync(path.join(dir, ...`${ART}/KeyArt`.split('/'))).concat(fs.readdirSync(path.join(dir, 'art', 'higgsfield', 'keyart')));
+  assert.deepEqual(left.filter((f) => f.endsWith('.tmp')), []);
+});
+
+test('the Unity import follows the file: a GLB gets a prefab, an image of a model kind does not', async () => {
+  const GLB = Buffer.concat([Buffer.from('glTF', 'latin1'), Buffer.alloc(16, 2)]);
+  const glb = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(1), download: async () => GLB });
+  const model = await glb.p.higgsfieldFinal({ name: 'Ronin', kind: 'concept', prompt: 'x', model: 'm' });
+  assert.deepEqual(model.files, [`${ART}/Concepts/ronin.glb`]);
+  assert.deepEqual(glb.unity.calls.map((c) => c.command), ['assets import', 'prefab create']);
+  // character is a model kind (it would get a prefab by kind alone), but a PNG is no model.
+  assert.equal(P.KINDS.character.model, true);
+  const png = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(1), download: async () => PNG });
+  await png.p.higgsfieldFinal({ name: 'Ronin', kind: 'character', prompt: 'x', model: 'm' });
+  assert.deepEqual(png.unity.calls.map((c) => c.command), ['assets import']);
+  const tex = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(1), download: async () => PNG });
+  await tex.p.higgsfieldFinal({ name: 'Stone', kind: 'texture', prompt: 'x', model: 'm' });
+  assert.deepEqual(tex.unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', `${ART}/Textures/stone.png`], ['material create', `${ART}/Textures/stone.mat`]]);
 });
 
 // ---- boundaries ---------------------------------------------------------------------------

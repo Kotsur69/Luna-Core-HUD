@@ -112,6 +112,27 @@ test('replies are validated: prompt id, output names, image bytes, size', async 
   await assert.rejects(client({ fetch: bigFetch }).run(WF), (err) => err.code === C.COMFY_ERROR.badReply && /too large/.test(err.message));
 });
 
+test('readCappedBody: a stream is cut at the cap, not buffered first; a short stream is joined', async () => {
+  const streamOf = (chunks) => {
+    const state = { reads: 0, cancelled: false };
+    const body = { getReader: () => ({
+      read: async () => (state.reads < chunks.length ? { done: false, value: chunks[state.reads++] } : { done: true, value: undefined }),
+      cancel: async () => { state.cancelled = true; },
+    }) };
+    return { res: { headers: { get: () => null }, body, arrayBuffer: async () => assert.fail('must stream') }, state };
+  };
+  const small = streamOf([new Uint8Array([1, 2]), new Uint8Array([3])]);
+  assert.deepEqual([...(await C.readCappedBody(small.res, 10))], [1, 2, 3]);
+  const big = streamOf([new Uint8Array(6), new Uint8Array(6), new Uint8Array(6)]);
+  await assert.rejects(C.readCappedBody(big.res, 10), (err) => err.code === 'BODY_TOO_LARGE');
+  assert.deepEqual([big.state.reads, big.state.cancelled], [2, true]);
+  // Through the client: an endless /view stream is a badReply, not an out-of-memory.
+  const normal = fakeComfy({ historyEmpty: 0 });
+  const endless = { ok: true, status: 200, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: false, value: new Uint8Array(16 * 1024 * 1024) }), cancel: async () => {} }) } };
+  const fetch = async (url, init) => (new URL(url).pathname === '/view' ? endless : normal.fetch(url, init));
+  await assert.rejects(client({ fetch }).run(WF), (err) => err.code === C.COMFY_ERROR.badReply && /too large/.test(err.message));
+});
+
 test('workflow helpers: API format only, seeds and the prompt placeholder, no mutation', () => {
   assert.equal(C.validateWorkflow(WF).ok, true);
   assert.match(C.validateWorkflow({ nodes: [], links: [] }).error, /API Format/);

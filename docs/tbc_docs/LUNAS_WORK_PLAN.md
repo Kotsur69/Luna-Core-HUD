@@ -275,7 +275,11 @@ lunacore MCP server: `luna_asset_blender` (save the open Blender scene to
 `luna_asset_comfy` (a draft from an API-format workflow in `art/comfyui/`,
 seeded; workflow + seed saved to `art/comfyui/runs/`) and
 `luna_asset_higgsfield` (a paid final: estimate -> `recordSpend` -> generate ->
-download -> save). Assets go to `<artRoot>/<Kind>/` (default
+record `art/higgsfield/<kind>/<stem>.json` -> download -> save; a used name
+gets `-v2`, a paid result that is not saved is still logged with its cost and
+its job id / URLs come back to the worker; downloads are public https on 443,
+DNS-checked on every manual redirect hop, size-capped while streaming).
+Assets go to `<artRoot>/<Kind>/` (default
 `Assets/BladeBullet/Art`), are imported through the Unity Pipeline asset calls
 (`helpers/playtest-bridge/unity.js UNITY_PIPELINE_ASSETS`, not yet verified
 against a live editor) and are logged in `run.assets` -> the run report's
