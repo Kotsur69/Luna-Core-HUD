@@ -360,7 +360,7 @@ function runPackage(p) {
  *   readTodos: Function, dirtyCount: Function, writeBrief: Function,
  *   briefDir: () => string, now?: () => number,
  *   finishPackage?: Function, headSha?: Function, writePty?: Function,
- *   sessionAlive?: Function, tickTodos?: Function, workerSettings?: Function,
+ *   sessionAlive?: Function, tickTodos?: Function, workerSettings?: Function, workerTools?: Function,
  *   saveState?: Function, loadState?: Function, onChange?: Function, onLive?: Function,
  *   onRunEvent?: Function, setTimer?: Function, clearTimer?: Function,
  *   closeSession?: Function, usageResetAt?: () => number|null,
@@ -373,6 +373,8 @@ function runPackage(p) {
  *   notifyPower?: Function, appendReport?: Function, otherRunsActive?: () => boolean,
  *   repoBusy?: (repoPath:string) => boolean, powerFlow?: ReturnType<typeof createPowerFlow>,
  * }} deps
+ *   workerTools: (pkg) => kit|null - a Luna's Work build's tool kit for one
+ *   package's tab (lunasworkBuild.workerTools); null = plain God Mode.
  *   repoBusy: multi God Mode (orchestraRegistry.js) - another project's run
  *   holds this repo, so makePlan refuses with 'repoBusy'.
  *   powerFlow: multi God Mode A3 - the registry's ONE sleep / shutdown flow
@@ -1479,8 +1481,27 @@ function createOrchestra(deps) {
             runSlug: plan.planRun.runSlug,
             mcpConfigPath: deps.planMcpConfigPath ? deps.planMcpConfigPath() : null,
           })
-        : { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] },
+        : withKit(pkg, { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] }),
     });
+  }
+
+  /** A Luna's Work build's tool kit on top of a package's task (deps.workerTools); the task as is otherwise. */
+  function withKit(pkg, task) {
+    let kit = null;
+    try {
+      kit = deps.workerTools ? deps.workerTools(pkg) : null;
+    } catch (err) {
+      log(`[orchestra] tool kit for ${pkg.id} not applied: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!kit || typeof kit !== 'object') return task;
+    const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+    return {
+      ...task,
+      allowedTools: [...task.allowedTools, ...list(kit.allowedTools)],
+      disallowedTools: list(kit.disallowedTools),
+      mcpConfigPath: typeof kit.mcpConfigPath === 'string' ? kit.mcpConfigPath : null,
+      addDirs: list(kit.addDirs),
+    };
   }
 
   /** openTab from a sync path (timer, watcher callback): never throws. */

@@ -173,6 +173,102 @@ Playtester is allowed), `stop()`, `evidenceDir`.
 LunaCore's local config so nothing a model writes into the repo can change the
 command LunaCore runs — same trust boundary as God Mode's planner.
 
+## Tool kit per role (2026-11-14)
+
+### Inventory: how each role got its tools before the kit
+
+| Role | How it runs | Tools |
+|---|---|---|
+| Director | headless `claude -p` (`lunasworkDirector.buildDirectorArgs`) | `--tools Read,Grep,Glob`, no `--strict-mcp-config`, default permission mode: MCP tools would need an approval a headless call never gets, so read-only in practice |
+| Builders | God Mode worker tabs (`orchestra.openTab` -> `launch.withTaskBrief`) | the user's whole Claude setup: every MCP server and skill of the active profile, no `--strict-mcp-config`, the God Mode permission mode (usually `bypassPermissions`), `--allowedTools` only from God Mode's learned rules, plus the tab's intake `--mcp-config` (to-dos). No deny rules |
+| Asset worker | not a separate process: asset cards (`lunasworkAssets.js`) are builder cards routed to the scene worker package (`lunasworkScene.SCENE_WORKER_ID`), so it had the builders' tools | same as builders. The style check is a separate read-only `claude -p --tools Read` |
+| Playtester | headless `claude -p` (`lunasworkPlaytest.buildPlaytestArgs`) | `--tools Read`, `--strict-mcp-config` + the adapter's own bridge `--mcp-config` (PlaytestDriver / Playwright only), `--permission-mode dontAsk`, `--setting-sources ""`, Read only on its evidence dir, everything else denied |
+| Critic | headless `claude -p` (`lunasworkCritic.buildCriticArgs`) | `--tools Read,Grep,Glob`, like the Director |
+| Others | research, reviews, graph, Lighthouse, design match, ask | each its own locked `--strict-mcp-config` set, unchanged |
+
+No role got a per-project choice of MCP servers or CLIs, and no worker had a
+deny rule against force-push or history rewrites.
+
+### The kit (`src/lunasworkToolkit.js`, launch side `src/lunasworkToolkitLaunch.js`)
+
+Per project in `lunaswork-settings.local.json` (`projects.<key>.toolkit`):
+`builder` and `asset` each list tool ids and skills; `artDirs` lists absolute
+art folders. Tool ids: `unity` (MCP `unity` + the unity CLI), `blender` (MCP
+`blender` + CLI), `higgsfield` (MCP `higgsfield-bridge` + the `higgsfield`
+CLI), `comfyui`, `meshy`, `context7`, `websearch` (WebSearch / WebFetch),
+`git` (always in: a worker commits). Default for a Unity project: all of them
+plus the gamedev skills (`unity-2d-gameplay`, `unity-mcp-workflow`,
+`blender-game-assets`, `higgsfield-media`, `ecc:csharp-reviewer`) for both
+roles; a web / electron project: `context7`, `websearch`, `git`. A broken
+value reads as the default; unknown roles or tool ids are refused on save.
+
+The Director, Critic and Playtester are **fixed** and not part of the kit
+(a kit naming them is refused): the Playtester keeps testing like a player
+through the PlaytestDriver only.
+
+Per worker tab (`lunasworkBuild.workerTools`, only while Luna's Work builds
+that project): `--allowedTools` for the kit's servers / CLIs, `--disallowedTools`
+for every catalog tool out of the kit or past its spend cap plus the
+guardrails, `--mcp-config` with the kit's servers that have a launch
+definition, `--add-dir` per art folder. The kit note (tools, skills,
+guardrails) is appended to every package prompt. Launch definitions come from
+the PC's `toolServers` setting (command/args or url per tool id); a tool
+without one still gets its allow rule and comes from the Claude setup.
+
+### Guardrails (always on)
+
+- **Spend caps**: `spendCaps` per project, defaults `DEFAULT_SPEND_CAPS_USD`
+  (Higgsfield $10, Meshy $10 per run), pinned in the run at start.
+  `controller.recordSpend({tool, costUsd})` (`lunasworkToolGuard.js`, pure
+  `checkSpend` in the kit module) books a generation before it runs; past the
+  cap it is refused, one card is filed and the tool is denied to every later
+  worker of the run.
+- **No force-push / history rewrite**: `GIT_GUARD_RULES` deny `git push` with
+  `--force*` / `-f` / `-uf` / `--mirror` / `+refspec` / `--delete` / `-d` /
+  `:ref` / `--prune`, `reset --hard|--merge|--keep`, `rebase`,
+  `filter-branch`, `filter-repo`, `replace`, `update-ref`, `reflog
+  expire|delete`, `gc --prune`, `stash clear` (the stash is shared by every
+  worktree), `clean -f`, and alias definitions - for `git` and `git.exe`,
+  with or without global options (`git -C . push -f`). Deny rules hold in every
+  permission mode. Not covered (the CLI cannot see through them): a script,
+  `bash -c` / `powershell -c`, another language. The hard stop for those is
+  branch protection on the remote.
+- **Writes**: deny rules for `~/.claude`, `~/.ssh`, `~/.aws`, `~/.config`,
+  `~/AppData`, `~/.gitconfig`; the brief names the repo and the art folders as
+  the only places to write; `isWritablePath` for LunaCore code that writes on
+  a worker's behalf. The CLI cannot express "deny everything but", so this is
+  not a sandbox.
+- **Secrets**: `toolServers` env / headers accept only `${VAR}` references;
+  a URL with a query string and a `--key=value`-shaped arg are refused. All of
+  it is re-checked before the `--mcp-config` file is written (atomically, only
+  when it changed): keys reach the MCP servers from LunaCore's environment and
+  never sit in that file.
+- **Tool down**: a build or playtest failure that names a kit tool (Unity
+  editor / Pipeline not open, a server that refuses) pauses the run for
+  `TOOL_DOWN_WAIT_MS` (the usage-limit wait path, `waitReason: 'toolDown'`)
+  with a desktop notification, instead of `retryLater`'s quick retries. At
+  most `MAX_TOOL_DOWN_PAUSES` (6) per run; past that the usual failure path
+  (`retryLater`, STOP after 3) takes over, so a broken setup ends the run.
+
+### Assumptions to confirm (Mati)
+
+- `git reset --hard` and `git rebase` are denied outright: the CLI cannot tell
+  a shared ref or pushed history from a local one.
+- Tool API keys come from the environment only. Keeping them in safeStorage
+  needs a per-tab env seam in `main.js` `createSession`; not built yet.
+- The Director and Critic stay read-only (no context7 / web search).
+- No settings UI yet: the kit, caps and `toolServers` are edited in the
+  local settings file.
+- **The spend cap is not metered yet.** Nothing calls `recordSpend`: workers
+  call the paid MCP servers directly and LunaCore cannot see those calls. Today
+  the cap reaches a worker only as its brief's budget line; it binds once the
+  asset work books its generations through `recordSpend` (or a hook / MCP
+  proxy meters them). The paid tools stay in the Unity default kit as the
+  brief asked - take them out of a project's kit to make them opt-in.
+- A broken kit falls back to the adapter's default, which for Unity includes
+  the paid tools (the brief's contract). A stricter fallback (git only) is a
+  one-line change if preferred.
+
 ## Reuse from God Mode
 
 | Need | Existing piece |

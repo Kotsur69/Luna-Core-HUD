@@ -37,6 +37,7 @@ const { HANDED } = require('./lunasworkWheel');
 const { appendResult } = require('./lunasworkLighthouse');
 const { cleanLedger } = require('./lunasworkUsage');
 const { cleanTargets, cleanVariants } = require('./lunasworkVariants');
+const { cleanGuardFields } = require('./lunasworkToolGuard');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
@@ -747,6 +748,8 @@ function restoreRun(raw) {
     toggles: settingsStore.normalizeToggles(raw.toggles),
     variants: cleanVariants(raw.variants),
     prototype: cleanPrototype(raw.prototype),
+    // Tool kit: spend caps pinned at start, the paid-tool spend, the tools past their cap.
+    ...cleanGuardFields(raw),
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),
