@@ -32,20 +32,32 @@ const COMPACT_TEXT = '/compact\r';
 const MAX_SUMMARY_FILES = 20;
 const MAX_SUMMARY_WORDS_CHARS = 600;
 
+// A drop of at least this share of the limit starts a new context window (a
+// compact landed, a fresh conversation). A smaller dip is noise - a stray
+// reading - and must not re-arm the window's one compact.
+const NEW_WINDOW_DROP_PERCENT = 10;
+
 const isCount = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+const isLimit = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+
+/** Whether reading `next` starts a new context window after reading `prev`. */
+function isNewWindow(prev, next) {
+  if (!prev || !next || !isCount(prev.tokens) || !isCount(next.tokens) || !isLimit(next.limit)) return false;
+  return prev.tokens - next.tokens >= (next.limit * NEW_WINDOW_DROP_PERCENT) / 100;
+}
 
 /**
  * The samples after one more reading: a new array, old ones out of the
- * window. Fewer tokens than before (a compact, a fresh conversation) or a
- * clock that stepped back starts a new history.
+ * window. A new context window (isNewWindow: a compact, a fresh
+ * conversation) or a clock that stepped back starts a new history.
  * @param {Array<{at:number, tokens:number, limit:number}>} samples
  * @param {{at:number, tokens:number, limit:number}} sample
  */
 function withSample(samples, sample, windowMs = SAMPLE_WINDOW_MS) {
   const list = Array.isArray(samples) ? samples : [];
-  if (!sample || !isCount(sample.at) || !isCount(sample.tokens) || !(sample.limit > 0)) return list;
+  if (!sample || !isCount(sample.at) || !isCount(sample.tokens) || !isLimit(sample.limit)) return list;
   const last = list[list.length - 1];
-  if (last && (sample.tokens < last.tokens || sample.at < last.at)) return [sample];
+  if (last && (isNewWindow(last, sample) || sample.at < last.at)) return [sample];
   return [...list, sample].filter((s) => sample.at - s.at <= windowMs).slice(-MAX_SAMPLES);
 }
 
@@ -61,7 +73,7 @@ function predictContext(samples) {
   const first = list[0];
   const last = list[list.length - 1];
   const span = last.at - first.at;
-  if (span < MIN_SPAN_MS || !(last.limit > 0)) return null;
+  if (span < MIN_SPAN_MS || !isLimit(last.limit)) return null;
   const percent = Math.min(100, Math.round((last.tokens / last.limit) * 100));
   const rate = (last.tokens - first.tokens) / span;
   if (!(rate > 0)) return { percent, tokensPerMin: 0, etaMs: null };
@@ -144,12 +156,16 @@ function createContextGuard(opts) {
     if (!pkg) return false;
     const prev = sessions.get(sessionId) || { samples: [], compacted: false };
     const samples = withSample(prev.samples, { at: opts.now(), tokens: context.tokens, limit: context.limit });
-    // Fewer tokens than the last reading = a new context window (the compact
-    // landed, or a fresh conversation): its one compact is still to come.
-    const lastPrev = prev.samples[prev.samples.length - 1];
-    const newWindow = !!lastPrev && isCount(context.tokens) && context.tokens < lastPrev.tokens;
+    // A new context window (the compact landed, or a fresh conversation):
+    // its one compact is still to come.
+    const newWindow = isNewWindow(prev.samples[prev.samples.length - 1], context);
     const state = { samples, compacted: newWindow ? false : prev.compacted, prediction: predictContext(samples) };
     sessions.set(sessionId, state);
+    // The worker compacted after all: a resume mark of the old window is stale.
+    if (newWindow && normalizeContextResume(pkg.contextResume)) {
+      opts.patch(pkg.id, { contextResume: null });
+      opts.commit();
+    }
     if (pkg.state === 'launched' && !pkg.awaitingDeps && opts.live() && shouldCompact(state.prediction, state.compacted)) {
       act(sessionId, pkg, state);
     }
@@ -197,7 +213,9 @@ module.exports = {
   MIN_SAMPLES,
   MIN_SPAN_MS,
   MIN_FILL_PERCENT,
+  NEW_WINDOW_DROP_PERCENT,
   COMPACT_TEXT,
+  isNewWindow,
   withSample,
   predictContext,
   shouldCompact,

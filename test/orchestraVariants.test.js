@@ -238,6 +238,21 @@ test('retryAction: a group is refused; a built variant parks again, or waits for
   assert.deepEqual(ab.retryAction(kept, [kept]), { keep: true }, 'no twin to wait for');
 });
 
+test('isSiblingRoot / criticCwd: only the worktrees folder, never the main checkout or the winner itself', () => {
+  const wt = path.join(path.sep, 'repos', '.luna-worktrees', 'hud');
+  const [ra, rb] = [path.join(wt, 'a-a-1'), path.join(wt, 'a-b-1')];
+  assert.equal(ab.isSiblingRoot(ra, rb), true);
+  assert.equal(ab.isSiblingRoot(ra, ra), false, 'never the winner worktree itself');
+  assert.equal(ab.isSiblingRoot(path.join(wt, 'x', '..', 'a-a-1'), ra), false, 'the same folder spelled otherwise');
+  assert.equal(ab.isSiblingRoot(path.join(path.sep, 'elsewhere', 'a-a-1'), rb), false);
+  for (const bad of [null, '', 7]) assert.equal(ab.isSiblingRoot(bad, rb), false, String(bad));
+  assert.equal(ab.criticCwd([{ root: ra }, { root: rb }]), wt);
+  assert.equal(ab.criticCwd([{ root: ra }, { root: path.join(path.sep, 'repos', 'hud') }]), null, 'not side by side');
+  assert.equal(ab.criticCwd([{ root: ra }, { root: null }]), null);
+  assert.equal(ab.criticCwd([{ root: ra }]), null);
+  assert.equal(ab.criticCwd(null), null);
+});
+
 test('adoptedFields: the group takes the winner worktree, branch, tab and verified head', () => {
   const winner = built('b', {
     prompt: 'do a, B',

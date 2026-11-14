@@ -124,7 +124,8 @@ test('a verified variant parks; once both are, the critic reads both diffs and t
   ]);
   assert.equal(h.calls.reviews.length, 1);
   const call = h.calls.reviews[0];
-  assert.deepEqual([call.cwd, call.env, call.schema, call.validate], ['/repo', { HOME: '/h' }, ab.CRITIC_SCHEMA, ab.validateChoice]);
+  // The folder of both worktrees, never the main checkout ('/repo').
+  assert.deepEqual([call.cwd, call.env, call.schema, call.validate], [path.dirname('/wt/a-a-1'), { HOME: '/h' }, ab.CRITIC_SCHEMA, ab.validateChoice]);
   assert.match(call.prompt, /### Variant A - lib X \(verify: passed\)/);
   assert.match(call.prompt, /\+diff up to bbb2222/);
   assert.match(call.prompt, /Use lib b\./, 'each variant approach is shown');
@@ -241,6 +242,58 @@ test('a kill drops the pending verdict and stops parked variants with their buil
   h.runner.evaluateAll();
   await flush();
   assert.equal(h.findPkg('a').ab.winner, 'b');
+});
+
+test('a variant whose verify ends after a kill stops with the run, its build kept', () => {
+  const h = harness();
+  h.plan.killed = true;
+  assert.equal(h.build('a', 'aaa1111'), true);
+  assert.deepEqual([h.findPkg('a-a').state, h.findPkg('a-a').abBuilt.headSha], ['killed', 'aaa1111'], 'Retry-able, not stuck in finishing');
+  assert.deepEqual(h.calls.reviews, []);
+});
+
+test('a run paused at the usage limit or held decides nothing until it goes on', async () => {
+  for (const stop of [{ pausedUntil: 123 }, { hold: { reason: 'noNodeModules' } }]) {
+    const h = harness();
+    Object.assign(h.plan, stop);
+    h.build('a', 'aaa1111');
+    h.build('b', 'bbb2222');
+    await flush();
+    assert.deepEqual([h.calls.reviews.length, h.findPkg('a').ab.winner], [0, null], JSON.stringify(stop));
+    Object.assign(h.plan, { pausedUntil: null, hold: null });
+    h.runner.evaluateAll();
+    await flush();
+    assert.equal(h.findPkg('a').ab.winner, 'b', JSON.stringify(stop));
+  }
+});
+
+test('only a loser worktree beside the winner is removed, and only while its plan is the run', async () => {
+  const far = harness();
+  far.patch('a-a', { state: 'stalled', terminal: true, error: 'blocked', root: '/elsewhere/a-a-1' });
+  far.build('b', 'bbb2222');
+  assert.equal(far.findPkg('a').ab.winner, 'b');
+  assert.deepEqual([far.calls.closed, far.calls.timers], [['s1'], []], 'its tab closes, its worktree is left alone');
+
+  const gone = harness();
+  gone.plan.id = 'p1';
+  gone.build('a', 'aaa1111');
+  gone.build('b', 'bbb2222');
+  await flush();
+  gone.plan.id = 'p2';
+  gone.calls.timers[0].fn();
+  await flush();
+  assert.deepEqual(gone.calls.worktrees, [], 'a new plan: nothing is removed');
+  assert.equal(gone.findPkg('a').ab.losers[0].removed, false);
+});
+
+test('variants that do not sit side by side get no critic: variant A is kept and the report says why', async () => {
+  const h = harness();
+  h.patch('a-b', { root: '/elsewhere/a-b-1' });
+  h.build('a', 'aaa1111');
+  h.build('b', 'bbb2222');
+  await flush();
+  assert.deepEqual(h.calls.reviews, []);
+  assert.deepEqual([h.findPkg('a').ab.winner, h.findPkg('a').ab.reasons], ['a', ['critic unavailable (noWorktree), variant A kept']]);
 });
 
 test('a variant that runs again during the review is waited for, not judged on its old build', async () => {

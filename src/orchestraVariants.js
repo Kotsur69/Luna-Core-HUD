@@ -21,6 +21,8 @@
 
 'use strict';
 
+const path = require('path');
+
 const VARIANT_KEYS = Object.freeze(['a', 'b']);
 const MAX_LABEL_CHARS = 60;
 const MAX_VARIANT_PROMPT_CHARS = 4000;
@@ -249,6 +251,31 @@ function groupDecision(group, packages) {
   return group.state === 'stalled' ? null : { kind: 'none', variants };
 }
 
+// ---- where the critic runs / what the cleanup may remove -------------------
+
+const samePath = (a, b) => path.resolve(a) === path.resolve(b);
+
+/**
+ * Whether `root` is a worktree beside `otherRoot` (the same LunaCore
+ * worktrees folder) and not that worktree itself.
+ */
+function isSiblingRoot(root, otherRoot) {
+  if (typeof root !== 'string' || typeof otherRoot !== 'string' || !root || !otherRoot) return false;
+  return !samePath(root, otherRoot) && samePath(path.dirname(path.resolve(root)), path.dirname(path.resolve(otherRoot)));
+}
+
+/**
+ * Where the critic runs: the folder holding both variants' worktrees. It may
+ * open either variant's files there, but nothing of the main checkout, whose
+ * untracked local files an injected diff could ask it to quote.
+ * @param {Array<{root?:string|null}>} built the two built variants
+ * @returns {string|null} null when they do not sit side by side
+ */
+function criticCwd(built) {
+  const [a, b] = Array.isArray(built) ? built : [];
+  return a && b && isSiblingRoot(a.root, b.root) ? path.dirname(a.root) : null;
+}
+
 /** The fields the group takes over from its winning variant. */
 function adoptedFields(winner) {
   const built = winner.abBuilt || {};
@@ -357,6 +384,8 @@ module.exports = {
   variantDone,
   retryAction,
   groupDecision,
+  isSiblingRoot,
+  criticCwd,
   adoptedFields,
   validateChoice,
   buildCriticPrompt,

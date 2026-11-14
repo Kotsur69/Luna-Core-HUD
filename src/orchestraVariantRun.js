@@ -40,6 +40,12 @@ function createVariantRunner(deps) {
     const plan = deps.getPlan();
     return plan && !plan.killed ? plan : null;
   };
+  // Paused at the usage limit or held: nothing is decided (the critic would
+  // hit the limit too); the pump decides once the run goes on.
+  const decidingPlan = () => {
+    const plan = livePlan();
+    return plan && !plan.pausedUntil && !plan.hold ? plan : null;
+  };
 
   /**
    * A variant's finish succeeded: it parks (state stays 'finishing') instead of pushing.
@@ -48,7 +54,10 @@ function createVariantRunner(deps) {
   function onBuilt(id, res) {
     const pkg = deps.findPkg(id);
     if (!pkg || !pkg.abOf) return false;
-    deps.patch(id, { abBuilt: { headSha: (res && res.headSha) || null, at: deps.now() } });
+    const plan = deps.getPlan();
+    // Finished after a kill: it stops with the run, its build kept (a Retry parks it again).
+    const stopped = !!(plan && plan.killed);
+    deps.patch(id, { abBuilt: { headSha: (res && res.headSha) || null, at: deps.now() }, ...(stopped ? { state: 'killed' } : {}) });
     deps.record(id, { at: deps.now(), kind: 'ab', reason: 'abBuilt', detail: `variant ${pkg.abKey.toUpperCase()} verified` });
     onEvent('abBuilt', { id, group: pkg.abOf });
     evaluate(pkg.abOf);
@@ -63,7 +72,7 @@ function createVariantRunner(deps) {
   }
 
   function evaluate(groupId) {
-    const plan = livePlan();
+    const plan = decidingPlan();
     if (!plan || deciding.has(groupId)) return;
     const group = deps.findPkg(groupId);
     const d = ab.groupDecision(group, plan.packages);
@@ -99,6 +108,9 @@ function createVariantRunner(deps) {
 
   async function critic(group, built) {
     if (!deps.runReview) return { ok: false, error: 'noReview' };
+    // Never the main checkout: the folder of both worktrees (orchestraVariants.criticCwd).
+    const cwd = ab.criticCwd(built);
+    if (!cwd) return { ok: false, error: 'noWorktree' };
     const variants = await Promise.all(
       built.map(async (b) => {
         const head = b.abBuilt && b.abBuilt.headSha;
@@ -108,7 +120,7 @@ function createVariantRunner(deps) {
       }),
     );
     const prompt = ab.buildCriticPrompt({ id: group.id, title: group.title, prompt: group.prompt, verify: group.verify, variants });
-    return deps.runReview({ cwd: deps.repoPath(), env: deps.reviewEnv(), prompt, schema: ab.CRITIC_SCHEMA, validate: ab.validateChoice });
+    return deps.runReview({ cwd, env: deps.reviewEnv(), prompt, schema: ab.CRITIC_SCHEMA, validate: ab.validateChoice });
   }
 
   function onVerdict(groupId, builtIds, token, res) {
@@ -157,18 +169,31 @@ function createVariantRunner(deps) {
     deps.removePackages([winnerId, ...(loser ? [loserId] : [])]);
     log(`[ab] ${groupId}: variant ${winner.abKey.toUpperCase()} won (${verdict.by})`);
     onEvent('abDecided', { id: groupId, winner: winner.abKey, by: verdict.by });
-    if (loser) cleanupLoser(groupId, loser);
+    if (loser) cleanupLoser(groupId, loser, winner);
     deps.commit();
     deps.finishGroup(groupId);
   }
 
-  /** Tab closed; worktree removed after a short settle (a dirty one is kept); branch kept. */
-  function cleanupLoser(groupId, loser) {
+  /**
+   * Tab closed; worktree removed after a short settle (a dirty one is kept);
+   * branch kept. Only a worktree beside the winner's is ever removed, and only
+   * while this plan is still the run's: repo and plan are pinned now.
+   */
+  function cleanupLoser(groupId, loser, winner) {
     if (loser.sessionId && deps.sessionAlive(loser.sessionId)) deps.closeSession(loser.sessionId);
     if (!loser.root || !deps.removeWorktree) return;
+    if (!ab.isSiblingRoot(loser.root, winner.root)) {
+      log(`[ab] ${groupId}: the losing variant ${loser.abKey.toUpperCase()}'s worktree was kept: not beside the winner's`);
+      return;
+    }
+    const plan = deps.getPlan();
+    const planId = plan ? plan.id : null;
+    const repo = deps.repoPath();
     const timer = deps.setTimer(() => {
+      const current = deps.getPlan();
+      if (!current || current.id !== planId) return;
       Promise.resolve()
-        .then(() => deps.removeWorktree(deps.repoPath(), loser.root))
+        .then(() => deps.removeWorktree(repo, loser.root))
         .then(
           (res) => markRemoved(groupId, loser.abKey, !!(res && res.ok), res && res.error),
           (err) => markRemoved(groupId, loser.abKey, false, err instanceof Error ? err.message : String(err)),

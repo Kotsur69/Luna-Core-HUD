@@ -1838,6 +1838,8 @@ function createOrchestra(deps) {
         await launchPackages(ready);
         ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
       }
+      // Again before settling: a variant may have finished while the launches ran.
+      variantRun.evaluateAll();
       checkSettled();
       commit();
     } finally {
@@ -1883,11 +1885,15 @@ function createOrchestra(deps) {
     const edits = o.prompts && typeof o.prompts === 'object' ? o.prompts : {};
     plan.packages = plan.packages.map((p) => {
       const edited = typeof edits[p.id] === 'string' ? edits[p.id].trim().slice(0, MAX_PROMPT_CHARS) : '';
-      return p.state === 'pending' && edited ? { ...p, prompt: edited } : p;
+      // An undecided A/B group runs no worker: its variants carry the prompts.
+      return p.state === 'pending' && edited && !variantRules.isUndecidedGroup(p) ? { ...p, prompt: edited } : p;
     });
 
     const chosen = Array.isArray(o.ids)
-      ? plan.packages.filter((p) => (p.state === 'pending' || p.state === 'failed') && o.ids.includes(p.id))
+      ? plan.packages.filter(
+          // An undecided A/B group never launches itself: its variants do (orchestraVariants.js).
+          (p) => (p.state === 'pending' || p.state === 'failed') && o.ids.includes(p.id) && !variantRules.isUndecidedGroup(p),
+        )
       : null;
     if (chosen ? !chosen.length : !sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL)).length) {
       return { ok: false, error: 'nothingToLaunch' };
@@ -2254,6 +2260,8 @@ function createOrchestra(deps) {
   async function finish(id) {
     cancelNudge(id);
     hybridRun.forget(id);
+    // The worker got going on its own: a self-heal still under way is not needed.
+    healer.cancel(id);
     // The post-DONE verify runs a plain `npm test` in the worktree: not
     // without its dependencies. The package waits for Resume, unstalled.
     if (!depsReady(findPkg(id))) {

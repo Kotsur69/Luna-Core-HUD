@@ -17,6 +17,8 @@ const {
   MIN_FILL_PERCENT,
   COMPACT_TEXT,
   withSample,
+  isNewWindow,
+  NEW_WINDOW_DROP_PERCENT,
   predictContext,
   shouldCompact,
   normalizeContextResume,
@@ -49,14 +51,26 @@ test('withSample appends to a new array and drops samples older than the window'
   assert.deepEqual(withSample(undefined, s(0, 5)), [s(0, 5)]);
 });
 
-test('withSample: fewer tokens or a clock that stepped back start a new history', () => {
-  assert.deepEqual(withSample([s(0, 5000), s(MIN, 9000)], s(2 * MIN, 3000)), [s(2 * MIN, 3000)]);
+test('withSample: a new context window or a clock that stepped back start a new history', () => {
+  assert.deepEqual(withSample([s(0, 50_000), s(MIN, 90_000)], s(2 * MIN, 30_000)), [s(2 * MIN, 30_000)]);
   assert.deepEqual(withSample([s(5 * MIN, 5000)], s(MIN, 6000)), [s(MIN, 6000)]);
+  // A dip under NEW_WINDOW_DROP_PERCENT of the limit is noise: the history goes on.
+  assert.deepEqual(withSample([s(0, 50_000), s(MIN, 90_000)], s(2 * MIN, 85_000)), [s(0, 50_000), s(MIN, 90_000), s(2 * MIN, 85_000)]);
+});
+
+test('isNewWindow: only a drop of at least NEW_WINDOW_DROP_PERCENT of the limit', () => {
+  assert.equal(NEW_WINDOW_DROP_PERCENT, 10);
+  assert.equal(isNewWindow(s(0, 150_000), s(MIN, 130_000)), true, 'exactly 10% of 200k');
+  assert.equal(isNewWindow(s(0, 150_000), s(MIN, 130_001)), false);
+  assert.equal(isNewWindow(s(0, 100_000), s(MIN, 120_000)), false, 'growth');
+  for (const [a, b] of [[null, s(0, 1)], [s(0, 1), null], [s(0, NaN), s(0, 1)], [s(0, 90_000), s(0, 1, Infinity)], [s(0, 90_000), s(0, 1, 0)]]) {
+    assert.equal(isNewWindow(a, b), false, JSON.stringify([a, b]));
+  }
 });
 
 test('withSample ignores an unusable reading and keeps at most 120 samples', () => {
   const list = [s(0, 1000)];
-  for (const bad of [null, s(MIN, NaN), s(MIN, -1), s(MIN, 10, 0), s(-1, 10), { at: MIN, tokens: '5', limit: LIMIT }]) {
+  for (const bad of [null, s(MIN, NaN), s(MIN, -1), s(MIN, 10, 0), s(MIN, 10, Infinity), s(-1, 10), { at: MIN, tokens: '5', limit: LIMIT }]) {
     assert.equal(withSample(list, bad), list, JSON.stringify(bad));
   }
   let many = [];
@@ -212,6 +226,15 @@ test('a session that takes no input is marked for a resume with a progress summa
   assert.match(contextResumeSection(h.box.pkg), /70% used, predicted full within 3 min/);
   h.feed(160_000);
   assert.equal(h.calls.patches.length, 1, 'once per window');
+
+  // A small dip is noise: same window, the mark stays.
+  h.feed(150_000);
+  assert.deepEqual([h.calls.patches.length, h.guard.view(h.box.pkg).compacted], [1, true]);
+  // The worker compacted after all (a new window): the mark is stale and goes.
+  h.feed(30_000);
+  assert.deepEqual(h.calls.patches[1], ['a', { contextResume: null }]);
+  assert.equal(h.guard.view(h.box.pkg).resumeMarked, false);
+  assert.equal(contextResumeSection(h.box.pkg), '');
 });
 
 test('a worker that could be at a permission prompt is never typed into: it is marked instead', () => {

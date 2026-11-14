@@ -192,6 +192,19 @@ test('self-heal: a locked file waits LOCK_RETRY_MS, keeps the run open meanwhile
   assert.equal(k.log.sessions.length, 1, 'nothing resumes a killed run');
 });
 
+test('self-heal: a worker that finishes on its own while a heal waits is not resumed by it', async () => {
+  const s = await started({ packages: [pkg('a', [1])], settings: { selfHeal: true } });
+  s.orch.onTurnEnd('s1', turn('LUNA_BLOCKED a: EBUSY: resource busy or locked, rename x'));
+  await s.flush();
+  assert.equal(s.view('a').heal.healing, 'lock');
+  s.orch.onTurnEnd('s1', turn('LUNA_DONE a'));
+  await s.flush();
+  assert.deepEqual(s.view('a').heal, { heals: ['lock'], healing: null }, 'cancelled, still spent');
+  s.advance(LOCK_RETRY_MS);
+  await s.flush();
+  assert.equal(s.log.sessions.length, 1, 'the old heal resumes nothing');
+});
+
 test('self-heal is off unless the setting was on when the plan was made', async () => {
   const s = await started({ packages: [pkg('a', [1])] });
   assert.equal('selfHeal' in s.orch.view().options, false);
@@ -291,6 +304,7 @@ test('A/B: two variants build in parallel, the critic picks one, only the winner
   await s.flush(30);
   assert.equal(s.log.reviews.length, 1);
   assert.equal(s.log.reviews[0].schema, CRITIC_SCHEMA);
+  assert.equal(s.log.reviews[0].cwd, path.dirname(rootOf(va.branch)), 'the worktrees folder, not the main checkout');
   assert.deepEqual(s.log.diffs.map((d) => [d.cwd, d.to]), [[rootOf(va.branch), 'aaa1111'], [rootOf(vb.branch), 'bbb2222']]);
 
   // The group adopted variant B and went through its own finish (with push).
@@ -360,6 +374,15 @@ test('A/B: a kill is a pause - the built variant keeps its build and waits for i
   await s.flush(30);
   assert.equal(s.log.reviews.length, 1, 'the critic compares both builds');
   assert.deepEqual([s.view('a').state, s.view('a').ab.winner], ['pushed', 'b']);
+});
+
+test('A/B: an undecided group cannot be launched by hand - only its variants run', async () => {
+  const s = await abStarted();
+  const sessions = s.log.sessions.length;
+  const res = await s.orch.launch({ planId: s.planId, ids: ['a'], prompts: { a: 'an edit nobody would run' } });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.deepEqual([s.view('a').state, s.log.sessions.length], ['pending', sessions], 'no third worker');
+  assert.equal(s.view('a').prompt, 'do a', 'its variants carry the prompts: the edit is not taken');
 });
 
 test('A/B: a plan with variants is refused as a free run', async () => {
