@@ -21,6 +21,7 @@ const C = require('../src/lunasworkCritic.js');
 const Pack = require('../src/lunasworkPack.js');
 const { changelogEntry, withChangelogEntry, appendChangelog, CHANGELOG_FILE } = require('../src/lunasworkCriticPack.js');
 const { orderCards } = require('../src/lunasworkRules.js');
+const { MAX_DETAILS_CHARS } = require('../src/todorows.js');
 
 const RUN_ID = 'amsteel-1';
 const RUN_TAG = 'run:amsteel-1';
@@ -161,9 +162,9 @@ test('a bug card that already carries a repro test is left as written', () => {
 });
 
 test('a bug card with huge details still ends with the repro instruction', () => {
-  const out = C.validateCritique(critique({ cards: [card({ kind: 'bug', details: 'x'.repeat(10000), acceptance: [] })] }), {});
+  const out = C.validateCritique(critique({ cards: [card({ kind: 'bug', details: 'x'.repeat(MAX_DETAILS_CHARS + 6000), acceptance: [] })] }), {});
   assert.match(out.cards[0].details, /reproduces this bug/);
-  assert.ok(out.cards[0].details.length <= 4000);
+  assert.ok(out.cards[0].details.length <= MAX_DETAILS_CHARS);
   assert.deepEqual(out.cards[0].acceptance, [C.REPRO_ACCEPTANCE]);
 });
 

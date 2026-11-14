@@ -232,7 +232,7 @@ function normalizeStoredPlanRun(raw) {
     }));
   return {
     runSlug: raw.runSlug,
-    request: strCap(raw.request, 4000),
+    request: strCap(raw.request, core.MAX_GOAL_CHARS),
     planner: raw.planner === 'free' ? 'free' : 'claude',
     topics,
     saved: (Array.isArray(raw.saved) ? raw.saved : []).filter((id) => typeof id === 'string' && /^[a-z0-9-]{1,24}$/.test(id)).slice(0, 12),
