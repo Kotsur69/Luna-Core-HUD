@@ -38,6 +38,21 @@ function fillPack(repo) {
 
 // ---- pure ---------------------------------------------------------------------------
 
+test('publicQueue shows a unity entry by its MCP URL, or as the official Pipeline without one', () => {
+  const unity = (extra) => ({ adapter: 'unity', readyTimeoutSec: 60, checkCommand: '', ...extra });
+  const queue = {
+    v: 1,
+    entries: [
+      entry('web'),
+      entry('pipe', { profile: unity({ unityProjectSubdir: 'Game' }) }),
+      entry('mcp', { profile: unity({ unityMcpUrl: 'http://127.0.0.1:8080/mcp' }) }),
+    ],
+  };
+  assert.deepEqual(q.publicQueue(queue).map((e) => e.url), [
+    'http://localhost:3000', 'Unity Pipeline (official)', 'http://127.0.0.1:8080/mcp',
+  ]);
+});
+
 test('normalizeQueue keeps valid entries once each, re-validates the profile, caps the list', () => {
   const raw = {
     entries: [

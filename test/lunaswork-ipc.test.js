@@ -189,6 +189,10 @@ test('saveSettings reports profile validation errors with the field', async () =
     [{ startCommand: 'npm start', readyTimeoutSec: 0 }, 'readyTimeoutSec'],
     [{ startCommand: 'npm start', adapter: 'android' }, 'adapter'],
     [{ adapter: 'unity', unityMcpUrl: 'http://example.com/mcp' }, 'unityMcpUrl'],
+    [{ adapter: 'unity', unityMcpUrl: 'http://10.0.0.2:8080/mcp' }, 'unityMcpUrl'],
+    [{ adapter: 'unity', unityProjectSubdir: '../outside' }, 'unityProjectSubdir'],
+    [{ adapter: 'unity', unityProjectSubdir: 'C:\\Windows' }, 'unityProjectSubdir'],
+    [{ adapter: 'unity', unityProjectSubdir: '/etc' }, 'unityProjectSubdir'],
     [{ adapter: 'unity', scene: '../evil.unity' }, 'scene'],
     [{ adapter: 'electron', startCommand: '' }, 'startCommand'],
     [{ startCommand: 'npm start', checkCommand: 'a\nb' }, 'checkCommand'],
@@ -224,6 +228,20 @@ test('saveSettings stores electron and unity profiles with only their own fields
     adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', scene: 'Assets/Scenes/Main.unity', readyTimeoutSec: 120, checkCommand: '',
   });
   assert.deepEqual((await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' })).profile, unity.profile);
+  s.done();
+});
+
+test('saveSettings stores a Pipeline unity profile: no unityMcpUrl, the project subdir kept, unknown keys dropped', async () => {
+  const s = setup();
+  const res = await s.ipc.invoke('lunaswork:saveSettings', {
+    projectId: 'game',
+    profile: { adapter: 'unity', unityProjectSubdir: 'Game\\Unity', scene: 'Assets/Scenes/Main.unity', projectDir: 'C:\\evil' },
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.profile, {
+    adapter: 'unity', unityProjectSubdir: 'Game/Unity', scene: 'Assets/Scenes/Main.unity', readyTimeoutSec: 60, checkCommand: '',
+  });
+  assert.deepEqual((await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' })).profile, res.profile);
   s.done();
 });
 
