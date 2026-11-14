@@ -27,7 +27,7 @@ const { createConfigSync } = require('./configsync');
 const { createMemoryProvider, scan } = require('./memorystore');
 const { createHealthProvider, touch, summarize } = require('./memoryhealth');
 const { readEnabled } = require('./memoryprojects');
-const { splitKey } = require('./memoryrecord');
+const { splitKey, extraFields } = require('./memoryrecord');
 const { createNoteProvider, projectOfNoteKey } = require('./memorynote');
 const { scrub } = require('./hostscrub');
 
@@ -48,9 +48,14 @@ function memoryPaths(configDir) {
   };
 }
 
-/** Whether the secret scanner would change anything in the text of a memory or of a "where we stopped" note. */
+/**
+ * Whether the secret scanner would change anything in the text of a memory or
+ * of a "where we stopped" note. The fields a newer version wrote (record.extra)
+ * leave the machine too, so their values are scanned as well.
+ */
 function hasSecret(record) {
-  return [record.title, record.body, record.source, record.text].some((s) => typeof s === 'string' && scrub(s) !== s);
+  const carried = extraFields(record.extra).map(([, value]) => value);
+  return [record.title, record.body, record.source, record.text, ...carried].some((s) => typeof s === 'string' && scrub(s) !== s);
 }
 
 /** A unit whose text the secret scanner guards: a memory or a note (src/memorynote.js). */
