@@ -359,6 +359,8 @@ function createLunasWorkRuntime(ctx) {
     research: (opts) => runResearch({ ...opts, env: ctx.env(), log: ctx.log }),
     // LW 3.37: the Critic's art-direction check of new game assets (design/ASSETS.md).
     styleCheck: (opts) => runStyleCheck({ ...opts, env: ctx.env() }),
+    // Asset cards on a Unity run name the asset pipeline's art root (per-PC setting).
+    assetArtRoot: () => settingsStore.assetToolsFor(settingsStore.readSettings()).artRoot,
     gitLog,
     syncCheckout,
     checkpoints: createCheckpoints({ log: ctx.log }),

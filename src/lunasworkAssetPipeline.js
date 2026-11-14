@@ -442,6 +442,59 @@ function createAssetPipeline(deps) {
   return { blenderModel, comfyDraft, higgsfieldFinal, artRoot, usdPerCredit };
 }
 
+// ---- per-PC settings ----------------------------------------------------------------------
+
+const DEFAULT_BLENDER_PORT = 9876;
+const isPort = (v) => Number.isInteger(v) && v >= 1024 && v <= 65535;
+
+/**
+ * lunaswork-settings.local.json `assetTools`: the local tools' ports, the
+ * Higgsfield credit price and the art root. Every bad value reads as its
+ * default; nothing here can point a write outside the repo or a request off
+ * loopback (the hosts are fixed in the clients).
+ * @returns {{comfyuiPort:number, blenderPort:number, higgsfieldUsdPerCredit:number, artRoot:string}}
+ */
+function normalizeAssetTools(raw) {
+  const r = isObj(raw) ? raw : {};
+  const rate = r.higgsfieldUsdPerCredit;
+  return {
+    comfyuiPort: isPort(r.comfyuiPort) ? r.comfyuiPort : comfyLib.DEFAULT_PORT,
+    blenderPort: isPort(r.blenderPort) ? r.blenderPort : DEFAULT_BLENDER_PORT,
+    higgsfieldUsdPerCredit: typeof rate === 'number' && rate > 0 && rate <= MAX_USD_PER_CREDIT ? rate : DEFAULT_USD_PER_CREDIT,
+    artRoot: artRootOf(r.artRoot),
+  };
+}
+
+// ---- the asset worker's brief -------------------------------------------------------------
+
+// Blade & Bullet docs/ART_DIRECTION.md (not in this repo): the rule every 3D asset follows.
+const ART_DIRECTION_RULE = 'Art direction (docs/ART_DIRECTION.md of the game - read it when the repo has it): 3D toon / cel-shaded characters and props on a 2D plane. Model in 3D, keep gameplay on one plane (X/Y, side-on camera, no depth movement), toon shading with clean outlines, no photoreal materials.';
+const AMD_GPU_RULE = 'ComfyUI runs on an AMD GPU: use only models and nodes that run on it (ROCm / DirectML builds such as SD 1.5 and SDXL checkpoints); no CUDA-only nodes (xformers, TensorRT, NVIDIA-only custom nodes).';
+
+/**
+ * The Unity part of an asset card's details: where the files go, which tool
+ * makes what (lunacore MCP tools of src/lunasworkAssetTools.js), the skills,
+ * the art direction and the GPU rule.
+ * @param {{kind:string, slug:string, source:string, artRoot?:string}} a kind = an ASSETS.md type
+ * @returns {string[]} paragraphs
+ */
+function unityAssetBrief({ kind, slug, source, artRoot }) {
+  const k = own(KINDS, kind) ? kind : 'other';
+  const root = artRootOf(artRoot);
+  const model = KINDS[k].model === true;
+  const make = source === 'blender' || model
+    ? `Make it in Blender through the Blender MCP (Blender must be running with its MCP add-on; load the blender-game-assets skill), then call the lunacore tool luna_asset_blender {name, kind: "${k}"}: it saves art/blender/${slug}.blend, exports ${root}/${KINDS[k].dir}/${slug}.fbx for Unity and makes the prefab.`
+    : `Drafts: the lunacore tool luna_asset_comfy {name, kind: "${k}", prompt, workflow} runs a workflow from ${COMFY_WORKFLOW_DIR}/ (API format, "{{prompt}}" placeholder) on the local ComfyUI and saves the workflow and seed under ${SOURCE_DIRS.comfyRuns}/. Finals: luna_asset_higgsfield {name, kind: "${k}", prompt, model} (load the higgsfield-media skill).`;
+  return [
+    `Files: the asset goes to ${root}/${KINDS[k].dir}/, its sources (Blender .blend, ComfyUI workflow + seed, Higgsfield record) to art/. Write only inside this repository.`,
+    make,
+    'Paid generation goes ONLY through luna_asset_higgsfield: it books the cost against this run\'s Higgsfield budget first. Use the higgsfield CLI / higgsfield-bridge directly only to look up models. When a tool answers capReached, stop using Higgsfield for this run.',
+    'The luna_asset_* tools import the result into Unity through the Unity Pipeline (asset import, prefab for a model, material for a texture). When a result says the import failed, import it with your Unity MCP.',
+    ART_DIRECTION_RULE,
+    AMD_GPU_RULE,
+  ];
+}
+
 // ---- report lines -----------------------------------------------------------------------
 
 /** "## Generated assets" lines of the run report, one per logged asset. */
@@ -472,6 +525,10 @@ module.exports = {
   assetPath,
   cleanParams,
   blenderExportScript,
+  normalizeAssetTools,
+  unityAssetBrief,
+  ART_DIRECTION_RULE,
+  AMD_GPU_RULE,
   cleanAssetEntry,
   createAssetPipeline,
   assetReportLines,

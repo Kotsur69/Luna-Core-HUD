@@ -33,6 +33,7 @@ const crypto = require('crypto');
 const { normalizeTodo, normalizeTodos, MAX_ITEMS, MAX_TAGS } = require('./todo');
 const { EFFORTS } = require('./efforts');
 const { MEMORY_TOOLS, callMemoryTool } = require('./memorytools');
+const { ASSET_TOOLS, callAssetTool } = require('./lunasworkAssetTools');
 
 const MCP_PATH = '/mcp';
 const MAX_BODY_BYTES = 256 * 1024;
@@ -314,10 +315,11 @@ function toolText(payload, isError = false) {
  * @param {string} name
  * @param {object} args
  * @param {{read:() => Array, write:(list:Array) => boolean, now?:() => number,
- *   canMarkDone?:boolean, memory?:object}} store canMarkDone must be true for
+ *   canMarkDone?:boolean, memory?:object, assets?:object}} store canMarkDone must be true for
  *   luna_todo_done (main sets it false for God Mode worker tabs, which must not
  *   tick cards); memory = the reader behind memory_search / memory_get
- *   (src/memorytools.js), absent when the tab has no memory tools
+ *   (src/memorytools.js), absent when the tab has no memory tools; assets =
+ *   the asset pipeline of a Luna's Work asset worker (src/lunasworkAssetTools.js)
  */
 function callTool(name, args, store) {
   const a = args && typeof args === 'object' ? args : {};
@@ -325,6 +327,9 @@ function callTool(name, args, store) {
   const recalledText = (res) => (res.ok ? toolText(res.payload) : toolText(res.error, true));
   // A memory search that embeds its question answers later (src/memorytools.js).
   if (recalled) return typeof recalled.then === 'function' ? recalled.then(recalledText) : recalledText(recalled);
+  // Luna's Work asset tools (src/lunasworkAssetTools.js): only a build's asset worker has them.
+  const made = store.assets ? callAssetTool(name, a, store.assets) : null;
+  if (made) return made.then(recalledText);
   if (name === 'luna_todo_list') return toolText(listView(normalizeTodos(store.read()), a.includeDone, a.tag));
 
   let outcome;
@@ -371,11 +376,11 @@ function handleRpc(msg, store, version = '0.0.0') {
     case 'ping':
       return rpcResult(id, {});
     case 'tools/list':
-      return rpcResult(id, { tools: store.memory ? [...TOOLS, ...MEMORY_TOOLS] : TOOLS });
+      return rpcResult(id, { tools: [...TOOLS, ...(store.memory ? MEMORY_TOOLS : []), ...(store.assets ? ASSET_TOOLS : [])] });
     case 'tools/call': {
       const result = callTool(params.name, params.arguments, store);
       const reply = (done) => (done ? rpcResult(id, done) : rpcError(id, -32602, `Unknown tool: ${params.name}`));
-      // Only a memory search is asynchronous; every other tool answers at once.
+      // A memory search and the asset tools are asynchronous; every other tool answers at once.
       return result && typeof result.then === 'function' ? result.then(reply) : reply(result);
     }
     default:

@@ -283,6 +283,30 @@ test('an editor that is not open fails only the import; the file stays and the w
   assert.match(P.assetReportLines(logged)[0], /not imported$/);
 });
 
+test('made assets land in run.assets through the guard and in the run report', async () => {
+  const dir = tempRepo();
+  const g = guardFor(10);
+  const comfy = { run: async () => ({ promptId: 'p', images: [{ data: PNG }] }) };
+  const { p } = pipeline(dir, {
+    comfy,
+    higgsfield: fakeHiggsfield(2),
+    usdPerCredit: 0.5,
+    download: async () => PNG,
+    recordSpend: (x) => g.guard.recordSpend(x),
+    logAsset: (e) => g.guard.recordAsset(e),
+  });
+  await p.comfyDraft({ name: 'Moon', kind: 'concept', prompt: 'pale moon', workflow: 'concept.json', seed: 3 });
+  await p.higgsfieldFinal({ name: 'Moon Final', kind: 'concept', prompt: 'pale moon', model: 'gpt_image_2_6' });
+  assert.equal(g.guard.recordAsset({ tool: 'evil', path: '/etc/passwd' }), false);
+  const run = { id: 'r1', repoPath: dir, verdict: 'ship', laps: [], log: [], ...cleanGuardFields(g.run()) };
+  assert.deepEqual(run.assets.map((a) => [a.tool, a.seed, a.costUsd]), [['comfyui', 3, 0], ['higgsfield', 99, 1]]);
+  const Report = require('../src/lunasworkReport.js');
+  const md = Report.buildRunReport(run, { now: 1 });
+  assert.match(md, /## Generated assets\n\nPaid generation this run: \$1\.00\.\n\n- comfyui concept "Moon": Assets\/BladeBullet\/Art\/Concepts\/moon-draft-3\.png - prompt "pale moon", seed 3, cost \$0\n- higgsfield concept "Moon Final": .*seed 99, cost \$1\.00 \(2 credits\)/);
+  assert.match(Report.renderRunReportHtml(run, { now: 1 }), /Generated assets/);
+  assert.doesNotMatch(Report.buildRunReport({ ...run, assets: [] }, { now: 1 }), /Generated assets/);
+});
+
 test('the art root comes from settings only in the Assets/... shape', () => {
   assert.equal(P.artRootOf('Assets/Game/Art'), 'Assets/Game/Art');
   for (const bad of ['../x', 'C:/Assets', 'Assets/../x', 'Assets', 7]) assert.equal(P.artRootOf(bad), P.DEFAULT_ART_ROOT);

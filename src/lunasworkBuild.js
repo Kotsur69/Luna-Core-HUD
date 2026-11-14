@@ -353,6 +353,8 @@ function createGodModeBuilder(deps) {
     wrapPlanner,
     ownsMerge,
     isBuilding: (projectId) => !!active && (projectId === undefined || active.projectId === projectId),
+    /** The build running now ({projectId, repoPath}), or null: who may get the asset tools. */
+    activeBuild: () => (active ? { projectId: active.projectId, repoPath: active.repoPath } : null),
   };
 }
 
