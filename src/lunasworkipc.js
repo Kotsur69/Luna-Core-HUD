@@ -84,8 +84,9 @@ const MAX_ID_CHARS = 200;
 const MAX_STEER_CHARS = 1000;
 // Opening a tab is a side effect a double click must not repeat.
 const INTERVIEW_GAP_MS = 3000;
-// unityMcpUrl / scene: the unity adapter's fields (src/lunasworkAdapterProfiles.js).
-const PROFILE_FIELDS = ['adapter', 'startCommand', 'url', 'unityMcpUrl', 'scene', 'readyTimeoutSec', 'checkCommand'];
+// unityMcpUrl / unityProjectSubdir / scene: the unity adapter's fields
+// (src/lunasworkAdapterProfiles.js), validated there in the main process.
+const PROFILE_FIELDS = ['adapter', 'startCommand', 'url', 'unityMcpUrl', 'unityProjectSubdir', 'scene', 'readyTimeoutSec', 'checkCommand'];
 const MAX_PROFILE_STRING = settingsStore.MAX_COMMAND_CHARS;
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -165,7 +166,7 @@ function parseProfile(raw) {
 
 /** Which form field a validateProfile reason is about (its first word). */
 function fieldOf(reason) {
-  const m = /^(adapter|startCommand|url|unityMcpUrl|scene|readyTimeoutSec|checkCommand)\b/.exec(String(reason || ''));
+  const m = /^(adapter|startCommand|url|unityMcpUrl|unityProjectSubdir|scene|readyTimeoutSec|checkCommand)\b/.exec(String(reason || ''));
   if (m) return m[1];
   return /adapter/.test(String(reason || '')) ? 'adapter' : 'profile';
 }

@@ -68,6 +68,8 @@ const defaultFile = () => paths.local(FILE_NAME);
 // (LW 3.35 / 3.36b), the same validators their adapters re-run in start().
 const ADAPTERS = ['web', 'electron', 'unity'];
 const DEFAULT_ADAPTER = 'web';
+// What a unity profile without unityMcpUrl talks to (the official Unity MCP).
+const UNITY_PIPELINE_LABEL = 'Pipeline (official)';
 // The stack templates of src/lunasworkScaffold.js (TEMPLATES keys).
 const PROFILE_STACKS = ['nextjs', 'python'];
 const DEFAULT_URL = 'http://localhost:3000';
@@ -222,20 +224,28 @@ function validateProfile(raw) {
   };
 }
 
+/** A unity profile's transport: its legacy MCP for Unity URL, or the official Pipeline. */
+function unityTransportLabel(profile) {
+  const url = typeof profile.unityMcpUrl === 'string' ? profile.unityMcpUrl.trim() : '';
+  return url || UNITY_PIPELINE_LABEL;
+}
+
 /**
  * What a confirm dialog shows for a profile: the launch commands per adapter
- * (web has a start command + URL, electron a start command, unity the editor's
- * MCP URL + scene). Only the set fields, in a fixed order.
+ * (web has a start command + URL, electron a start command, unity its transport
+ * + project folder + scene). Only the set fields, in a fixed order.
  * @param {object|null} profile a validated profile
  * @returns {Array<{label:string, value:string}>}
  */
 function profileSummary(profile) {
   if (!profile || typeof profile !== 'object') return [];
+  const isUnity = profile.adapter === 'unity';
   const rows = [
     ['Adapter', profile.adapter],
     ['Start command', profile.startCommand],
     ['App URL', profile.url],
-    ['Unity MCP URL', profile.unityMcpUrl],
+    ['Unity transport', isUnity ? unityTransportLabel(profile) : undefined],
+    ['Unity project folder', profile.unityProjectSubdir],
     ['Scene', profile.scene],
   ];
   return rows.filter(([, v]) => typeof v === 'string' && v).map(([label, value]) => ({ label, value }));
@@ -438,6 +448,7 @@ module.exports = {
   STAGING_COMMANDS,
   validateProfile,
   profileSummary,
+  UNITY_PIPELINE_LABEL,
   validateBudgets,
   normalizeBudgets,
   normalizeCliOrder,
