@@ -209,3 +209,48 @@ test('update: only an available / downloaded version is an item', () => {
   const [noDate] = c.collectUpdate({ update: { state: 'downloaded', info: { version: '0.21.0' } }, now: NOW });
   assert.equal(noDate.at, new Date(2026, 10, 2).getTime());
 });
+
+// ---- the weekly memory digest ----------------------------------------------------
+
+test('the weekly memory digest is one brief per ISO week, every count in words', () => {
+  const start = new Date(2026, 10, 9, 0).getTime();
+  const digest = { week: '2026-46', start, proposed: 5, approved: 3, rejected: 1, autoAccepted: 2, graveyard: 4, archived: 1, conflicts: 2 };
+  const items = c.COLLECTORS.memory({ count: 0, now: NOW, digest });
+
+  assert.equal(items.length, 1);
+  const [item] = items;
+  assertIds(items);
+  assert.equal(item.id, 'memory:digest:2026-46');
+  assert.equal(item.kind, 'brief');
+  assert.equal(item.source, 'memory');
+  assert.equal(item.at, start);
+  assert.equal(item.title, 'Memory this week: 5 proposed, 3 approved, 1 rejected, 2 auto-accepted');
+  assert.equal(item.detail, '4 to the graveyard, 1 archived by decay, 2 conflicts open');
+  assert.equal(item.key, 'hub.item.memoryDigest');
+  assert.equal(item.detailKey, 'hub.item.memoryDigestDetail');
+  assert.deepEqual(item.vars, { proposed: 5, approved: 3, rejected: 1, autoAccepted: 2, graveyard: 4, archived: 1, conflicts: 2 });
+  assert.deepEqual(item.primary, { action: 'openMemoryInbox' });
+
+  // The hub keeps every count (MAX_VARS).
+  const { cleanItem } = require('../src/hub.js');
+  assert.deepEqual(cleanItem(item).vars, item.vars);
+});
+
+test('the digest comes with the inbox count and stays alone when nothing waits', () => {
+  const start = new Date(2026, 10, 9, 0).getTime();
+  const digest = { week: '2026-46', start, proposed: 1 };
+  const ids = c.COLLECTORS.memory({ count: 3, now: NOW, digest }).map((i) => i.id);
+  assert.deepEqual(ids, ['memory:inbox:3', 'memory:digest:2026-46']);
+  const [only] = c.COLLECTORS.memory({ count: 0, now: NOW, digest });
+  assert.deepEqual(only.vars, { proposed: 1, approved: 0, rejected: 0, autoAccepted: 0, graveyard: 0, archived: 0, conflicts: 0 });
+});
+
+test('no digest for an empty week, and a broken digest yields [] without a throw', () => {
+  const start = new Date(2026, 10, 9, 0).getTime();
+  const empty = { week: '2026-46', start, proposed: 0, approved: 0, rejected: 0, autoAccepted: 0, graveyard: 0, archived: 0, conflicts: 0 };
+  assert.deepEqual(c.COLLECTORS.memory({ count: 0, now: NOW, digest: empty }), []);
+  for (const digest of [null, undefined, 42, 'x', [], {}, { week: '2026-W46', start, proposed: 3 }, { week: '2026-46', start: 0, proposed: 3 }, { week: '2026-46', start, proposed: -3, approved: '2', rejected: NaN }]) {
+    assert.deepEqual(c.runCollector(c.COLLECTORS.memory, { count: 0, now: NOW, digest }), [], JSON.stringify(digest));
+  }
+  assert.deepEqual(c.digestItems({ week: '2026-46', start, proposed: 1e12 })[0].vars.proposed, 9999, 'a huge count is capped');
+});

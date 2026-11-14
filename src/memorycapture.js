@@ -23,7 +23,8 @@
 // -> filter (src/memoryextract.js) -> the candidates are written to the mirror
 // as `observed` memories. They wait in the inbox (src/memoryinbox.js). A
 // candidate the model scored under the usefulness floor never gets there: it
-// is only logged (src/memorylog.js, `dropped`) with its score. The same model
+// is logged (src/memorylog.js, `dropped`) with its score, and kept whole in
+// the local graveyard (src/memorygraveyard.js), where it can be restored. The same model
 // call gives the project's "where we stopped" status: it overwrites the
 // project's note (src/memorynote.js) without the inbox; no status, no change.
 //
@@ -48,6 +49,7 @@ const { rejectedTitles } = require('./memorylog');
 const { statusFrom, saveNote } = require('./memorynote');
 const { createLanding, autoEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
+const { bury, graveyardPath } = require('./memorygraveyard');
 
 const LEDGER_FILE = 'memory-capture.local.json';
 const TICK_MS = 5 * 60 * 1000;
@@ -185,6 +187,7 @@ async function extractPiece({ text, project, dir, source, today, run, notWanted 
 function createCapture({ configDir, machine, run, live = () => [], now = Date.now, onSaved = () => {}, transcriptsDir = CLAUDE_PROJECTS_DIR, log = null }) {
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
+  const graveyardFile = graveyardPath(configDir);
   const root = path.resolve(transcriptsDir) + path.sep;
   let busy = false;
   let timer = null;
@@ -264,6 +267,8 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
     const noted = res.status ? saveNote(paths.dir, note) : false;
     const reason = saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason;
     if (log) for (const event of droppedEvents(res.rejected, entry.project)) log.add(event);
+    // The whole record of a low-usefulness drop, scrubbed: restorable from the memory window.
+    bury(graveyardFile, res.rejected, now());
     // Only a piece the model read is a capture worth counting.
     if (log && called) log.add({ ev: 'capture', project: entry.project, reason, kept: saved, dropped: countReasons(res.rejected) });
     return { entry: { ...entry, done: piece.end, fails: 0, at: now() }, reason, saved, called, noted };

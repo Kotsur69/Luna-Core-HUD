@@ -19,6 +19,7 @@ const { setEnabled } = require('../src/memoryprojects.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { runJob } = require('../src/missionrunner.js');
 const { createLog, logPath } = require('../src/memorylog.js');
+const { readGraveyard, graveyardPath } = require('../src/memorygraveyard.js');
 
 const PROJECT = 'github.com/acme/hud';
 const NOW = Date.parse('2026-11-11T12:00:00Z');
@@ -432,4 +433,26 @@ test('droppedEvents logs only the low-usefulness drops', () => {
   ];
 
   assert.deepEqual(droppedEvents(rejected, PROJECT), [{ ev: 'dropped', project: PROJECT, reason: 'low usefulness', type: 'how-to', title: 'Weak', usefulness: 3 }]);
+});
+
+test('a candidate under the usefulness floor lands in the graveyard with its whole body', async (t) => {
+  const s = setup(t);
+  const file = s.transcript('abababab-7777', session('the release'));
+  const scored = (title, usefulness) => ({ type: 'gotcha', scope: 'project', title, body: `${title}. The full body is kept.`, usefulness });
+  s.state.reply = { ok: true, answer: { candidates: [scored('Name the installer asset with dashes', 82), scored('The window was resized once', 12)] } };
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  const graves = readGraveyard(graveyardPath(s.configDir), s.clock.at);
+  assert.equal(graves.length, 1);
+  assert.equal(graves[0].reason, 'low usefulness');
+  assert.equal(graves[0].score, 12);
+  assert.equal(graves[0].at, s.clock.at);
+  assert.equal(graves[0].record.title, 'The window was resized once');
+  assert.equal(graves[0].record.body, 'The window was resized once. The full body is kept.');
+  assert.equal(graves[0].record.project, PROJECT);
+  assert.equal(graves[0].record.source, 'captured from session abababab on PC1');
+  // The kept candidate is not buried.
+  assert.ok(!graves.some((g) => g.record.title === 'Name the installer asset with dashes'));
 });

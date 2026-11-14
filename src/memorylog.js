@@ -8,7 +8,8 @@
 //   {"at": <ms>, "ev": "capture",  "project", "reason", "kept", "dropped": {"duplicate": 2}}
 //   {"at": <ms>, "ev": "proposed", "key", "type", "usefulness"?, "by"?: "session"}
 //   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?}
-//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted" | "superseded", "key", "type", "title"?, "usefulness"?}
+//   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted" | "superseded" | "restored", "key", "type", "title"?, "usefulness"?}
+//                                  restored = brought back from the graveyard into the inbox (src/memorygraveyard.js)
 //   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js)
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
@@ -59,7 +60,8 @@ const MAX_REJECTED_TITLES = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // 'auto-accepted' = confirmed by the type's auto-accept switch (src/memoryautoaccept.js), not by hand.
-const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'auto-accepted', 'superseded'];
+// 'restored' = a graveyard entry put back into the inbox by hand (src/memorygraveyard.js).
+const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'auto-accepted', 'superseded', 'restored'];
 const VERDICTS = ['verified', 'disputed'];
 const BY = ['tool', 'user'];
 
@@ -402,6 +404,67 @@ function acceptedMissing(events) {
   return accepted;
 }
 
+// ---- the weekly digest: one hub item per ISO week (src/hubcollect.js) ----
+
+const WEEK_DAYS = 7;
+/** ISO weekday of a Date, Monday = 0. */
+const mondayIndex = (d) => (d.getDay() + 6) % 7;
+
+/**
+ * The ISO week holding a moment, in local time.
+ * @param {number} now ms
+ * @returns {{key: string, start: number}} key = 'yyyy-ww' (ISO week-numbering year), start = Monday 00:00 local
+ */
+function isoWeek(now) {
+  const d = new Date(now);
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - mondayIndex(d));
+  // The ISO year is the year of the week's Thursday; its week 1 holds January 4th.
+  const year = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 3).getFullYear();
+  const jan4 = new Date(year, 0, 4);
+  const week1 = new Date(year, 0, 4 - mondayIndex(jan4));
+  // Rounded: a daylight-saving change makes a week an hour shorter or longer.
+  const week = 1 + Math.round((monday.getTime() - week1.getTime()) / (WEEK_DAYS * DAY_MS));
+  return { key: `${year}-${String(week).padStart(2, '0')}`, start: monday.getTime() };
+}
+
+/**
+ * 'YYYY-MM-DD' of a moment in local time. `archived` (src/memorydecay.js) is a
+ * UTC calendar day with no time, compared here as a calendar day against the
+ * local week: a memory archived in the first hours of a local Monday (still
+ * Sunday in UTC) counts in the week before. Comparing UTC days instead would
+ * pull a whole Sunday into the wrong week.
+ */
+const localDay = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/**
+ * What happened to the memory on this PC in the ISO week holding `now`.
+ * graveyard = candidates dropped under the usefulness floor (every `dropped`
+ * line is one: memorycapture.droppedEvents logs only those); archived = memories
+ * whose decay reached zero this week (records' `archived` day).
+ * @param {object[]} events readLog()
+ * @param {{now: number, records?: object[]}} opts records = the mirror's records (memorystore.scan)
+ * @returns {{week: string, start: number, proposed: number, approved: number, rejected: number,
+ *   autoAccepted: number, graveyard: number, archived: number}}
+ */
+function weeklyCounts(events, { now, records = [] }) {
+  const { key, start } = isoWeek(now);
+  const counts = { proposed: 0, approved: 0, rejected: 0, autoAccepted: 0, graveyard: 0 };
+  const field = { proposed: 'proposed', approved: 'approved', rejected: 'rejected', 'auto-accepted': 'autoAccepted', dropped: 'graveyard' };
+  for (const e of Array.isArray(events) ? events : []) {
+    if (!isObject(e) || !Number.isFinite(e.at) || e.at < start || e.at > now) continue;
+    const name = Object.hasOwn(field, e.ev) ? field[e.ev] : null;
+    if (name) counts[name]++;
+  }
+  const [from, to] = [localDay(start), localDay(now)];
+  const archived = (Array.isArray(records) ? records : []).filter(
+    (r) => isObject(r) && typeof r.archived === 'string' && r.archived >= from && r.archived <= to,
+  ).length;
+  return { week: key, start, ...counts, archived };
+}
+
 // ---- release notes: what changed in the memory since a date (luna memory notes) ----
 
 /** The sections of the notes, in order. */
@@ -490,6 +553,8 @@ module.exports = {
   rejectedTitles,
   openDisputes,
   acceptedMissing,
+  isoWeek,
+  weeklyCounts,
   LOG_FILE,
   MAX_LOG_BYTES,
   MAX_NOTE,

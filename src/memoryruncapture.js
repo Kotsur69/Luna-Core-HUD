@@ -12,6 +12,7 @@
 //   -> small model -> the same filter as a session (memoryextract.candidatesFrom:
 //   checkRecord, secret scan, near-duplicates, usefulness floor, at most five,
 //   rejected titles as "not wanted") -> `observed` memories in the inbox.
+//   A candidate under the floor goes to the local graveyard (src/memorygraveyard.js).
 //
 // Their source is `captured from God Mode run <runId> on <machine>`, plus the
 // outside-content note when the workers read web, subagent or foreign MCP
@@ -48,6 +49,7 @@ const { recordFailures, repeatedFailures, uncoveredRepeats, floorRepeated, FAILU
 const { RUN_ID_RE } = require('./orchestraReport');
 const { createLanding, autoEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
+const { bury, graveyardPath } = require('./memorygraveyard');
 
 const LEDGER_FILE = 'memory-runcapture.local.json';
 /** Runs remembered; the oldest go first. Run ids are new per run, so this only bounds the file. */
@@ -119,6 +121,7 @@ function createRunCapture({
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
   const failureFile = path.join(configDir, FAILURE_LEDGER_FILE);
+  const graveyardFile = graveyardPath(configDir);
   /** Runs being captured right now: a second report of the same run does not start another call. */
   const inflight = new Set();
 
@@ -236,6 +239,7 @@ function createRunCapture({
         res = { reason: 'failed', saved: 0, rejected: [] };
       }
       remember(runId, project, res.reason);
+      bury(graveyardFile, res.rejected, now());
       if (log) {
         for (const event of droppedEvents(res.rejected, project)) log.add(event);
         log.add({ ev: 'capture', project, reason: res.reason, kept: res.saved, dropped: countReasons(res.rejected) });

@@ -297,10 +297,21 @@ test(`a candidate scored under USEFULNESS_FLOOR (${USEFULNESS_FLOOR}) is dropped
     records.map((r) => [r.title, r.usefulness]),
     [['Package times out on battery power', USEFULNESS_FLOOR]],
   );
-  assert.deepEqual(rejected, [
-    { title: 'Retry says busy after a sleep', reason: LOW_USEFULNESS, type: 'gotcha', usefulness: USEFULNESS_FLOOR - 1 },
-    { title: 'Release assets need dashes in the name', reason: LOW_USEFULNESS, type: 'how-to', usefulness: 0 },
-  ]);
+  assert.deepEqual(
+    rejected.map(({ record, ...rest }) => rest),
+    [
+      { title: 'Retry says busy after a sleep', reason: LOW_USEFULNESS, type: 'gotcha', usefulness: USEFULNESS_FLOOR - 1 },
+      { title: 'Release assets need dashes in the name', reason: LOW_USEFULNESS, type: 'how-to', usefulness: 0 },
+    ],
+  );
+  // The checked record rides along for the graveyard (src/memorygraveyard.js).
+  assert.deepEqual(
+    rejected.map(({ record }) => [record.id, record.confidence, record.usefulness, record.body.length > 0]),
+    [
+      ['retry-says-busy-after-a-sleep', 'observed', USEFULNESS_FLOOR - 1, true],
+      ['release-assets-need-dashes-in-the-name', 'observed', 0, true],
+    ],
+  );
   assert.equal(LOW_USEFULNESS, 'low usefulness');
 });
 

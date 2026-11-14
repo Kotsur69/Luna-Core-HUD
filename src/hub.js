@@ -53,7 +53,8 @@ const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
 const MAX_TITLE = 200;
 const MAX_DETAIL = 300;
 const MAX_VAR = 160;
-const MAX_VARS = 6;
+/** The weekly memory digest names seven counts (src/hubcollect.js digestItems). */
+const MAX_VARS = 8;
 const MAX_ITEMS = 200;
 const MAX_DONE_SHOWN = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;

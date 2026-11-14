@@ -477,6 +477,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   memoryAutoSet: (type, on) => ipcRenderer.invoke('memory:auto-set', { type: typeof type === 'string' ? type : '', on: on === true }),
   /** Undoes one auto-accept: the memory is deleted on every PC. Promise<{ok, key} | {ok:false, reason}>. */
   memoryAutoUndo: (key) => ipcRenderer.invoke('memory:auto-undo', typeof key === 'string' ? key : ''),
+  // The memory graveyard (src/memoryipc.js): candidates dropped under the
+  // usefulness floor, local only. An entry is named by its entry id; main
+  // checks it. Restore puts it in the inbox; delete removes it.
+  memoryGraveyard: () => ipcRenderer.invoke('memory:graveyard'),
+  memoryGraveyardRestore: (key) => ipcRenderer.invoke('memory:graveyard-restore', typeof key === 'string' ? key : ''),
+  memoryGraveyardDelete: (key) => ipcRenderer.invoke('memory:graveyard-delete', typeof key === 'string' ? key : ''),
   // All memories of one project, the usefulness scan, conflicts and the archive
   // (src/memorybrainipc.js). Strings only; main checks every key and project.
   /** One project's memories with their usefulness and the scan status. Promise<{ok, projects, project, items, total, scan}>. */

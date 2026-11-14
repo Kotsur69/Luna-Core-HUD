@@ -25,6 +25,7 @@ const { memoryPaths } = require('../src/memorysync.js');
 const { setEnabled } = require('../src/memoryprojects.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { createLog, logPath } = require('../src/memorylog.js');
+const { readGraveyard, graveyardPath } = require('../src/memorygraveyard.js');
 const { worktreePathFor } = require('../src/worktrees.js');
 const { encodeProjectDir } = require('../src/observer.js');
 
@@ -174,6 +175,22 @@ test('the session filter applies: usefulness floor, secrets and duplicates are d
   const events = s.log.read().map(({ at, ...e }) => e);
   assert.deepEqual(events.find((e) => e.ev === 'dropped'), { ev: 'dropped', project: PROJECT, reason: 'low usefulness', type: 'gotcha', title: 'Weak note about the weather', usefulness: 10 });
   assert.deepEqual(events.find((e) => e.ev === 'capture'), { ev: 'capture', project: PROJECT, reason: 'saved', kept: 1, dropped: { 'low usefulness': 1, secret: 1, duplicate: 1 } });
+});
+
+test('a run candidate under the usefulness floor lands in the graveyard with its whole body', async (t) => {
+  const s = setup(t);
+  s.state.reply = reply(candidate('Weak note about the weather', { usefulness: 10 }), candidate('Kept gotcha about ledgers'));
+
+  await s.capture.capture(finished());
+
+  const graves = readGraveyard(graveyardPath(s.configDir), NOW);
+  assert.equal(graves.length, 1);
+  assert.equal(graves[0].reason, 'low usefulness');
+  assert.equal(graves[0].score, 10);
+  assert.equal(graves[0].record.body, 'Weak note about the weather. Unique body for Weak note about the weather.');
+  assert.equal(graves[0].record.source, `captured from God Mode run ${RUN_ID} on PC1`);
+  assert.equal(graves[0].record.confidence, 'observed');
+  assert.deepEqual(listInbox(s.dir).items.map((i) => i.title), ['Kept gotcha about ledgers']);
 });
 
 test('zero candidates is a capture too: the run is marked and nothing waits', async (t) => {
