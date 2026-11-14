@@ -374,3 +374,34 @@ test('approving a folded group keeps the score the inbox showed for it', (t) => 
   assert.equal(kept.usefulness_note, 'Saves a broken install.');
   assert.deepEqual(seen, [['approved', 80]]);
 });
+
+test('the inbox sorts by final score: reads on this PC lift an entry, a tie falls to usefulness then newest', (t) => {
+  const dir = mirror(t, [
+    rec('read-often', 'Retry says busy after sleep', { created: '2026-11-01', usefulness: 60 }),
+    rec('more-useful', 'Packaging times out on battery', { created: '2026-11-02', usefulness: 64 }),
+    rec('same-old', 'Name the installer with dashes', { created: '2026-11-03', usefulness: 50 }),
+    rec('same-new', 'Release notes need a date', { created: '2026-11-04', usefulness: 50 }),
+    rec('unrated', 'Junction targets get emptied', { created: '2026-11-05' }),
+  ]);
+  const reads = new Map([[`${PROJECT}/read-often`, 5]]);
+
+  const { items } = listInbox(dir, { reads, today: '2026-11-14' });
+
+  // read-often: 0.7 * 60 + 7.5 + 15 = 64.5 -> 65; more-useful: 0.7 * 64 + 7.5 = 52.3 -> 52.
+  assert.deepEqual(
+    items.map((i) => [i.id, i.final.score]),
+    [
+      ['read-often', 65],
+      ['more-useful', 52],
+      ['same-new', 43],
+      ['same-old', 43],
+      ['unrated', null],
+    ],
+  );
+  assert.deepEqual(items[0].final.parts, { usefulness: 60, confidence: 'observed', usage: 5 });
+  // Without usage (the CLI, the phone) the order is the usefulness order.
+  assert.deepEqual(
+    listInbox(dir).items.map((i) => i.id),
+    ['more-useful', 'read-often', 'same-new', 'same-old', 'unrated'],
+  );
+});

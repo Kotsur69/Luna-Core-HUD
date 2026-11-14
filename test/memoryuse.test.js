@@ -211,3 +211,20 @@ test('a tab start without the memory tools is logged with tools:false and left o
   assert.equal(stats.withCard.sessions, 1);
   assert.equal(stats.withoutCard.sessions, 1, 'a start logged before the flag existed still counts');
 });
+
+test('recentUsage counts the reads of the last RECENT_READ_DAYS and names today', () => {
+  const { recentUsage, RECENT_READ_DAYS } = require('../src/memoryuse.js');
+  const DAY = 24 * 60 * 60 * 1000;
+  const key = 'github.com/acme/hud/busy-after-sleep';
+  const events = [
+    { at: NOW - (RECENT_READ_DAYS + 1) * DAY, ev: 'get', key },
+    { at: NOW - 2 * DAY, ev: 'get', key },
+    { at: NOW - DAY, ev: 'search', hits: [key, 'global/other'] },
+    { at: NOW, ev: 'approved', key },
+  ];
+  const usage = recentUsage(events, NOW);
+  assert.equal(usage.today, '2026-11-11');
+  assert.equal(usage.reads.get(key), 2);
+  assert.equal(usage.reads.get('global/other'), 1);
+  assert.deepEqual(recentUsage([], NOW).reads, new Map());
+});

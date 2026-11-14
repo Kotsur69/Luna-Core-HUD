@@ -3504,7 +3504,9 @@ function registerIpc() {
       if (memorySync) memorySync.soon();
       send('memory:changed', {});
     },
-    log: { add: (event) => memoryLogOf().add(event) },
+    // read: this PC's reads (final score) and disputes (health line); roots: the anchor check.
+    log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
+    roots: memoryRoots,
   });
   // Notification hub (face icon + right drawer): docs/tbc_docs/NOTIFICATION_HUB_PLAN.md, src/hubipc.js.
   // Other PCs' runs come from their `godmode` rows; done marks sync as config units.

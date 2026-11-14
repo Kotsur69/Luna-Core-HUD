@@ -26,7 +26,7 @@
 
 'use strict';
 
-const { GLOBAL, TYPES, checkRecord, splitKey, keyOf, scoreOf } = require('./memoryrecord');
+const { GLOBAL, TYPES, checkRecord, splitKey, keyOf, scoreOf, finalScore, byFinalScore } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord } = require('./memorystore');
 const { nearDuplicate, sourceNotes, withoutSuggestedGlobal } = require('./memoryextract');
 const { supersededKeys } = require('./memoryreview');
@@ -39,8 +39,6 @@ const MAX_ID_SUFFIX = 9;
 const isPending = (record) => record.confidence !== 'confirmed';
 /** Oldest first; the key settles a tie so every PC picks the same lead of a group. */
 const byAge = ([ka, a], [kb, b]) => a.created.localeCompare(b.created) || ka.localeCompare(kb);
-/** A score to sort by: an unknown one (-1) comes after every real score. */
-const rankOf = (record) => (record.usefulness === undefined ? -1 : record.usefulness);
 
 /**
  * The waiting entries, near-duplicates folded into the oldest of them.
@@ -90,19 +88,34 @@ function similarConfirmed(records, record) {
 }
 
 /**
- * @param {string} dir the mirror folder (memoryPaths().dir)
- * @returns {{items: object[], total: number}} the extractor's usefulness score highest first, an
- *   entry without one last, newest first within the same score; total = entries waiting, duplicates folded
+ * A folded group with its score: the entry as shown (withGroupScore) and its
+ * final score; the reads of the whole group count.
  */
-function listInbox(dir) {
+function scoredGroup(group, byKey, { reads, today }) {
+  const record = withGroupScore(group.record, group.duplicates.map((k) => byKey.get(k)));
+  const groupReads = [group.key, ...group.duplicates].reduce((sum, k) => sum + (reads.get(k) || 0), 0);
+  const final = finalScore(record, { reads: groupReads, today });
+  return { ...group, record, final, usefulness: final.parts.usefulness };
+}
+
+/**
+ * @param {string} dir the mirror folder (memoryPaths().dir)
+ * @param {{reads?: Map<string, number>, today?: string|null}} [usage] this PC's recent reads
+ *   (memoryuse.recentUsage); none = the final score counts no reads
+ * @returns {{items: object[], total: number}} the final score highest first (memoryrecord.finalScore),
+ *   an entry without one last, then by usefulness, newest first within the same score;
+ *   total = entries waiting, duplicates folded
+ */
+function listInbox(dir, { reads = new Map(), today = null } = {}) {
   const { records } = scan(dir);
   const byKey = new Map(records);
+  const usage = { reads: reads instanceof Map ? reads : new Map(), today };
   // Array.prototype.sort is stable: equal scores keep the newest-first order.
   const groups = groupPending(listable(records))
     .reverse()
-    .map((g) => ({ ...g, record: withGroupScore(g.record, g.duplicates.map((k) => byKey.get(k))) }))
-    .sort((a, b) => rankOf(b.record) - rankOf(a.record));
-  const items = groups.slice(0, MAX_ITEMS).map(({ key, record, duplicates }) => ({
+    .map((g) => scoredGroup(g, byKey, usage))
+    .sort(byFinalScore);
+  const items = groups.slice(0, MAX_ITEMS).map(({ key, record, duplicates, final }) => ({
     key,
     project: record.project,
     id: record.id,
@@ -125,6 +138,8 @@ function listInbox(dir) {
     duplicates: duplicates.length,
     similar: similarConfirmed(records, record),
     ...scoreOf(record),
+    // Computed here, never stored: {score: 0-100|null, parts: {usefulness, confidence, usage}}.
+    final,
   }));
   return { items, total: groups.length };
 }

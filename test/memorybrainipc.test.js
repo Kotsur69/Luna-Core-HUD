@@ -198,3 +198,133 @@ test('main wires the scan to Sonnet, the decay timer, references and God Mode br
   assert.match(main, /memoryConflictCount\(dir\)/);
   assert.match(read('src/orchestraWiring.js'), /projectMemory: \(repoPath, pkg\) =>/);
 });
+
+// ---- final score and memory health in the list of all memories -----------------------
+
+const { projectHealth, HEALTH_WEIGHT_PCT, BACKLOG_DAYS } = require('../src/memorybrainipc.js');
+
+test('projectHealth: fixed inputs give a fixed score, every part counted', () => {
+  assert.equal(Object.values(HEALTH_WEIGHT_PCT).reduce((a, b) => a + b, 0), 100);
+  const item = (key, usefulness, score, over = {}) => ({ key, usefulness, final: { score }, confidence: 'confirmed', created: '2026-11-01', archived: null, ...over });
+  const items = [
+    item('p/a', 80, 80),
+    item('p/b', 60, 60),
+    item('p/c', null, null),
+    item('p/d', 40, 40, { confidence: 'observed' }), // waiting 13 days: backlog
+    item('p/e', null, null, { confidence: 'observed', created: '2026-11-12' }), // waiting 2 days: not yet
+    item('p/f', 0, 15, { created: '2026-01-01', archived: '2026-10-01' }),
+  ];
+  const review = [{ flags: [{ kind: 'stale' }] }, { flags: [{ kind: 'unopened' }] }];
+  const conflicts = [{ a: 'p/a', b: 'p/b' }];
+
+  const health = projectHealth(items, review, conflicts, { today: '2026-11-14' });
+
+  // scored 3/5 -> 60, quality avg(80, 60, 40) = 60, conflicts 1 - 2/5 -> 60, review 1 - 1/5 -> 80,
+  // backlog 1 - 1/5 -> 80, archived 1 - 1/6 -> 83.3: (25*60 + 30*60 + 15*60 + 15*80 + 10*80 + 5*83.3) / 100 = 66.2
+  assert.deepEqual(health, {
+    score: 66,
+    parts: { total: 6, unscored: 2, average: 60, conflicts: 1, review: 1, backlog: 1, backlogDays: BACKLOG_DAYS, archived: 1 },
+  });
+});
+
+test('projectHealth: a clean project scores 100, an empty one has no score, no date counts no backlog', () => {
+  const clean = [1, 2, 3].map((n) => ({ key: `p/${n}`, usefulness: 100, final: { score: 100 }, confidence: 'confirmed', created: '2026-01-01', archived: null }));
+  assert.equal(projectHealth(clean, [], [], { today: '2026-11-14' }).score, 100);
+  assert.deepEqual(projectHealth([], [], []), { score: null, parts: null });
+  assert.deepEqual(projectHealth(null, null, null), { score: null, parts: null });
+  const old = [{ key: 'p/x', usefulness: 50, final: { score: 50 }, confidence: 'observed', created: '2026-01-01', archived: null }];
+  assert.equal(projectHealth(old, [], []).parts.backlog, 0);
+  assert.equal(projectHealth(old, [], [], { today: '2026-11-14' }).parts.backlog, 1);
+  // Nothing rated: no average, and the score says so.
+  const unrated = [{ key: 'p/y', usefulness: null, final: { score: null }, confidence: 'confirmed', created: '2026-11-01', archived: null }];
+  assert.deepEqual(projectHealth(unrated, [], []), {
+    score: 45,
+    parts: { total: 1, unscored: 1, average: null, conflicts: 0, review: 0, backlog: 0, backlogDays: BACKLOG_DAYS, archived: 0 },
+  });
+});
+
+test('memory:list sorts by final score with this PC reads, and carries the project health', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-brainipc-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  for (const r of [
+    rec('high', { usefulness: 90 }),
+    rec('reads', { usefulness: 70 }),
+    rec('pending', { confidence: 'observed', usefulness: 40 }),
+    rec('stale', { created: '2025-01-01', usefulness: 50 }),
+    rec('always', { title: 'Always use npm ci in worktrees' }),
+    rec('never', { title: 'Never use npm ci in worktrees' }),
+  ]) {
+    writeRecord(dir, r);
+  }
+  const events = Array.from({ length: 5 }, (_, i) => ({ at: NOW - i * 1000, ev: 'get', key: `${PROJECT}/reads` }));
+  const handlers = {};
+  registerMemoryBrainIpc({
+    ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) },
+    dir: () => dir,
+    scanner: createScanner({ dir: () => dir, run: async () => ({ ok: false }), now: () => NOW }),
+    now: () => NOW,
+    log: { add: () => true, read: () => events },
+  });
+
+  const res = handlers['memory:list']({}, PROJECT);
+
+  // reads: 0.7 * 70 + 15 + 15 = 79 beats high: 0.7 * 90 + 15 = 78.
+  assert.deepEqual(
+    res.items.map((i) => [i.id, i.final.score]),
+    [
+      ['reads', 79],
+      ['high', 78],
+      ['stale', 50],
+      ['pending', 36],
+      ['always', null],
+      ['never', null],
+    ],
+  );
+  assert.deepEqual(res.items[0].final.parts, { usefulness: 70, confidence: 'confirmed', usage: 5 });
+  assert.ok(Number.isInteger(res.health.score) && res.health.score >= 0 && res.health.score <= 100);
+  assert.deepEqual(res.health.parts, { total: 6, unscored: 2, average: 61, conflicts: 1, review: 1, backlog: 1, backlogDays: BACKLOG_DAYS, archived: 0 });
+});
+
+test('a failing memory log or project folder list never hides the list of all memories', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-brainipc-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  writeRecord(dir, rec('a', { usefulness: 60 }));
+  const handlers = {};
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  registerMemoryBrainIpc({
+    ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) },
+    dir: () => dir,
+    scanner: createScanner({ dir: () => dir, run: async () => ({ ok: false }), now: () => NOW }),
+    now: () => NOW,
+    log: {
+      add: () => true,
+      read: () => {
+        throw new Error('log broken');
+      },
+    },
+    roots: () => {
+      throw new Error('roots broken');
+    },
+  });
+
+  const res = handlers['memory:list']({}, PROJECT);
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.items.map((i) => [i.id, i.final.score]), [['a', 57]]);
+  assert.equal(res.health.parts.total, 1);
+  assert.ok(errors.some((e) => e.includes('log broken')) && errors.some((e) => e.includes('roots broken')), errors.join('\n'));
+});
+
+test('the score and health strings exist in Polish and English, and the inbox chip uses its own', () => {
+  const i18n = read('src/renderer/i18n.js');
+  for (const key of ['mem.inbox.score', 'mem.brain.score', 'mem.brain.scoreWhy', 'mem.brain.health', 'mem.brain.conf.confirmed', 'mem.brain.conf.observed', 'mem.brain.conf.inferred']) {
+    const lines = i18n.split('\n').filter((l) => l.includes(`'${key}':`));
+    assert.equal(lines.length, 2, `${key} must exist once in pl and once in en`);
+    assert.doesNotMatch(lines[0], /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, `${key}: Polish UI strings carry no diacritics`);
+  }
+  assert.match(read('src/renderer/modules/memoryinbox.js'), /t\('mem\.inbox\.score'/);
+  assert.match(read('src/renderer/modules/memorybrain.js'), /healthLine\(list\.health\)/);
+  // The wiring hands the log reads and the project folders to the list of all memories.
+  assert.match(read('src/main.js'), /registerMemoryBrainIpc\(\{[\s\S]*?read: \(\) => memoryLogOf\(\)\.read\(\)[\s\S]*?roots: memoryRoots,\s*\}\);/);
+});

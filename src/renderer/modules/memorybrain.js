@@ -4,8 +4,11 @@
 // Parts of the memory window (memoryinbox.js) for the usefulness scan,
 // conflicts and the archive (src/memorybrainipc.js):
 //
-//   usefulnessLine   "Usefulness: 72/100 - <why>" under every memory, or "?"
-//                    for one the scan has not rated yet.
+//   usefulnessLine   "Score 74 (usefulness 80, confirmed, read 3x) - <why>" under
+//                    every memory (the final score main computed), or "?" for
+//                    one that has no usefulness score yet.
+//   healthLine       "Memory health 78/100 - ..." on top of the list of all
+//                    memories, every part in words.
 //   conflictEntry    two memories that contradict each other: keep A, keep B
 //                    or keep both. The loser is superseded, never deleted.
 //   memoriesPanel    the "All memories" list of one project, its Scan button
@@ -40,10 +43,61 @@ const cut = (text, max = PREVIEW_CHARS) => {
   return s.length > max ? `${s.slice(0, max).trimEnd()} ...` : s;
 };
 
-/** The usefulness line of a memory: its score and why, or "?" when it was never scanned. */
+/** How sure a memory is, in words, for its score line. */
+const CONFIDENCE_KEYS = {
+  confirmed: 'mem.brain.conf.confirmed',
+  observed: 'mem.brain.conf.observed',
+  inferred: 'mem.brain.conf.inferred',
+};
+
+/**
+ * The final score main computed for an item (src/memoryrecord.js finalScore), or
+ * null when there is none to show: not sent, or the memory has no usefulness yet.
+ * @returns {{score: number, usefulness: number, confidence: string, reads: number}|null}
+ */
+export function finalOf(item) {
+  const final = item && item.final;
+  const parts = final && final.parts;
+  if (!parts || !Number.isInteger(final.score) || !Number.isInteger(parts.usefulness)) return null;
+  return {
+    score: final.score,
+    usefulness: parts.usefulness,
+    confidence: Object.hasOwn(CONFIDENCE_KEYS, parts.confidence) ? parts.confidence : 'observed',
+    reads: Number.isInteger(parts.usage) && parts.usage > 0 ? parts.usage : 0,
+  };
+}
+
+/**
+ * The score line of a memory: "Score 74 (usefulness 80, confirmed, read 3x) - <why>",
+ * or "?" when it was never rated. Without a final score from main it says the usefulness alone.
+ */
 export function usefulnessLine(item) {
+  const final = finalOf(item);
+  const note = item && item.usefulness_note;
+  if (final) {
+    const params = { score: final.score, usefulness: final.usefulness, confidence: t(CONFIDENCE_KEYS[final.confidence]), reads: final.reads };
+    return note ? t('mem.brain.scoreWhy', { ...params, note }) : t('mem.brain.score', params);
+  }
   if (!item || !Number.isInteger(item.usefulness)) return t('mem.brain.usefulnessNone');
-  return item.usefulness_note ? t('mem.brain.usefulnessWhy', { score: item.usefulness, note: item.usefulness_note }) : t('mem.brain.usefulness', { score: item.usefulness });
+  return note ? t('mem.brain.usefulnessWhy', { score: item.usefulness, note }) : t('mem.brain.usefulness', { score: item.usefulness });
+}
+
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+
+/** The health line of a project's memories, every part in words (never colour alone); '' when main sent none. */
+export function healthLine(health) {
+  if (!health || !Number.isInteger(health.score) || !health.parts) return '';
+  const p = health.parts;
+  return t('mem.brain.health', {
+    score: health.score,
+    unscored: count(p.unscored),
+    average: Number.isInteger(p.average) ? p.average : '?',
+    conflicts: count(p.conflicts),
+    review: count(p.review),
+    backlog: count(p.backlog),
+    days: count(p.backlogDays),
+    archived: count(p.archived),
+  });
 }
 
 /** The i18n key of a scan failure reason (src/memoryscan.js). */
@@ -155,6 +209,9 @@ export function memoriesPanel(list, ctx) {
     panel.append(el('p', 'mem-inbox__empty', t('mem.brain.empty')));
     return { node: panel, list: null };
   }
+  // The project's memory health on top, in words (src/memorybrainipc.js projectHealth).
+  const health = healthLine(list.health);
+  if (health) panel.append(el('p', 'hint mem-brain__health', health));
   const bar = el('div', 'mem-brain__bar');
   const label = el('label', 'ui-field');
   const select = el('select', 'mem-brain__select');

@@ -21,6 +21,10 @@
 //   memory:retire  (key)          -> same                             deleted on every PC
 //   Both refuse a memory that is not on the review list (`not-flagged`).
 //
+// Every listed memory (inbox entries, review entries, both sides of a conflict)
+// carries `final`, its computed final score (memoryrecord.finalScore): this
+// PC's reads of the last 30 days count.
+//
 // memory:inbox also carries `stats`: what capture proposed in the last week
 // and what was approved (src/memorylog.js). Every decision is written to that log.
 //
@@ -39,7 +43,8 @@
 'use strict';
 
 const { listInbox, approve, reject, update, makeGlobal } = require('./memoryinbox');
-const { MAX_BODY, MAX_TITLE } = require('./memoryrecord');
+const { MAX_BODY, MAX_TITLE, finalScore } = require('./memoryrecord');
+const { recentUsage } = require('./memoryuse');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
 const { captureStats, decisionEvent, DAY_MS } = require('./memorylog');
@@ -69,6 +74,24 @@ function cleanEdits(raw) {
   }
   return edits;
 }
+
+/**
+ * A listed memory with its final score (memoryrecord.finalScore), read from
+ * the record of its key; an item whose record is gone is left as it is.
+ * @param {{key: string}} item
+ * @param {Map<string, object>} byKey the mirror's records
+ * @param {{reads: Map<string, number>, today: string}} usage memoryuse.recentUsage()
+ */
+function withFinal(item, byKey, usage) {
+  const record = byKey.get(item.key);
+  return record ? { ...item, final: finalScore(record, { reads: usage.reads.get(item.key) || 0, today: usage.today }) } : item;
+}
+
+/** The inbox's conflict pairs, each side with its final score. */
+const conflictsWithFinal = (conflicts, byKey, usage) => ({
+  ...conflicts,
+  items: conflicts.items.map((pair) => ({ ...pair, a: withFinal(pair.a, byKey, usage), b: withFinal(pair.b, byKey, usage) })),
+});
 
 const SEARCH_REASONS = new Set(['checking', 'not-local', 'no-server', 'no-model', 'failed', 'building']);
 const MAX_MODEL_CHARS = 120;
@@ -169,12 +192,15 @@ function registerMemoryIpc({
 
   ipcMain.handle('memory:inbox', () => {
     try {
-      const { captures, proposed, approved, rejected, edited, rate } = captureStats(events(), { since: now() - STATS_DAYS * DAY_MS });
+      const evs = events();
+      const { captures, proposed, approved, rejected, edited, rate } = captureStats(evs, { since: now() - STATS_DAYS * DAY_MS });
+      const usage = recentUsage(evs, now());
+      const { records } = scan(dir());
       return {
         ok: true,
-        ...listInbox(dir()),
+        ...listInbox(dir(), usage),
         // Memories that contradict each other wait here too (src/memoryconflict.js).
-        conflicts: listConflicts(scan(dir()).records, { events: events() }),
+        conflicts: conflictsWithFinal(listConflicts(records, { events: evs }), new Map(records), usage),
         capture: captureStatus(),
         search: searchMode(),
         stats: { days: STATS_DAYS, captures, proposed, approved, rejected, edited, rate },
@@ -196,7 +222,12 @@ function registerMemoryIpc({
 
   ipcMain.handle('memory:review', () => {
     try {
-      return { ok: true, ...reviewList({ records: scan(dir()).records, today: isoDate(now()), events: events(), roots: knownRoots() }) };
+      const evs = events();
+      const { records } = scan(dir());
+      const res = reviewList({ records, today: isoDate(now()), events: evs, roots: knownRoots() });
+      const byKey = new Map(records);
+      const usage = recentUsage(evs, now());
+      return { ok: true, ...res, items: res.items.map((item) => withFinal(item, byKey, usage)) };
     } catch (err) {
       console.error('[memory] review failed:', errText(err));
       return { ok: false, reason: 'failed' };

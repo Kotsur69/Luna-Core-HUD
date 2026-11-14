@@ -219,3 +219,62 @@ test('the secret scanner reads the carried values too', () => {
   assert.equal(hasSecret(clean), false);
   assert.equal(hasSecret(leaky), true);
 });
+
+// ---- the final score (memoryrecord.finalScore) -----------------------------------
+
+const { finalScore, byFinalScore, FINAL_WEIGHT_PCT, CONFIDENCE_POINTS, USAGE_SATURATION_READS } = require('../src/memoryrecord.js');
+
+test('the final score weighs usefulness 70%, confidence 15% and usage 15%', () => {
+  assert.equal(FINAL_WEIGHT_PCT.usefulness + FINAL_WEIGHT_PCT.confidence + FINAL_WEIGHT_PCT.usage, 100);
+  assert.deepEqual(CONFIDENCE_POINTS, { confirmed: 100, observed: 50, inferred: 25 });
+  const confirmed = normalizeRecord({ ...base, usefulness: 80 });
+  // 0.7 * 80 + 0.15 * 100 + 0.15 * (3 / 5 * 100) = 56 + 15 + 9
+  assert.deepEqual(finalScore(confirmed, { reads: 3 }), { score: 80, parts: { usefulness: 80, confidence: 'confirmed', usage: 3 } });
+  // 0.7 * 80 + 0.15 * 50 + 0 = 63.5, rounded
+  assert.equal(finalScore({ ...confirmed, confidence: 'observed' }).score, 64);
+  assert.equal(finalScore({ ...confirmed, confidence: 'inferred' }).score, 60);
+  assert.equal(finalScore({ ...confirmed, usefulness: 0 }).score, 15);
+});
+
+test('a memory without a usefulness score has no final score, but its parts are still told', () => {
+  assert.deepEqual(finalScore(normalizeRecord(base), { reads: 4 }), { score: null, parts: { usefulness: null, confidence: 'confirmed', usage: 4 } });
+  assert.equal(finalScore(null).score, null);
+  assert.equal(finalScore({ usefulness: 'high' }).score, null);
+});
+
+test('the final score is clamped to 0-100 and never trusts its inputs', () => {
+  assert.equal(finalScore({ ...base, usefulness: 140 }, { reads: 50 }).score, 100);
+  assert.equal(finalScore({ ...base, usefulness: -20, confidence: 'nonsense' }, { reads: -3 }).score, 8);
+  assert.deepEqual(finalScore({ ...base, usefulness: '72' }, { reads: Number.NaN }).parts, { usefulness: 72, confidence: 'confirmed', usage: 0 });
+  assert.equal(finalScore({ ...base, usefulness: 72 }, { reads: '9' }).parts.usage, 0);
+});
+
+test('reads saturate at USAGE_SATURATION_READS, and a recent last_used counts as one read', () => {
+  const r = normalizeRecord({ ...base, usefulness: 50 });
+  const at = (reads) => finalScore(r, { reads }).score;
+  assert.equal(USAGE_SATURATION_READS, 5);
+  assert.ok(at(0) < at(1) && at(1) < at(4) && at(4) < at(5));
+  assert.equal(at(5), at(500));
+  const today = '2026-11-14';
+  assert.equal(finalScore({ ...r, last_used: '2026-10-20' }, { today }).parts.usage, 1);
+  assert.equal(finalScore({ ...r, last_used: '2026-10-01' }, { today }).parts.usage, 0, 'older than 30 days');
+  assert.equal(finalScore({ ...r, last_used: '2026-12-01' }, { today }).parts.usage, 0, 'a future date from a bad sync');
+  assert.equal(finalScore({ ...r, last_used: '2026-11-10' }).parts.usage, 0, 'no today, no last_used rule');
+  // It never adds to reads this PC counted: last_used comes from those same reads.
+  assert.equal(finalScore({ ...r, last_used: '2026-11-10' }, { reads: 3, today }).parts.usage, 3);
+});
+
+test('the final score is computed only: it never becomes a field of the file', () => {
+  const r = normalizeRecord({ ...base, usefulness: 80 });
+  finalScore(r, { reads: 2 });
+  assert.doesNotMatch(serializeRecord(r), /final|score/);
+});
+
+test('lists sort by final score, unscored last, a tie by usefulness, else as they came', () => {
+  const item = (id, score, usefulness) => ({ id, final: { score }, usefulness });
+  const sorted = [item('none', null, null), item('a', 70, 60), item('b', 70, 80), item('c', 90, 50), item('d', 70, 80)].sort(byFinalScore);
+  assert.deepEqual(
+    sorted.map((i) => i.id),
+    ['c', 'b', 'd', 'a', 'none'],
+  );
+});

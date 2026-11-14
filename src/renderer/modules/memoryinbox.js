@@ -8,8 +8,9 @@
 // every PC). Capture never files a memory as global by itself: only the
 // 'Make global' button here does (security review of 2026-11-11).
 //
-// Entries come most useful first (the extractor's usefulness score, unknown
-// last; src/memoryinbox.js listInbox). The score is shown, never acted on.
+// Entries come highest final score first (usefulness, approval and this PC's
+// reads; unknown last; src/memoryinbox.js listInbox). The score is shown,
+// never acted on.
 //
 // Opened from the notification hub item "N memories to review"
 // (hubpanel.js openMemoryInbox). A memory is named to main only by its key.
@@ -22,7 +23,7 @@ import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
 import { COMMANDS, keyCommand, typingIn, moveSelection, keepSelection } from './memoryinboxkeys.js';
 import { autoSection } from './memoryautopanel.js';
-import { usefulnessLine, conflictEntry, memoriesPanel, scanStartKey } from './memorybrain.js';
+import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey } from './memorybrain.js';
 
 /** Characters of a body shown before "show all". */
 export const PREVIEW_CHARS = 320;
@@ -152,8 +153,10 @@ export function noteLines(item) {
   return lines;
 }
 
-/** The usefulness label of an entry: "Usefulness 72%", or the unknown form. */
+/** The score chip of an entry: "Score 74" (its final score, main computes it), or the unknown form. */
 export function scoreLabel(item) {
+  const final = finalOf(item);
+  if (final) return t('mem.inbox.score', { score: final.score });
   const pct = item && Number.isInteger(item.usefulness) ? item.usefulness : null;
   return pct === null ? t('mem.inbox.usefulnessUnknown') : t('mem.inbox.usefulness', { pct });
 }

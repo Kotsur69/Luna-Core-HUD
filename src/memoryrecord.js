@@ -39,7 +39,9 @@
 
 'use strict';
 
-const TYPES = ['decision', 'gotcha', 'how-to', 'project-fact', 'preference', 'domain', 'digest', 'reference'];
+const { RECENT_READ_DAYS } = require('./memoryuse');
+
+const TYPES =['decision', 'gotcha', 'how-to', 'project-fact', 'preference', 'domain', 'digest', 'reference'];
 const CONFIDENCE = ['confirmed', 'observed', 'inferred'];
 const GLOBAL = 'global';
 
@@ -255,6 +257,62 @@ const scoreOf = (record) => ({
   usefulness_note: record.usefulness_note || null,
 });
 
+// --- the final score ---------------------------------------------------------------
+// One 0-100 number to sort by: mostly how useful a memory is, a little whether
+// Mati approved it and whether it is being read. Computed on demand, never
+// stored in the file: no new field, no sync traffic.
+
+/** Weights of the final score's parts, in percent; they add up to 100. */
+const FINAL_WEIGHT_PCT = Object.freeze({ usefulness: 70, confidence: 15, usage: 15 });
+/** Confidence as points of its part. `inferred` is a weaker claim than `observed`. */
+const CONFIDENCE_POINTS = Object.freeze({ confirmed: 100, observed: 50, inferred: 25 });
+/** Reads in the window that earn the whole usage part. */
+const USAGE_SATURATION_READS = 5;
+/** Reads are counted over this many days, and a `last_used` this recent counts as one read. */
+const USAGE_WINDOW_DAYS = RECENT_READ_DAYS;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Whether `lastUsed` lies within USAGE_WINDOW_DAYS before `today` (a future date, from a bad sync, does not count). */
+function usedRecently(lastUsed, today) {
+  if (!isDate(lastUsed) || !isDate(today) || lastUsed > today) return false;
+  return (Date.parse(today) - Date.parse(lastUsed)) / DAY_MS <= USAGE_WINDOW_DAYS;
+}
+
+/**
+ * A memory's final score. Pure.
+ * @param {object} record a checked record
+ * @param {{reads?: number, today?: string|null}} [usage] reads = memory_search hits and
+ *   memory_get opens of this memory on this PC in the last USAGE_WINDOW_DAYS
+ *   (memoryuse.readCounts); today = YYYY-MM-DD, for the `last_used` rule
+ * @returns {{score: number|null, parts: {usefulness: number|null, confidence: string, usage: number}}}
+ *   score = null while the memory has no usefulness score (shown as "?");
+ *   parts.usage = the reads counted (before saturation)
+ */
+function finalScore(record, { reads = 0, today = null } = {}) {
+  const r = isPlainObject(record) ? record : {};
+  const usefulness = usefulnessOf(r.usefulness) ?? null;
+  const confidence = CONFIDENCE.includes(r.confidence) ? r.confidence : 'observed';
+  const counted = typeof reads === 'number' && Number.isFinite(reads) && reads > 0 ? Math.floor(reads) : 0;
+  const usage = Math.max(counted, usedRecently(r.last_used, today) ? 1 : 0);
+  const parts = { usefulness, confidence, usage };
+  if (usefulness === null) return { score: null, parts };
+  const usagePoints = (Math.min(usage, USAGE_SATURATION_READS) / USAGE_SATURATION_READS) * 100;
+  const weighted =
+    (FINAL_WEIGHT_PCT.usefulness * usefulness + FINAL_WEIGHT_PCT.confidence * CONFIDENCE_POINTS[confidence] + FINAL_WEIGHT_PCT.usage * usagePoints) / 100;
+  return { score: Math.min(USEFULNESS_MAX, Math.max(USEFULNESS_MIN, Math.round(weighted))), parts };
+}
+
+/**
+ * Sort order of the memory lists: final score high to low, unscored last; a tie
+ * by usefulness. Equal ones keep their order (Array.prototype.sort is stable),
+ * so the caller sorts newest first before.
+ * @param {{final: {score: number|null}, usefulness: number|null}} a list items
+ */
+function byFinalScore(a, b) {
+  const rank = (score) => (Number.isInteger(score) ? score : -1);
+  return rank(b.final.score) - rank(a.final.score) || rank(b.usefulness) - rank(a.usefulness);
+}
+
 /** A clean record, or null. */
 function normalizeRecord(raw) {
   const res = checkRecord(raw);
@@ -452,6 +510,12 @@ module.exports = {
   cleanLine,
   slug,
   scoreOf,
+  finalScore,
+  byFinalScore,
+  FINAL_WEIGHT_PCT,
+  CONFIDENCE_POINTS,
+  USAGE_SATURATION_READS,
+  USAGE_WINDOW_DAYS,
   usefulnessOf,
   validProject,
   projectFromRepoKey,

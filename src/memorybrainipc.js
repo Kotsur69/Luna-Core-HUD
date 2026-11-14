@@ -4,8 +4,10 @@
 // The memory window's third list and the conflict entries of its inbox
 // (renderer memorybrain.js):
 //
-//   memory:list     (project)        -> {ok, projects, project, items, total, scan}
-//                                       one project's memories with their usefulness;
+//   memory:list     (project)        -> {ok, projects, project, items, total, scan, health}
+//                                       one project's memories with their usefulness and
+//                                       final score (memoryrecord.finalScore), highest first;
+//                                       health = projectHealth() of that project, or null;
 //                                       an unknown or empty project picks the first one
 //   memory:scan     (project)        -> {ok, total} | {ok:false, reason: 'busy'|'bad-project'|'empty'}
 //                                       starts the usefulness scan (src/memoryscan.js)
@@ -21,11 +23,12 @@
 
 'use strict';
 
-const { validProject, splitKey, scoreOf } = require('./memoryrecord');
+const { validProject, splitKey, scoreOf, finalScore, byFinalScore, DATE_RE } = require('./memoryrecord');
 const { scan } = require('./memorystore');
-const { supersededKeys } = require('./memoryreview');
-const { resolveConflict, KEEP } = require('./memoryconflict');
+const { supersededKeys, reviewList } = require('./memoryreview');
+const { resolveConflict, findConflicts, KEEP } = require('./memoryconflict');
 const { restore } = require('./memorydecay');
+const { recentUsage } = require('./memoryuse');
 
 const MAX_KEY_CHARS = 200;
 const MAX_PROJECT_CHARS = 110;
@@ -40,21 +43,22 @@ const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 const keyArg = (v) => (typeof v === 'string' && v.length <= MAX_KEY_CHARS && splitKey(v) ? v : null);
 const projectArg = (v) => (typeof v === 'string' && v.length <= MAX_PROJECT_CHARS && validProject(v) ? v : null);
 
-/** Active first, the most useful first (never scanned last), then the archive. */
+/** Active first; the highest final score first (unrated last), then the most useful, then the newest; the archive last. */
 function byUse(a, b) {
   if (Boolean(a.archived) !== Boolean(b.archived)) return a.archived ? 1 : -1;
-  const ua = a.usefulness === null ? -1 : a.usefulness;
-  const ub = b.usefulness === null ? -1 : b.usefulness;
-  return ub - ua || a.title.localeCompare(b.title);
+  return byFinalScore(a, b) || b.created.localeCompare(a.created) || a.title.localeCompare(b.title);
 }
+
+const NO_USAGE = Object.freeze({ reads: new Map(), today: null });
 
 /**
  * One project's memories for the window. Superseded ones are history and stay out.
  * @param {[string, object][]} records
  * @param {string} project
  * @param {Set<string>} gone superseded keys
+ * @param {{reads: Map<string, number>, today: string|null}} [usage] memoryuse.recentUsage(): the reads the final score counts
  */
-function listItems(records, project, gone) {
+function listItems(records, project, gone, usage = NO_USAGE) {
   return records
     .filter(([key, r]) => r.project === project && !gone.has(key))
     .map(([key, r]) => ({
@@ -68,8 +72,64 @@ function listItems(records, project, gone) {
       last_used: r.last_used || null,
       archived: r.archived || null,
       ...scoreOf(r),
+      // Computed, never stored: {score: 0-100|null, parts: {usefulness, confidence, usage}}.
+      final: finalScore(r, { reads: usage.reads.get(key) || 0, today: usage.today }),
     }))
     .sort(byUse);
+}
+
+// --- memory health of one project -------------------------------------------------
+// Not src/memoryhealth.js: that one says whether every PC still syncs. This
+// says how well kept one project's memories are.
+
+/** Weights of the health parts, in percent; they add up to 100. */
+const HEALTH_WEIGHT_PCT = Object.freeze({ scored: 25, quality: 30, conflicts: 15, review: 15, backlog: 10, archived: 5 });
+/** An inbox entry that has waited longer than this is backlog. */
+const BACKLOG_DAYS = 7;
+/** The review flags that count against health; "never opened" is only a hint (memoryreview.js LOW_FLAGS). */
+const HEALTH_REVIEW_FLAGS = Object.freeze(['stale', 'anchor', 'disputed']);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const isDay = (v) => typeof v === 'string' && DATE_RE.test(v);
+const daysBetween = (from, to) => Math.floor((Date.parse(to) - Date.parse(from)) / DAY_MS);
+/** 100 when nothing is wrong, 0 when `bad` covers every memory counted. */
+const cleanShare = (bad, of) => 100 * (1 - Math.min(1, bad / Math.max(1, of)));
+
+/**
+ * How well kept one project's memories are. Pure.
+ * @param {object[]} items the project's memories as listItems() lists them (with `final`)
+ * @param {{flags: {kind: string}[]}[]} review the project's entries of the review list (memoryreview.reviewList items)
+ * @param {{a: string, b: string}[]} conflicts the project's open conflicts (memoryconflict.findConflicts)
+ * @param {{today?: string|null}} [opts] today = YYYY-MM-DD, for the inbox backlog; none = no backlog counted
+ * @returns {{score: number|null, parts: object|null}} null for a project without memories. parts =
+ *   {total, unscored, average, conflicts, review, backlog, backlogDays, archived}: counts, and the
+ *   average final score of the rated memories (null when none is rated)
+ */
+function projectHealth(items, review, conflicts, { today = null } = {}) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return { score: null, parts: null };
+  const active = list.filter((i) => !i.archived);
+  const rated = active.filter((i) => Number.isInteger(i.usefulness));
+  const finals = active.map((i) => i.final && i.final.score).filter(Number.isInteger);
+  const average = finals.length ? Math.round(finals.reduce((sum, n) => sum + n, 0) / finals.length) : null;
+  const pairs = Array.isArray(conflicts) ? conflicts : [];
+  const inConflict = new Set(pairs.flatMap((p) => [p.a, p.b])).size;
+  const flagged = (Array.isArray(review) ? review : []).filter((r) => Array.isArray(r.flags) && r.flags.some((f) => HEALTH_REVIEW_FLAGS.includes(f.kind))).length;
+  const backlog = isDay(today) ? active.filter((i) => i.confidence !== 'confirmed' && isDay(i.created) && daysBetween(i.created, today) > BACKLOG_DAYS).length : 0;
+  const archived = list.length - active.length;
+  const points = {
+    scored: active.length ? (100 * rated.length) / active.length : 0,
+    quality: average === null ? 0 : average,
+    conflicts: cleanShare(inConflict, active.length),
+    review: cleanShare(flagged, active.length),
+    backlog: cleanShare(backlog, active.length),
+    archived: cleanShare(archived, list.length),
+  };
+  const weighted = Object.entries(HEALTH_WEIGHT_PCT).reduce((sum, [part, weight]) => sum + weight * points[part], 0) / 100;
+  return {
+    score: Math.min(100, Math.max(0, Math.round(weighted))),
+    parts: { total: list.length, unscored: active.length - rated.length, average, conflicts: pairs.length, review: flagged, backlog, backlogDays: BACKLOG_DAYS, archived },
+  };
 }
 
 /**
@@ -86,11 +146,14 @@ function projectsOf(records, gone, enabled) {
 
 /**
  * @param {{ipcMain: object, dir: () => string, scanner: {start: Function, status: Function},
- *   enabled?: () => string[], onChanged?: () => void, now?: () => number, log?: {add: Function}|null}} deps
+ *   enabled?: () => string[], onChanged?: () => void, now?: () => number,
+ *   log?: {add: Function, read?: Function}|null, roots?: () => object}} deps
  *   scanner = memoryscan.createScanner(); enabled = projects with memory switched on;
- *   onChanged fires after a write (sync soon, repaint)
+ *   onChanged fires after a write (sync soon, repaint); log.read = this PC's memory log
+ *   (reads for the final score, disputes for the health line); roots = {<project>: its
+ *   folder on this PC}, for the anchor check of the health line
  */
-function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onChanged = () => {}, now = Date.now, log = null }) {
+function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onChanged = () => {}, now = Date.now, log = null, roots = () => ({}) }) {
   const guarded = (label, fn) => {
     try {
       const res = fn();
@@ -110,6 +173,38 @@ function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onC
     }
   };
 
+  /** This PC's memory log; without one, or when it fails, no reads and no disputes count. */
+  const events = () => {
+    if (!log || typeof log.read !== 'function') return [];
+    try {
+      return log.read() || [];
+    } catch (err) {
+      console.error('[memory] memory log unavailable:', errText(err));
+      return [];
+    }
+  };
+  const knownRoots = () => {
+    try {
+      return roots() || {};
+    } catch (err) {
+      console.error('[memory] project folders unavailable:', errText(err));
+      return {};
+    }
+  };
+  /** One project's health line (projectHealth); null when it cannot be worked out: it never hides the list. */
+  const healthOf = (records, project, items, evs) => {
+    try {
+      const today = isoDate(now());
+      const own = records.filter(([, r]) => r.project === project);
+      const review = reviewList({ records: own, today, events: evs, roots: knownRoots() }).items;
+      const pairs = findConflicts(records).filter((p) => (splitKey(p.a) || {}).project === project);
+      return projectHealth(items, review, pairs, { today });
+    } catch (err) {
+      console.error('[memory] health failed:', errText(err));
+      return null;
+    }
+  };
+
   ipcMain.handle('memory:list', (_event, rawProject) => {
     try {
       const { records } = scan(dir());
@@ -117,8 +212,10 @@ function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onC
       const projects = projectsOf(records, gone, enabledNow());
       const wanted = projectArg(rawProject);
       const project = wanted && projects.some((p) => p.project === wanted) ? wanted : projects.length ? projects[0].project : null;
-      const items = project ? listItems(records, project, gone) : [];
-      return { ok: true, projects, project, items: items.slice(0, MAX_LIST_ITEMS), total: items.length, scan: scanner.status() };
+      const evs = events();
+      const items = project ? listItems(records, project, gone, recentUsage(evs, now())) : [];
+      const health = project ? healthOf(records, project, items, evs) : null;
+      return { ok: true, projects, project, items: items.slice(0, MAX_LIST_ITEMS), total: items.length, scan: scanner.status(), health };
     } catch (err) {
       console.error('[memory] list failed:', errText(err));
       return { ok: false, reason: 'failed' };
@@ -152,4 +249,4 @@ function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onC
   });
 }
 
-module.exports = { registerMemoryBrainIpc, listItems, MAX_LIST_ITEMS };
+module.exports = { registerMemoryBrainIpc, listItems, projectHealth, HEALTH_WEIGHT_PCT, BACKLOG_DAYS, MAX_LIST_ITEMS };
