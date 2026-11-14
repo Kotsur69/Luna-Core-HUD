@@ -102,19 +102,43 @@ const POST_MERGE_STEPS = Object.freeze([
 ]);
 
 const SELF_CHECK_KEYS = ['tests', 'syntax', 'smoke'];
+// How many unmerged package ids the release-skip reason names.
+const MAX_UNFINISHED_IDS = 5;
+
+/**
+ * Why the run is not finished yet, or null when every package of the plan is
+ * pushed and merged into the base branch (by this pass or an earlier one)
+ * and none was skipped from this pass's merge.
+ * @param {Array<{id:string, state?:string, merged?:boolean, skipped?:boolean}>|undefined} packages
+ * @returns {string|null}
+ */
+function unfinishedReason(packages) {
+  if (!Array.isArray(packages) || packages.length === 0) return 'run not finished: no packages';
+  const open = packages.filter((p) => !p || p.state !== 'pushed' || p.merged !== true || p.skipped === true);
+  if (!open.length) return null;
+  const ids = open.slice(0, MAX_UNFINISHED_IDS).map((p) => (p && p.id) || '?');
+  const more = open.length > MAX_UNFINISHED_IDS ? ', ...' : '';
+  return `run not finished: ${open.length} package(s) not merged (${ids.join(', ')}${more})`;
+}
 
 /**
  * The release step runs only when Mati ticked it at Approve, at most once
- * per run (a later pass that merges more leaves a done release alone), and
- * only on a green self-check: its tests passed, nothing failed. The release
- * goes to every installed copy (auto-update), so a self-check that did not
- * run is not green. The rest (dirty tree, the merge not in the local
- * checkout, red tests, no gh) releaseCut refuses with its own reason.
+ * per run (a later pass that merges more leaves a done release alone), only
+ * once the whole run finished - every package pushed and merged, none
+ * stalled, failed, pending, running or skipped from the merge (a "Finish
+ * run" on a stalled run merges what is done but releases nothing; the pass
+ * that completes it releases) - and only on a green self-check: its tests
+ * passed, nothing failed. The release goes to every installed copy
+ * (auto-update), so a self-check that did not run is not green. The rest
+ * (dirty tree, the merge not in the local checkout, red tests, no gh)
+ * releaseCut refuses with its own reason.
  */
 function releaseGate(ctx) {
   if (!ctx.options || ctx.options.releaseAfter !== true) return false;
   const done = ctx.previous && ctx.previous.release;
   if (done && done.released === true) return false;
+  const unfinished = unfinishedReason(ctx.packages);
+  if (unfinished) return unfinished;
   const sc = ctx.selfCheck;
   if (!sc || typeof sc !== 'object') return 'self-check did not run';
   if (SELF_CHECK_KEYS.some((k) => sc[k] === 'failed')) return 'self-check failed';
@@ -138,6 +162,7 @@ function postMergeContext(plan, res, slug) {
     integrationBranch: branchFor(`${slug}-integration`),
     packages: plan.packages.map((p) => ({
       id: p.id,
+      state: p.state || null,
       branch: p.branch || null,
       merged: p.merged === true,
       skipped: skippedIds.has(p.id),
