@@ -27,6 +27,9 @@ test('--since takes a tag name or an ISO date; anything else is refused', () => 
   assert.deepEqual(parseSince('v0.28.0'), { tag: 'v0.28.0' });
   assert.deepEqual(parseSince('2026-11-01'), { date: Date.parse('2026-11-01T00:00:00Z'), label: '2026-11-01' });
   assert.equal(parseSince('2026-11-01T10:00:00+01:00').date, Date.parse('2026-11-01T09:00:00Z'));
+  // An offset that crosses midnight in UTC is still the day as written.
+  assert.equal(parseSince('2026-11-01T00:30:00+02:00').date, Date.parse('2026-10-31T22:30:00Z'));
+  assert.deepEqual(parseSince('v1.0.0+build'), { tag: 'v1.0.0+build' });
   for (const bad of ['2026-02-31', '2026-13-01', '--upload-pack=x', 'refs/tags/v1', 'v1..v2', 'v*', '', '-v1', 'a b']) {
     assert.throws(() => parseSince(bad), UsageError, bad);
   }

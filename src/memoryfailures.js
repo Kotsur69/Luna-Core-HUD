@@ -144,31 +144,50 @@ function uncoveredRepeats(repeats, records, project) {
   return repeats.filter((r) => !confirmed.some((record) => covers(record, r.signature)));
 }
 
-/** Whether a raw candidate of the model is about one of the failures. */
-function mentionsFailure(candidate, signature) {
+/**
+ * How much a raw candidate of the model is about a failure, 0 to 1: 1 when it
+ * covers it, else the share of the failure's words it names.
+ */
+function mentionShare(candidate, signature) {
   const title = typeof candidate.title === 'string' ? candidate.title : '';
   const body = typeof candidate.body === 'string' ? candidate.body : '';
-  if (covers({ title, body }, signature)) return true;
+  if (covers({ title, body }, signature)) return 1;
   const words = failureWords(signature);
-  if (!words.size) return false;
+  if (!words.size) return 0;
   const text = wordsOf(`${title} ${body}`);
   let shared = 0;
   for (const w of words) if (text.has(w)) shared++;
-  return shared / words.size >= MENTION_SHARE;
+  return shared / words.size;
 }
 
 /**
- * The model's answer with every candidate about a repeated failure scored at
- * least REPEATED_USEFULNESS_FLOOR. Applied before the extractor's filter, so a
- * low model score cannot drop the gotcha the digest asked for.
+ * The model's answer with the ONE candidate that best matches each repeated
+ * failure scored at least REPEATED_USEFULNESS_FLOOR (the digest asks for one
+ * gotcha per failure; other candidates that share some words keep their own
+ * score). Applied before the extractor's filter, so a low model score cannot
+ * drop the gotcha the digest asked for. The score only sorts the inbox: it
+ * never approves anything.
  * @param {unknown} answer the parsed model answer
  * @param {{signature: string}[]} repeats the failures the digest named
  * @returns {unknown} a new answer (the input is not changed)
  */
 function floorRepeated(answer, repeats) {
   if (!repeats.length || !isObject(answer) || !Array.isArray(answer.candidates)) return answer;
-  const candidates = answer.candidates.map((c) => {
-    if (!isObject(c) || !repeats.some((r) => mentionsFailure(c, r.signature))) return c;
+  const floored = new Set();
+  for (const { signature } of repeats) {
+    let best = -1;
+    let bestShare = MENTION_SHARE;
+    answer.candidates.forEach((c, i) => {
+      const share = isObject(c) ? mentionShare(c, signature) : 0;
+      if (share > bestShare || (best < 0 && share >= bestShare)) {
+        best = i;
+        bestShare = share;
+      }
+    });
+    if (best >= 0) floored.add(best);
+  }
+  const candidates = answer.candidates.map((c, i) => {
+    if (!floored.has(i)) return c;
     // A fraction (0-1 scale) or a missing score counts as no score at all.
     const score = typeof c.usefulness === 'number' && Number.isFinite(c.usefulness) && c.usefulness >= 1 ? c.usefulness : 0;
     return { ...c, usefulness: Math.max(REPEATED_USEFULNESS_FLOOR, score) };

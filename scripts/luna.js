@@ -75,7 +75,8 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   verify | retire <id>  say one of them is still true, or delete it on every PC
   stats                 approval rate of captured memories, per usefulness band, and how often memories are read   [--days n]
   notes                 markdown list of memories confirmed, superseded, archived and retired, titles only
-                        [--since <tag|YYYY-MM-DD>] [--all]   default: the latest v* tag of the current repository
+                        [--since <tag|YYYY-MM-DD>] [--all]   default: the latest v* tag; tags are read
+                        from the repository of the current folder, whatever --project says
 
   --project <host/owner/repo>   default: the repository of the current folder
   --dir <config folder>         default: LUNA_CONFIG_DIR, else this clone's config/ when its memory
@@ -459,7 +460,13 @@ function cmdStats({ configDir, project, values }) {
 // ---- notes: what the memory gained and lost since a release ------------------------
 
 /** A tag name as typed: no path, glob, option or `..` (it is passed to git as a ref). */
-const TAG_RE = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const TAG_RE = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
+/**
+ * Where git is started from. On Windows a bare `git` is looked up in the
+ * working folder first, so a cloned repository holding a git.exe would run
+ * it: git starts in Node's own folder and is pointed at the repository with -C.
+ */
+const GIT_START_DIR = path.dirname(process.execPath);
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 const GIT_TIMEOUT_MS = 15000;
 const execFileAsync = promisify(execFile);
@@ -473,18 +480,21 @@ const execFileAsync = promisify(execFile);
 function parseSince(value) {
   if (value === undefined) return { latest: true };
   if (ISO_DATE_RE.test(value)) {
-    const date = Date.parse(value.length === 10 ? `${value}T00:00:00Z` : value);
-    // Date.parse rolls 2026-02-31 over to March: the day must survive the round trip.
-    if (Number.isFinite(date) && new Date(date).toISOString().slice(0, 10) === value.slice(0, 10)) return { date, label: value };
+    const day = value.slice(0, 10);
+    // Date.parse rolls 2026-02-31 over to March: the calendar day alone must survive the round trip.
+    const dayAt = Date.parse(`${day}T00:00:00Z`);
+    const date = Date.parse(value.length === 10 ? `${day}T00:00:00Z` : value);
+    const realDay = Number.isFinite(dayAt) && new Date(dayAt).toISOString().slice(0, 10) === day;
+    if (realDay && Number.isFinite(date)) return { date, label: value };
     throw new UsageError(`--since: not a valid date: ${value}`);
   }
   if (TAG_RE.test(value)) return { tag: value };
   throw new UsageError('--since takes a tag name (v0.28.0) or an ISO date (2026-11-01)');
 }
 
-/** One git query in the current folder, without a shell; its first output line. */
+/** One git query about the repository of the current folder, without a shell; its first output line. */
 async function gitLine(args) {
-  const { stdout } = await execFileAsync('git', args, { cwd: process.cwd(), timeout: GIT_TIMEOUT_MS, windowsHide: true, encoding: 'utf8' });
+  const { stdout } = await execFileAsync('git', ['-C', process.cwd(), ...args], { cwd: GIT_START_DIR, timeout: GIT_TIMEOUT_MS, windowsHide: true, encoding: 'utf8' });
   return String(stdout).split(/\r?\n/)[0].trim();
 }
 
@@ -492,7 +502,7 @@ async function gitLine(args) {
 async function sinceMoment(value) {
   const since = parseSince(value);
   if (since.date !== undefined) return since;
-  const tag = since.tag || (await gitLine(['for-each-ref', '--sort=-creatordate', '--count=1', '--format=%(refname:short)', 'refs/tags/v*']));
+  const tag = since.tag || (await gitLine(['for-each-ref', '--sort=-creatordate', '--count=1', '--format=%(refname:strip=2)', 'refs/tags/v*']));
   if (!tag) throw new UsageError('no v* tag in this repository; pass --since <tag|YYYY-MM-DD>');
   if (!TAG_RE.test(tag)) throw new UsageError(`unexpected tag name from git: ${tag}`);
   const when = await gitLine(['for-each-ref', '--count=1', '--format=%(creatordate:iso-strict)', `refs/tags/${tag}`]);

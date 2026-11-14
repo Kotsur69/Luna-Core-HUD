@@ -341,9 +341,15 @@ test('a failure signature drops paths, numbers and hashes, so the same failure m
   assert.equal(windows, "error: enoent: no such file, open '<path>' at line");
   assert.equal(normalizeFailure("Cannot find module '/home/mati/repo/node_modules/foo/index.js' (commit 3f2a9c1d)"), "cannot find module '<path>' (commit )");
   assert.equal(normalizeFailure('AssertionError:   expected 2 to equal 3\tat 0xdeadbeef'), 'assertionerror: expected to equal at');
-  assert.equal(normalizeFailure('fatal: luna/pkg-b-y2 is at a1b2c3d4e5f6, run 550e8400-e29b-41d4-a716-446655440000'), 'fatal: <path> is at , run');
+  assert.equal(normalizeFailure('fatal: luna/pkg-b-y2 is at a1b2c3d4e5f6, run 550e8400-e29b-41d4-a716-446655440000'), 'fatal: <branch> is at , run');
   assert.equal(normalizeFailure('not ok 12 - ledger'), normalizeFailure('not ok 7 - ledger'));
   assert.ok(normalizeFailure('x '.repeat(400)).length <= 160);
+  // A quoted path keeps no part of itself, spaces and all.
+  assert.equal(normalizeFailure("EPERM: unlink 'C:\\Users\\Jan Kowalski\\repo\\x.js'"), "eperm: unlink '<path>'");
+  assert.equal(normalizeFailure('cannot read test/fixtures/a.json in src/memorylog.js'), 'cannot read <path> in <path>');
+  // Error codes name the error and stay; a ratio or a pair of words is no path.
+  assert.notEqual(normalizeFailure('error TS2304: cannot find name'), normalizeFailure('error TS2322: cannot find name'));
+  assert.equal(normalizeFailure('3/5 passed, pass/fail unknown'), '/ passed, pass/fail unknown');
 
   assert.deepEqual(runFailureSignatures(fixtureView()), [
     'verify: not ok - ledger',
@@ -351,6 +357,18 @@ test('a failure signature drops paths, numbers and hashes, so the same failure m
     'skipped merge: at verify: assertionerror: expected to equal',
   ]);
   assert.deepEqual(runFailureSignatures(null), []);
+  // A secret in a failure line is masked before it can reach the ledger.
+  const leaky = runFailureSignatures({ packages: [{ verifyTail: `Error: auth failed with ${FAKE_KEY}` }] });
+  assert.equal(leaky.length, 1);
+  assert.ok(!leaky[0].includes(FAKE_KEY), leaky[0]);
+});
+
+test('a runner count line is never the verify signature; the named failure is preferred', () => {
+  const sig = (verifyTail) => runFailureSignatures({ packages: [{ verifyTail }] });
+  assert.deepEqual(sig('# tests 5\n# pass 3\n# fail 2'), [], 'a tail of counts only says nothing about the failure');
+  assert.deepEqual(sig('ℹ tests 5\nℹ fail 0'), []);
+  assert.deepEqual(sig('# Subtest: cannot open the ledger\nnot ok 4 - ledger\n# fail 1'), ['verify: not ok - ledger']);
+  assert.deepEqual(sig('warning: 2 files failed to lint\nTypeError: x is not a function'), ['verify: typeerror: x is not a function']);
 });
 
 test('a failure seen in three runs puts a REPEATED FAILURE section in the third digest', async (t) => {
@@ -361,8 +379,8 @@ test('a failure seen in three runs puts a REPEATED FAILURE section in the third 
   assert.equal(s.state.prompts.length, 3);
   assert.doesNotMatch(s.state.prompts[0], /REPEATED FAILURE/);
   assert.doesNotMatch(s.state.prompts[1], /REPEATED FAILURE/);
-  assert.ok(s.state.prompts[2].includes('REPEATED FAILURE (seen 3 times): verify: not ok - ledger'));
-  assert.ok(s.state.prompts[2].includes('REPEATED FAILURE (seen 3 times): stall: nomarker'));
+  assert.ok(s.state.prompts[2].includes('REPEATED FAILURE (seen 3 times): "verify: not ok - ledger"'));
+  assert.ok(s.state.prompts[2].includes('REPEATED FAILURE (seen 3 times): "stall: nomarker"'));
   // Each run counts once, however many packages failed the same way.
   const seen = readFailureLedger(path.join(s.configDir, FAILURE_LEDGER_FILE), NOW).seen;
   assert.equal(seen.filter((e) => e.sig === 'verify: not ok - ledger').length, 3);
@@ -402,18 +420,21 @@ test('an observed memory does not count as covering: only a confirmed one does',
     body: 'Verify prints not ok 9 - ledger keeps order when the machine is saturated.',
   });
   for (const id of ['prun1', 'prun2', 'prun3']) await s.capture.capture(runOf(id, ledgerFailure()));
-  assert.ok(s.state.prompts[2].includes('REPEATED FAILURE (seen 3 times): verify: not ok - ledger keeps order'));
+  assert.ok(s.state.prompts[2].includes('REPEATED FAILURE (seen 3 times): "verify: not ok - ledger keeps order"'));
 });
 
 test('the candidate about a repeated failure is saved with usefulness of at least 80', async (t) => {
   const s = setup(t);
   const gotcha = candidate('Ledger keeps order test fails in parallel verify', { usefulness: 20 });
   const other = candidate('Do not junction node_modules into a worktree', { usefulness: 70 });
-  s.state.reply = () => (s.state.prompts.length < 3 ? reply() : reply(gotcha, other));
+  // Shares some words with the failure, but the gotcha above matches it better: only one is floored.
+  const near = candidate('Keep ledger writes atomic on Windows', { usefulness: 40 });
+  s.state.reply = () => (s.state.prompts.length < 3 ? reply() : reply(near, gotcha, other));
   for (const id of ['prun1', 'prun2', 'prun3']) await s.capture.capture(runOf(id, ledgerFailure()));
 
   const byTitle = Object.fromEntries(scan(s.dir).records.map(([, r]) => [r.title, r]));
   assert.equal(byTitle[gotcha.title].usefulness, 80);
+  assert.equal(byTitle[near.title].usefulness, 40, 'only the best match is floored');
   assert.equal(byTitle[other.title].usefulness, 70, 'a candidate about something else keeps its score');
 });
 

@@ -386,5 +386,7 @@ test('memory notes escape markdown in titles, so a title cannot become a link or
   const records = [memo('linky', { title: 'Click [here](http://evil.example) <img src=x> *now*' })];
   const events = [{ at: since + DAY_MS, ev: 'approved', key: key('linky'), type: 'gotcha' }];
   const text = memoryNotes({ records, events, since, project: PROJECT });
-  assert.ok(text.includes('- Click \\[here\\](http://evil.example) \\<img src=x\\> \\*now\\*'));
+  assert.ok(text.includes('- Click \\[here\\](http:\\/\\/evil.example) \\<img src=x\\> \\*now\\*'), text);
+  const bare = memoryNotes({ records: [memo('bare', { title: 'See https://evil.example and www.evil.example' })], events: [{ at: since + DAY_MS, ev: 'approved', key: key('bare'), type: 'gotcha' }], since });
+  assert.ok(bare.includes('- See https:\\/\\/evil.example and www\\.evil.example'), bare);
 });

@@ -417,7 +417,12 @@ const OTHER_TYPE = 'other';
  * HTML. Parentheses are left: without brackets they make no link.
  */
 const MARKDOWN_RE = /[\\`*_[\]<>|~]/g;
-const mdTitle = (title) => line(title, MAX_TITLE).replace(MARKDOWN_RE, (c) => `\\${c}`);
+/** What GitHub turns into a link on its own: `https://...` and `www.`. */
+const AUTOLINK_RE = /(:)(\/\/)|\b(www)(\.)/gi;
+const mdTitle = (title) =>
+  line(title, MAX_TITLE)
+    .replace(MARKDOWN_RE, (c) => `\\${c}`)
+    .replace(AUTOLINK_RE, (m, colon, slashes, www, dot) => (colon ? `${colon}\\/\\/` : `${www}\\${dot}`));
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 /**
