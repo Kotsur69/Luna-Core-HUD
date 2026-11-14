@@ -24,6 +24,14 @@
 //                 mockupFirst - LW 2.25b toggle, off by default: a clickable
 //                           prototype is approved before the real build
 //                 (a toggle is stored only while on)
+//                 toolkit - which MCP servers / CLIs the builder and asset
+//                           workers may use (src/lunasworkToolkit.js); unset or
+//                           broken = the adapter's default kit
+//                 spendCaps - per-run USD caps for the paid tools; unset =
+//                           lunasworkToolkit.DEFAULT_SPEND_CAPS_USD
+//   toolServers   per-PC MCP launch definitions by tool id (command/args or
+//                 url). env / headers hold only ${VAR} references: keys come
+//                 from LunaCore's environment, never from this file
 //
 // Optional staging fields (LW 3.28a + 3.29, flow in src/lunasworkStaging.js):
 //   stagingUrl             the Playtester tests this instead of a local launch
@@ -55,11 +63,13 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const paths = require('./paths');
 const { ROLES, MODEL_CHOICES, normalizeModels } = require('./lunasworkRules');
 const { keyFor } = require('./todo');
 const { CATEGORIES: LIGHTHOUSE_CATEGORIES, budgetsFrom } = require('./lunasworkLighthouse');
 const { SECOND_OPINION_CLIS } = require('./lunasworkSecondOpinion');
+const toolkitRules = require('./lunasworkToolkit');
 
 const FILE_NAME = 'lunaswork-settings.local.json';
 const defaultFile = () => paths.local(FILE_NAME);
@@ -321,13 +331,22 @@ function normalizeProject(raw) {
   if (profile) out.profile = profile;
   if (Object.keys(budgets).length) out.lighthouseBudgets = budgets;
   for (const t of TOGGLES) if (raw[t] === true) out[t] = true;
+  // Kept only when valid: a broken kit reads as the adapter's default.
+  if (raw.toolkit !== undefined) {
+    const { toolkit } = toolkitRules.validateToolkit(raw.toolkit, { home: os.homedir() });
+    if (toolkit) out.toolkit = toolkit;
+  }
+  if (raw.spendCaps !== undefined) {
+    const { caps } = toolkitRules.validateSpendCaps(raw.spendCaps);
+    if (caps && Object.keys(caps).length) out.spendCaps = caps;
+  }
   return Object.keys(out).length ? out : null;
 }
 
 /**
  * @param {unknown} raw parsed file content (or anything)
  * @returns {{models: Record<string,string>, freeFallback: boolean, secondOpinionOrder: string[],
- *   projects: Record<string,object>}}
+ *   toolServers: Record<string,object>, projects: Record<string,object>}}
  */
 function normalizeSettings(raw) {
   const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -342,6 +361,7 @@ function normalizeSettings(raw) {
     models: normalizeModels(src.models),
     freeFallback: src.freeFallback === true,
     secondOpinionOrder: normalizeCliOrder(src.secondOpinionOrder),
+    toolServers: toolkitRules.normalizeToolServers(src.toolServers),
     projects,
   };
 }
@@ -374,13 +394,26 @@ function togglesFor(settings, projectId) {
   return normalizeToggles(normalizeSettings(settings).projects[keyFor(projectId)]);
 }
 
+/** The project's tool kit: its own, else the default for its profile's adapter. */
+function toolkitFor(settings, projectId) {
+  const project = normalizeSettings(settings).projects[keyFor(projectId)];
+  const adapter = project && project.profile ? project.profile.adapter : DEFAULT_ADAPTER;
+  return toolkitRules.normalizeToolkit(project && project.toolkit, adapter, { home: os.homedir() });
+}
+
+/** Every paid tool's per-run cap for the project (its own over the defaults). */
+function spendCapsFor(settings, projectId) {
+  const project = normalizeSettings(settings).projects[keyFor(projectId)];
+  return toolkitRules.normalizeSpendCaps(project && project.spendCaps);
+}
+
 /**
  * Returns new settings with one project's entry replaced (no mutation).
  * A profile, budgets or a toggle that fail validation are reported and nothing changes.
  * @param {object} settings
  * @param {string|null|undefined} projectId
  * @param {{models?: object, profile?: object|null, lighthouseBudgets?: object|null,
- *   designVariants?: boolean, mockupFirst?: boolean}} patch null removes
+ *   designVariants?: boolean, mockupFirst?: boolean, toolkit?: object|null, spendCaps?: object|null}} patch null removes
  * @returns {{settings: object, reason: string|null}}
  */
 function withProject(settings, projectId, patch) {
@@ -405,6 +438,15 @@ function withProject(settings, projectId, patch) {
     if (!budgets) return { settings: s, reason };
     next.lighthouseBudgets = budgets;
   }
+  for (const [key, check] of [['toolkit', patchToolkit], ['spendCaps', patchSpendCaps]]) {
+    if (p[key] === null) {
+      delete next[key];
+    } else if (p[key] !== undefined) {
+      const { value, reason } = check(p[key]);
+      if (!value) return { settings: s, reason };
+      next[key] = value;
+    }
+  }
   for (const t of TOGGLES) {
     if (p[t] === undefined) continue;
     if (typeof p[t] !== 'boolean') return { settings: s, reason: `${t} must be true or false` };
@@ -412,6 +454,24 @@ function withProject(settings, projectId, patch) {
     else delete next[t];
   }
   return { settings: normalizeSettings({ ...s, projects: { ...s.projects, [key]: next } }), reason: null };
+}
+
+function patchToolkit(raw) {
+  const { toolkit, reason } = toolkitRules.validateToolkit(raw, { home: os.homedir() });
+  return { value: toolkit, reason };
+}
+
+function patchSpendCaps(raw) {
+  const { caps, reason } = toolkitRules.validateSpendCaps(raw);
+  return { value: caps, reason };
+}
+
+/** Returns new settings with the PC's tool server definitions replaced; invalid = unchanged + reason. */
+function withToolServers(settings, raw) {
+  const s = normalizeSettings(settings);
+  const { servers, reason } = toolkitRules.validateToolServers(raw);
+  if (!servers) return { settings: s, reason };
+  return { settings: { ...s, toolServers: servers }, reason: null };
 }
 
 // ---- disk -------------------------------------------------------------------------
@@ -460,7 +520,10 @@ module.exports = {
   profileFor,
   lighthouseBudgetsFor,
   togglesFor,
+  toolkitFor,
+  spendCapsFor,
   withProject,
+  withToolServers,
   readSettings,
   writeSettings,
 };

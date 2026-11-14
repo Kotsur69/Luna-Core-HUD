@@ -215,7 +215,8 @@ const { createErrorTracking } = require('./lunasworkErrorTracking');
 const { handbackDecisionLine, architectureBlock } = require('./lunasworkHandback');
 const { createLoopHooks } = require('./lunasworkLoopHooks');
 const { closePhase } = require('./lunasworkUsage');
-const { togglesFor } = require('./lunasworkSettings');
+const { togglesFor, spendCapsFor } = require('./lunasworkSettings');
+const { createToolGuard } = require('./lunasworkToolGuard');
 const { createVariantFlow } = require('./lunasworkVariantFlow');
 const { createPrototype } = require('./lunasworkPrototype');
 const { planAfterRun, startQueued } = require('./lunasworkQueue');
@@ -385,6 +386,17 @@ function createLunasWork(deps) {
     styleCheck: deps.styleCheck,
     logEvent: (text) => logEvent(text),
     logModel: (role, model, reason) => logModel(role, model, reason),
+  });
+  // Tool kit guardrails (src/lunasworkToolGuard.js): paid-tool spend caps, a tool that is down.
+  const toolGuard = createToolGuard({
+    run: () => run,
+    update: (fields) => update(fields),
+    logEvent: (text) => logEvent(text),
+    armWait: (until, reason) => armWait(until, reason),
+    fileCards: (cards) => cardBook.fileCards(run.projectId, run.id, cards),
+    now,
+    onToolDown: deps.onToolDown,
+    log,
   });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
@@ -968,6 +980,8 @@ function createLunasWork(deps) {
       free,
       // Set after a restart mid-build: the builder finishes that plan first.
       resumePlanId: run.current.planId,
+      // Paid tools past the run's spend cap: denied to every worker of this build.
+      cappedTools: toolGuard.cappedTools(),
       // Plans this run made may be replaced; anyone else's open plan may not.
       ownPlanIds: run.planIds,
       onPlan: (planId) => {
@@ -984,6 +998,8 @@ function createLunasWork(deps) {
       return armWait(now() + GODMODE_RETRY_MS, 'godModeBusy');
     }
     if (r.killed) requestStop('godModeKilled');
+    // A kit tool that is down: pause with a notification, never a retry loop.
+    else if (!r.ok && toolGuard.toolDown(r, 'builder')) return;
     // God Mode's own error (planner, launch, a discarded plan): try the build again.
     else if (!r.ok) return retryLater(`build: ${r.error || 'failed'}`);
     const files = conflictedPaths(r);
@@ -1054,6 +1070,12 @@ function createLunasWork(deps) {
       if (isLimit(res)) return limited(res, 'playtester');
       logModel('playtester', res.model, `${res.modelReason || 'setting'} (prototype navigation)`);
       return prototype.afterPlaytest(res);
+    }
+    // The app's tool (the Unity editor / its Pipeline) is down: pause, start it again after the wait.
+    if (res && toolGuard.toolDownOf(res)) {
+      transition('launching');
+      toolGuard.toolDown(res, 'playtester');
+      return;
     }
     const built = cardBook.builtCards(run.projectId);
     if (!res) res = await playtestAndStop('explore', checkList(built), run.current.variantTargets);
@@ -1561,6 +1583,10 @@ function createLunasWork(deps) {
       checkCommand,
       // LW 2.25: the project's toggles, pinned like the profile.
       toggles: togglesFor(deps.settings(), project.id),
+      // Tool kit: the paid tools' spend caps, pinned like the profile.
+      spendCaps: spendCapsFor(deps.settings(), project.id),
+      spend: {},
+      spendCapped: [],
       planIds: [],
     });
     if (!created || !created.profile) return refuse('failed', 'Could not create the run.');
@@ -1897,6 +1923,8 @@ function createLunasWork(deps) {
     handOver,
     handBack,
     applyWheel,
+    // Tool kit: book a paid generation before it runs ({tool, costUsd}); false = stop generating.
+    recordSpend: (payload) => toolGuard.recordSpend(payload),
     status,
     subscribe,
     godModeBlock,

@@ -176,11 +176,33 @@ function withTaskBrief(command, task, firstMessage) {
   // Allow rules learned from stalled prompts (God Mode idea #5). Single
   // quotes are literal in PowerShell and POSIX shells alike; the shape check
   // keeps a quote, `$` or backtick out of them.
-  const rules = Array.isArray(task.allowedTools) ? task.allowedTools.filter((r) => ALLOW_RULE_RE.test(r)) : [];
+  const rules = Array.isArray(task.allowedTools) ? task.allowedTools.filter((r) => TOOL_RULE_RE.test(r)) : [];
   if (rules.length && !/(^|\s)--allowed-?tools(\s|=|$)/i.test(cmd)) {
     parts.push('--allowedTools', ...rules.map((r) => `'${r}'`));
   }
+  parts.push(...kitFlags(task));
   return parts.join(' ');
+}
+
+/** An absolute path that fits a single-quoted shell argument, or null. */
+const quotablePath = (p) => (typeof p === 'string' && p && path.isAbsolute(p) && !UNSAFE_QUOTE_RE.test(p) ? `'${p}'` : null);
+
+/**
+ * The tool kit's flags of a Luna's Work worker task (src/lunasworkToolkitLaunch.js):
+ * deny rules always go on - more deny rules are never less safe - then the
+ * kit's --mcp-config and its art folders.
+ */
+function kitFlags(task) {
+  const out = [];
+  const denied = Array.isArray(task.disallowedTools) ? task.disallowedTools.filter((r) => TOOL_RULE_RE.test(r)) : [];
+  if (denied.length) out.push('--disallowedTools', ...denied.map((r) => `'${r}'`));
+  const config = quotablePath(task.mcpConfigPath);
+  if (config) out.push('--mcp-config', config);
+  for (const dir of Array.isArray(task.addDirs) ? task.addDirs : []) {
+    const quoted = quotablePath(dir);
+    if (quoted) out.push('--add-dir', quoted);
+  }
+  return out;
 }
 
 /** First message of a tab resumed on another Claude account. No quotes in it. */
@@ -232,8 +254,11 @@ function withPlainResume(command, uuid) {
 // flag on purpose: it is what the CLI does anyway.
 const WORKER_PERMISSION_MODES = ['acceptEdits', 'bypassPermissions'];
 const PERMISSION_DECIDED = /(^|\s)(--permission-mode|--dangerously-skip-permissions)(\s|=|$)/;
-// Same shape as orchestraSupervisor's ALLOW_RULE_RE.
-const ALLOW_RULE_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}(\([A-Za-z0-9 _.:*/@=-]{1,100}\))?$/;
+// Rules a worker task may carry: orchestraSupervisor's ALLOW_RULE_RE shape plus `~` / `+` inside the
+// parentheses (the tool kit's home-folder and refspec guards) and MCP server
+// names with a hyphen (mcp__higgsfield-bridge). Nothing a single-quoted
+// argument treats specially in PowerShell or a POSIX shell.
+const TOOL_RULE_RE = /^(?:[A-Za-z][A-Za-z0-9_]{0,63}(\([A-Za-z0-9 _.:*/@=~+-]{1,100}\))?|mcp__[A-Za-z0-9_-]{1,64}(__[A-Za-z0-9_-]{1,64})?)$/;
 
 // Extensions Windows will actually execute for a bare name. The empty string is
 // last on purpose: `claude` with no extension is the POSIX case and also catches

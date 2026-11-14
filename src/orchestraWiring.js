@@ -792,6 +792,8 @@ function builderDeps(projectId, ctx, self) {
       };
       return building() ? ctx.builder.workerSettings(base) : base;
     },
+    // The build's tool kit for one package's tab (lunasworkToolkit.js).
+    workerTools: (pkg) => (building() && typeof ctx.builder.workerTools === 'function' ? ctx.builder.workerTools(pkg) : null),
     // The Approve screen's / phone's worker model becomes the saved pref
     // (orchestra.js validates it first; writeUiPrefs allow-lists it again).
     saveWorkerModel: (model) => {
@@ -825,7 +827,7 @@ function builderDeps(projectId, ctx, self) {
  * @param {string|null} projectId the registry key this controller is bound to
  * @param {{
  *   registry: () => {get:Function, othersActive:Function, repoBusy:Function},
- *   builder: {isBuilding:Function, wrapPlanner:Function, workerSettings:Function, ownsMerge:Function, onChange:Function},
+ *   builder: {isBuilding:Function, wrapPlanner:Function, workerSettings:Function, workerTools?:Function, ownsMerge:Function, onChange:Function},
  *   secretGate: {wrapSelfCheck:Function, wrapPushBranch:Function},
  *   overnight: {suspendAwake:Function, restoreAwake:Function},
  *   sessions: Map<string, object>, send: (channel:string, payload:unknown) => void,

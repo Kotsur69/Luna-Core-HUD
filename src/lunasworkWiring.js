@@ -228,6 +228,7 @@ ${msg.text}` }),
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
+ *   notify?: (title:string, body:string)=>void (a desktop notification: a kit tool is down),
  *   runsDir?: ()=>string, mail?: {sender:object, prefs:object}, secretStore?: object,
  *   queue?: {read:()=>object, write:(q:object)=>boolean},
  *   widget?: {prepare:Function, revoke:Function} (lunasworkWidget.createWidget),
@@ -408,6 +409,10 @@ function createLunasWorkRuntime(ctx) {
     onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [onRunEndReport] : [])],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: milestoneMail ? [milestoneMail] : [],
+    // Tool kit: a tool that is down pauses the run - Mati gets a desktop notification.
+    onToolDown: typeof ctx.notify === 'function'
+      ? [(_run, down) => ctx.notify("Luna's Work paused", `${down.tool} is down (${down.role}). The run waits and tries again later.`)]
+      : [],
     queue: ctx.queue || fileQueueStore(),
     log: ctx.log,
   });

@@ -26,6 +26,12 @@
 //   ownsMerge()           the merge confirmation was given when Mati started
 //                         the Luna's Work run (a native dialog in main)
 //
+// Tool kit (src/lunasworkToolkit.js): workerTools(pkg) gives God Mode each
+// package tab's kit - the scene worker runs as the `asset` role, every other
+// package as `builder` - and wrapPlanner adds the kit's note (tools, skills,
+// guardrails) to every package prompt. Tools past their spend cap
+// (opts.cappedTools) are denied for the whole build.
+//
 // A Unity project (LW 3.36b) also gets UnityYAMLMerge as its merge driver
 // before each build, and makePlan an ownership map giving every scene and
 // prefab to the scene worker (LW 2.12's guard enforces it once merged).
@@ -37,6 +43,10 @@
 'use strict';
 
 const scene = require('./lunasworkScene');
+const { MAX_PROMPT_CHARS } = require('./orchestraPlan');
+
+// Between a package prompt and its tool kit note.
+const KIT_NOTE_GAP = '\n\n';
 
 const { MODEL_RANK, isClaudeModel, strongerModel } = require('./claudeModels');
 
@@ -94,8 +104,10 @@ function planCard(card) {
  *   view?:(projectId:string)=>object|null, planWait?:(projectId:string)=>object|null, finishRun?:Function},
  *   profileId:()=>string|null, env:()=>object, freeEnv?:()=>object|null,
  *   log?:(line:string)=>void, isUnityProject?:(repoPath:string)=>boolean,
- *   configureUnityMerge?:(repoPath:string)=>Promise<object>}} deps
+ *   configureUnityMerge?:(repoPath:string)=>Promise<object>,
+ *   toolsFor?:(req:{projectId:string, repoPath:string, role:string, capped:string[]})=>object|null}} deps
  *   isUnityProject / configureUnityMerge: lunasworkScene's, injectable for tests
+ *   toolsFor: lunasworkToolkitLaunch.createToolsFor() - no kit without it
  */
 function createGodModeBuilder(deps) {
   const log = deps.log || (() => {});
@@ -173,7 +185,8 @@ function createGodModeBuilder(deps) {
    * After a restart (resumePlanId = the plan this build made before) a
    * restored plan with pushed work is finished and merged instead.
    * @param {{projectId:string, repoPath:string, cards:object[], checkCommand:string, free?:boolean,
-   *   resumePlanId?:string|null, ownPlanIds?:string[], onPlan?:(planId:string)=>void, plannerModel?:string}} opts
+   *   resumePlanId?:string|null, ownPlanIds?:string[], onPlan?:(planId:string)=>void, plannerModel?:string,
+   *   cappedTools?:string[]}} opts cappedTools: paid tools past the run's spend cap
    *   ownPlanIds: plans this run made (replaceable); onPlan: the plan id, once made;
    *   plannerModel: God Mode's planner model (default: the strongest model of the cards)
    * @returns {Promise<object>} the onRunSettled result {planId, killed, integration, plan} plus ok,
@@ -194,6 +207,8 @@ function createGodModeBuilder(deps) {
     };
     active = {
       projectId: opts.projectId,
+      repoPath: opts.repoPath,
+      capped: Array.isArray(opts.cappedTools) ? opts.cappedTools.filter((t) => typeof t === 'string') : [],
       checkCommand: typeof opts.checkCommand === 'string' ? opts.checkCommand : '',
       models: new Map(cards.map((c) => [c.at, c.model])),
       cards,
@@ -257,6 +272,24 @@ function createGodModeBuilder(deps) {
     if (view.killed && !merging) active.settle({ planId: view.id, killed: true, integration: view.integration, plan: view });
   }
 
+  /** The kit of one package's role during a build; null when idle, without toolsFor or on a failure. */
+  function kitOf(pkg) {
+    if (!active || typeof deps.toolsFor !== 'function') return null;
+    const role = isObj(pkg) && pkg.id === scene.SCENE_WORKER_ID ? 'asset' : 'builder';
+    try {
+      return deps.toolsFor({ projectId: active.projectId, repoPath: active.repoPath, role, capped: active.capped });
+    } catch (err) {
+      log(`[lunaswork-build] tool kit (${role}) not applied: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /** God Mode's per-tab hook: the package's tool kit while a Luna's Work build runs. */
+  function workerTools(pkg) {
+    const kit = kitOf(pkg);
+    return kit ? { allowedTools: kit.allowedTools, disallowedTools: kit.disallowedTools, mcpConfigPath: kit.mcpConfigPath, addDirs: kit.addDirs } : null;
+  }
+
   /** God Mode's worker settings while a Luna's Work build runs; `base` untouched otherwise. */
   function workerSettings(base) {
     if (!active) return base;
@@ -274,9 +307,18 @@ function createGodModeBuilder(deps) {
       const res = await runPlanner(args);
       if (!active || !isObj(res) || !res.ok || !isObj(res.raw) || !Array.isArray(res.raw.packages)) return res;
       const modelled = res.raw.packages.map((p) => (isObj(p) ? { ...p, model: packageModel(p.todoAts, active.models, p.model) } : p));
-      const packages = scene.routeScenePackages(modelled, active.cards);
+      const packages = scene.routeScenePackages(modelled, active.cards).map(withKitNote);
       return { ...res, raw: { ...res.raw, packages } };
     };
+  }
+
+  /** The package prompt with its kit's note at the end, cut at the front to fit the planner's cap. */
+  function withKitNote(pkg) {
+    const kit = isObj(pkg) ? kitOf(pkg) : null;
+    if (!kit || typeof kit.note !== 'string' || !kit.note) return pkg;
+    const prompt = typeof pkg.prompt === 'string' ? pkg.prompt : '';
+    const room = Math.max(0, MAX_PROMPT_CHARS - kit.note.length - 2);
+    return { ...pkg, prompt: [prompt.slice(0, room), kit.note].filter(Boolean).join(KIT_NOTE_GAP) };
   }
 
   /**
@@ -292,6 +334,7 @@ function createGodModeBuilder(deps) {
     build,
     onChange,
     workerSettings,
+    workerTools,
     wrapPlanner,
     ownsMerge,
     isBuilding: (projectId) => !!active && (projectId === undefined || active.projectId === projectId),

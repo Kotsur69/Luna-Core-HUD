@@ -167,6 +167,8 @@ const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createTabResume } = require('./tabResume');
 const { createEditorAutosave } = require('./editorAutosave');
 const { createGodModeBuilder } = require('./lunasworkBuild');
+const { createToolsFor: createLunasworkToolsFor } = require('./lunasworkToolkitLaunch');
+const { readSettings: readLunasworkSettings } = require('./lunasworkSettings');
 const { createSecretStore, createSecretGate } = require('./lunasworkErrorTracking');
 const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { stagingLines } = require('./lunasworkStaging');
@@ -1362,6 +1364,8 @@ const lunasworkBuilder = createGodModeBuilder({
   profileId: () => activeProfileId,
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),
+  // Per-project tool kit of the build's workers (src/lunasworkToolkit.js).
+  toolsFor: createLunasworkToolsFor({ readSettings: () => readLunasworkSettings(), dir: userDir, log: (line) => console.info(line) }),
   log: (line) => console.info(line),
 });
 
@@ -1633,6 +1637,10 @@ const lunaswork = createLunasWorkRuntime({
     return response === 0;
   },
   powerSaveBlocker,
+  // A kit tool that is down paused the run (src/lunasworkToolGuard.js).
+  notify: (title, body) => {
+    if (Notification.isSupported()) new Notification({ title, body }).show();
+  },
   // Run report (<userDir>/runs/lunaswork-<id>.md + .html) and the run-end email.
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
   mail: { sender: reportMail.sender, prefs: reportMail.prefs },

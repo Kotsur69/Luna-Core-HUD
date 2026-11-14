@@ -1,0 +1,105 @@
+// ============================================================================
+// LunaCore - Luna's Work tool guardrails inside a run (src/lunaswork.js uses
+// it; the pure rules are in src/lunasworkToolkit.js)
+// ----------------------------------------------------------------------------
+//   recordSpend({tool, costUsd})  books one paid generation (Higgsfield, Meshy)
+//                                 against the run's cap, pinned at start
+//                                 (run.spendCaps). Past the cap: refused, the
+//                                 tool goes to run.spendCapped - every later
+//                                 worker of the run has it denied - and ONE
+//                                 card per tool is filed. The asset work calls
+//                                 this BEFORE it generates
+//   cappedTools()                 run.spendCapped, for the next build
+//   toolDown(result, role)        a step result that says a kit tool is down
+//                                 pauses the run (the usage-limit wait path:
+//                                 armWait, waitReason 'toolDown') for
+//                                 TOOL_DOWN_WAIT_MS with a notification, instead
+//                                 of retryLater's quick retries. true = handled
+//
+// Never throws: a failed hook or card write is a run-log line.
+// ============================================================================
+
+'use strict';
+
+const { checkSpend, spendCapCard, toolDownOf, normalizeSpend, normalizeSpendCaps, PAID_TOOLS } = require('./lunasworkToolkit');
+
+const TOOL_DOWN_WAIT_MS = 30 * 60 * 1000;
+const TOOL_DOWN_REASON = 'toolDown';
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const errText = (err) => (err instanceof Error ? err.message : String(err));
+
+/** What a stored run keeps of the guard: the caps pinned at start, the spend, the capped tools. */
+function cleanGuardFields(raw) {
+  const r = isObj(raw) ? raw : {};
+  return {
+    spendCaps: normalizeSpendCaps(r.spendCaps),
+    spend: normalizeSpend(r.spend),
+    spendCapped: [...new Set((Array.isArray(r.spendCapped) ? r.spendCapped : []).filter((t) => PAID_TOOLS.includes(t)))],
+  };
+}
+
+/**
+ * @param {{run:()=>object|null, update:(fields:object)=>void, logEvent:(text:string)=>void,
+ *   armWait:(until:number, reason:string)=>void, fileCards:(cards:object[])=>number[],
+ *   now:()=>number, onToolDown?:Array<(run:object, down:object)=>void>, log?:(line:string)=>void}} ctx
+ */
+function createToolGuard(ctx) {
+  const log = ctx.log || (() => {});
+  const hooks = Array.isArray(ctx.onToolDown) ? ctx.onToolDown : [];
+
+  /**
+   * @param {{tool?:unknown, costUsd?:unknown}} payload untrusted
+   * @returns {{ok:boolean, reason:string|null, tool?:string, spent?:number, cap?:number|null, remaining?:number|null}}
+   */
+  function recordSpend(payload) {
+    const run = ctx.run();
+    if (!run) return { ok: false, reason: 'noRun' };
+    const p = isObj(payload) ? payload : {};
+    const fields = cleanGuardFields(run);
+    if (fields.spendCapped.includes(p.tool)) return { ok: false, reason: 'capReached', tool: p.tool };
+    const res = checkSpend(fields, p.tool, p.costUsd);
+    const out = { ok: res.ok, reason: res.reason, tool: res.tool, spent: res.spent, cap: res.cap, remaining: res.remaining };
+    if (res.ok) {
+      if (PAID_TOOLS.includes(res.tool)) ctx.update({ spend: res.spend });
+      return out;
+    }
+    if (res.reason === 'capReached') capReached(res, fields);
+    return out;
+  }
+
+  function capReached(res, fields) {
+    ctx.update({ spendCapped: [...fields.spendCapped, res.tool] });
+    ctx.logEvent(`${res.tool} spend cap reached ($${res.spent.toFixed(2)} of $${res.cap.toFixed(2)}): generation stopped for this run`);
+    try {
+      const ats = ctx.fileCards([spendCapCard(res.tool, res.spent, res.cap)]);
+      if (!ats.length) ctx.logEvent(`${res.tool} spend cap: the card could not be filed`);
+    } catch (err) {
+      ctx.logEvent(`${res.tool} spend cap: the card could not be filed (${errText(err).slice(0, 150)})`);
+    }
+  }
+
+  const cappedTools = () => cleanGuardFields(ctx.run()).spendCapped;
+
+  /** @returns {boolean} true when the result meant a tool is down and the run now waits */
+  function toolDown(result, role) {
+    const down = toolDownOf(result);
+    const run = ctx.run();
+    if (!down || !run) return false;
+    const minutes = Math.round(TOOL_DOWN_WAIT_MS / 60000);
+    ctx.logEvent(`${role}: ${down.tool} is down (${down.detail.slice(0, 150)}) - the run pauses ${minutes} min instead of retrying`);
+    for (const fn of hooks) {
+      try {
+        Promise.resolve(fn({ ...run }, { ...down, role })).catch((err) => log(`[lunaswork] onToolDown failed: ${errText(err)}`));
+      } catch (err) {
+        log(`[lunaswork] onToolDown failed: ${errText(err)}`);
+      }
+    }
+    ctx.armWait(ctx.now() + TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON);
+    return true;
+  }
+
+  return { recordSpend, cappedTools, toolDown, toolDownOf };
+}
+
+module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, cleanGuardFields, createToolGuard };
