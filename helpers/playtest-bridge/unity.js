@@ -77,6 +77,20 @@ const UNITY_PIPELINE = Object.freeze({
   driver: pipelineDriver,
 });
 
+/**
+ * Unity Pipeline asset calls of the Luna's Work asset pipeline
+ * (src/lunasworkAssetPipeline.js): import a file written under Assets/, make a
+ * prefab from an imported model, a material from an imported texture. Paths
+ * are project-relative ("Assets/..."), built by LunaCore, never by a model.
+ * NOT verified against a live editor yet: if com.unity.pipeline names these
+ * commands differently, fix them here.
+ */
+const UNITY_PIPELINE_ASSETS = Object.freeze({
+  importAsset: (assetPath) => ['assets import', { path: assetPath }],
+  createPrefab: (sourcePath, prefabPath) => ['prefab create', { source: sourcePath, path: prefabPath }],
+  createMaterial: (texturePath, materialPath) => ['material create', { path: materialPath, texture: texturePath }],
+});
+
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /** The text items of an MCP tool result, joined. */
@@ -154,6 +168,7 @@ module.exports = {
   UNITY_MCP_TOOLS,
   UNITY_MCP,
   UNITY_PIPELINE,
+  UNITY_PIPELINE_ASSETS,
   UNITY_TRANSPORTS,
   DRIVER_TOOL,
   DRIVER_GROUP,

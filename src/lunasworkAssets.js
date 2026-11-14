@@ -18,6 +18,10 @@
 //              asset library, then import it into the Unity project. Its
 //              `files` name the asset's prefab, so src/lunasworkScene.js routes
 //              the card to the scene worker (the only one with the editor).
+//              On a Unity run the card carries the asset pipeline's brief
+//              (src/lunasworkAssetPipeline.js unityAssetBrief): files under
+//              Assets/<game>/Art/<Kind>/, sources under art/, the lunacore
+//              luna_asset_* tools, the art direction and the GPU rule.
 //   cost gate  costDecision: a batch over the list's "Batch limit" goes to the
 //              decision queue (lunasworkDecisions via the controller's ask).
 //              The capped batch goes on at once - the default answer is
@@ -54,6 +58,7 @@ const { slugify } = require('./lunasworkResearch');
 const { checkCwd } = require('./projects');
 const { normalizeTodos, runTag, MAX_DETAILS_CHARS } = require('./todorows');
 const { MAX_TASKS_PER_CALL } = require('./intake');
+const { KINDS, artRootOf, unityAssetBrief } = require('./lunasworkAssetPipeline');
 
 const ASSETS_FILE = 'ASSETS.md';
 const RENDERS_DIR = 'asset-renders';
@@ -317,16 +322,25 @@ const HOW = Object.freeze({
   library: 'Take it from an asset library (Blender MCP search_assets / import_asset: Poly Haven, Sketchfab, Poly Pizza). Check that its license allows use in the game.',
 });
 
-/** The builder card for one asset row (Critic card shape, lunasworkCritic.applyCards). */
-function assetCard(row) {
+/**
+ * The builder card for one asset row (Critic card shape, lunasworkCritic.applyCards).
+ * A Unity run's card names the asset pipeline (src/lunasworkAssetPipeline.js):
+ * its folders under the art root, its lunacore tools, the art direction.
+ * @param {object} row
+ * @param {{unity?:boolean, artRoot?:string}} [opts]
+ */
+function assetCard(row, opts = {}) {
   const slug = slugOf(row);
-  const prefab = `${UNITY_ART_DIR}/${slug}/${slug}.prefab`;
+  const unity = isObj(opts) && opts.unity === true;
+  const folder = unity ? `${artRootOf(opts.artRoot)}/${KINDS[row.type] ? KINDS[row.type].dir : KINDS.other.dir}` : `${UNITY_ART_DIR}/${slug}`;
+  const prefab = `${folder}/${slug}.prefab`;
+  const how = unity ? unityAssetBrief({ kind: row.type, slug, source: row.source, artRoot: opts.artRoot }) : [HOW[row.source]];
   const details = [
     `Make the game asset "${row.name}" from design/${ASSETS_FILE} (hash ${row.hash}).`,
     `Type: ${row.type}. Source: ${row.source}. Spec: ${row.spec || row.name}`,
-    HOW[row.source],
+    ...how,
     `Generate it once: before any generation call, read design/${ASSETS_FILE}. If a row with hash ${row.hash} or the name "${row.name}" is already done or approved with a file, reuse that file instead.`,
-    `Import it into the Unity project under ${UNITY_ART_DIR}/${slug}/ with a prefab ${prefab}.`,
+    `Import it into the Unity project under ${folder}/ with a prefab ${prefab}.`,
     `Save a render or screenshot of it to ${renderBase(row)}.png for the art-direction style check.`,
     `Last, in design/${ASSETS_FILE} set this row's File to the imported path and its Status to done.`,
   ].join('\n\n');
@@ -336,7 +350,7 @@ function assetCard(row) {
     text: `Asset: ${row.name} (${row.type})`,
     details: details.slice(0, MAX_DETAILS_CHARS),
     acceptance: [
-      `The asset is imported under ${UNITY_ART_DIR}/${slug}/ with a prefab`,
+      `The asset is imported under ${folder}/ with a prefab`,
       `${renderBase(row)}.png shows it`,
       `Its design/${ASSETS_FILE} row is done, with the file path`,
     ],
@@ -569,7 +583,7 @@ function styleCard(row, s) {
  * empty template.
  * @param {{todoStore:(projectId:string)=>{read:Function, write:Function, now?:Function},
  *   ask:(spec:object)=>{ok:boolean, id?:number, reason?:string},
- *   styleCheck?:(opts:object)=>Promise<object>, batchLimit?:number,
+ *   styleCheck?:(opts:object)=>Promise<object>, batchLimit?:number, artRoot?:()=>string,
  *   logEvent:(text:string)=>void, logModel?:(role:string, model:string, reason:string)=>void}} deps
  */
 function createAssetStep(deps) {
@@ -590,9 +604,11 @@ function createAssetStep(deps) {
   }
 
   /** Files the batch's cards; carded rows become queued. */
-  function card(rows, take, store, tag) {
+  function card(run, rows, take, store, tag) {
     if (!take.length) return rows;
-    const cards = new Map(take.map((r) => [r, assetCard(r)]));
+    const unity = isObj(run.profile) && run.profile.adapter === 'unity';
+    const artRoot = typeof deps.artRoot === 'function' ? deps.artRoot() : undefined;
+    const cards = new Map(take.map((r) => [r, assetCard(r, { unity, artRoot })]));
     const { ats, error } = fileCards(store, tag, [...cards.values()]);
     if (error) logEvent(`cards not saved (${oneLine(error, 120)}) - those assets stay planned`);
     const carded = take.filter((r) => ats.has(cards.get(r).text));
@@ -656,7 +672,7 @@ function createAssetStep(deps) {
       const limit = parsed.limit || defaultLimit;
       let rows = dedupeAssets(settleRows(parsed.rows, { decisions: run.decisions, cards: normalizeTodos(store.read()) }));
       const { take, ask } = selectBatch(rows, limit);
-      rows = card(gate(rows, ask, limit), take, store, tag);
+      rows = card(run, gate(rows, ask, limit), take, store, tag);
       rows = await styleCheck(run, rows, store, tag);
       // `now` is this pass's own flag (an `all` answer), never written.
       rows = rows.map(({ now, ...r }) => r);

@@ -17,6 +17,8 @@
 //        ## Notes             loop-hook failures and skips per iteration (graph
 //                             refresh, reviews, second opinion, i18n, Lighthouse)
 //        ## Evidence          the evidence folder of every iteration
+//        ## Generated assets  every asset the pipeline made: tool, prompt,
+//                             seed, cost, path (only when there are any)
 //        ## Timeline
 //   2. emails it, under God Mode's "Email me when a run finishes" setting
 //      (mailprefs.godmodeEmailOn). PLATEAU and RED mails carry the tail of
@@ -71,6 +73,7 @@ const { decisionLine } = require('./lunasworkDecisions');
 const { buildReturnPack } = require('./lunasworkReturn');
 const { createMilestoneMailer, screenshotAttachments } = require('./lunasworkMail');
 const { findDraftFiles } = require('./lunasworkLegal');
+const { assetReportLines, assetSpendUsd } = require('./lunasworkAssetPipeline');
 
 // The run email carries the HTML report and the return pack: room for three screenshots (gmailsend caps at 5).
 const RUN_MAIL_IMAGES = 3;
@@ -250,6 +253,13 @@ function evidence(run, forEmail) {
 
 const bullets = (items, none = '- none') => (items.length ? items.map((i) => `- ${i}`) : [none]);
 
+/** ## Generated assets: every made asset (tool, prompt, seed, cost, path); null when the run made none. */
+function assetSection(run) {
+  const items = assetReportLines(run.assets).slice(0, MAX_LIST);
+  if (!items.length) return null;
+  return { intro: `Paid generation this run: $${assetSpendUsd(run.assets).toFixed(2)}.`, items };
+}
+
 // ---- media: launch assets (C10) and demo videos (B13) -------------------------------
 
 /** A demo video: its full path locally, its place under LunaCore's runs/ in an email. */
@@ -378,6 +388,7 @@ function buildRunReport(run, extra = {}) {
     '',
     ...bullets(evidence(r, forEmail)),
     '',
+    ...sectionMarkdown('Generated assets', assetSection(r)),
     ...sectionMarkdown('Launch assets', launchSection(extra.media)),
     ...sectionMarkdown('Demo videos', demoSection(r, extra.media, forEmail)),
     '## Timeline',
@@ -450,6 +461,7 @@ function renderRunReportHtml(run, extra = {}) {
     h.section('Decisions', h.list(decisions(r), 'No decisions')),
     h.section('Notes', h.list(hookNotes(r), 'No notes')),
     h.section('Evidence', h.list(evidence(r, false), 'No evidence folder')),
+    mediaHtml('Generated assets', assetSection(r), 'No assets'),
     mediaHtml('Launch assets', launchSection(extra.media), 'No files'),
     mediaHtml('Demo videos', demoSection(r, extra.media, false), 'No video'),
   ].filter(Boolean).join('\n');

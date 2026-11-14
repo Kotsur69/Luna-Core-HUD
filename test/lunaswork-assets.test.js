@@ -199,11 +199,31 @@ test('an asset card goes to the scene worker, names its source and stays in scop
   const [card] = assetCards(store);
   assert.equal(card.text, 'Asset: Hero Ship (model)');
   assert.ok(card.tags.includes(RUN_TAG) && card.tags.includes('kind:missing'));
-  assert.ok(card.files.includes('Assets/Art/hero-ship/hero-ship.prefab'));
+  // A Unity run: the asset pipeline's folders, tools and rules.
+  assert.ok(card.files.includes('Assets/BladeBullet/Art/Models/hero-ship.prefab'));
   assert.match(card.details, /Blender MCP/);
+  assert.match(card.details, /blender-game-assets skill/);
+  assert.match(card.details, /luna_asset_blender/);
+  assert.match(card.details, /art\/blender\/hero-ship\.blend/);
+  assert.match(card.details, /3D toon \/ cel-shaded characters and props on a 2D plane/);
+  assert.match(card.details, /AMD GPU/);
+  assert.match(card.details, /ONLY through luna_asset_higgsfield/);
   assert.match(card.details, /design\/asset-renders\/hero-ship\.png/);
   assert.equal(require('../src/lunasworkScene.js').isSceneCard(card), true);
   assert.equal(scopeCheck(card, 'a puzzle game about gardens').inScope, true);
+});
+
+test('a generated 2D asset card names ComfyUI for drafts and Higgsfield for finals; a non-Unity card keeps the old folder', () => {
+  const [row] = A.parseAssetList(`${HEADER}\n| Slash FX | vfx | red arc | generated |  |  |  |  |`).rows;
+  const card = A.assetCard(row, { unity: true, artRoot: 'Assets/Game/Art' });
+  assert.ok(card.files.includes('Assets/Game/Art/VFX/slash-fx.prefab'));
+  assert.match(card.details, /luna_asset_comfy/);
+  assert.match(card.details, /art\/comfyui\/runs\//);
+  assert.match(card.details, /luna_asset_higgsfield/);
+  assert.match(card.details, /higgsfield-media skill/);
+  const plain = A.assetCard(row);
+  assert.ok(plain.files.includes('Assets/Art/slash-fx/slash-fx.prefab'));
+  assert.doesNotMatch(plain.details, /luna_asset_/);
 });
 
 // ---- cost gate ------------------------------------------------------------------------

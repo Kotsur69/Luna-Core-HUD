@@ -168,7 +168,9 @@ const { createTabResume } = require('./tabResume');
 const { createEditorAutosave } = require('./editorAutosave');
 const { createGodModeBuilder } = require('./lunasworkBuild');
 const { createToolsFor: createLunasworkToolsFor } = require('./lunasworkToolkitLaunch');
-const { readSettings: readLunasworkSettings } = require('./lunasworkSettings');
+const { readSettings: readLunasworkSettings, assetToolsFor: lunasworkAssetToolsFor } = require('./lunasworkSettings');
+const { createAssetToolsFor: createLunasworkAssetTools } = require('./lunasworkAssetTools');
+const { isUnityProject } = require('./lunasworkScene');
 const { createSecretStore, createSecretGate } = require('./lunasworkErrorTracking');
 const { createLunasWorkRuntime, createMachineRuntime, createAskRuntime, wireDecisionSync } = require('./lunasworkWiring');
 const { stagingLines } = require('./lunasworkStaging');
@@ -1300,9 +1302,38 @@ const intakeServer = new IntakeServer({
       // God Mode workers must never tick cards; only the user's own tabs may.
       canMarkDone: !orchestraRuns.ownsSession(sessionId),
       memory: memoryFor(session),
+      assets: lunasworkAssetsFor(sessionId, session),
     };
   },
 });
+
+// Luna's Work asset tools (src/lunasworkAssetTools.js): luna_asset_blender /
+// _comfy / _higgsfield. Built per request from the per-PC assetTools settings.
+const lunasworkAssetTools = createLunasworkAssetTools({
+  assetTools: () => lunasworkAssetToolsFor(readLunasworkSettings()),
+  env: () => orchestraToolEnv(),
+  log: (line) => console.info(line),
+});
+
+/**
+ * The asset tools of one tab: only a God Mode worker of the project a Luna's
+ * Work build runs on right now, working in a Unity project folder. Its files
+ * go into that worker's own folder (its worktree); paid generation is booked
+ * against the run's spend cap and every asset lands in the run report.
+ */
+function lunasworkAssetsFor(sessionId, session) {
+  if (!orchestraRuns.ownsSession(sessionId)) return null;
+  const build = lunasworkBuilder.activeBuild();
+  if (!build || build.projectId !== session.projectId || !lunaswork.isActiveOn(session.projectId)) return null;
+  const cwd = typeof session.cwd === 'string' && path.isAbsolute(session.cwd) ? session.cwd : null;
+  if (!cwd || !isUnityProject(cwd)) return null;
+  return lunasworkAssetTools({
+    repoPath: cwd,
+    recordSpend: (payload) => lunaswork.recordSpend(payload),
+    recordAsset: (entry) => lunaswork.recordAsset(entry),
+    cappedTools: () => lunaswork.cappedTools(),
+  });
+}
 
 // God Mode v2 run controller. Briefs live in <userDir>/tasks (gitignored in a
 // dev clone): outside the worktree, so a worker's `git add -A` never commits

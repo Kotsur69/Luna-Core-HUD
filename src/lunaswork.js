@@ -384,6 +384,7 @@ function createLunasWork(deps) {
     todoStore: (projectId) => deps.todoStore(projectId),
     ask: (spec) => ask(spec),
     styleCheck: deps.styleCheck,
+    artRoot: deps.assetArtRoot,
     logEvent: (text) => logEvent(text),
     logModel: (role, model, reason) => logModel(role, model, reason),
   });
@@ -1589,6 +1590,7 @@ function createLunasWork(deps) {
       spendCaps: spendCapsFor(deps.settings(), project.id),
       spend: {},
       spendCapped: [],
+      assets: [],
       planIds: [],
     });
     if (!created || !created.profile) return refuse('failed', 'Could not create the run.');
@@ -1927,6 +1929,9 @@ function createLunasWork(deps) {
     applyWheel,
     // Tool kit: book a paid generation before it runs ({tool, costUsd}); false = stop generating.
     recordSpend: (payload) => toolGuard.recordSpend(payload),
+    // Asset pipeline (src/lunasworkAssetPipeline.js): one made asset for the run report.
+    recordAsset: (entry) => toolGuard.recordAsset(entry),
+    cappedTools: () => toolGuard.cappedTools(),
     status,
     subscribe,
     godModeBlock,

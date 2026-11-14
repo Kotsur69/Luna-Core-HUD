@@ -9,6 +9,8 @@
 //                                 worker of the run has it denied - and ONE
 //                                 card per tool is filed. The asset work calls
 //                                 this BEFORE it generates
+//   recordAsset(entry)            logs one made asset (tool, prompt, seed,
+//                                 cost, path) in run.assets for the run report
 //   cappedTools()                 run.spendCapped, for the next build
 //   toolDown(result, role)        a step result that says a kit tool is down
 //                                 pauses the run (the usage-limit wait path:
@@ -25,8 +27,11 @@
 'use strict';
 
 const { checkSpend, spendCapCard, toolDownOf, normalizeSpend, normalizeSpendCaps, PAID_TOOLS } = require('./lunasworkToolkit');
+const { cleanAssetEntry } = require('./lunasworkAssetPipeline');
 
 const TOOL_DOWN_WAIT_MS = 30 * 60 * 1000;
+// The run report's asset log (lunasworkAssetPipeline): the newest entries win.
+const MAX_ASSET_ENTRIES = 500;
 const TOOL_DOWN_REASON = 'toolDown';
 // 6 x 30 min: a tool still down after three hours is a setup problem, not a blip.
 const MAX_TOOL_DOWN_PAUSES = 6;
@@ -43,6 +48,7 @@ function cleanGuardFields(raw) {
     spend: normalizeSpend(r.spend),
     spendCapped: [...new Set((Array.isArray(r.spendCapped) ? r.spendCapped : []).filter((t) => PAID_TOOLS.includes(t)))],
     toolDownPauses: Number.isInteger(r.toolDownPauses) && r.toolDownPauses > 0 ? Math.min(r.toolDownPauses, MAX_TOOL_DOWN_PAUSES) : 0,
+    assets: (Array.isArray(r.assets) ? r.assets : []).map(cleanAssetEntry).filter(Boolean).slice(-MAX_ASSET_ENTRIES),
   };
 }
 
@@ -89,6 +95,20 @@ function createToolGuard(ctx) {
 
   const cappedTools = () => cleanGuardFields(ctx.run()).spendCapped;
 
+  /**
+   * Logs one made asset for the run report (tool, prompt, seed, cost, path).
+   * @param {unknown} entry untrusted: validated by cleanAssetEntry
+   * @returns {boolean} whether it was kept
+   */
+  function recordAsset(entry) {
+    const run = ctx.run();
+    if (!run || run.phase === DONE_PHASE) return false;
+    const clean = cleanAssetEntry(entry);
+    if (!clean) return false;
+    ctx.update({ assets: [...cleanGuardFields(run).assets, clean].slice(-MAX_ASSET_ENTRIES) });
+    return true;
+  }
+
   /** @returns {boolean} true when the result meant a tool is down and the run now waits */
   function toolDown(result, role) {
     const down = toolDownOf(result);
@@ -113,7 +133,7 @@ function createToolGuard(ctx) {
     return true;
   }
 
-  return { recordSpend, cappedTools, toolDown, toolDownOf };
+  return { recordSpend, recordAsset, cappedTools, toolDown, toolDownOf };
 }
 
-module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, cleanGuardFields, createToolGuard };
+module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, MAX_ASSET_ENTRIES, cleanGuardFields, createToolGuard };

@@ -32,6 +32,9 @@
 //   toolServers   per-PC MCP launch definitions by tool id (command/args or
 //                 url). env / headers hold only ${VAR} references: keys come
 //                 from LunaCore's environment, never from this file
+//   assetTools    per-PC asset pipeline settings (src/lunasworkAssetPipeline.js
+//                 normalizeAssetTools): comfyuiPort (8188), blenderPort (9876),
+//                 higgsfieldUsdPerCredit (0.1), artRoot (Assets/BladeBullet/Art)
 //
 // Optional staging fields (LW 3.28a + 3.29, flow in src/lunasworkStaging.js):
 //   stagingUrl             the Playtester tests this instead of a local launch
@@ -70,6 +73,7 @@ const { keyFor } = require('./todo');
 const { CATEGORIES: LIGHTHOUSE_CATEGORIES, budgetsFrom } = require('./lunasworkLighthouse');
 const { SECOND_OPINION_CLIS } = require('./lunasworkSecondOpinion');
 const toolkitRules = require('./lunasworkToolkit');
+const { normalizeAssetTools } = require('./lunasworkAssetPipeline');
 
 const FILE_NAME = 'lunaswork-settings.local.json';
 const defaultFile = () => paths.local(FILE_NAME);
@@ -362,8 +366,14 @@ function normalizeSettings(raw) {
     freeFallback: src.freeFallback === true,
     secondOpinionOrder: normalizeCliOrder(src.secondOpinionOrder),
     toolServers: toolkitRules.normalizeToolServers(src.toolServers),
+    assetTools: normalizeAssetTools(src.assetTools),
     projects,
   };
+}
+
+/** The asset pipeline's per-PC settings (ports, Higgsfield credit price, art root). */
+function assetToolsFor(settings) {
+  return normalizeSettings(settings).assetTools;
 }
 
 function defaultSettings() {
@@ -522,6 +532,7 @@ module.exports = {
   togglesFor,
   toolkitFor,
   spendCapsFor,
+  assetToolsFor,
   withProject,
   withToolServers,
   readSettings,
