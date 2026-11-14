@@ -27,7 +27,7 @@ const { createConfigSync } = require('./configsync');
 const { createMemoryProvider, scan } = require('./memorystore');
 const { createHealthProvider, touch, summarize } = require('./memoryhealth');
 const { readEnabled } = require('./memoryprojects');
-const { splitKey } = require('./memoryrecord');
+const { splitKey, extraFields } = require('./memoryrecord');
 const { createNoteProvider, projectOfNoteKey } = require('./memorynote');
 const { scrub } = require('./hostscrub');
 
@@ -48,9 +48,22 @@ function memoryPaths(configDir) {
   };
 }
 
-/** Whether the secret scanner would change anything in the text of a memory or of a "where we stopped" note. */
+/** A carried key (lowercase snake_case) whose last word says its value is a secret. */
+const SECRET_KEY_TAIL_RE = /(?:^|_)(?:key|apikey|token|secret|password|passwd|pwd)$/;
+
+/**
+ * Whether the secret scanner would change anything in the text of a memory or
+ * of a "where we stopped" note. The fields a newer version wrote (record.extra)
+ * leave the machine too, so their values are scanned as well. A key that names a
+ * secret as its last word (db_password, api_key) is scanned as `key=value`: the
+ * scrubber knows a secret by its name only in that shape, and the joined text
+ * still holds the whole value for every other rule. Any other key is left out,
+ * because the scrubber also flags names like token_count or password_hint, and
+ * one such harmless field would hold the whole memory back from the sync.
+ */
 function hasSecret(record) {
-  return [record.title, record.body, record.source, record.text].some((s) => typeof s === 'string' && scrub(s) !== s);
+  const carried = extraFields(record.extra).map(([key, value]) => (SECRET_KEY_TAIL_RE.test(key) ? `${key}=${value}` : value));
+  return [record.title, record.body, record.source, record.text, ...carried].some((s) => typeof s === 'string' && scrub(s) !== s);
 }
 
 /** A unit whose text the secret scanner guards: a memory or a note (src/memorynote.js). */

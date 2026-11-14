@@ -30,11 +30,19 @@
 // folders agree on it; `global` holds what is true everywhere.
 //
 // Everything here is untrusted input at some point (a hand-edited file, a row
-// another machine wrote), so checkRecord() rebuilds the record field by field
-// and drops what it does not know.
+// another machine wrote), so checkRecord() rebuilds the record field by field.
+// A top-level field it does not know (one a newer LunaCore added) is not
+// dropped: it rides along in `extra` ([[key, rawValue], ...], file order) and
+// is written back after the known ones, so an older PC that rewrites the file
+// does not strip it. Carried only: never shown, searched or sent to a model.
+// Only a one-line `key: value` field is carried. A nested block (`meta:` with
+// indented lines), a key outside lowercase snake_case and a value over the cap
+// are still dropped on a rewrite.
 // ============================================================================
 
 'use strict';
+
+const { RECENT_READ_DAYS } = require('./memoryuse');
 
 const TYPES = ['decision', 'gotcha', 'how-to', 'project-fact', 'preference', 'domain', 'digest', 'reference'];
 const CONFIDENCE = ['confirmed', 'observed', 'inferred'];
@@ -67,6 +75,19 @@ const NUMBER_TEXT_RE = /^\s*-?\d+(\.\d+)?\s*$/;
 const MAX_USEFULNESS = USEFULNESS_MAX;
 const MAX_USEFULNESS_NOTE = 200;
 
+/** Every field this version reads or writes. Anything else in a file is carried in `extra`. */
+const KNOWN_FIELDS = new Set([
+  'id', 'type', 'project', 'area', 'title', 'created', 'last_verified', 'source', 'confidence',
+  'usefulness', 'usefulness_note', 'usefulness_at', 'last_used', 'archived', 'conflicts', 'compatible',
+  'supersedes', 'links', 'body', 'extra',
+]);
+/** A carried field's name: plain snake_case, as every field of a memory file is. */
+const EXTRA_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+const MAX_EXTRA_VALUE = 500;
+const MAX_EXTRA_FIELDS = 20;
+/** A carried value goes back into the file as one line: nothing that ends the line or hides text. */
+const EXTRA_BAD_CHAR_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{E0000}-\u{E007F}]/u;
+
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
 // Control characters (terminal escapes, NUL), invisible format characters
@@ -92,6 +113,41 @@ function usefulnessOf(raw) {
   if (!Number.isFinite(n)) return undefined;
   return Math.min(USEFULNESS_MAX, Math.max(USEFULNESS_MIN, Math.round(n)));
 }
+
+const unsafeKey = (k) => k === '__proto__' || Object.hasOwn(Object.prototype, k);
+
+/** One carried value: the raw frontmatter text, one line, or null. Never cleaned: carried as it is, or dropped. */
+function extraValue(raw) {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  if (!value || value.length > MAX_EXTRA_VALUE || !value.isWellFormed() || EXTRA_BAD_CHAR_RE.test(value)) return null;
+  return value;
+}
+
+/**
+ * The fields a newer LunaCore wrote and this one does not know. They are only
+ * carried: a PC on older code that rewrites a memory (approve, verify, decay,
+ * a conflict settled) must not strip them, or the sync would spread the loss
+ * to every PC. Never shown, searched, injected or sent to a model.
+ * A bad name or value is dropped; it never fails the record.
+ * @param {unknown} list [[key, rawValue], ...] in file order
+ * @returns {[string, string][]} at most MAX_EXTRA_FIELDS; a repeated key keeps its first place and its last value
+ */
+function extraFields(list) {
+  if (!Array.isArray(list)) return [];
+  const kept = new Map();
+  for (const pair of list) {
+    if (!Array.isArray(pair) || pair.length !== 2) continue;
+    const [key, raw] = pair;
+    if (typeof key !== 'string' || !EXTRA_KEY_RE.test(key) || KNOWN_FIELDS.has(key) || unsafeKey(key)) continue;
+    const value = extraValue(raw);
+    if (value === null || (!kept.has(key) && kept.size >= MAX_EXTRA_FIELDS)) continue;
+    kept.set(key, value);
+  }
+  return [...kept];
+}
+
+const recordBytes = (record) => Buffer.byteLength(JSON.stringify(record), 'utf8');
 
 /** `global` or a normalised remote; never a path segment like `..`. */
 function validProject(p) {
@@ -163,8 +219,11 @@ function checkRecord(raw) {
     links: refs(raw.links).filter((x) => x !== raw.id),
     body,
   };
-  if (Buffer.byteLength(JSON.stringify(record), 'utf8') > MAX_RECORD_BYTES) return { error: 'record-too-big' };
-  return { record };
+  if (recordBytes(record) > MAX_RECORD_BYTES) return { error: 'record-too-big' };
+  // Carried fields never fail the record: the last ones are dropped until it fits.
+  const extra = extraFields(raw.extra);
+  while (extra.length && recordBytes({ ...record, extra }) > MAX_RECORD_BYTES) extra.pop();
+  return { record: extra.length ? { ...record, extra } : record };
 }
 
 const isDate = (v) => typeof v === 'string' && DATE_RE.test(v);
@@ -200,6 +259,62 @@ const scoreOf = (record) => ({
   usefulness: Number.isInteger(record.usefulness) ? record.usefulness : null,
   usefulness_note: record.usefulness_note || null,
 });
+
+// --- the final score ---------------------------------------------------------------
+// One 0-100 number to sort by: mostly how useful a memory is, a little whether
+// Mati approved it and whether it is being read. Computed on demand, never
+// stored in the file: no new field, no sync traffic.
+
+/** Weights of the final score's parts, in percent; they add up to 100. */
+const FINAL_WEIGHT_PCT = Object.freeze({ usefulness: 70, confidence: 15, usage: 15 });
+/** Confidence as points of its part. `inferred` is a weaker claim than `observed`. */
+const CONFIDENCE_POINTS = Object.freeze({ confirmed: 100, observed: 50, inferred: 25 });
+/** Reads in the window that earn the whole usage part. */
+const USAGE_SATURATION_READS = 5;
+/** Reads are counted over this many days, and a `last_used` this recent counts as one read. */
+const USAGE_WINDOW_DAYS = RECENT_READ_DAYS;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Whether `lastUsed` lies within USAGE_WINDOW_DAYS before `today` (a future date, from a bad sync, does not count). */
+function usedRecently(lastUsed, today) {
+  if (!isDate(lastUsed) || !isDate(today) || lastUsed > today) return false;
+  return (Date.parse(today) - Date.parse(lastUsed)) / DAY_MS <= USAGE_WINDOW_DAYS;
+}
+
+/**
+ * A memory's final score. Pure.
+ * @param {object} record a checked record
+ * @param {{reads?: number, today?: string|null}} [usage] reads = memory_search hits and
+ *   memory_get opens of this memory on this PC in the last USAGE_WINDOW_DAYS
+ *   (memoryuse.readCounts); today = YYYY-MM-DD, for the `last_used` rule
+ * @returns {{score: number|null, parts: {usefulness: number|null, confidence: string, usage: number}}}
+ *   score = null while the memory has no usefulness score (shown as "?");
+ *   parts.usage = the reads counted (before saturation)
+ */
+function finalScore(record, { reads = 0, today = null } = {}) {
+  const r = isPlainObject(record) ? record : {};
+  const usefulness = usefulnessOf(r.usefulness) ?? null;
+  const confidence = CONFIDENCE.includes(r.confidence) ? r.confidence : 'observed';
+  const counted = typeof reads === 'number' && Number.isFinite(reads) && reads > 0 ? Math.floor(reads) : 0;
+  const usage = Math.max(counted, usedRecently(r.last_used, today) ? 1 : 0);
+  const parts = { usefulness, confidence, usage };
+  if (usefulness === null) return { score: null, parts };
+  const usagePoints = (Math.min(usage, USAGE_SATURATION_READS) / USAGE_SATURATION_READS) * 100;
+  const weighted =
+    (FINAL_WEIGHT_PCT.usefulness * usefulness + FINAL_WEIGHT_PCT.confidence * CONFIDENCE_POINTS[confidence] + FINAL_WEIGHT_PCT.usage * usagePoints) / 100;
+  return { score: Math.min(USEFULNESS_MAX, Math.max(USEFULNESS_MIN, Math.round(weighted))), parts };
+}
+
+/**
+ * Sort order of the memory lists: final score high to low, unscored last; a tie
+ * by usefulness. Equal ones keep their order (Array.prototype.sort is stable),
+ * so the caller sorts newest first before.
+ * @param {{final: {score: number|null}, usefulness: number|null}} a list items
+ */
+function byFinalScore(a, b) {
+  const rank = (score) => (Number.isInteger(score) ? score : -1);
+  return rank(b.final.score) - rank(a.final.score) || rank(b.usefulness) - rank(a.usefulness);
+}
 
 /** A clean record, or null. */
 function normalizeRecord(raw) {
@@ -237,11 +352,10 @@ function parseValue(text) {
     .filter((x) => x !== '');
 }
 
-const unsafeKey = (k) => k === '__proto__' || Object.hasOwn(Object.prototype, k);
-
 /**
  * @param {string} text a markdown file
- * @returns {{front: object, body: string}|null} null when there is no frontmatter block
+ * @returns {{front: object, body: string, fields: [string, string][]}|null} null when there
+ *   is no frontmatter block; fields = every top-level `key: value` line as raw text, in file order
  */
 function parseFrontmatter(text) {
   if (typeof text !== 'string') return null;
@@ -250,6 +364,7 @@ function parseFrontmatter(text) {
   const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
   if (end < 0) return null;
   const front = {};
+  const fields = [];
   let parent = null;
   for (const line of lines.slice(1, end)) {
     if (!line.trim() || line.trim().startsWith('#')) continue;
@@ -264,9 +379,10 @@ function parseFrontmatter(text) {
     } else if (!indent) {
       parent = null;
       front[key] = parseValue(rest);
+      fields.push([key, rest.trim()]);
     }
   }
-  return { front, body: lines.slice(end + 1).join('\n').trim() };
+  return { front, body: lines.slice(end + 1).join('\n').trim(), fields };
 }
 
 const BARE_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*( [A-Za-z0-9._/-]+)*$/;
@@ -295,6 +411,9 @@ function serializeRecord(record) {
   front.push(`supersedes: [${record.supersedes.join(', ')}]`, `links: [${record.links.join(', ')}]`);
   // Written only when set, so a file without them stays byte for byte the same.
   for (const field of ['conflicts', 'compatible']) if (Array.isArray(record[field]) && record[field].length) front.push(`${field}: [${record[field].join(', ')}]`);
+  // Fields a newer version wrote, after the known ones, as they were read. Checked
+  // again here: a value with a line break would forge frontmatter lines.
+  for (const [key, value] of extraFields(record.extra)) front.push(`${key}: ${value}`);
   return `---\n${front.join('\n')}\n---\n${record.body}\n`;
 }
 
@@ -318,7 +437,7 @@ function titleFromBody(body) {
 function recordFromFile(text, { project, id }) {
   const parsed = parseFrontmatter(text);
   if (!parsed) return { error: 'no-frontmatter' };
-  const { front, body } = parsed;
+  const { front, body, fields } = parsed;
   return checkRecord({
     ...front,
     id,
@@ -327,6 +446,8 @@ function recordFromFile(text, { project, id }) {
     // A file written by hand, or by an agent, is not confirmed until Mati says so.
     confidence: front.confidence === undefined ? 'observed' : front.confidence,
     body,
+    // The fields this version does not know, as raw text: checkRecord keeps the valid unknown ones.
+    extra: fields,
   });
 }
 
@@ -385,10 +506,19 @@ module.exports = {
   MAX_USEFULNESS,
   MAX_USEFULNESS_NOTE,
   USEFULNESS_MAX,
+  MAX_EXTRA_FIELDS,
+  MAX_EXTRA_VALUE,
   DATE_RE,
+  extraFields,
   cleanLine,
   slug,
   scoreOf,
+  finalScore,
+  byFinalScore,
+  FINAL_WEIGHT_PCT,
+  CONFIDENCE_POINTS,
+  USAGE_SATURATION_READS,
+  USAGE_WINDOW_DAYS,
   usefulnessOf,
   validProject,
   projectFromRepoKey,

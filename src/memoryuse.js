@@ -7,6 +7,8 @@
 //   readCounts    per memory, how often it was returned by memory_search or
 //                 opened with memory_get: the card orders its one-line
 //                 entries by it (src/memorycard.js).
+//   recentUsage   the same reads over the last RECENT_READ_DAYS: the usage
+//                 part of a memory's final score (memoryrecord.finalScore).
 //   lastOpened    per memory, when memory_get last opened it: the review list
 //                 flags a confirmed memory nobody opened for UNOPENED_DAYS
 //                 (src/memoryreview.js).
@@ -56,6 +58,20 @@ function readCounts(events, { since = 0 } = {}) {
     else if (e.ev === 'get') bump(e.key);
   }
   return counts;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The usage the final score of every memory needs (memoryrecord.finalScore):
+ * this PC's reads of the last RECENT_READ_DAYS, and today's date for the
+ * `last_used` rule.
+ * @param {object[]} events memorylog readLog()
+ * @param {number} now ms
+ * @returns {{reads: Map<string, number>, today: string}}
+ */
+function recentUsage(events, now) {
+  return { reads: readCounts(events, { since: now - RECENT_READ_DAYS * DAY_MS }), today: new Date(now).toISOString().slice(0, 10) };
 }
 
 /**
@@ -146,4 +162,4 @@ function cardSessionLines({ withCard, withoutCard }) {
   return [lineOf('with the card', withCard), lineOf('without the card', withoutCard)];
 }
 
-module.exports = { readCounts, lastOpened, oldestRead, cardSessions, cardSessionLines, callOf, RECENT_READ_DAYS, TOOL_CALLS };
+module.exports = { readCounts, recentUsage, lastOpened, oldestRead, cardSessions, cardSessionLines, callOf, RECENT_READ_DAYS, TOOL_CALLS };
