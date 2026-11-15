@@ -34,6 +34,7 @@ const { normalizeStoredGuard } = require('./orchestraHybridGuard');
 const { storedWorkers } = require('./orchestraWorkers');
 const { normalizeStoredHybrid, normalizeStoredProfileId } = require('./orchestraHybrid');
 const { normalizeStoredFreeReview } = require('./orchestraFreeReview');
+const { normalizeFollowupEntries } = require('./orchestraFollowups');
 // The three opt-in God Mode evolutions: A/B builds, self-heal, context guard.
 const { normalizeStoredAb, isParked, isUndecidedGroup } = require('./orchestraVariants');
 const { normalizeHeals } = require('./orchestraHeal');
@@ -1037,7 +1038,16 @@ function normalizeStoredPlan(raw) {
     ...(ownership ? { ownership } : {}),
     // Free God Mode v2 plan runs: topics, request, written docs, flagged tasks.
     ...(planRun ? { planRun } : {}),
+    // The follow-up channel (orchestraFollowups.js): the run option and what its sessions filed.
+    ...(raw.followups === true ? { followups: true } : {}),
+    ...storedFollowups(raw),
   };
+}
+
+/** A stored run's follow-up record: the key only when there is something in it. */
+function storedFollowups(raw) {
+  const entries = normalizeFollowupEntries(raw.followupsFiled, raw.id.slice(0, 64));
+  return entries.length ? { followupsFiled: entries } : {};
 }
 
 /**

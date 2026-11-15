@@ -39,6 +39,8 @@ const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer, ABORT_FINISH_AFTER_MS, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
+const followupLaunch = require('./orchestraFollowupsLaunch');
+const { normalizeFollowupEntries } = require('./orchestraFollowups');
 const pushSecrets = require('./pushSecrets');
 const { createMergeRunDeps } = require('./orchestraMergeRun');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
@@ -492,6 +494,7 @@ function createOrchestra(deps) {
     permissionMode: () => (plan && plan.permissionMode) || workerSettings().permissionMode || null,
     setTimer: (fn, ms) => setTimer(fn, ms),
     clearTimer: (t) => clearTimer(t),
+    revokeFollowups: deps.revokeFollowups,
   });
 
   // The merge's own deps (orchestraMergeRun.js): task text, the same fix-up
@@ -822,6 +825,8 @@ function createOrchestra(deps) {
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
     plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
+    // Restart recovery: no session of this run keeps an intake token (matched by run id, never by session id).
+    if (deps.revokeRunFollowups) revokeQuietly(() => deps.revokeRunFollowups(plan.id));
     // Tokens are not stored with the run: the book starts empty and counts what runs from here on.
     usageBook.begin(plan.id);
     // A held run is held anyway after a restart; Approve / Retry check again.
@@ -999,6 +1004,8 @@ function createOrchestra(deps) {
     if (plan) plan.packages = sup.withBlockedBy(plan.packages);
     // Each live worker's conversation id rides along, for a resume after a shutdown.
     if (plan && deps.transcriptIdOf) plan.packages = resumeRules.withTranscriptIds(plan.packages, deps.transcriptIdOf, log);
+    // A settled package's tab loses its scoped intake token (orchestraFollowupsLaunch.js).
+    if (plan && deps.revokeFollowups) revokeQuietly(() => deps.revokeFollowups(followupLaunch.settledSessions(plan, sup.SETTLED_STATES)));
     saveState(plan ? sup.serializePlan(plan) : null);
     const v = view();
     onChange(v);
@@ -1016,6 +1023,29 @@ function createOrchestra(deps) {
     } catch (err) {
       log(`[orchestra] live snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /** A token revocation never stops a transition; a failure is logged. */
+  function revokeQuietly(fn) {
+    try {
+      fn();
+    } catch (err) {
+      log(`[orchestra] follow-up token not revoked: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** The cards this run's sessions filed (orchestraFollowups.js ledger), or null for another run. */
+  function followupsFiled(runId) {
+    if (!plan || plan.id !== runId) return null;
+    return normalizeFollowupEntries(plan.followupsFiled, plan.id);
+  }
+
+  /** Stores the run's follow-up record with the run. @returns {boolean} */
+  function noteFollowups(runId, entries) {
+    if (!plan || plan.id !== runId) return false;
+    plan.followupsFiled = normalizeFollowupEntries(entries, plan.id);
+    commit();
+    return true;
   }
 
   const findPkg = (id) => (plan ? plan.packages.find((p) => p.id === id) : null);
@@ -1202,6 +1232,8 @@ function createOrchestra(deps) {
         // F6 "Workers"; a Claude-only plan carries no key (as before the selector).
         ...(workers !== 'claude' ? { workers } : {}),
         dirty,
+        // Opt-in: sessions may file follow-up cards (orchestraFollowups.js); off unless asked for.
+        followups: ctx.followups === true,
         workerModel: null,
         workerEffort: null,
         permissionMode: null,
@@ -1407,19 +1439,22 @@ function createOrchestra(deps) {
       if (!built.ok) return { ok: false, error: built.error, errors: built.errors };
       clearAllTimers();
       ownershipNudged.clear();
-      plan = planStart.planRunState({
-        id: `p${now().toString(36)}`,
-        ctx,
-        settings,
-        runSlug,
-        built,
-        costUsd: res.costUsd,
-        dirty,
-        baseBranch: sup.isBaseBranch(baseBranch) ? baseBranch : null,
-        options: sup.normalizeOptions({ unattendedApprovalMin: workerSettings().unattendedApprovalMin, sleepOnLimit: false, shutdownWhenDone: false }),
-        estimate: estimatePlan(built.packages, []),
-        packages: built.packages.map(runPackage),
-      });
+      plan = {
+        ...planStart.planRunState({
+          id: `p${now().toString(36)}`,
+          ctx,
+          settings,
+          runSlug,
+          built,
+          costUsd: res.costUsd,
+          dirty,
+          baseBranch: sup.isBaseBranch(baseBranch) ? baseBranch : null,
+          options: sup.normalizeOptions({ unattendedApprovalMin: workerSettings().unattendedApprovalMin, sleepOnLimit: false, shutdownWhenDone: false }),
+          estimate: estimatePlan(built.packages, []),
+          packages: built.packages.map(runPackage),
+        }),
+        followups: ctx.followups === true,
+      };
       runSettledHook = null;
       // Q6: no review step - the run starts now.
       freezeSettings();
@@ -1468,6 +1503,13 @@ function createOrchestra(deps) {
 
   /** @param {{resumeId?:string, resumeMessage?:string}} [resume] reopen this conversation instead (main-only opts) */
   function openTab(pkg, cwd, branch, briefPath, resume = {}) {
+    const task = plan.planRun
+      ? planLaunch.planWorkerTask({
+          briefPath,
+          runSlug: plan.planRun.runSlug,
+          mcpConfigPath: deps.planMcpConfigPath ? deps.planMcpConfigPath() : null,
+        })
+      : withKit(pkg, { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] });
     return deps.createSession({
       ...resume,
       // A hybrid free package runs on the coding profile (never auto:easy).
@@ -1475,13 +1517,8 @@ function createOrchestra(deps) {
       projectId: plan.projectId,
       cwd,
       branch,
-      task: plan.planRun
-        ? planLaunch.planWorkerTask({
-            briefPath,
-            runSlug: plan.planRun.runSlug,
-            mcpConfigPath: deps.planMcpConfigPath ? deps.planMcpConfigPath() : null,
-          })
-        : withKit(pkg, { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] }),
+      // The God Mode marker: a scoped intake token, never the tab's full one (orchestraFollowupsLaunch.js).
+      task: followupLaunch.godModeTask(task, { runId: plan.id, packageId: pkg.id, followups: plan.followups === true }),
     });
   }
 
@@ -3303,6 +3340,7 @@ function createOrchestra(deps) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
     clearAllTimers();
+    if (plan && deps.revokeRunFollowups) revokeQuietly(() => deps.revokeRunFollowups(plan.id));
     plan = null;
     commit();
     return { ok: true };
@@ -3332,6 +3370,8 @@ function createOrchestra(deps) {
     ownsSession,
     onSessionUsage,
     onSessionClosed,
+    followupsFiled,
+    noteFollowups,
     unschedule,
     finishRun,
     setOptions,

@@ -18,26 +18,37 @@
 
 const path = require('path');
 const sup = require('./orchestraSupervisor');
+const { godModeTask, SELFCHECK_PACKAGE_ID, FIXUP_PACKAGE_ID } = require('./orchestraFollowupsLaunch');
 
 const FIXUP_ID = 'selfcheck';
 const FIXUP_CAP_MS = 45 * 60 * 1000;
+// Which fix-up a tab is, for the follow-up channel's record: the end-of-run
+// self-check's ('selfcheck') or a package's merge fix-up ('fixup').
+const FIXUP_KINDS = new Set([SELFCHECK_PACKAGE_ID, FIXUP_PACKAGE_ID]);
 
 /**
  * @param {{
  *   getPlan: () => object|null, createSession: Function, writeBrief: Function,
  *   briefDir: () => string, closeSession: Function, sessionAlive: Function,
  *   model: () => string|null, effort?: () => string|null, permissionMode: () => string|null, setTimer: Function, clearTimer: Function,
+ *   revokeFollowups?: (list:Array<{sessionId:string, runId:string, packageId:string}>) => void,
  * }} deps
  */
 function createFixupRunner(deps) {
-  /** @type {null|{sessionId:string, resolve:Function, timer:any}} */
+  /** @type {null|{sessionId:string, resolve:Function, timer:any, runId:string, packageId:string}} */
   let current = null;
 
   function settle(ok) {
     if (!current) return;
-    const { sessionId, resolve, timer } = current;
+    const { sessionId, resolve, timer, runId, packageId } = current;
     current = null;
     if (timer) deps.clearTimer(timer);
+    // The follow-up channel closes with the fix-up, whether or not its tab does.
+    try {
+      if (deps.revokeFollowups) deps.revokeFollowups([{ sessionId, runId, packageId }]);
+    } catch (err) {
+      console.error('[orchestra] fix-up token not revoked:', err instanceof Error ? err.message : String(err));
+    }
     try {
       if (deps.sessionAlive(sessionId)) deps.closeSession(sessionId);
     } catch {
@@ -47,8 +58,9 @@ function createFixupRunner(deps) {
   }
 
   /**
-   * @param {{root:string, brief:string, capMs?:number}} args capMs: a
-   *   shorter cap (the merge fix-up's 20 min); never longer than 45 min
+   * @param {{root:string, brief:string, capMs?:number, packageId?:string}} args capMs: a
+   *   shorter cap (the merge fix-up's 20 min); never longer than 45 min.
+   *   packageId: 'selfcheck' (default) or 'fixup' (a merge fix-up)
    * @returns {Promise<{ok:boolean}>}
    */
   function run(args) {
@@ -57,23 +69,25 @@ function createFixupRunner(deps) {
     if (!plan || current || typeof o.root !== 'string' || !o.root || typeof o.brief !== 'string') {
       return Promise.resolve({ ok: false });
     }
+    const packageId = FIXUP_KINDS.has(o.packageId) ? o.packageId : SELFCHECK_PACKAGE_ID;
     let session = null;
     try {
       const briefPath = path.join(deps.briefDir(), `${plan.id}-${FIXUP_ID}.md`);
       if (!deps.writeBrief(briefPath, o.brief)) return Promise.resolve({ ok: false });
+      const task = { briefPath, model: deps.model(), effort: deps.effort ? deps.effort() : null, permissionMode: deps.permissionMode(), allowedTools: plan.allowedTools || [] };
       session = deps.createSession({
         profileId: plan.profileId,
         projectId: plan.projectId,
         cwd: o.root,
         branch: null,
-        task: { briefPath, model: deps.model(), effort: deps.effort ? deps.effort() : null, permissionMode: deps.permissionMode(), allowedTools: plan.allowedTools || [] },
+        task: godModeTask(task, { runId: plan.id, packageId, followups: plan.followups === true }),
       });
     } catch {
       session = null;
     }
     if (!session || !session.id) return Promise.resolve({ ok: false });
     return new Promise((resolve) => {
-      current = { sessionId: session.id, resolve, timer: null };
+      current = { sessionId: session.id, resolve, timer: null, runId: plan.id, packageId };
       const cap = Number.isFinite(o.capMs) && o.capMs > 0 ? Math.min(o.capMs, FIXUP_CAP_MS) : FIXUP_CAP_MS;
       const timer = deps.setTimer(() => settle(false), cap);
       // A real timer must not keep a test process (or a quitting app) alive.

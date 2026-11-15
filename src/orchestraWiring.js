@@ -55,6 +55,7 @@ const orchestraRecover = require('./orchestraRecover');
 const planRunStart = require('./orchestraPlanRunStart');
 const planRunView = require('./orchestraPlanRunView');
 const planLaunch = require('./orchestraPlanRunLaunch');
+const { followupDeps } = require('./orchestraFollowupsLaunch');
 const { validateRunSlug, planPath: planDocPath } = require('./orchestraPlanRun');
 const { sizePackages } = require('./orchestraPlanBuild');
 const orchestraReview = require('./orchestraReview');
@@ -846,6 +847,7 @@ function builderDeps(projectId, ctx, self) {
  *   freePlannerEnv?: () => object|null,
  *   playCue: (key:string) => void, log: (line:string) => void, logError: (line:string) => void,
  *   store?: {loadRun:Function, saveRun:Function},
+ *   intake?: {revokeScoped:Function, revokeRun:Function},
  * }} ctx
  * @param {{powerFlow?: object|null}} [shared] what the registry shares between its runs
  * @returns {object} createOrchestra deps
@@ -866,6 +868,8 @@ function makeOrchestraDeps(projectId, ctx, shared = {}) {
     ...planRunDeps(ctx),
     ...planBuildDeps(ctx),
     ...reviewDeps(ctx),
+    // Scoped intake tokens of the run's sessions: revoked on settle / restore / discard.
+    ...followupDeps(ctx.intake || null),
     // The watchdog interval (main.js ticks the registry at it): a tick much
     // later than this means the PC slept (orchestraSleep.js).
     tickMs: WATCHDOG_TICK_MS,

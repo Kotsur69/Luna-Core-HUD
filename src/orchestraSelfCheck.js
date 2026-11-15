@@ -430,7 +430,7 @@ async function selfCheckGate({ root, baseSha, checkCommand, slug }, deps) {
   if (!isGreen(result) && typeof deps.runFixup === 'function') {
     fixups = 1;
     try {
-      await deps.runFixup({ root, brief: fixupBrief(result, checkCommand) });
+      await deps.runFixup({ root, brief: fixupBrief(result, checkCommand), packageId: 'selfcheck' });
     } catch {
       /* the second check decides */
     }
