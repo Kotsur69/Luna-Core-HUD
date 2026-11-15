@@ -7,7 +7,39 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.28.1 — fix(lunaswork): official Unity Pipeline transport.**
+> **Current release: v0.29.0 — free licensed asset sourcing with a license ledger.**
+> - free licensed asset sourcing with a license ledger
+> - asset worker tools for Blender, ComfyUI and Higgsfield
+> - asset pipeline executor and ComfyUI client
+> - merge suggestions for near-duplicates and a per-memory History view
+> - per-project tool kit with spend caps and git guardrails
+> - score thresholds - graveyard under 50, opt-in auto-save from 90
+> - graveyard for dropped candidates and a weekly digest in the hub
+> - official Unity Pipeline as the default unity transport
+> - final score per memory and memory health per project
+> - repeat-failure detector across God Mode runs and `memory notes` command
+> - talk to the official Unity MCP (Unity Pipeline) over HTTP
+> - A/B parallel builds, self-healing workers, predictive context routing
+> - usefulness scan, conflict resolver, decay to archive, memory in God Mode
+>   briefs
+> - Fix: harden the asset pipeline after review
+> - Fix: harden the tool kit after review
+> - Fix: review fixes for merge and History
+> - Fix: score auto-save needs the type's offered bar; no re-enable while
+>   failing
+> - Fix: do not hold back a memory over a harmless carried field
+> - Fix: scan carried fields with their name for secrets
+> - Fix: review fixes for the repeat-failure detector and `memory notes`
+> - Fix: review fixes for the Unity Pipeline start and client
+> - Fix: keep the usefulness of folded inbox duplicates
+> - Fix: carry unknown frontmatter fields through memory records
+> - Fix: review fixes for A/B builds, self-heal and the context guard
+> - Fix: review fixes for scan, decay, briefs and the memory window
+> - Fix: end every drag gesture cleanly so bars cannot stay unclickable
+> - Fix: raise to-do and plan-run request caps to 20000 characters
+> - Fix: cut the release only once the whole run finished
+>
+> **v0.28.1 — fix(lunaswork): official Unity Pipeline transport.**
 > - Pipeline HTTP client for the official Unity MCP (`com.unity.pipeline`):
 >   reads `Library/Pipeline/.unity-pipeline-port` and talks to the editor on
 >   127.0.0.1
