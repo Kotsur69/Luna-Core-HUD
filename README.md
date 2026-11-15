@@ -7,7 +7,15 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.29.0 — free licensed asset sourcing with a license ledger.**
+> **Current release: v0.30.0 — Antigravity provider, plus everything from v0.29.0.**
+> - Antigravity (`agy`) replaces the retired Gemini CLI template: native tab,
+>   Google account sign-in kept in Windows Credential Manager, no key needed
+> - "Use my Luna setup" is offered only for CLIs with an overlay layout
+>   (codex, gemini), so it is hidden for Antigravity
+> - v0.29.0 was tagged but its installer build failed, so this is the first
+>   published build with the v0.29.0 changes listed below
+>
+> **v0.29.0 — free licensed asset sourcing with a license ledger.**
 > - free licensed asset sourcing with a license ledger
 > - asset worker tools for Blender, ComfyUI and Higgsfield
 > - asset pipeline executor and ComfyUI client
