@@ -120,13 +120,21 @@ export function todoForm(draft, { onSave, onCancel }) {
     event.preventDefault();
     if (save.disabled) return;
     save.disabled = true;
-    onSave(todoPayload(text.value, details.value, size.value)).then((refusal) => {
-      if (!refusal) return;
+    const refused = (key) => {
       // A refused save keeps the form and what was typed in it.
-      problem.textContent = t(refusal);
+      problem.textContent = t(key);
       problem.hidden = false;
       save.disabled = false;
-    });
+    };
+    onSave(todoPayload(text.value, details.value, size.value)).then(
+      (refusal) => {
+        if (refusal) refused(refusal);
+      },
+      (err) => {
+        console.error('[memory] to-do save failed:', err);
+        refused('mem.inbox.err.failed');
+      },
+    );
   });
   queueMicrotask(() => text.focus());
   return form;

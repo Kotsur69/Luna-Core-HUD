@@ -46,8 +46,8 @@
 //   memory:graveyard-delete  (key) -> {ok, key} | {ok:false, reason}
 //
 // "Make a to-do" (src/memorytodo.js): a memory becomes a card in the To-do
-// list of its project on this PC, then leaves (waiting -> graveyard,
-// confirmed -> retired). Global memories and projects with no list here are refused.
+// list of its project on this PC, then leaves: copied to the local graveyard,
+// then deleted (a confirmed one is retired on every PC). Global memories and projects with no list here are refused.
 //
 //   memory:todo-draft (key)                         -> {ok, key, text, details} | {ok:false, reason}
 //   memory:to-todo    (key, {text, details?, size?}) -> {ok, key, projectId, at} | {ok:false, reason}
@@ -367,7 +367,10 @@ function registerMemoryIpc({
     const draft = cleanDraft(raw);
     if (!draft) return { ok: false, reason: 'bad-draft' };
     if (!todos) return { ok: false, reason: 'failed' };
-    return guarded('to-todo', () => moveToTodo({ dir: dir(), key: k, draft, now: now(), projectIdFor, todos, graveyardFile, log }));
+    const res = guarded('to-todo', () => moveToTodo({ dir: dir(), key: k, draft, now: now(), projectIdFor, todos, graveyardFile, log }));
+    // Some of a group's files may be gone even so: sync and repaint what is left.
+    if (res.reason === 'remove-failed') onChanged();
+    return res;
   });
 
   ipcMain.handle('memory:auto-undo', (_event, key) => {

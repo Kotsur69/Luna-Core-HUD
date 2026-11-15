@@ -15,7 +15,7 @@ const { draftFromMemory, cleanDraft, todoProjectFor, moveToTodo, TODO_TAG, MOVED
 const { registerMemoryIpc } = require('../src/memoryipc.js');
 const { writeRecord, scan, fileFor } = require('../src/memorystore.js');
 const { createLog, logPath } = require('../src/memorylog.js');
-const { graveyardPath, readGraveyard, restoreEntry } = require('../src/memorygraveyard.js');
+const { graveyardPath, readGraveyard, restoreEntry, buryRecords } = require('../src/memorygraveyard.js');
 const { MAX_TEXT_CHARS, MAX_DETAILS_CHARS, MAX_ITEMS, DEFAULT_KEY } = require('../src/todo.js');
 
 const PROJECT = 'github.com/acme/hud';
@@ -184,13 +184,55 @@ test('the near-duplicates folded into a waiting entry leave with it, into the gr
   assert.equal(readGraveyard(s.graveFile, NOW).length, 2);
 });
 
-test('a confirmed memory is retired: deleted, a `retired` line, no graveyard entry', (t) => {
+test('a confirmed memory is retired, its original kept in the local graveyard, and no `retired` line', (t) => {
   const s = setup(t, [rec('paste-cut', { confidence: 'confirmed', last_verified: '2026-11-11' })]);
-  const res = s.invoke('memory:to-todo', KEY, DRAFT);
+  const res = s.invoke('memory:to-todo', KEY, { text: 'Fix it', details: 'cut down by hand' });
   assert.equal(res.ok, true);
   assert.equal(s.stored()[KEY], undefined);
+  // The card may have been edited down: the full original stays restorable here.
+  const [entry] = readGraveyard(s.graveFile, NOW);
+  assert.equal(entry.reason, MOVED_REASON);
+  assert.equal(entry.record.body, rec('paste-cut').body);
+  // Auto-accept counts a `retired` auto-accepted memory as an undo (memoryautoaccept.js).
+  assert.equal(s.logged().filter((e) => e.ev === 'retired').length, 0);
+});
+
+test('a confirmed memory whose graveyard copy cannot be written is not retired', (t) => {
+  const s = setup(t, [rec('paste-cut', { confidence: 'confirmed' })], { graveyard: false });
+  const res = s.invoke('memory:to-todo', KEY, DRAFT);
+  assert.equal(res.reason, 'remove-failed');
+  assert.ok(s.stored()[KEY]);
+});
+
+test('a retry after a failed removal reuses the card it already wrote', (t) => {
+  const s = setup(t, undefined, { graveyard: false });
+  // The prefilled draft ends with the "From memory <key>" line the retry looks for.
+  const draft = draftFromMemory(rec('paste-cut'));
+  const first = s.invoke('memory:to-todo', KEY, draft);
+  assert.equal(first.reason, 'remove-failed');
+
+  // Same memory, the graveyard works again: no second card, the memory leaves.
+  const todos = s.todos;
+  const again = moveToTodo({ dir: s.dir, key: KEY, draft, now: NOW + 1000, projectIdFor: () => PROJECT_ID, todos, graveyardFile: () => s.graveFile, log: s.log });
+  assert.equal(again.ok, true);
+  assert.equal(again.at, first.at);
+  assert.equal(todos.lists[PROJECT_ID].length, 1);
+  assert.equal(s.stored()[KEY], undefined);
+
+  // A card ticked done, or one without the provenance line, is not reused.
+  const other = setup(t, [rec('paste-cut')], {
+    todos: todoStore({ initial: { [PROJECT_ID]: [{ text: 'done one', done: true, at: 1, tags: ['memory'], details: `From memory ${KEY} (gotcha, created 2026-11-10)` }] } }),
+  });
+  assert.equal(other.invoke('memory:to-todo', KEY, DRAFT).ok, true);
+  assert.equal(other.todos.lists[PROJECT_ID].length, 2);
+});
+
+test('buryRecords throws, and writes nothing, when an entry would be refused', (t) => {
+  const s = setup(t);
+  assert.throws(() => buryRecords(s.graveFile, [rec('ok'), { title: 'not a record' }], MOVED_REASON, NOW), /refused/);
   assert.deepEqual(readGraveyard(s.graveFile, NOW), []);
-  assert.ok(s.logged().some((e) => e.ev === 'retired' && e.key === KEY));
+  assert.throws(() => buryRecords(s.graveFile, [rec('ok')], '   ', NOW), /reason/);
+  assert.deepEqual(buryRecords(s.graveFile, [], MOVED_REASON, NOW), []);
 });
 
 test('`to-todo` is logged with the key and the card; never a `rejected` decision', (t) => {

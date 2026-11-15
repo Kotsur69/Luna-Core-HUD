@@ -10,16 +10,19 @@
 //      is the memory's project on this PC (todoProjectFor). A global memory,
 //      or a project with no LunaCore project here, is refused: never the
 //      `_default` bucket (src/todo.js).
-//   2. ONLY once that write returned true is the memory removed:
-//        waiting   -> the local graveyard (src/memorygraveyard.js), reason
-//                     MOVED_REASON, restorable from the Graveyard tab
+//   2. ONLY once that write returned true is the memory removed. It is first
+//      copied to the local graveyard (src/memorygraveyard.js, reason
+//      MOVED_REASON, restorable from the Graveyard tab), then:
+//        waiting   -> deleted, with the near-duplicates folded into it
 //        confirmed -> retired (memoryreview.retire): deleted on every PC.
-//                     Safe: the card holds the text.
+//                     The card holds the text; the graveyard holds the original.
+//      A retry after a failed removal finds the card it already wrote
+//      (its "From memory <key>" line) and does not write a second one.
 //   3. `to-todo` goes to the memory log with the key and the card's `at`.
 //
 // No `rejected` decision is logged: a rejected title goes back to the
 // extractor as "do not capture this again", and a fixable bug is not a bad
-// capture.
+// capture. No `retired` either: auto-accept would count it as an undo.
 //
 // No Electron here: the list reads/writes and the project mapping come in as deps.
 // ============================================================================
@@ -138,19 +141,43 @@ function freshAt(list, now) {
   return Math.max(now, newest + 1);
 }
 
-/** Takes the memory out once its card exists. Throws when it could not: the memory then stays. */
-function removeMemory({ dir, key, found, graveyardFile, log, now }) {
+/** The provenance line draftFromMemory ends a card's details with, up to the type. */
+const fromLine = (key) => `From memory ${key} (`;
+
+/**
+ * An open card this memory already became: a removal that failed after the
+ * write leaves one behind, and the retry must not write a second.
+ */
+const existingCard = (list, key) =>
+  list.find((c) => c && c.done !== true && Array.isArray(c.tags) && c.tags.includes(TODO_TAG) && typeof c.details === 'string' && c.details.includes(fromLine(key))) || null;
+
+/**
+ * Takes the memory out once its card exists. Throws when it could not.
+ * Kept first, deleted second: every record goes to the local graveyard
+ * before any file is deleted, so a failed burial leaves the memory where it
+ * was, and even a confirmed one (retired on every PC) can be restored here.
+ */
+function removeMemory({ dir, key, found, graveyardFile, now }) {
+  const file = graveyardFile();
+  if (!file) throw new Error('no graveyard file');
+  const all = [[key, found.record], ...found.twins];
+  buryRecords(file, all.map(([, r]) => r), MOVED_REASON, now);
   if (!found.pending) {
-    const res = retire(dir, key, { log });
+    // No `retired` line: auto-accept counts one as an undo (src/memoryautoaccept.js), and a fixable bug is not a bad capture.
+    const res = retire(dir, key, {});
     if (!res.ok) throw new Error(`retire refused: ${res.reason}`);
     return;
   }
-  const file = graveyardFile();
-  if (!file) throw new Error('no graveyard file');
-  // Kept first, deleted second: a failed burial leaves the memory where it was.
-  const all = [[key, found.record], ...found.twins];
-  buryRecords(file, all.map(([, r]) => r), MOVED_REASON, now);
-  for (const [k] of all) removeRecord(dir, k);
+  // Every twin is tried: one locked file must not keep the others.
+  const failures = [];
+  for (const [k] of all) {
+    try {
+      removeRecord(dir, k);
+    } catch (err) {
+      failures.push(`${k}: ${errText(err)}`);
+    }
+  }
+  if (failures.length) throw new Error(`not removed: ${failures.join('; ')}`);
 }
 
 /**
@@ -173,15 +200,19 @@ function moveToTodo({ dir, key, draft, now, projectIdFor, todos, graveyardFile, 
   const { projectId } = target;
   const list = todos.read(projectId);
   if (!Array.isArray(list)) return fail('todo-failed');
-  // normalizeTodos would silently drop a card past the cap: refuse instead.
-  if (list.length >= MAX_ITEMS) return fail('list-full');
-  const at = freshAt(list, now);
-  const card = normalizeTodo({ text: draft.text, details: draft.details, size: draft.size, done: false, at, tags: [TODO_TAG] });
-  if (!card) return fail('bad-draft');
-  if (todos.write(projectId, [...list, card]) !== true) return fail('todo-failed');
-  if (todos.changed) todos.changed(projectId);
+  const earlier = existingCard(list, key);
+  let at = earlier ? earlier.at : null;
+  if (!earlier) {
+    // normalizeTodos would silently drop a card past the cap: refuse instead.
+    if (list.length >= MAX_ITEMS) return fail('list-full');
+    at = freshAt(list, now);
+    const card = normalizeTodo({ text: draft.text, details: draft.details, size: draft.size, done: false, at, tags: [TODO_TAG] });
+    if (!card) return fail('bad-draft');
+    if (todos.write(projectId, [...list, card]) !== true) return fail('todo-failed');
+    if (todos.changed) todos.changed(projectId);
+  }
   try {
-    removeMemory({ dir, key, found, graveyardFile, log, now });
+    removeMemory({ dir, key, found, graveyardFile, now });
   } catch (err) {
     console.error('[memory] to-do card written, memory not removed:', errText(err));
     return { ok: false, reason: 'remove-failed', projectId, at };
