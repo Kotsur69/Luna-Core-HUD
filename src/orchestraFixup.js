@@ -19,6 +19,7 @@
 const path = require('path');
 const sup = require('./orchestraSupervisor');
 const { godModeTask, SELFCHECK_PACKAGE_ID, FIXUP_PACKAGE_ID } = require('./orchestraFollowupsLaunch');
+const { withFollowupBrief } = require('./orchestraFollowups');
 
 const FIXUP_ID = 'selfcheck';
 const FIXUP_CAP_MS = 45 * 60 * 1000;
@@ -73,7 +74,8 @@ function createFixupRunner(deps) {
     let session = null;
     try {
       const briefPath = path.join(deps.briefDir(), `${plan.id}-${FIXUP_ID}.md`);
-      if (!deps.writeBrief(briefPath, o.brief)) return Promise.resolve({ ok: false });
+      // The self-check and merge fix-up briefs get the follow-up section here, only with the option on.
+      if (!deps.writeBrief(briefPath, withFollowupBrief(o.brief, plan.followups === true))) return Promise.resolve({ ok: false });
       const task = { briefPath, model: deps.model(), effort: deps.effort ? deps.effort() : null, permissionMode: deps.permissionMode(), allowedTools: plan.allowedTools || [] };
       session = deps.createSession({
         profileId: plan.profileId,

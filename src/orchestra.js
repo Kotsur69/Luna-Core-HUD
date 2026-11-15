@@ -40,7 +40,7 @@ const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./eff
 const { createFinalizer, ABORT_FINISH_AFTER_MS, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
 const followupLaunch = require('./orchestraFollowupsLaunch');
-const { normalizeFollowupEntries } = require('./orchestraFollowups');
+const { normalizeFollowupEntries, followupBriefLines } = require('./orchestraFollowups');
 const pushSecrets = require('./pushSecrets');
 const { createMergeRunDeps } = require('./orchestraMergeRun');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
@@ -132,9 +132,10 @@ const ESC = '\x1b';
  * @param {{id:string, title:string, prompt:string, verify:string}} pkg
  * @param {string} branch
  * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null},
- *   depMerge?:{branches:string[], files:string[]}|null, memory?:string|null}} [opts] depMerge
+ *   depMerge?:{branches:string[], files:string[]}|null, memory?:string|null, followups?:boolean}} [opts] depMerge
  *   defaults to the package's recorded one, so a resume brief keeps it;
- *   memory = the "## Project memory" section (src/memoryinject.js), or none
+ *   memory = the "## Project memory" section (src/memoryinject.js), or none;
+ *   followups = the run's plan.followups (the follow-up to-do section only when true)
  * @returns {string}
  */
 function briefText(pkg, branch, opts = {}) {
@@ -162,6 +163,7 @@ function briefText(pkg, branch, opts = {}) {
     pkg.prompt,
     '',
     ...(opts.memory ? [opts.memory, ''] : []),
+    ...followupBriefLines(opts.followups),
     '## Verify',
     pkg.verify ? `Run \`${pkg.verify}\` and fix until it passes.` : "Check your work with the project's tests before you finish.",
     'Run the verify command in the foreground and wait for it to finish. Do not end your turn while a test run (or any other command) of yours is still running in the background: an ended turn tells LunaCore you stopped.',
@@ -629,7 +631,7 @@ function createOrchestra(deps) {
     cancelNudge: (id) => cancelNudge(id),
     writePty: (sessionId, text, opts) => writePty(sessionId, text, opts),
     // A hand-over brief is a resume brief: same project memory as the first start.
-    briefText: (pkg, branch, opts = {}) => briefText(pkg, branch, opts.resume ? { ...opts, memory: projectMemoryFor(pkg) } : opts),
+    briefText: (pkg, branch, opts = {}) => runBrief(pkg, branch, opts.resume ? { ...opts, memory: projectMemoryFor(pkg) } : opts),
     reopen: (pkg, text) => reopenInWorktree(pkg, text),
     landPushed: (id) => landPushed(id),
     stall: (id, reason, detail) => stall(id, reason, detail),
@@ -775,7 +777,7 @@ function createOrchestra(deps) {
     },
     // Held for node_modules: the hold's Resume reopens it (as Retry does).
     reopenChat: (pkg, text) => heldOnDeps(pkg, reopenChat(pkg, text)),
-    reopenFresh: (pkg) => heldOnDeps(pkg, reopenInWorktree(pkg, briefText(pkg, pkg.branch, { resume: true }))),
+    reopenFresh: (pkg) => heldOnDeps(pkg, reopenInWorktree(pkg, runBrief(pkg, pkg.branch, { resume: true }))),
     requeue: (pkg) => patch(pkg.id, { state: 'pending', error: null, detail: null }),
     beforeResume: () => freezeSettings(),
     stopForPause: () => stopForPause(),
@@ -911,6 +913,9 @@ function createOrchestra(deps) {
       sleeps: Array.isArray(plan.sleeps) ? plan.sleeps.map((s) => ({ ...s })) : [],
       // Run-level automatic fixes (integration retries, orchestraRecover.js).
       recoveries: Array.isArray(plan.recoveries) ? plan.recoveries.map((e) => ({ ...e })) : [],
+      // The run option "Sessions may file new to-dos" and the cards they filed (the report's section).
+      followups: plan.followups === true,
+      followupsFiled: normalizeFollowupEntries(plan.followupsFiled, plan.id),
       freeMode: plan.freeMode === true,
       // D1: who planned this build run ('claude' for every older plan).
       buildPlanner: plan.buildPlanner === 'free' ? 'free' : 'claude',
@@ -1671,12 +1676,17 @@ function createOrchestra(deps) {
    * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
    */
   function startWorker(pkg, where) {
-    if (!deps.writeBrief(where.briefPath, briefText(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
+    if (!deps.writeBrief(where.briefPath, runBrief(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
       return { ...where, state: 'failed', error: 'briefFailed' };
     }
     const session = openTab(pkg, where.cwd, where.branch, where.briefPath);
     if (!session) return { ...where, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
+  }
+
+  /** briefText with this run's follow-up option: every worker brief of the run goes through here. */
+  function runBrief(pkg, branch, opts = {}) {
+    return briefText(pkg, branch, { ...opts, followups: !!plan && plan.followups === true });
   }
 
   /** The brief's project memory section, or null. Memory never stops a worker from starting. */
@@ -1693,7 +1703,7 @@ function createOrchestra(deps) {
 
   /** The brief of a reopened worker: RESUMING, with the same project memory section as a first start. */
   function resumeBrief(pkg, extra = {}) {
-    const text = briefText(pkg, pkg.branch, { ...extra, resume: true, memory: projectMemoryFor(pkg) });
+    const text = runBrief(pkg, pkg.branch, { ...extra, resume: true, memory: projectMemoryFor(pkg) });
     // Context guard: a session that ran out of context without /compact resumes with its progress.
     const context = contextResumeSection(pkg);
     return context ? `${text}\n\n${context}\n` : text;
@@ -2257,7 +2267,7 @@ function createOrchestra(deps) {
     if (!depsReady(pkg)) return { ok: false, error: 'noNodeModules' };
     // The brief stays readable (and current) should the worker look again.
     const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
-    if (!deps.writeBrief(briefPath, briefText(pkg, pkg.branch, { resume: true }))) return { ok: false, error: 'briefFailed' };
+    if (!deps.writeBrief(briefPath, runBrief(pkg, pkg.branch, { resume: true }))) return { ok: false, error: 'briefFailed' };
     const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath, { resumeId: transcriptId, resumeMessage: text });
     if (!session) return { ok: false, error: 'noTab' };
     // Main could not build a --resume command (a profile that decides its own

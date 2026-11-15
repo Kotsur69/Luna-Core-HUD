@@ -691,7 +691,7 @@ function render() {
       pickerView({
         disabled: phase !== 'idle',
         canCancel: !!plan,
-        onPlan: (ats, effort, planner, workers, model) => startPlanning(ats, effort, planner, workers, model),
+        onPlan: (ats, effort, planner, workers, model, followups) => startPlanning(ats, effort, planner, workers, model, followups),
         onCancel: () => {
           picking = false;
           render();
@@ -745,8 +745,9 @@ async function refetchAndRender() {
  * @param {'claude'|'free'} [planner] D1: who plans the build run
  * @param {'claude'|'hybrid'|'free'} [workers] F6 "Workers"
  * @param {string} [model] the Claude planner's model (main falls back to opus)
+ * @param {boolean} [followups] "Sessions may file new to-dos" (main: only true is on)
  */
-async function startPlanning(ats, effort, planner, workers, model) {
+async function startPlanning(ats, effort, planner, workers, model, followups) {
   if (phase !== 'idle') return;
   phase = 'planning';
   picking = false;
@@ -754,7 +755,7 @@ async function startPlanning(ats, effort, planner, workers, model) {
   render();
   let res;
   try {
-    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner, workers, model);
+    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner, workers, model, followups === true);
   } catch {
     res = { ok: false, error: 'failed' };
   }

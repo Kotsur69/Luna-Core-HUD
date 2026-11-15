@@ -38,6 +38,8 @@ let buildPlanner = 'claude';
  */
 const WORKERS = ['claude', 'hybrid', 'free'];
 let workers = 'claude';
+/** "Sessions may file new to-dos" (ui pref orchestraFollowups): off unless ticked; the last choice is kept. */
+let followups = false;
 let manual = 0;
 let selected = new Set();
 const seen = new Set();
@@ -72,6 +74,7 @@ async function loadPlannerEffort() {
     plannerEffort = PLANNER_EFFORTS.includes(saved) ? saved : DEFAULT_PLANNER_EFFORT;
     plannerModel = plannerModelPrefOf(prefs);
     workers = workersPrefOf(prefs);
+    followups = followupsPrefOf(prefs);
   } catch {
     /* prefs unreadable: keep the level and workers already on screen */
   }
@@ -86,6 +89,14 @@ export function workersPrefOf(prefs) {
   if (!prefs || typeof prefs !== 'object') return 'claude';
   if (WORKERS.includes(prefs.orchestraWorkers)) return prefs.orchestraWorkers;
   return prefs.orchestraFree === true ? 'free' : 'claude';
+}
+
+/**
+ * The saved "Sessions may file new to-dos" tick; only an exact true is on.
+ * @param {{orchestraFollowups?:unknown}|null} prefs
+ */
+export function followupsPrefOf(prefs) {
+  return !!prefs && typeof prefs === 'object' && prefs.orchestraFollowups === true;
 }
 
 /** The workers the next plan uses: a free planner always plans a free-only run (D1). */
@@ -222,6 +233,27 @@ function modelSelect(disabled) {
   return label;
 }
 
+/**
+ * "Sessions may file new to-dos (bugs, gaps, ideas)": a per-run option fixed
+ * into the plan (plan.followups). The cards go to the To-do list, never into
+ * the run. A change is saved as the ui pref, so the next plan starts from it.
+ */
+function followupsToggle(disabled) {
+  const label = el('label', 'orchestra__pick-effort');
+  label.title = t('orch.pick.followups.hint');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = followups;
+  box.disabled = disabled;
+  box.addEventListener('change', () => {
+    followups = box.checked === true;
+    // Main validates again; a failed save only loses the remembered choice.
+    Promise.resolve(window.lunacore.setUiPrefs({ orchestraFollowups: followups })).catch(() => {});
+  });
+  label.append(box, el('span', '', t('orch.pick.followups')));
+  return label;
+}
+
 function cardRow(card, missing, disabled, repaint) {
   const row = el('label', 'orchestra__pick-row');
   const box = el('input');
@@ -243,7 +275,8 @@ function cardRow(card, missing, disabled, repaint) {
 
 /**
  * The picker block for #orchestra-body.
- * @param {{disabled:boolean, canCancel:boolean, onPlan:(ats:number[], effort:string, planner:string, workers:string, model:string) => void,
+ * @param {{disabled:boolean, canCancel:boolean,
+ *   onPlan:(ats:number[], effort:string, planner:string, workers:string, model:string, followups:boolean) => void,
  *   onCancel:() => void, repaint:() => void}} opts
  * @returns {HTMLElement}
  */
@@ -294,7 +327,12 @@ export function pickerView({ disabled, canCancel, onPlan, onCancel, repaint }) {
     workersSelect(planDisabled),
     effortSelect(planDisabled),
     modelSelect(planDisabled),
-    button(t('orch.pick.plan', { n: count }), () => onPlan(selectedAts(), plannerEffort, buildPlanner, chosenWorkers(), plannerModel), planDisabled),
+    followupsToggle(planDisabled),
+    button(
+      t('orch.pick.plan', { n: count }),
+      () => onPlan(selectedAts(), plannerEffort, buildPlanner, chosenWorkers(), plannerModel, followups),
+      planDisabled,
+    ),
   );
   if (canCancel) foot.append(button(t('orch.pick.back'), onCancel, disabled));
   box.append(foot);

@@ -11,7 +11,7 @@
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
-// orchestraPlannerEffort, orchestraPlannerModel, orchestraWorkers,
+// orchestraPlannerEffort, orchestraPlannerModel, orchestraWorkers, orchestraFollowups,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
 // motion, effectsStrength, welcomeSeen, welcomeChecked, pwaUrl, hideLife,
 // hideMission, hideGodMode.
@@ -239,6 +239,9 @@ const DEFAULTS = {
   // God Mode "Workers" (F6): 'claude' | 'hybrid' | 'free', picked in the to-do
   // picker. An older prefs file's boolean orchestraFree tick migrates.
   orchestraWorkers: 'claude',
+  // God Mode "Sessions may file new to-dos" (orchestraFollowups.js), ticked
+  // in the to-do picker: the last choice, fixed into each new plan. Off.
+  orchestraFollowups: false,
   orchestraIntegration: 'pr',
   orchestraAllowedTools: [],
   orchestraCheckCommand: 'npm test',
@@ -758,6 +761,7 @@ function readUiPrefs() {
         ? obj.orchestraPlannerModel
         : DEFAULTS.orchestraPlannerModel,
       orchestraWorkers: workersPrefOf(obj),
+      orchestraFollowups: obj.orchestraFollowups === true,
       orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
         ? obj.orchestraIntegration
         : DEFAULTS.orchestraIntegration,
@@ -909,7 +913,7 @@ function writeUiPrefs(partial) {
       next.orchestraSupabaseApply = partial.orchestraSupabaseApply;
     }
     // God Mode opt-in evolutions: booleans only, anything else is ignored.
-    for (const key of ['orchestraAbBuild', 'orchestraSelfHeal', 'orchestraContextGuard']) {
+    for (const key of ['orchestraAbBuild', 'orchestraSelfHeal', 'orchestraContextGuard', 'orchestraFollowups']) {
       if (partial && typeof partial[key] === 'boolean') next[key] = partial[key];
     }
     if (partial && typeof partial.autoProceedArmed === 'boolean') {

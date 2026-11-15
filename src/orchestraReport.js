@@ -7,7 +7,9 @@
 //
 // The report answers at a glance (GM never blocks 5/5), in this order:
 //   ## Needs you               what waits for Mati, or 'Nothing - all done'
-//   ## What went wrong         per problem: what happened, why, how to fix,
+//   ## New to-dos from this run  cards the sessions filed, by kind then
+//                              package (only when any; orchestraFollowupsReport.js)
+//   ## What went wrong        per problem: what happened, why, how to fix,
 //                              evidence (orchestraDiagnose.js)
 //   ## Manual actions         what he has to apply live (migrations, ...)
 //   ## Merged / pushed         per package: branch, sha, PR / merged, notes
@@ -33,6 +35,7 @@ const { hybridReportLines, hybridReportRows } = require('./orchestraHybrid');
 const { resumeReportLines } = require('./orchestraResume');
 // A/B builds: per group the winner, how it was picked and the kept loser branch.
 const { abReportLines } = require('./orchestraVariantRun');
+const { followupReportLines, followupReportHtml } = require('./orchestraFollowupsReport');
 
 const NOTE_TAG = '[LunaCore run';
 // A whole note line: the tag with a run id, as stallNote() writes it.
@@ -622,6 +625,8 @@ function buildReport(view, extra) {
     ...hybridReportLines(view),
     ...abReportLines(view),
     ...tailLines(integ.selfCheck),
+    // Cards the run's sessions filed (run option "Sessions may file new to-dos"); none = no section.
+    ...followupReportLines(view),
     ...wrongSection(view, facts),
     ...manualSection(integ),
     ...mergedSection(view),
@@ -806,6 +811,7 @@ function renderRunReportHtml(view, extra = {}) {
   const body = [
     runCards(v, packages, integ, now),
     needsHtml(v, integ),
+    followupReportHtml(v, h),
     wrongHtml(v, { gitDirExists: extra.gitDirExists }),
     runCharts(v, packages, integ, now),
     packageTable(v, packages, now),
