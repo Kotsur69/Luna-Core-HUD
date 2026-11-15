@@ -30,7 +30,7 @@ import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey, me
 import { clearHistory } from './memoryhistory.js';
 import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
 import { statsLine, captureLine, searchLine, flagLine, graveLine } from './memoryinboxlines.js';
-import { createCheckFlow, checkBadge, checkReasonKey } from './memorycheckview.js';
+import { createCheckFlow, checkReasonKey } from './memorycheckview.js';
 
 export { statsLine, searchLine, flagLine, graveLine };
 
@@ -275,7 +275,7 @@ function reviewEntry(item) {
   }
   // A 'checked' flag is drawn as the check's badge (memorycheckview.js), with its evidence.
   const flags = item.flags.filter((flag) => flag.kind !== 'checked').map((flag) => el('p', 'mem-inbox__note', flagLine(flag)));
-  const badge = checkBadge(item.check);
+  const badge = check.badge(item);
   card.append(...flags, ...(badge ? [badge] : []), el('p', 'mem-inbox__note', usefulnessLine(item)));
   const off = busy.has(item.key);
   const actions = el('div', 'mem-inbox__actions');

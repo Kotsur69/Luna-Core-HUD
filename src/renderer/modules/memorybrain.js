@@ -26,7 +26,7 @@
 import { t } from './util.js';
 import { historyBlock } from './memoryhistory.js';
 import { todoButton } from './memorytodoform.js';
-import { checkBadge, checkStatusLine } from './memorycheckview.js';
+import { checkStatusLine } from './memorycheckview.js';
 
 /** Characters of a body shown in a list. */
 const PREVIEW_CHARS = 280;
@@ -198,7 +198,7 @@ function memoryItem(item, { off, error, onRestore, onTodo = null, todoFormOf = (
   if (item.archived) card.append(el('p', 'mem-inbox__note mem-inbox__note--warn', t('mem.brain.archived', { date: item.archived })));
   // "Check if still true" (memorycheckview.js): a confirmed, active memory only.
   const checked = check && item.confidence === 'confirmed' && !item.archived ? check : null;
-  const badge = checked ? checkBadge(item.check) : null;
+  const badge = checked ? checked.badge(item) : null;
   if (badge) card.append(badge);
   // An open "Make a to-do" form (memorytodoform.js) or check edit form takes the place of the buttons.
   const form = todoFormOf(item.key) || (checked && checked.formOf(item.key));

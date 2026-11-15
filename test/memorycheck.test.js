@@ -135,6 +135,13 @@ test('the parser rejects junk and keeps only the expected keys, capped', () => {
   });
 });
 
+test('a secret the model read is scrubbed out of every answer field', () => {
+  // Assembled at runtime: the full key shape never appears in the source.
+  const fake = ['AK', 'IA', 'Z'.repeat(16)].join('');
+  const parsed = parseCheckAnswer({ verdict: 'partly', note: `key ${fake}`, evidence: [`.env:1 ${fake}`], suggested_body: `Use ${fake} here.` });
+  for (const text of [parsed.note, parsed.evidence[0], parsed.suggested_body]) assert.ok(!text.includes(fake), text);
+});
+
 // --- each verdict's effect ---------------------------------------------------------
 
 test('holds: verified today, logged by check with the evidence, off the review list', async (t) => {
@@ -240,6 +247,33 @@ test('a memory edited while it was being checked keeps nothing of the answer', a
   assert.equal(c.status().error, 'changed');
   assert.equal(ctx.log.read().length, 0);
   assert.equal(stored(ctx.dir)[key].last_verified, undefined);
+});
+
+test('holds: a record that cannot be re-dated leaves no "holds" line in the log', async (t) => {
+  const ctx = setup(t, [rec('a')]);
+  const key = `${PROJECT}/a`;
+  const { checker: c } = checker(ctx, {
+    run: async () => {
+      // Retired on the other PC while the model was reading.
+      fs.rmSync(path.join(ctx.dir, 'projects', ...PROJECT.split('/'), 'a.md'));
+      return { ok: true, answer: { verdict: 'holds' } };
+    },
+  });
+  c.check(key);
+  await c.whenIdle();
+  assert.equal(c.status().failed, 1);
+  assert.equal(c.status().failedKey, key);
+  assert.equal(ctx.log.read().length, 0);
+});
+
+test('Edit is refused on a memory archived since the answer', async (t) => {
+  const ctx = setup(t, [rec('a')]);
+  const key = `${PROJECT}/a`;
+  const { checker: c } = checker(ctx, { run: answer({ verdict: 'partly', suggested_body: 'S.' }) });
+  c.check(key);
+  await c.whenIdle();
+  writeRecord(ctx.dir, rec('a', { archived: TODAY }));
+  assert.deepEqual(editChecked({ dir: ctx.dir, key, title: 'T', body: 'S.', today: TODAY, log: ctx.log }), { ok: false, reason: 'not-found' });
 });
 
 // --- refusals and the shared lock --------------------------------------------------
@@ -349,6 +383,22 @@ test('check all runs each target in turn and stops after two failures in a row',
   assert.equal(bad.checker.status().failed, 2);
   assert.equal(bad.checker.status().error, 'bad-verdict');
   assert.equal(ctx2.log.read().length, 0);
+
+  // Memories edited during the run are not the model failing: the run goes on.
+  const ctx3 = setup(t, [rec('a'), rec('b'), rec('c')]);
+  let n = 0;
+  const edited = checker(ctx3, {
+    run: async ({ prompt }) => {
+      const id = prompt.match(/^### (\w+) /m)[1];
+      if (n++ < 2) writeRecord(ctx3.dir, rec(id, { body: 'Edited meanwhile.' }));
+      return { ok: true, answer: { verdict: 'unknown' } };
+    },
+  });
+  edited.checker.checkAll(PROJECT);
+  await edited.checker.whenIdle();
+  assert.equal(edited.prompts.length, 3);
+  assert.equal(edited.checker.status().failed, 2);
+  assert.equal(edited.checker.status().verdicts.unknown, 1);
 });
 
 // --- the log ------------------------------------------------------------------------

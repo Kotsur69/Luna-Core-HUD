@@ -64,8 +64,10 @@ const DEFAULT_TIMEOUT_MS = 120000;
 /**
  * The built-in tools of a `readOnly` job (the memory check, src/memorycheck.js):
  * they read files and search them, nothing else. No Bash, no edits, no web.
- * Verified live 2026-11-15: under --permission-mode dontAsk a Read inside the
- * job's cwd works and a Read outside it is denied (permission_denials).
+ * Verified live 2026-11-15 under --permission-mode dontAsk: a Read inside the
+ * job's cwd works; a Read outside it, a Read through a junction inside cwd
+ * pointing outside, and a Grep or Glob given a path outside cwd are all
+ * denied (permission_denials); Bash and Write do not exist in the session.
  */
 const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob'];
 /** Tool rounds a readOnly job may take before the CLI stops it: a bound on cost. */

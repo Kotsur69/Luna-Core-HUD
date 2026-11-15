@@ -41,6 +41,7 @@ const { scan, writeRecord } = require('./memorystore');
 const { supersededKeys, findConfirmed, verify, anchorsOf, checkedOn } = require('./memoryreview');
 const { openDisputes, openChecks, lastChecks, CHECK_VERDICTS, MAX_EVIDENCE, MAX_EVIDENCE_CHARS, DAY_MS } = require('./memorylog');
 const { createJobLock, promptSafe } = require('./memoryscan');
+const { scrub } = require('./hostscrub');
 
 const CHECK_MODEL = 'sonnet';
 /** One memory, read against a whole repository: a slow model with tools. */
@@ -55,6 +56,8 @@ const MAX_COMMITS = 60;
 const MAX_GIT_LOG_CHARS = 8000;
 const GIT_TIMEOUT_MS = 15000;
 const MAX_FAILURES_IN_A_ROW = 2;
+/** The failures that count toward MAX_FAILURES_IN_A_ROW: the model call or its answer. */
+const MODEL_FAILURE_RE = /^(model-|bad-|failed$)/;
 /** The check's name on the shared job lock. */
 const LOCK_NAME = 'check';
 
@@ -66,6 +69,7 @@ const oneLine = (v, max) => (typeof v === 'string' ? v.replace(/[\p{Cc}\p{Cf}]/g
 const block = (v, max) =>
   typeof v === 'string'
     ? v
+        .toWellFormed()
         .replace(/\r\n?/g, '\n')
         .replace(/[^\P{Cc}\n\t]|\p{Cf}/gu, ' ')
         .trim()
@@ -137,7 +141,9 @@ function buildCheckPrompt({ project, today, record, gitLog }) {
 }
 
 /**
- * The model's answer, rebuilt: only the expected keys, every text capped.
+ * The model's answer, rebuilt: only the expected keys, every text capped and
+ * run through the secret scanner (the model can read the project's `.env`;
+ * a suggested body may be saved into a memory that syncs).
  * @param {unknown} answer
  * @returns {{ok: true, verdict: string, note: string, evidence: string[], suggested_body?: string}|{ok: false, reason: string}}
  */
@@ -145,14 +151,16 @@ function parseCheckAnswer(answer) {
   if (!isObject(answer)) return { ok: false, reason: 'bad-answer' };
   const verdict = typeof answer.verdict === 'string' ? answer.verdict.trim().toLowerCase() : '';
   if (!CHECK_VERDICTS.includes(verdict)) return { ok: false, reason: 'bad-verdict' };
+  // Scrubbed whole, then cut: a secret cut in half at the limit is too short for the scrubber to see.
+  const clean = (v) => (typeof v === 'string' ? scrub(v) : v);
   const raw = Array.isArray(answer.evidence) ? answer.evidence : typeof answer.evidence === 'string' ? [answer.evidence] : [];
   const evidence = raw
     .slice(0, MAX_EVIDENCE * 2)
-    .map((e) => oneLine(e, MAX_EVIDENCE_CHARS))
+    .map((e) => oneLine(clean(e), MAX_EVIDENCE_CHARS))
     .filter(Boolean)
     .slice(0, MAX_EVIDENCE);
-  const suggested = verdict === 'partly' ? block(answer.suggested_body, MAX_BODY) : '';
-  return { ok: true, verdict, note: oneLine(answer.note, MAX_NOTE), evidence, ...(suggested ? { suggested_body: suggested } : {}) };
+  const suggested = verdict === 'partly' ? block(clean(answer.suggested_body), MAX_BODY) : '';
+  return { ok: true, verdict, note: oneLine(clean(answer.note), MAX_NOTE), evidence, ...(suggested ? { suggested_body: suggested } : {}) };
 }
 
 // --- applying an answer -----------------------------------------------------------------
@@ -171,12 +179,13 @@ function applyCheck({ dir, key, checked, result, today, log, roots = {} }) {
   if (found.record.archived) return { ok: false, reason: 'not-found' };
   if (found.record.title !== checked.title || found.record.body !== checked.body) return { ok: false, reason: 'changed' };
   const { verdict, note, evidence } = result;
-  const logged = log.add({ ev: 'checked', key, verdict, note, evidence, ...(result.suggested_body ? { suggested: result.suggested_body } : {}) });
-  if (!logged) return { ok: false, reason: 'log' };
+  // The record first: a log line saying "holds" for a memory that was not re-dated would be a lie.
   if (verdict === 'holds') {
     const res = verify(dir, key, today, { log, roots, by: 'check', note, evidence });
     if (!res.ok) return res;
   }
+  const logged = log.add({ ev: 'checked', key, verdict, note, evidence, ...(result.suggested_body ? { suggested: result.suggested_body } : {}) });
+  if (!logged) return { ok: false, reason: 'log' };
   return { ok: true, verdict };
 }
 
@@ -193,6 +202,8 @@ function editChecked({ dir, key, title, body, today, log }) {
   if (!log || typeof log.read !== 'function') return { ok: false, reason: 'log' };
   const found = findConfirmed(dir, key);
   if (!found.record) return { ok: false, reason: found.reason };
+  // Archived since the answer (decay, or the other PC): an edit must not bring it back silently.
+  if (found.record.archived) return { ok: false, reason: 'not-found' };
   const open = openChecks(log.read()).get(key);
   if (!open || open.verdict !== 'partly') return { ok: false, reason: 'not-partly' };
   const res = checkRecord({ ...found.record, title, body, last_verified: today });
@@ -238,7 +249,8 @@ function checkAllTargets({ records, events, project, now }) {
 // --- the runner -----------------------------------------------------------------------
 
 const NO_VERDICTS = Object.freeze(Object.fromEntries(CHECK_VERDICTS.map((v) => [v, 0])));
-const IDLE = Object.freeze({ running: false, project: null, key: null, total: 0, done: 0, verdicts: NO_VERDICTS, failed: 0, error: null, startedAt: null, finishedAt: null });
+// failedKey = the memory whose check failed last: the window shows that failure on its entry.
+const IDLE = Object.freeze({ running: false, project: null, key: null, total: 0, done: 0, verdicts: NO_VERDICTS, failed: 0, error: null, failedKey: null, startedAt: null, finishedAt: null });
 
 /** The project's folder on this PC, when it is a real one; null otherwise. */
 function folderOf(roots, project) {
@@ -314,8 +326,11 @@ function createChecker({ dir, run, roots, log, gitLog = readGitLog, now = Date.n
         notify(onWritten);
         continue;
       }
-      failuresInARow++;
-      update({ done: state.done + 1, failed: state.failed + 1, error: res.reason });
+      console.error(`[memory] check of ${key} failed:`, res.reason);
+      // Only the model failing ends the run: the next call would fail the same way. A memory
+      // edited or removed meanwhile says nothing about the next one.
+      if (MODEL_FAILURE_RE.test(res.reason)) failuresInARow++;
+      update({ done: state.done + 1, failed: state.failed + 1, error: res.reason, failedKey: key });
       if (failuresInARow >= MAX_FAILURES_IN_A_ROW) break;
     }
   }

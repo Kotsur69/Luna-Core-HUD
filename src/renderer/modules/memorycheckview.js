@@ -187,6 +187,8 @@ export function createCheckFlow(w) {
   let checkable = new Set();
   /** An i18n key when main refused "Check all", or null. */
   let startError = null;
+  /** A "Check all" call is on its way to main. */
+  let starting = false;
 
   const close = (key) => {
     draft = null;
@@ -221,10 +223,25 @@ export function createCheckFlow(w) {
     canCheck: (project) => checkable.has(project),
     startError: () => startError,
     async checkAll(project) {
+      // A second click before the repaint disables the button would only be refused as busy.
+      if (starting) return;
+      starting = true;
       startError = null;
       const res = await w.call('memoryCheckAll', project);
+      starting = false;
       if (!res || !res.ok) startError = checkStartKey(res && res.reason);
       w.load();
+    },
+    /** The entry's last answer, and the failure of its last check when that is the newer news. Null when there is neither. */
+    badge(item) {
+      const answer = checkBadge(item.check);
+      const failedHere = status && !status.running && status.failedKey === item.key && status.error;
+      if (!failedHere) return answer;
+      const box = el('div');
+      const err = el('p', 'hint is-fail', t('mem.check.lastFailed', { reason: t(checkErrorKey(status.error)) }));
+      err.setAttribute('role', 'alert');
+      box.append(...(answer ? [answer] : []), err);
+      return box;
     },
     /** The check button of an entry. */
     button(item, off) {
