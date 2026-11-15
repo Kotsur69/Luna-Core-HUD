@@ -16,6 +16,7 @@ import { t } from './util.js';
 export function flagLine(flag) {
   if (flag.kind === 'disputed') return t('mem.inbox.review.disputed', { note: flag.note || '-' });
   if (flag.kind === 'anchor') return t('mem.inbox.review.anchor', { files: (flag.missing || []).join(', ') });
+  if (flag.kind === 'changed') return t('mem.inbox.review.changed', { files: (flag.files || []).join(', '), date: flag.last || '-' });
   if (flag.kind === 'unopened') return t('mem.inbox.review.unopened', { days: flag.days });
   return t('mem.inbox.review.stale', { since: flag.since });
 }

@@ -55,6 +55,7 @@ const { createRepoKeys, findRepo } = require('../src/missionrepokey');
 const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, memoryNotes, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
 const { cardSessions, cardSessionLines } = require('../src/memoryuse');
 const { reviewList, verify, retire } = require('../src/memoryreview');
+const { changeQueries, readChanges } = require('../src/memorychanges');
 const { machineName } = require('../src/missionledgersync');
 
 const USAGE = `Usage: node scripts/luna.js memory <command> [options]
@@ -391,21 +392,41 @@ function rootsHere(project) {
 
 const FLAG_TEXT = {
   disputed: (f) => `REPORTED WRONG by a session${f.note ? `: ${f.note}` : ''}`,
+  checked: (f) => `"Check if still true" said ${f.verdict}${f.note ? `: ${f.note}` : ''}`,
   anchor: (f) => `names a file that is gone: ${f.missing.join(', ')}`,
+  changed: (f) => `files it names changed since it was checked: ${f.files.join(', ')} (last change ${f.last})`,
   stale: (f) => `not verified since ${f.since}`,
   unopened: (f) => `never opened in ${f.days} days (low priority)`,
 };
+/** A flag this CLI has no words for yet (a newer app wrote it) is still shown. */
+const flagText = (flag) => (Object.hasOwn(FLAG_TEXT, flag.kind) ? FLAG_TEXT[flag.kind](flag) : flag.kind);
+
+/**
+ * The project's 'changed' answers: one git log in its repository
+ * (src/memorychanges.js). A failure is said once and flags nothing.
+ */
+async function changesHere(records, roots) {
+  const changes = {};
+  for (const [project, query] of Object.entries(changeQueries(records, roots))) {
+    const res = await readChanges(query);
+    if (res.ok) changes[project] = res.changes;
+    else process.stderr.write(`(Changed files not checked, git log failed: ${res.reason})\n`);
+  }
+  return changes;
+}
 
 /** Phase 5: the confirmed memories that need a look. */
-function cmdReview({ configDir, dir, project }) {
+async function cmdReview({ configDir, dir, project }) {
   const roots = rootsHere(project);
-  const { items, total } = reviewList({ records: scan(dir).records, today: today(), events: createLog(logPath(configDir)).read(), roots });
+  const { records } = scan(dir);
+  const changes = await changesHere(records, roots);
+  const { items, total } = reviewList({ records, today: today(), events: createLog(logPath(configDir)).read(), roots, changes });
   if (!project || !roots[project]) out('(Run this inside a repository to also check the files its memories name.)');
   if (!total) return out('Nothing to review.');
   for (const item of items) {
     out(`[${item.type}] ${item.title}`);
     out(`   ${item.key}`);
-    for (const flag of item.flags) out(`   ${FLAG_TEXT[flag.kind](flag)}`);
+    for (const flag of item.flags) out(`   ${flagText(flag)}`);
   }
   out(`${total} to review ("memory verify <id>" = still true, "memory retire <id>" = delete)`);
 }

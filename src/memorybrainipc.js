@@ -46,6 +46,7 @@ const { restore } = require('./memorydecay');
 const { recentUsage } = require('./memoryuse');
 const { lastChecks } = require('./memorylog');
 const { checkOf, editChecked } = require('./memorycheck');
+const { cachedChanges } = require('./memorychanges');
 
 const MAX_KEY_CHARS = 200;
 /** Merge text longer than this is refused before it is read; checkRecord applies the real limits. */
@@ -173,9 +174,11 @@ function projectsOf(records, gone, enabled) {
  *   onChanged fires after a write (sync soon, repaint); log.read = this PC's memory log
  *   (reads for the final score, disputes for the health line); roots = {<project>: its
  *   folder on this PC}, for the anchor check of the health line; checker = memorycheck.createChecker()
- *   ("Check if still true"), null = the check channels refuse
+ *   ("Check if still true"), null = the check channels refuse; changes =
+ *   memorychanges.createChangeTracker(): memory:list refreshes it in the background
+ *   (the 'changed' flags "Check all" puts first), null = none
  */
-function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onChanged = () => {}, now = Date.now, log = null, roots = () => ({}), checker = null }) {
+function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onChanged = () => {}, now = Date.now, log = null, roots = () => ({}), checker = null, changes = null }) {
   const guarded = (label, fn) => {
     try {
       const res = fn();
@@ -218,7 +221,8 @@ function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onC
     try {
       const today = isoDate(now());
       const own = records.filter(([, r]) => r.project === project);
-      const review = reviewList({ records: own, today, events: evs, roots: knownRoots() }).items;
+      const rootsHere = knownRoots();
+      const review = reviewList({ records: own, today, events: evs, roots: rootsHere, changes: cachedChanges(changes, own, rootsHere, onChanged) }).items;
       const pairs = findConflicts(records).filter((p) => (splitKey(p.a) || {}).project === project);
       return projectHealth(items, review, pairs, { today });
     } catch (err) {

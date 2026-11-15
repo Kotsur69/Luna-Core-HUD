@@ -10,6 +10,10 @@
 //   anchor    the memory names a file of its repository (`src/x.js`) and that
 //             file is gone. Checked only on a PC that has the repository, and
 //             only for a path whose top folder exists there.
+//   changed   a file the memory names has a commit after the day it was last
+//             checked (src/memorychanges.js asks git, cached; this file only
+//             reads the answer). Compared by UTC day: a commit made later on
+//             the day of a "still true" is not flagged.
 //   disputed  a session reported through `memory_verify` that the memory was
 //             wrong (src/memorylog.js keeps the report).
 //   checked   "Check if still true" (src/memorycheck.js) found it fixed, partly
@@ -35,7 +39,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { splitKey, scoreOf } = require('./memoryrecord');
+const { splitKey, scoreOf, DATE_RE } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord, fileFor } = require('./memorystore');
 const { openDisputes, openChecks, acceptedMissing, DAY_MS } = require('./memorylog');
 const { lastOpened, oldestRead } = require('./memoryuse');
@@ -53,7 +57,7 @@ const MAX_ITEMS = 100;
 /** A confirmed memory checked longer ago than this and never opened since is flagged, at low priority. */
 const UNOPENED_DAYS = 60;
 /** Worst first. A flag listed in LOW_FLAGS alone does not count toward the hub's number. */
-const FLAG_ORDER = ['disputed', 'checked', 'anchor', 'stale', 'unopened'];
+const FLAG_ORDER = ['disputed', 'checked', 'anchor', 'changed', 'stale', 'unopened'];
 const LOW_FLAGS = ['unopened'];
 
 const daysBetween = (from, to) => Math.floor((Date.parse(to) - Date.parse(from)) / DAY_MS);
@@ -119,6 +123,28 @@ function missingAnchors(record, root) {
   });
 }
 
+/**
+ * The named files that have a commit after the day the memory was last
+ * checked, by UTC day. Pure: the commits come from src/memorychanges.js.
+ * @param {{body: string, created: string, last_verified?: string}} record
+ * @param {Map<string, string>|null|undefined} changes anchor path -> ISO time of its newest commit
+ * @returns {{files: string[], last: string}|null} last = YYYY-MM-DD of the newest of those commits
+ */
+function changedSince(record, changes) {
+  if (!(changes instanceof Map) || !changes.size) return null;
+  const since = checkedOn(record);
+  const files = [];
+  let last = '';
+  for (const anchor of anchorsOf(record.body)) {
+    const at = changes.get(anchor);
+    const day = typeof at === 'string' ? at.slice(0, 10) : '';
+    if (!DATE_RE.test(day) || day <= since) continue;
+    files.push(anchor);
+    if (day > last) last = day;
+  }
+  return files.length ? { files, last } : null;
+}
+
 /** The keys a confirmed memory of the same project has replaced. */
 function supersededKeys(records) {
   const gone = new Set();
@@ -146,13 +172,15 @@ function unopenedCheck(events, today) {
 
 /**
  * The confirmed memories that need a look.
- * @param {{records: [string, object][], today: string, events?: object[], roots?: object}} ctx
+ * @param {{records: [string, object][], today: string, events?: object[], roots?: object, changes?: object}} ctx
  *   records = memorystore.scan().records; events = the memory log;
- *   roots = {<project>: its folder on this PC}, for the anchor check
- * @returns {{items: object[], total: number, urgent: number}} worst first: disputed, anchors,
- *   stale, then unopened; urgent = how many carry more than a low-priority flag
+ *   roots = {<project>: its folder on this PC}, for the anchor check;
+ *   changes = {<project>: Map<anchorPath, newestCommitISO>} (src/memorychanges.js);
+ *   a project without an entry gets no 'changed' flags
+ * @returns {{items: object[], total: number, urgent: number}} worst first: disputed, checked,
+ *   anchors, changed, stale, then unopened; urgent = how many carry more than a low-priority flag
  */
-function reviewList({ records, today, events = [], roots = {} }) {
+function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
   const disputes = openDisputes(events);
   const checks = openChecks(events);
   const accepted = acceptedMissing(events);
@@ -170,6 +198,11 @@ function reviewList({ records, today, events = [], roots = {} }) {
     const seen = accepted.get(key) || new Set();
     const missing = missingAnchors(record, roots[record.project]).filter((p) => !seen.has(p));
     if (missing.length) flags.push({ kind: 'anchor', missing });
+    const commits = changes && Object.hasOwn(changes, record.project) ? changes[record.project] : null;
+    const changed = changedSince(record, commits);
+    // A file that is gone is the anchor flag's: its deletion is not a second reason.
+    const files = changed ? changed.files.filter((f) => !missing.includes(f)) : [];
+    if (files.length) flags.push({ kind: 'changed', files, last: changed.last });
     if (isStale(record, today)) flags.push({ kind: 'stale', since: checkedOn(record) });
     if (unopened && unopened(key, record)) flags.push({ kind: 'unopened', days: UNOPENED_DAYS });
     if (!flags.length) continue;
@@ -273,6 +306,7 @@ module.exports = {
   checkedOn,
   anchorsOf,
   missingAnchors,
+  changedSince,
   reviewList,
   supersededKeys,
   verify,
@@ -284,4 +318,6 @@ module.exports = {
   REVERIFY_DAYS,
   UNOPENED_DAYS,
   MAX_ITEMS,
+  FLAG_ORDER,
+  LOW_FLAGS,
 };

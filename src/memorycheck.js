@@ -38,7 +38,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { validProject, splitKey, checkRecord, DATE_RE, MAX_BODY, GLOBAL } = require('./memoryrecord');
 const { scan, writeRecord } = require('./memorystore');
-const { supersededKeys, findConfirmed, verify, anchorsOf, checkedOn } = require('./memoryreview');
+const { supersededKeys, findConfirmed, verify, anchorsOf, checkedOn, changedSince } = require('./memoryreview');
 const { openDisputes, openChecks, lastChecks, CHECK_VERDICTS, MAX_EVIDENCE, MAX_EVIDENCE_CHARS, DAY_MS } = require('./memorylog');
 const { createJobLock, promptSafe } = require('./memoryscan');
 const { scrub } = require('./hostscrub');
@@ -227,23 +227,35 @@ function checkOf(checks, key) {
 // --- which memories "Check all" takes ---------------------------------------------------
 
 /**
- * The confirmed memories of `project` a "Check all" click checks: disputed
- * ones first, then the longest unverified; none checked in the last
- * RECHECK_DAYS; at most CHECK_ALL_CAP.
- * @param {{records: [string, object][], events: object[], project: string, now: number}} ctx
+ * The confirmed memories of `project` a "Check all" click checks: those whose
+ * named files changed since they were checked (the review list's 'changed'
+ * flag) first, then disputed ones, then the longest unverified; at most
+ * CHECK_ALL_CAP. A memory checked in the last RECHECK_DAYS is skipped, unless
+ * its files changed after that check: then the answer may differ.
+ * @param {{records: [string, object][], events: object[], project: string, now: number,
+ *   changes?: Map<string, string>|null}} ctx changes = the project's cached commits per
+ *   named file (src/memorychanges.js); none = no 'changed' priority
  * @returns {string[]} keys
  */
-function checkAllTargets({ records, events, project, now }) {
+function checkAllTargets({ records, events, project, now, changes = null }) {
   const gone = supersededKeys(records);
   const disputed = openDisputes(events);
   const checks = lastChecks(events);
   const recent = now - RECHECK_DAYS * DAY_MS;
-  return records
+  const candidates = records
     .filter(([key, r]) => r.project === project && r.confidence === 'confirmed' && !r.archived && !gone.has(key))
-    .filter(([key]) => !checks.has(key) || checks.get(key).at < recent)
-    .sort(([ka, a], [kb, b]) => Number(disputed.has(kb)) - Number(disputed.has(ka)) || checkedOn(a).localeCompare(checkedOn(b)) || ka.localeCompare(kb))
+    .map(([key, r]) => ({ key, record: r, changed: changedSince(r, changes) }));
+  const due = ({ key, changed }) => {
+    const check = checks.get(key);
+    return !check || check.at < recent || Boolean(changed && changed.last > isoDate(check.at));
+  };
+  // Lower is checked first.
+  const tier = ({ key, changed }) => (changed ? 0 : disputed.has(key) ? 1 : 2);
+  return candidates
+    .filter(due)
+    .sort((a, b) => tier(a) - tier(b) || checkedOn(a.record).localeCompare(checkedOn(b.record)) || a.key.localeCompare(b.key))
     .slice(0, CHECK_ALL_CAP)
-    .map(([key]) => key);
+    .map(({ key }) => key);
 }
 
 // --- the runner -----------------------------------------------------------------------
@@ -274,13 +286,15 @@ function folderOf(roots, project) {
 /**
  * @param {{dir: () => string, run: (job: {prompt: string, cwd: string}) => Promise<object>,
  *   roots: () => object, log: {add: Function, read: Function}, gitLog?: (opts: {root: string, since: string}) => Promise<string>,
- *   now?: () => number, lock?: object, onProgress?: (status: object) => void, onWritten?: () => void}} deps
+ *   now?: () => number, lock?: object, onProgress?: (status: object) => void, onWritten?: () => void,
+ *   changes?: () => object}} deps
  *   run = the model call (missionrunner.runJob, lean + readOnly, cwd = the folder); roots = {<project>:
- *   its folder on this PC}; lock = memoryscan.createJobLock(), shared with the usefulness scan
+ *   its folder on this PC}; lock = memoryscan.createJobLock(), shared with the usefulness scan;
+ *   changes = the cached 'changed' answers {<project>: Map} (memorychanges tracker current())
  * @returns {{check: (key: string) => object, checkAll: (project: string) => object, status: () => object,
  *   checkableProjects: () => string[], whenIdle: () => Promise<void>}}
  */
-function createChecker({ dir, run, roots, log, gitLog = readGitLog, now = Date.now, lock = createJobLock(), onProgress = () => {}, onWritten = () => {} }) {
+function createChecker({ dir, run, roots, log, gitLog = readGitLog, now = Date.now, lock = createJobLock(), onProgress = () => {}, onWritten = () => {}, changes = () => ({}) }) {
   let state = { ...IDLE };
   let current = null;
   const status = () => ({ ...state, verdicts: { ...state.verdicts } });
@@ -371,7 +385,14 @@ function createChecker({ dir, run, roots, log, gitLog = readGitLog, now = Date.n
     } catch (err) {
       console.error('[memory] check: memory log unavailable:', errText(err));
     }
-    const keys = checkAllTargets({ records: scan(dir()).records, events, project, now: now() });
+    let commits = null;
+    try {
+      const known = changes() || {};
+      commits = Object.hasOwn(known, project) ? known[project] : null;
+    } catch (err) {
+      console.error('[memory] check: changed files unavailable:', errText(err));
+    }
+    const keys = checkAllTargets({ records: scan(dir()).records, events, project, now: now(), changes: commits });
     if (!keys.length) return { ok: false, reason: 'empty' };
     return begin(project, keys, folder);
   }
