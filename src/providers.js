@@ -36,6 +36,9 @@ const BASE_FILE = paths.bundled('providers.json');
 // key is needed on the free tiers.
 const WIRE_VIA_VALUES = new Set(['direct', 'ccr', 'native']);
 
+/** Native CLIs with a Luna overlay - mirrors SYNC_CLIS in src/lunasynclaunch.js. */
+const LUNA_SYNC_COMMANDS = new Set(['codex', 'gemini']);
+
 /** A native template's command: one bare executable name, never a path or shell syntax. */
 const NATIVE_COMMAND_RE = /^[a-z][a-z0-9-]*$/;
 
@@ -214,8 +217,9 @@ function buildProfileFromTemplate(template, entry) {
   // Lean-launch toggles only mean something for a template that ships local
   // launch defaults; for any other template an override is dropped.
   const localLaunch = template.localLaunch ? normalizeLocalLaunch(e.localLaunch) : null;
-  // The Luna overlay only exists for another vendor's CLI; `claude` already has the setup.
-  const lunaSync = template.wireVia === 'native' && e.lunaSync === true;
+  // The Luna overlay only exists for a vendor CLI with an overlay layout
+  // (src/lunasynclaunch.js SYNC_CLIS); `claude` already has the setup.
+  const lunaSync = template.wireVia === 'native' && LUNA_SYNC_COMMANDS.has(template.command) && e.lunaSync === true;
   // A chain choice only means something on a template that has one.
   const fallbackChain = template.fallbackChain && typeof e.fallbackChain === 'string' && FALLBACK_CHAIN_RE.test(e.fallbackChain)
     ? e.fallbackChain

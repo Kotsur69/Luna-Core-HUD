@@ -429,16 +429,18 @@ test('codex-cli builds a keyless profile that launches the codex CLI', () => {
   assert.equal(isCcrTemplate(tpl), false);
 });
 
-test('gemini-cli works without a key (Google login) and stores an optional one', () => {
-  const tpl = getProviderTemplate(loadProviders().providers, 'gemini-cli');
-  assert.ok(tpl, 'gemini-cli template is shipped');
+test('antigravity builds a keyless profile that launches agy (Google login)', () => {
+  const { providers } = loadProviders();
+  assert.equal(getProviderTemplate(providers, 'gemini-cli'), null, 'the retired Gemini CLI template is gone');
+  const tpl = getProviderTemplate(providers, 'antigravity');
+  assert.ok(tpl, 'antigravity template is shipped');
   assert.equal(tpl.requiresApiKey, false);
-  assert.equal(tpl.optionalApiKey, true);
-  const keyless = buildProfileFromTemplate(tpl, { id: 'g', label: 'G' });
-  assert.equal(keyless.profile.command, 'gemini');
-  assert.deepEqual(keyless.profile.env, {});
-  const keyed = buildProfileFromTemplate(tpl, { id: 'g', label: 'G', apiKey: 'AIza-test' });
-  assert.deepEqual(keyed.profile.env, { GEMINI_API_KEY: 'AIza-test' });
+  assert.equal(tpl.optionalApiKey, false);
+  const result = buildProfileFromTemplate(tpl, { id: 'antigravity-michal', label: 'Antigravity - Michał' });
+  assert.equal(result.ok, true);
+  assert.equal(result.profile.command, 'agy');
+  assert.equal(result.profile.label, 'Antigravity - Michał');
+  assert.deepEqual(result.profile.env, {});
 });
 
 test('openrouter defaults every tier to the free router and needs a key', () => {
@@ -460,11 +462,13 @@ test('a native template can never opt into autoModel', () => {
   assert.equal(tpl.autoModel, false);
 });
 
-test('buildProfileFromTemplate stores lunaSync only for a native template', () => {
+test('buildProfileFromTemplate stores lunaSync only for a native template with an overlay', () => {
   const { providers } = loadProviders();
-  const gemini = getProviderTemplate(providers, 'gemini-cli');
-  assert.equal(buildProfileFromTemplate(gemini, { id: 'g', label: 'G', lunaSync: true }).profile.lunaSync, true);
-  assert.equal(buildProfileFromTemplate(gemini, { id: 'g', label: 'G' }).profile.lunaSync, undefined);
+  const codex = getProviderTemplate(providers, 'codex-cli');
+  assert.equal(buildProfileFromTemplate(codex, { id: 'g', label: 'G', lunaSync: true }).profile.lunaSync, true);
+  assert.equal(buildProfileFromTemplate(codex, { id: 'g', label: 'G' }).profile.lunaSync, undefined);
+  const agy = getProviderTemplate(providers, 'antigravity');
+  assert.equal(buildProfileFromTemplate(agy, { id: 'a', label: 'A', lunaSync: true }).profile.lunaSync, undefined);
   const glm = getProviderTemplate(providers, 'glm');
   assert.equal(buildProfileFromTemplate(glm, { id: 'x', label: 'X', apiKey: 'k', lunaSync: true }).profile.lunaSync, undefined);
 });

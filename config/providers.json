@@ -166,16 +166,13 @@
       "docsUrl": "https://developers.openai.com/codex/cli"
     },
     {
-      "id": "gemini-cli",
-      "label": { "pl": "Gemini CLI (konto Google)", "en": "Gemini CLI (Google account)" },
+      "id": "antigravity",
+      "label": { "pl": "Antigravity (konto Google)", "en": "Antigravity (Google account)" },
       "wireVia": "native",
-      "command": "gemini",
+      "command": "agy",
       "requiresApiKey": false,
-      "optionalApiKey": true,
-      "envTemplate": {
-        "GEMINI_API_KEY": "{{apiKey}}"
-      },
-      "docsUrl": "https://geminicli.com/docs/resources/quota-and-pricing/"
+      "envTemplate": {},
+      "docsUrl": "https://antigravity.google"
     },
     {
       "id": "ollama",

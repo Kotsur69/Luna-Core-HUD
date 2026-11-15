@@ -67,7 +67,7 @@ test('templateFields matches every shipped template\'s real field needs', () => 
     'openai-compatible': { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: true, showLunaSync: false },
     openrouter: { needsApiKey: true, showApiKey: true, needsBaseUrl: false, showModel: true, showFastModel: true, showCcrPort: false, showLunaSync: false },
     'codex-cli': { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: true },
-    'gemini-cli': { needsApiKey: false, showApiKey: true, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: true },
+    antigravity: { needsApiKey: false, showApiKey: false, needsBaseUrl: false, showModel: false, showFastModel: false, showCcrPort: false, showLunaSync: false },
   };
   for (const [id, want] of Object.entries(expected)) {
     assert.deepEqual(templateFields(template(id)), want, `templateFields(${id})`);
@@ -556,21 +556,21 @@ test('every localLaunch toggle string has a pl and en translation', () => {
 });
 
 test('templateFields shows an optional key field without requiring it', () => {
-  const fields = templateFields(template('gemini-cli'));
+  const fields = templateFields({ id: 'x', wireVia: 'native', command: 'gemini', requiresApiKey: false, optionalApiKey: true });
   assert.equal(fields.showApiKey, true);
   assert.equal(fields.needsApiKey, false);
   assert.equal(templateFields(template('codex-cli')).showApiKey, false);
 });
 
 test('buildAddPayload accepts a native CLI profile with no key', () => {
-  const result = buildAddPayload({ template: template('gemini-cli'), label: 'Gemini CLI' });
+  const result = buildAddPayload({ template: template('antigravity'), label: 'Antigravity - Michał' });
   assert.equal(result.ok, true);
   assert.equal(result.payload.apiKey, undefined);
 });
 
-test('templateFields offers the Luna sync switch only for native templates', () => {
-  assert.equal(templateFields(template('gemini-cli')).showLunaSync, true);
+test('templateFields offers the Luna sync switch only for native CLIs with an overlay', () => {
   assert.equal(templateFields(template('codex-cli')).showLunaSync, true);
+  assert.equal(templateFields(template('antigravity')).showLunaSync, false);
   assert.equal(templateFields(template('glm')).showLunaSync, false);
 });
 

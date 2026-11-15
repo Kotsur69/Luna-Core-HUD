@@ -19,6 +19,9 @@
 
 'use strict';
 
+/** Native CLIs with a Luna overlay - mirrors SYNC_CLIS in src/lunasynclaunch.js. */
+const LUNA_SYNC_COMMANDS = new Set(['codex', 'gemini']);
+
 /**
  * Only entries built FROM a provider template (src/providers.js) - a
  * hand-written profile (e.g. the shipped claude-cloud) has `templateId: null`
@@ -62,8 +65,9 @@ function templateFields(template) {
     showModel: modelCapable && usesPlaceholder(envTemplate, 'model'),
     showFastModel: modelCapable && usesPlaceholder(envTemplate, 'fastModel'),
     showCcrPort: usesPlaceholder(envTemplate, 'ccrPort'),
-    // "Use my Luna setup" - only for another vendor's CLI (src/lunasyncio.js).
-    showLunaSync: t.wireVia === 'native',
+    // "Use my Luna setup" - only for a vendor CLI that has an overlay layout
+    // (src/lunasynclaunch.js SYNC_CLIS); Antigravity's `agy` has none.
+    showLunaSync: t.wireVia === 'native' && LUNA_SYNC_COMMANDS.has(t.command),
   };
 }
 
