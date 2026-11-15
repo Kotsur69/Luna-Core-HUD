@@ -29,9 +29,10 @@ import { autoSection } from './memoryautopanel.js';
 import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft } from './memorybrain.js';
 import { clearHistory } from './memoryhistory.js';
 import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
-import { statsLine, captureLine, searchLine } from './memoryinboxlines.js';
+import { statsLine, captureLine, searchLine, flagLine, graveLine } from './memoryinboxlines.js';
+import { createCheckFlow, checkBadge, checkReasonKey } from './memorycheckview.js';
 
-export { statsLine, searchLine };
+export { statsLine, searchLine, flagLine, graveLine };
 
 /** Characters of a body shown before "show all". */
 export const PREVIEW_CHARS = 320;
@@ -62,16 +63,20 @@ let brainProject = '';
 /** An i18n key when main refused to start a scan, or null. */
 let scanError = null;
 
-/** "Make a to-do" (memorytodoform.js): its open form holds `editing`, so every draft lock applies to it. */
-const todo = createTodoFlow({
+/** What the to-do and check flows use of the window. Their open forms hold `editing`, so every draft lock applies. */
+const flowHooks = {
   actResult: (...args) => actResult(...args),
+  call: (...args) => call(...args),
   failureOf: (key) => failed.get(key),
   clearFailure: (key) => failed.delete(key),
   reasonKey: (reason) => reasonKey(reason),
   load: (key) => load(key),
   getEditing: () => editing,
   setEditing: (key) => void (editing = key),
-});
+};
+/** "Make a to-do" (memorytodoform.js) and "Check if still true" (memorycheckview.js). */
+const todo = createTodoFlow(flowHooks);
+const check = createCheckFlow(flowHooks);
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
@@ -100,8 +105,8 @@ export function preview(body, max = PREVIEW_CHARS) {
 
 /** The i18n key of a failed action's reason. */
 export function reasonKey(reason) {
-  const todoKey = todoReasonKey(reason);
-  if (todoKey) return todoKey;
+  const ownKey = todoReasonKey(reason) || checkReasonKey(reason);
+  if (ownKey) return ownKey;
   if (['not-found', 'not-pending', 'not-confirmed', 'not-flagged', 'not-conflict', 'not-archived'].includes(reason)) return 'mem.inbox.err.gone';
   if (['empty-body', 'bad-title', 'body-too-long', 'record-too-big', 'bad-edits'].includes(reason)) return 'mem.inbox.err.text';
   return 'mem.inbox.err.failed';
@@ -253,14 +258,6 @@ function entry(item) {
   return card;
 }
 
-/** Why a confirmed memory is on the review list, in words (never by colour alone). */
-export function flagLine(flag) {
-  if (flag.kind === 'disputed') return t('mem.inbox.review.disputed', { note: flag.note || '-' });
-  if (flag.kind === 'anchor') return t('mem.inbox.review.anchor', { files: (flag.missing || []).join(', ') });
-  if (flag.kind === 'unopened') return t('mem.inbox.review.unopened', { days: flag.days });
-  return t('mem.inbox.review.stale', { since: flag.since });
-}
-
 /** One confirmed memory that needs a look: still true, or retire (asked twice). */
 function reviewEntry(item) {
   const card = cardFor(item);
@@ -276,10 +273,13 @@ function reviewEntry(item) {
       }),
     );
   }
-  card.append(...item.flags.map((flag) => el('p', 'mem-inbox__note', flagLine(flag))), el('p', 'mem-inbox__note', usefulnessLine(item)));
+  // A 'checked' flag is drawn as the check's badge (memorycheckview.js), with its evidence.
+  const flags = item.flags.filter((flag) => flag.kind !== 'checked').map((flag) => el('p', 'mem-inbox__note', flagLine(flag)));
+  const badge = checkBadge(item.check);
+  card.append(...flags, ...(badge ? [badge] : []), el('p', 'mem-inbox__note', usefulnessLine(item)));
   const off = busy.has(item.key);
   const actions = el('div', 'mem-inbox__actions');
-  const form = todo.formOf(item.key);
+  const form = todo.formOf(item.key) || check.formOf(item.key);
   if (form) {
     card.append(form);
   } else if (confirming === item.key) {
@@ -302,7 +302,7 @@ function reviewEntry(item) {
     });
     const toTodo = todoButton({ global: isGlobal(item), off, onClick: () => todo.open(item.key) });
     for (const b of [keep, retire]) b.disabled = off;
-    actions.append(keep, toTodo, retire);
+    actions.append(keep, check.button(item, off), ...check.actions(item, { off }), toTodo, retire);
   }
   if (!form) card.append(actions);
   if (failed.has(item.key)) {
@@ -311,13 +311,6 @@ function reviewEntry(item) {
     card.append(err);
   }
   return card;
-}
-
-/** Why a graveyard entry was dropped, in words: the usefulness floor with its score, or main's reason. */
-export function graveLine(item) {
-  if (item.reason === 'low usefulness') return t('mem.grave.low', { score: Number.isInteger(item.usefulness) ? item.usefulness : '?' });
-  if (item.reason === 'moved to to-do') return t('mem.grave.moved');
-  return t('mem.grave.reason', { reason: String(item.reason || '') });
 }
 
 /** One dropped candidate: restore it to the inbox, or delete it. Model text: textContent only. */
@@ -447,6 +440,7 @@ function listView(res, review, conflicts, graves) {
   if (editing !== null && !listed.has(editing)) {
     editing = null;
     todo.reset();
+    check.reset();
   }
   if (confirming !== null && !listed.has(confirming)) confirming = null;
   // A decided entry hands the keyboard selection to the one that took its place.
@@ -484,6 +478,7 @@ function allView(all) {
   if (editing !== null && !(all && Array.isArray(all.items) && all.items.some((item) => item.key === editing))) {
     editing = null;
     todo.reset();
+    check.reset();
   }
   const { node, list } = memoriesPanel(all, {
     scanError,
@@ -498,6 +493,7 @@ function allView(all) {
     onRestore: (key) => decide(key, 'memoryRestore', key),
     onTodo: (key) => todo.open(key),
     todoFormOf: (key) => todo.formOf(key),
+    check,
   });
   return { nodes: [node], list };
 }
@@ -558,14 +554,16 @@ let loadSeq = 0;
 /** Reads both lists and repaints. `focusKey` / `focusIndex` / `focusTab` say where the keyboard focus goes. */
 async function load(focusKey, focusIndex, focusTab) {
   const seq = ++loadSeq;
-  const [res, review, all, graves] = await Promise.all([
+  const [res, review, all, graves, checks] = await Promise.all([
     call('memoryInbox'),
     call('memoryReview'),
     tab === 'all' ? call('memoryList', brainProject) : Promise.resolve(null),
     call('memoryGraveyard'),
+    call('memoryCheckStatus'),
   ]);
   // Only the newest read paints: an older answer arriving late must not undo its focus.
   if (seq !== loadSeq || !overlay || !overlay.isOpen()) return;
+  check.setStatus(checks);
   if (!res || !res.ok || !Array.isArray(res.items)) {
     overlay.body.replaceChildren(el('p', 'hint is-fail', t('mem.inbox.err.load')));
     return;
@@ -769,6 +767,7 @@ export async function openMemoryInbox() {
         stopListening = null;
         editing = null;
         todo.reset();
+        check.reset();
         confirming = null;
         selected = null;
         shownItems = [];

@@ -6076,6 +6076,14 @@ section.orchestra__planrun {
 /* A global entry reaches every project's card; a session that read web or MCP content needs a closer look. */
 .mem-inbox__note--global, .mem-inbox__note--warn { padding-left: var(--space-3); border-left: 2px solid currentColor; font-weight: 600; }
 .mem-inbox__note--global { color: var(--neon-cyan); }
+/* "Check if still true" (memorycheckview.js): the verdict is always in words; the colour only repeats it. */
+.mem-check { display: flex; flex-direction: column; gap: var(--space-1, 4px); }
+.mem-check__badge { display: inline-block; padding: 0 var(--space-2); border: 1px solid currentColor; border-radius: 3px; font-family: var(--font-mono); font-weight: 600; }
+.mem-check__badge--holds { color: var(--good); }
+.mem-check__badge--fixed, .mem-check__badge--fixable { color: var(--warn); }
+.mem-check__badge--partly { color: var(--neon-cyan); }
+.mem-check__badge--unknown { color: var(--text); }
+.mem-check__evidence { margin: 0; padding-left: var(--space-4, 16px); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .mem-inbox__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); }
 .mem-inbox__btn { width: auto; min-height: 30px; padding: 0 var(--space-5); font-size: var(--fs-sm); }
 .mem-inbox__btn:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }

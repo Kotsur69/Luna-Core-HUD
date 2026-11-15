@@ -26,6 +26,7 @@
 import { t } from './util.js';
 import { historyBlock } from './memoryhistory.js';
 import { todoButton } from './memorytodoform.js';
+import { checkBadge, checkStatusLine } from './memorycheckview.js';
 
 /** Characters of a body shown in a list. */
 const PREVIEW_CHARS = 280;
@@ -186,7 +187,7 @@ export function conflictEntry(item, { off, error, onKeep, onMerge = null, form =
   return card;
 }
 
-function memoryItem(item, { off, error, onRestore, onTodo = null, todoFormOf = () => null, global = false }) {
+function memoryItem(item, { off, error, onRestore, onTodo = null, todoFormOf = () => null, global = false, check = null }) {
   const card = el('li', item.archived ? 'mem-inbox__item mem-brain__item--archived' : 'mem-inbox__item');
   card.dataset.key = item.key;
   const head = el('div', 'mem-inbox__head');
@@ -195,16 +196,23 @@ function memoryItem(item, { off, error, onRestore, onTodo = null, todoFormOf = (
   head.append(el('span', 'mem-inbox__date', item.created));
   card.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', cut(item.body)), el('p', 'mem-inbox__note', usefulnessLine(item)));
   if (item.archived) card.append(el('p', 'mem-inbox__note mem-inbox__note--warn', t('mem.brain.archived', { date: item.archived })));
-  // An open "Make a to-do" form (memorytodoform.js) takes the place of the buttons.
-  const form = todoFormOf(item.key);
+  // "Check if still true" (memorycheckview.js): a confirmed, active memory only.
+  const checked = check && item.confidence === 'confirmed' && !item.archived ? check : null;
+  const badge = checked ? checkBadge(item.check) : null;
+  if (badge) card.append(badge);
+  // An open "Make a to-do" form (memorytodoform.js) or check edit form takes the place of the buttons.
+  const form = todoFormOf(item.key) || (checked && checked.formOf(item.key));
+  const ask = !form && checked ? checked.retireAsk(item, off(item.key)) : null;
   const buttons = [];
   if (!form && item.archived) {
     const restore = button('port-btn mem-inbox__btn', t('mem.brain.restore'), () => onRestore(item.key));
     restore.disabled = off(item.key);
     buttons.push(restore);
   }
-  if (!form && onTodo) buttons.push(todoButton({ global, off: off(item.key), onClick: () => onTodo(item.key) }));
+  if (!form && !ask && checked) buttons.push(checked.button(item, off(item.key)), ...checked.actions(item, { off: off(item.key), retire: true }));
+  if (!form && !ask && onTodo) buttons.push(todoButton({ global, off: off(item.key), onClick: () => onTodo(item.key) }));
   if (form) card.append(form);
+  else if (ask) card.append(ask);
   else if (buttons.length) {
     const actions = el('div', 'mem-inbox__actions');
     actions.append(...buttons);
@@ -234,7 +242,8 @@ export function projectOption(p) {
  *   onProject: (project: string) => void, onScan: (project: string) => void, onRestore: (key: string) => void,
  *   onTodo?: (key: string) => void, todoFormOf?: (key: string) => HTMLElement|null}} ctx
  *   scanError = an i18n key of a refused scan start, or null; onTodo = "Make a to-do" on an
- *   entry; todoFormOf = that entry's open to-do form (memorytodoform.js), or null
+ *   entry; todoFormOf = that entry's open to-do form (memorytodoform.js), or null;
+ *   check = the "Check if still true" flow (memorycheckview.js createCheckFlow), or none
  * @returns {{node: HTMLElement, list: HTMLElement|null}}
  */
 export function memoriesPanel(list, ctx) {
@@ -263,16 +272,29 @@ export function memoriesPanel(list, ctx) {
   select.addEventListener('change', () => ctx.onProject(select.value));
   label.append(el('span', 'ui-field__label', t('mem.brain.project')), select);
   const running = Boolean(list.scan && list.scan.running);
+  const check = ctx.check || null;
+  // checking = a model job holds the shared lock; checkRunning = it is the check (not the scan).
+  const checking = Boolean(check && check.running());
+  const checkRunning = Boolean(check && check.status() && check.status().running);
   const scanBtn = button('port-btn mem-inbox__btn mem-brain__scan', t(running ? 'mem.brain.scanRunning' : 'mem.brain.scan'), () => ctx.onScan(list.project));
-  // One scan at a time: main refuses a second one too.
-  scanBtn.disabled = running;
+  // One model job at a time (the scan and the check share a lock): main refuses a second one too.
+  scanBtn.disabled = running || checking;
   bar.append(label, scanBtn);
-  const status = el('p', 'hint mem-brain__status', scanLine(list.scan));
+  if (check) {
+    // "Check all": this project's confirmed memories, capped per click (src/memorycheck.js CHECK_ALL_CAP).
+    const checkable = check.canCheck(list.project);
+    const all = button('port-btn mem-inbox__btn', t(checkRunning ? 'mem.check.allRunning' : 'mem.check.all'), () => check.checkAll(list.project));
+    all.disabled = running || checking || !checkable;
+    all.title = checkable ? t('mem.check.allHint') : t('mem.check.noFolderHint');
+    bar.append(all);
+  }
+  const lines = [scanLine(list.scan), check ? checkStatusLine(check.status(), list.project) : ''].filter(Boolean).join(' ');
+  const status = el('p', 'hint mem-brain__status', lines);
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   panel.append(bar, status);
-  if (ctx.scanError) {
-    const err = el('p', 'hint is-fail', t(ctx.scanError));
+  for (const problem of [ctx.scanError, check && check.startError()].filter(Boolean)) {
+    const err = el('p', 'hint is-fail', t(problem));
     err.setAttribute('role', 'alert');
     panel.append(err);
   }
@@ -283,7 +305,7 @@ export function memoriesPanel(list, ctx) {
   const ul = el('ul', 'mem-inbox__list');
   // A global memory has no project, so no To-do list: its button is disabled with the reason.
   const todo = { onTodo: ctx.onTodo || null, todoFormOf: ctx.todoFormOf || (() => null), global: list.project === 'global' };
-  for (const item of list.items) ul.append(memoryItem(item, { off: ctx.off, error: ctx.error, onRestore: ctx.onRestore, ...todo }));
+  for (const item of list.items) ul.append(memoryItem(item, { off: ctx.off, error: ctx.error, onRestore: ctx.onRestore, check, ...todo }));
   panel.append(ul);
   if (list.total > list.items.length) panel.append(el('p', 'hint', t('mem.brain.more', { count: list.total - list.items.length })));
   return { node: panel, list: ul };

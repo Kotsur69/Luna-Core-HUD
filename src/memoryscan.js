@@ -159,6 +159,28 @@ function applyScores(dir, project, scores, today) {
   return { written, skipped };
 }
 
+/**
+ * One model job on the memory at a time, app-wide: the usefulness scan and the
+ * memory check (src/memorycheck.js) share one of these.
+ * @returns {{take: (name: string) => boolean, release: (name: string) => void, holder: () => string|null}}
+ */
+function createJobLock() {
+  let holder = null;
+  return {
+    take(name) {
+      if (holder) return false;
+      holder = name;
+      return true;
+    },
+    release(name) {
+      if (holder === name) holder = null;
+    },
+    holder: () => holder,
+  };
+}
+
+/** The scan's name on the shared job lock. */
+const LOCK_NAME = 'scan';
 const chunk = (list, size) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 const IDLE = { running: false, project: null, total: 0, done: 0, scored: 0, skipped: 0, conflicts: 0, failed: 0, error: null, startedAt: null, finishedAt: null };
 
@@ -166,10 +188,11 @@ const IDLE = { running: false, project: null, total: 0, done: 0, scored: 0, skip
  * @param {{dir: () => string, run: (job: {prompt: string}) => Promise<object>, now?: () => number,
  *   log?: {add: Function}|null, onProgress?: (status: object) => void, onWritten?: () => void}} opts
  *   run = the model call (missionrunner.runJob with model sonnet); onProgress fires on every
- *   status change; onWritten after a batch wrote scores or conflict marks
+ *   status change; onWritten after a batch wrote scores or conflict marks; lock = createJobLock()
+ *   shared with the memory check (one model job at a time), its own when none is given
  * @returns {{start: (project: string) => object, status: () => object, whenIdle: () => Promise<void>}}
  */
-function createScanner({ dir, run, now = Date.now, log = null, onProgress = () => {}, onWritten = () => {} }) {
+function createScanner({ dir, run, now = Date.now, log = null, onProgress = () => {}, onWritten = () => {}, lock = createJobLock() }) {
   let state = { ...IDLE };
   let current = null;
   const status = () => ({ ...state });
@@ -226,10 +249,13 @@ function createScanner({ dir, run, now = Date.now, log = null, onProgress = () =
     if (!validProject(project)) return { ok: false, reason: 'bad-project' };
     const targets = scanTargets(scan(dir()).records, project);
     if (!targets.length) return { ok: false, reason: 'empty' };
+    // A memory check may hold the model: one job at a time.
+    if (!lock.take(LOCK_NAME)) return { ok: false, reason: 'busy' };
     const batches = chunk(targets, BATCH_SIZE);
     update({ ...IDLE, running: true, project, total: batches.length, startedAt: now() });
     current = runAll(project, batches).finally(() => {
       current = null;
+      lock.release(LOCK_NAME);
       update({ running: false, finishedAt: now() });
     });
     return { ok: true, total: batches.length };
@@ -240,6 +266,8 @@ function createScanner({ dir, run, now = Date.now, log = null, onProgress = () =
 
 module.exports = {
   createScanner,
+  createJobLock,
+  promptSafe: safe,
   buildScanPrompt,
   parseScanAnswer,
   applyScores,

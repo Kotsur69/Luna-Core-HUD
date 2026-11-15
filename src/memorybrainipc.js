@@ -21,6 +21,14 @@
 //   memory:provenance (key)          -> {ok, ...} | {ok:false, reason}   read only: the History
 //                                       expander (src/memoryprovenance.js); the timeline is this PC's log
 //
+// "Check if still true" (src/memorycheck.js): Sonnet reads the project's code.
+//   memory:check        (key)        -> {ok, total: 1} | {ok:false, reason: 'busy'|'bad-key'|'no-folder'|...}
+//   memory:check-all    (project)    -> {ok, total} | {ok:false, reason: 'busy'|'bad-project'|'no-folder'|'empty'}
+//   memory:check-status ()           -> {ok, status, checkable: [<project>, ...]}   projects whose folder this PC has
+//   memory:check-edit   (key, {title, body}) -> {ok, key} | {ok:false, reason}   only after a `partly` answer
+// Both checks start and return; the answer arrives as memory:changed. Every
+// memory:list item carries `check`, its last answer on this PC (or null).
+//
 // The renderer is untrusted: every payload is checked here, keys by
 // splitKey() (never a path), a project by validProject(). A conflict or a
 // merge suggestion can be settled only while it is listed, and only an
@@ -36,6 +44,8 @@ const { resolveConflict, findConflicts, mergePair, KEEP } = require('./memorycon
 const { provenance } = require('./memoryprovenance');
 const { restore } = require('./memorydecay');
 const { recentUsage } = require('./memoryuse');
+const { lastChecks } = require('./memorylog');
+const { checkOf, editChecked } = require('./memorycheck');
 
 const MAX_KEY_CHARS = 200;
 /** Merge text longer than this is refused before it is read; checkRecord applies the real limits. */
@@ -66,8 +76,9 @@ const NO_USAGE = Object.freeze({ reads: new Map(), today: null });
  * @param {string} project
  * @param {Set<string>} gone superseded keys
  * @param {{reads: Map<string, number>, today: string|null}} [usage] memoryuse.recentUsage(): the reads the final score counts
+ * @param {Map<string, object>} [checks] memorylog.lastChecks(): each item's last "Check if still true" answer
  */
-function listItems(records, project, gone, usage = NO_USAGE) {
+function listItems(records, project, gone, usage = NO_USAGE, checks = new Map()) {
   return records
     .filter(([key, r]) => r.project === project && !gone.has(key))
     .map(([key, r]) => ({
@@ -83,6 +94,7 @@ function listItems(records, project, gone, usage = NO_USAGE) {
       ...scoreOf(r),
       // Computed, never stored: {score: 0-100|null, parts: {usefulness, confidence, usage}}.
       final: finalScore(r, { reads: usage.reads.get(key) || 0, today: usage.today }),
+      check: checkOf(checks, key),
     }))
     .sort(byUse);
 }
@@ -160,9 +172,10 @@ function projectsOf(records, gone, enabled) {
  *   scanner = memoryscan.createScanner(); enabled = projects with memory switched on;
  *   onChanged fires after a write (sync soon, repaint); log.read = this PC's memory log
  *   (reads for the final score, disputes for the health line); roots = {<project>: its
- *   folder on this PC}, for the anchor check of the health line
+ *   folder on this PC}, for the anchor check of the health line; checker = memorycheck.createChecker()
+ *   ("Check if still true"), null = the check channels refuse
  */
-function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onChanged = () => {}, now = Date.now, log = null, roots = () => ({}) }) {
+function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onChanged = () => {}, now = Date.now, log = null, roots = () => ({}), checker = null }) {
   const guarded = (label, fn) => {
     try {
       const res = fn();
@@ -222,7 +235,7 @@ function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onC
       const wanted = projectArg(rawProject);
       const project = wanted && projects.some((p) => p.project === wanted) ? wanted : projects.length ? projects[0].project : null;
       const evs = events();
-      const items = project ? listItems(records, project, gone, recentUsage(evs, now())) : [];
+      const items = project ? listItems(records, project, gone, recentUsage(evs, now()), lastChecks(evs)) : [];
       const health = project ? healthOf(records, project, items, evs) : null;
       return { ok: true, projects, project, items: items.slice(0, MAX_LIST_ITEMS), total: items.length, scan: scanner.status(), health };
     } catch (err) {
@@ -267,6 +280,48 @@ function registerMemoryBrainIpc({ ipcMain, dir, scanner, enabled = () => [], onC
     const body = text('body');
     if (title === null || body === null) return { ok: false, reason: 'bad-edits' };
     return guarded('merge', () => mergePair(dir(), { a, b, title, body }, isoDate(now()), { log }));
+  });
+
+  // "Check if still true" (src/memorycheck.js). A start writes nothing yet: the
+  // checker's own progress repaints, and each answer syncs through onWritten.
+  const startCheck = (label, fn) => {
+    if (!checker) return { ok: false, reason: 'failed' };
+    try {
+      return fn();
+    } catch (err) {
+      console.error(`[memory] ${label} failed to start:`, errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  };
+  ipcMain.handle('memory:check', (_event, rawKey) => {
+    const key = keyArg(rawKey);
+    if (!key) return { ok: false, reason: 'bad-key' };
+    return startCheck('check', () => checker.check(key));
+  });
+  ipcMain.handle('memory:check-all', (_event, rawProject) => {
+    const project = projectArg(rawProject);
+    if (!project) return { ok: false, reason: 'bad-project' };
+    return startCheck('check-all', () => checker.checkAll(project));
+  });
+  ipcMain.handle('memory:check-status', () => {
+    if (!checker) return { ok: false, reason: 'failed' };
+    try {
+      return { ok: true, status: checker.status(), busy: checker.busy(), checkable: checker.checkableProjects() };
+    } catch (err) {
+      console.error('[memory] check status failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  });
+  ipcMain.handle('memory:check-edit', (_event, rawKey, req) => {
+    const key = keyArg(rawKey);
+    if (!key) return { ok: false, reason: 'bad-key' };
+    if (!isObject(req)) return { ok: false, reason: 'bad-request' };
+    const text = (field) => (typeof req[field] === 'string' && req[field].length <= MERGE_LIMITS[field] ? req[field] : null);
+    const title = text('title');
+    const body = text('body');
+    if (title === null || body === null) return { ok: false, reason: 'bad-edits' };
+    if (!log) return { ok: false, reason: 'failed' };
+    return guarded('check-edit', () => editChecked({ dir: dir(), key, title, body, today: isoDate(now()), log }));
   });
 
   // Read only: no onChanged, nothing is written.

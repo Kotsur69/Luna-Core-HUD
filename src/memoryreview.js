@@ -12,6 +12,8 @@
 //             only for a path whose top folder exists there.
 //   disputed  a session reported through `memory_verify` that the memory was
 //             wrong (src/memorylog.js keeps the report).
+//   checked   "Check if still true" (src/memorycheck.js) found it fixed, partly
+//             true or fixable, and nobody has acted on that yet.
 //   decayed   a `digest` older than DIGEST_DAYS drops out of search. The file
 //             stays: archived, not deleted.
 //   unopened  low priority: a confirmed memory last checked more than
@@ -35,7 +37,7 @@ const fs = require('fs');
 const path = require('path');
 const { splitKey, scoreOf } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord, fileFor } = require('./memorystore');
-const { openDisputes, acceptedMissing, DAY_MS } = require('./memorylog');
+const { openDisputes, openChecks, acceptedMissing, DAY_MS } = require('./memorylog');
 const { lastOpened, oldestRead } = require('./memoryuse');
 const { FULL_AREA_IDS } = require('./memorycard');
 
@@ -51,7 +53,7 @@ const MAX_ITEMS = 100;
 /** A confirmed memory checked longer ago than this and never opened since is flagged, at low priority. */
 const UNOPENED_DAYS = 60;
 /** Worst first. A flag listed in LOW_FLAGS alone does not count toward the hub's number. */
-const FLAG_ORDER = ['disputed', 'anchor', 'stale', 'unopened'];
+const FLAG_ORDER = ['disputed', 'checked', 'anchor', 'stale', 'unopened'];
 const LOW_FLAGS = ['unopened'];
 
 const daysBetween = (from, to) => Math.floor((Date.parse(to) - Date.parse(from)) / DAY_MS);
@@ -152,6 +154,7 @@ function unopenedCheck(events, today) {
  */
 function reviewList({ records, today, events = [], roots = {} }) {
   const disputes = openDisputes(events);
+  const checks = openChecks(events);
   const accepted = acceptedMissing(events);
   const gone = supersededKeys(records);
   const unopened = unopenedCheck(events, today);
@@ -162,6 +165,8 @@ function reviewList({ records, today, events = [], roots = {} }) {
     const flags = [];
     const dispute = disputes.get(key);
     if (dispute) flags.push({ kind: 'disputed', at: dispute.at, note: dispute.note });
+    const check = checks.get(key);
+    if (check) flags.push({ kind: 'checked', at: check.at, verdict: check.verdict, note: check.note });
     const seen = accepted.get(key) || new Set();
     const missing = missingAnchors(record, roots[record.project]).filter((p) => !seen.has(p));
     if (missing.length) flags.push({ kind: 'anchor', missing });
@@ -196,20 +201,24 @@ function findConfirmed(dir, key) {
 }
 
 /**
- * The user says a confirmed memory is still true: its flags clear.
+ * The user says a confirmed memory is still true: its flags clear. The memory
+ * check (src/memorycheck.js) says the same with by 'check': the date moves,
+ * but a dispute or a missing file is still the user's to accept.
  * @param {string} dir the mirror folder
  * @param {string} key
  * @param {string} today YYYY-MM-DD
- * @param {{log?: {add: Function}, roots?: object}} [opts]
+ * @param {{log?: {add: Function}, roots?: object, by?: 'user'|'check', note?: string, evidence?: string[]}} [opts]
  * @returns {{ok: true, key: string}|{ok: false, reason: string}}
  */
-function verify(dir, key, today, { log = null, roots = {} } = {}) {
+function verify(dir, key, today, { log = null, roots = {}, by = 'user', note = '', evidence = [] } = {}) {
   const found = findConfirmed(dir, key);
   if (!found.record) return { ok: false, reason: found.reason };
   const { record } = found;
   writeRecord(dir, { ...record, last_verified: today });
-  // The files missing today were seen and accepted: they are not flagged again.
-  if (log) log.add({ ev: 'verified', key, by: 'user', missing: missingAnchors(record, roots[record.project]) });
+  if (!log) return { ok: true, key };
+  // The files missing today were seen and accepted by the user: they are not flagged again.
+  if (by === 'user') log.add({ ev: 'verified', key, by: 'user', missing: missingAnchors(record, roots[record.project]) });
+  else log.add({ ev: 'verified', key, by: 'check', note, evidence });
   return { ok: true, key };
 }
 

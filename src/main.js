@@ -277,7 +277,8 @@ const { toolVerdict: memoryToolVerdict } = require('./memoryreview');
 const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOffs } = require('./memoryautoaccept');
 // The usefulness scan, conflicts, decay to the archive, and memory in God Mode
 // briefs (src/memoryscan.js, memoryconflict.js, memorydecay.js, memoryinject.js).
-const { createScanner: createMemoryScanner, SCAN_MODEL: MEMORY_SCAN_MODEL, SCAN_TIMEOUT_MS: MEMORY_SCAN_TIMEOUT_MS } = require('./memoryscan');
+const { createScanner: createMemoryScanner, createJobLock: createMemoryJobLock, SCAN_MODEL: MEMORY_SCAN_MODEL, SCAN_TIMEOUT_MS: MEMORY_SCAN_TIMEOUT_MS } = require('./memoryscan');
+const { createChecker: createMemoryChecker, CHECK_MODEL: MEMORY_CHECK_MODEL, CHECK_TIMEOUT_MS: MEMORY_CHECK_TIMEOUT_MS } = require('./memorycheck');
 const { registerMemoryBrainIpc } = require('./memorybrainipc');
 const { conflictCount: memoryConflictCount } = require('./memoryconflict');
 const { createDecayTimer: createMemoryDecay, createReferenceRecorder: createMemoryReferences } = require('./memorydecay');
@@ -3537,10 +3538,35 @@ function registerIpc() {
   });
   // The memory window's list of all memories, the usefulness scan (Sonnet,
   // through the same headless runner as capture), conflicts and the archive.
+  // The scan and "Check if still true" share one lock: one model job at a time.
+  const memoryJobLock = createMemoryJobLock();
   registerMemoryBrainIpc({
     ipcMain,
     dir: () => memoryPaths(userDir()).dir,
+    // "Check if still true" (src/memorycheck.js): Sonnet with Read / Grep / Glob only, in the project's folder.
+    checker: createMemoryChecker({
+      dir: () => memoryPaths(userDir()).dir,
+      run: ({ prompt, cwd }) =>
+        runMemoryJob({
+          prompt,
+          model: MEMORY_CHECK_MODEL,
+          lean: true,
+          readOnly: true,
+          cwd,
+          stdin: true,
+          env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+          timeoutMs: MEMORY_CHECK_TIMEOUT_MS,
+        }),
+      roots: memoryRoots,
+      log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
+      lock: memoryJobLock,
+      onProgress: () => send('memory:changed', {}),
+      onWritten: () => {
+        if (memorySync) memorySync.soon();
+      },
+    }),
     scanner: createMemoryScanner({
+      lock: memoryJobLock,
       dir: () => memoryPaths(userDir()).dir,
       run: ({ prompt }) =>
         runMemoryJob({

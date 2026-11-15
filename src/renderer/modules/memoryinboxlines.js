@@ -3,13 +3,29 @@
 // ----------------------------------------------------------------------------
 // The lines under the memory window's lists (memoryinbox.js): what capture
 // proposed and what was approved, when capture last ran, and how
-// memory_search answers on this PC. Split out of memoryinbox.js to keep that
-// file under the size ceiling; it re-exports statsLine and searchLine.
+// memory_search answers on this PC, why a memory is on the review list and why
+// a graveyard entry was dropped. Split out of memoryinbox.js to keep that file
+// under the size ceiling; it re-exports statsLine, searchLine, flagLine and graveLine.
 // ============================================================================
 
 'use strict';
 
 import { t } from './util.js';
+
+/** Why a confirmed memory is on the review list, in words (never by colour alone). */
+export function flagLine(flag) {
+  if (flag.kind === 'disputed') return t('mem.inbox.review.disputed', { note: flag.note || '-' });
+  if (flag.kind === 'anchor') return t('mem.inbox.review.anchor', { files: (flag.missing || []).join(', ') });
+  if (flag.kind === 'unopened') return t('mem.inbox.review.unopened', { days: flag.days });
+  return t('mem.inbox.review.stale', { since: flag.since });
+}
+
+/** Why a graveyard entry was dropped, in words: the usefulness floor with its score, or main's reason. */
+export function graveLine(item) {
+  if (item.reason === 'low usefulness') return t('mem.grave.low', { score: Number.isInteger(item.usefulness) ? item.usefulness : '?' });
+  if (item.reason === 'moved to to-do') return t('mem.grave.moved');
+  return t('mem.grave.reason', { reason: String(item.reason || '') });
+}
 
 /** What capture proposed in the last week and what became of it, or '' when there is nothing to say. */
 export function statsLine(stats) {

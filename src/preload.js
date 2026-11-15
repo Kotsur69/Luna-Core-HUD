@@ -517,6 +517,20 @@ contextBridge.exposeInMainWorld('lunacore', {
       title: edits && typeof edits.title === 'string' ? edits.title : '',
       body: edits && typeof edits.body === 'string' ? edits.body : '',
     }),
+  // "Check if still true" (src/memorycheck.js): Sonnet reads the project's code,
+  // read-only. Keys and projects only; main checks them and the project folder.
+  /** Checks one confirmed memory. Promise<{ok, total} | {ok:false, reason}>; the answer arrives as memory:changed. */
+  memoryCheck: (key) => ipcRenderer.invoke('memory:check', typeof key === 'string' ? key : ''),
+  /** Checks a project's confirmed memories, capped per click. Promise<{ok, total} | {ok:false, reason}>. */
+  memoryCheckAll: (project) => ipcRenderer.invoke('memory:check-all', typeof project === 'string' ? project : ''),
+  /** The check's progress and the projects this PC can check. Promise<{ok, status, checkable} | {ok:false, reason}>. */
+  memoryCheckStatus: () => ipcRenderer.invoke('memory:check-status'),
+  /** Saves the corrected text after a 'partly' answer. Promise<{ok, key} | {ok:false, reason}>. */
+  memoryCheckEdit: (key, edits) =>
+    ipcRenderer.invoke('memory:check-edit', typeof key === 'string' ? key : '', {
+      title: edits && typeof edits.title === 'string' ? edits.title : '',
+      body: edits && typeof edits.body === 'string' ? edits.body : '',
+    }),
   /** Read only: one memory's source, supersede chain, links and this PC's log about it. Promise<{ok, ...} | {ok:false, reason}>. */
   memoryProvenance: (key) => ipcRenderer.invoke('memory:provenance', typeof key === 'string' ? key : ''),
   /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
