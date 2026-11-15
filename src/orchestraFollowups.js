@@ -20,6 +20,10 @@
 // end with "Filed by God Mode package <packageId>"; dependsOn ids that are
 // not cards of this project are dropped; a title equal to an open card's
 // (trim, lowercase, collapsed whitespace) is refused as "duplicate of <at>".
+// Only text, details, acceptance, size and dependsOn come from the session:
+// never verify (a later run runs it in a shell), files, model or effort.
+// Caps per call, per package and per run, and a few list slots always stay
+// free for the user's own cards.
 // Every add is recorded per run + package in the ledger, stored with the run
 // (orchestra.js noteFollowups) so the run report can list it after a restart.
 //
@@ -30,22 +34,31 @@
 'use strict';
 
 const { TOOLS: INTAKE_TOOLS, applyAdd, listView, toolText } = require('./intake');
-const { normalizeTodos, runTag, MAX_DETAILS_CHARS } = require('./todo');
+const { normalizeTodos, runTag, MAX_DETAILS_CHARS, MAX_ITEMS } = require('./todo');
 
 const FOLLOWUP_KINDS = Object.freeze(['gap', 'bug', 'deps', 'idea']);
 const FOLLOWUP_TAG = 'gm-followup';
 /** Cards one luna_todo_add call of a God Mode session may file. */
 const MAX_FOLLOWUPS_PER_CALL = 5;
 /** Cards one package (or fix-up) may file over the whole run: a runaway session cannot flood the list. */
-const MAX_FOLLOWUPS_PER_PACKAGE = 20;
-/** Entries one run's record keeps (the oldest go first). */
+const MAX_FOLLOWUPS_PER_PACKAGE = 10;
+/** Cards all sessions of one run may file together. */
+const MAX_FOLLOWUPS_PER_RUN = 30;
+/** List slots a follow-up never takes: the user's own adds keep working on a near-full list. */
+const LIST_HEADROOM = 20;
+/** Entries one run's record keeps (the oldest go first); above MAX_FOLLOWUPS_PER_RUN, so the caps never reset. */
 const MAX_LEDGER_ENTRIES = 500;
 /** A recorded title is for the report, not the card: capped. */
 const MAX_LEDGER_TITLE_CHARS = 200;
 const RUN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const PACKAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-/** Card fields a God Mode session may set itself; everything else is decided here or dropped. */
-const SESSION_CARD_KEYS = Object.freeze(['text', 'acceptance', 'files', 'verify', 'size', 'model', 'effort']);
+/**
+ * Card fields a God Mode session may set itself; everything else is decided
+ * here or dropped. Never `verify` (a later run executes it in a shell), nor
+ * `files` / `model` / `effort` (they steer a later worker): the card is
+ * untrusted model output that reaches the next run's planner.
+ */
+const SESSION_CARD_KEYS = Object.freeze(['text', 'acceptance', 'size']);
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -81,11 +94,7 @@ const FOLLOWUP_ADD_TOOL = Object.freeze({
             },
             details: intakeItem.details,
             acceptance: intakeItem.acceptance,
-            files: intakeItem.files,
-            verify: intakeItem.verify,
             size: intakeItem.size,
-            model: intakeItem.model,
-            effort: intakeItem.effort,
             dependsOn: intakeItem.dependsOn,
           },
           required: ['text', 'kind'],
@@ -138,14 +147,22 @@ function forcedTask(task, index, count, existingAts, scope, runLabel) {
  * @param {Array} list the project's normalized to-do list
  * @param {unknown} tasks the tool's `tasks` argument (untrusted)
  * @param {{runId:string, packageId:string}} scope
- * @param {number} filedSoFar cards this package filed earlier in the run
+ * @param {{byPackage?:number, byRun?:number}} [filed] cards this package / this run filed earlier
  * @returns {{ok:true, tasks:object[], kinds:string[]}|{ok:false, error:string}}
  */
-function prepareFollowups(list, tasks, scope, filedSoFar = 0) {
+function prepareFollowups(list, tasks, scope, filed = {}) {
   if (!Array.isArray(tasks) || tasks.length === 0) return fail('tasks must be a non-empty array');
   if (tasks.length > MAX_FOLLOWUPS_PER_CALL) return fail(`at most ${MAX_FOLLOWUPS_PER_CALL} follow-up cards per call`);
-  if (filedSoFar + tasks.length > MAX_FOLLOWUPS_PER_PACKAGE) {
-    return fail(`a God Mode package may file at most ${MAX_FOLLOWUPS_PER_PACKAGE} follow-up cards (${filedSoFar} already)`);
+  const byPackage = filed.byPackage || 0;
+  const byRun = filed.byRun || 0;
+  if (byPackage + tasks.length > MAX_FOLLOWUPS_PER_PACKAGE) {
+    return fail(`a God Mode package may file at most ${MAX_FOLLOWUPS_PER_PACKAGE} follow-up cards (${byPackage} already)`);
+  }
+  if (byRun + tasks.length > MAX_FOLLOWUPS_PER_RUN) {
+    return fail(`a God Mode run may file at most ${MAX_FOLLOWUPS_PER_RUN} follow-up cards (${byRun} already)`);
+  }
+  if (list.length + tasks.length > MAX_ITEMS - LIST_HEADROOM) {
+    return fail(`the to-do list is nearly full (${list.length} of ${MAX_ITEMS}): follow-up cards keep ${LIST_HEADROOM} slots free`);
   }
   const runLabel = runTag(scope.runId);
   if (!runLabel) return fail('this session has no valid run id');
@@ -265,10 +282,14 @@ function runStoredLedger(registry, log) {
 function createFollowupChannel({ ledger, now = Date.now }) {
   function add(args, store, scope) {
     const list = normalizeTodos(store.read());
-    const prepared = prepareFollowups(list, args.tasks, scope, ledger.list(scope.runId, scope.packageId).length);
+    const runFiled = ledger.list(scope.runId);
+    const filed = { byRun: runFiled.length, byPackage: runFiled.filter((e) => e.packageId === scope.packageId).length };
+    const prepared = prepareFollowups(list, args.tasks, scope, filed);
     if (!prepared.ok) return toolText(prepared.error, true);
     const outcome = applyAdd(list, prepared.tasks, store.now ? store.now() : now());
     if (!outcome.ok) return toolText(outcome.error, true);
+    // The record pairs each card with its kind by position: applyAdd is all-or-nothing and keeps order.
+    if (outcome.added.length !== prepared.kinds.length) return toolText('internal error: cards and kinds do not line up', true);
     if (!store.write(outcome.list)) return toolText('could not save the to-do list', true);
     // The cards are saved: a record that cannot be stored is logged by the ledger, never undone.
     ledger.record(
@@ -296,6 +317,8 @@ module.exports = {
   FOLLOWUP_ADD_TOOL,
   MAX_FOLLOWUPS_PER_CALL,
   MAX_FOLLOWUPS_PER_PACKAGE,
+  MAX_FOLLOWUPS_PER_RUN,
+  LIST_HEADROOM,
   MAX_LEDGER_ENTRIES,
   RUN_ID_RE,
   PACKAGE_ID_RE,

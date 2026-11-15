@@ -41,7 +41,7 @@ const SELFCHECK_PACKAGE_ID = 'selfcheck';
 const FIXUP_PACKAGE_ID = 'fixup';
 // A path typed into the shell single-quoted: no quote, backtick, $ or newline
 // (same rule as orchestraPlanRunLaunch.js SAFE_PATH_RE).
-const SAFE_PATH_RE = /^[^'`$\r\n‘-‛]+$/;
+const SAFE_PATH_RE = /^[^'`$\r\n\u2018-\u201B]+$/;
 const STRICT_RE = /(^|\s)--strict-mcp-config(?=\s|$)/;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);

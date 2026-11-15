@@ -116,18 +116,59 @@ test('dependsOn keeps project cards and batch indexes, drops everything else', (
   assert.deepEqual(second.dependsOn, [first.at]);
 });
 
+const many = (n, prefix) => Array.from({ length: n }, (_v, i) => ({ text: `${prefix} ${i}`, kind: 'idea' }));
+const fill = (channel, store, packageId, n) => {
+  for (let i = 0; i < n; i += F.MAX_FOLLOWUPS_PER_CALL) {
+    const res = addVia(channel, store, many(Math.min(F.MAX_FOLLOWUPS_PER_CALL, n - i), `${packageId}-${i}`), { ...WORKER, packageId });
+    assert.equal(res.isError, false, res.text);
+  }
+};
+
 test('the per-call and per-package caps hold', () => {
   const { channel } = newChannel();
   const store = memoryStore();
-  const many = (n, prefix) => Array.from({ length: n }, (_v, i) => ({ text: `${prefix} ${i}`, kind: 'idea' }));
   assert.match(addVia(channel, store, many(F.MAX_FOLLOWUPS_PER_CALL + 1, 'x')).text, /at most 5 follow-up cards per call/);
-  for (let round = 0; round < F.MAX_FOLLOWUPS_PER_PACKAGE / F.MAX_FOLLOWUPS_PER_CALL; round += 1) {
-    assert.equal(addVia(channel, store, many(F.MAX_FOLLOWUPS_PER_CALL, `r${round}`)).isError, false);
-  }
+  fill(channel, store, 'auth-flow', F.MAX_FOLLOWUPS_PER_PACKAGE);
   const over = addVia(channel, store, many(1, 'over'));
-  assert.match(over.text, /at most 20 follow-up cards \(20 already\)/);
+  assert.match(over.text, /package may file at most 10 follow-up cards \(10 already\)/);
   // Another package of the same run has its own allowance.
   assert.equal(addVia(channel, store, many(1, 'other'), { ...WORKER, packageId: 'data-model' }).isError, false);
+});
+
+test('the per-run cap holds across packages', () => {
+  const { channel } = newChannel();
+  const store = memoryStore();
+  fill(channel, store, 'pkg-a', 10);
+  fill(channel, store, 'pkg-b', 10);
+  fill(channel, store, 'pkg-c', 10);
+  const over = addVia(channel, store, many(1, 'over'), { ...WORKER, packageId: 'pkg-d' });
+  assert.match(over.text, /run may file at most 30 follow-up cards \(30 already\)/);
+  assert.equal(store.list.length, F.MAX_FOLLOWUPS_PER_RUN);
+});
+
+test('follow-ups keep the last list slots free for the user', () => {
+  const { channel } = newChannel();
+  const full = Array.from({ length: 80 }, (_v, i) => normalizeTodo({ text: `user ${i}`, done: false, at: i + 1 }));
+  const store = memoryStore(full);
+  const res = addVia(channel, store, many(1, 'one more'));
+  assert.equal(res.isError, true);
+  assert.match(res.text, /nearly full \(80 of 100\)/);
+  assert.equal(store.list.length, 80);
+});
+
+test('verify, files, model and effort never come from a God Mode session', () => {
+  const { channel } = newChannel();
+  const store = memoryStore();
+  const res = addVia(channel, store, [
+    { text: 'Add lint', kind: 'idea', verify: 'powershell -c evil', files: ['C:/Windows/x'], model: 'opus', effort: 'max', acceptance: ['lint passes'], size: 'S' },
+  ]);
+  assert.equal(res.isError, false, res.text);
+  const [card] = store.list;
+  for (const key of ['verify', 'files', 'model', 'effort']) assert.equal(card[key] ?? null, null, key);
+  assert.deepEqual(card.acceptance, ['lint passes']);
+  assert.equal(card.size, 'S');
+  const props = F.FOLLOWUP_ADD_TOOL.inputSchema.properties.tasks.items.properties;
+  assert.deepEqual(Object.keys(props).sort(), ['acceptance', 'dependsOn', 'details', 'kind', 'size', 'text']);
 });
 
 test('luna_todo_list answers through the channel; any other to-do tool is not the channel\'s', () => {

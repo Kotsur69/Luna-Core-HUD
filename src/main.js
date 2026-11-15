@@ -1753,6 +1753,8 @@ async function prepareIntake(session) {
   if (readUiPrefs().todoToolsEnabled === false) return null;
   const started = await intakeServer.start();
   if (!started.ok || !ensureUserDir()) return null;
+  // Closed while the server started: no token (it would outlive the tab's revoke).
+  if (sessions.get(session.id) !== session) return null;
   // A God Mode session gets a scoped token instead of the full one (src/orchestraFollowupsLaunch.js).
   // Any marker, valid or not: an invalid one gets no lunacore server at all (fail closed).
   const task = session.launchTask || null;
