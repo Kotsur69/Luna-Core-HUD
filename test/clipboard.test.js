@@ -179,3 +179,24 @@ test('previewOf on a non-string treats it as empty', () => {
   assert.equal(previewOf(undefined, 10), '');
   assert.equal(previewOf(null, 10), '');
 });
+
+// ---- widget layout ----------------------------------------------------------
+
+// Regression: the to-do sort row once took over the `.clip-list` selector
+// (it was inserted between `.clip-list,` and `.todo-list`), so the clipboard
+// history rendered as one horizontal row. Every rule naming `.clip-list` must
+// stack its clips vertically.
+test('the clipboard list stacks its clips vertically', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'styles.css'), 'utf8');
+  const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter(([, selectors]) => selectors.split(',').some((s) => s.trim() === '.clip-list'));
+  assert.ok(rules.length > 0, 'no .clip-list rule found');
+  for (const [, selectors, body] of rules) {
+    if (/display:\s*flex/.test(body)) {
+      assert.match(body, /flex-direction:\s*column/, `.clip-list is a horizontal flex row in: ${selectors.trim()}`);
+    }
+  }
+  assert.ok(rules.some(([, , body]) => /flex-direction:\s*column/.test(body)), '.clip-list has no column layout');
+});

@@ -4184,7 +4184,6 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .todo-form textarea:focus { outline: none; border-color: var(--edge-glow); }
 
-.clip-list,
 .todo-sort {
   display: flex;
   align-items: center;
@@ -4194,6 +4193,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 }
 .todo-sort .profile-select { flex: 1; min-width: 0; }
 
+.clip-list,
 .todo-list {
   list-style: none;
   margin: 0;
