@@ -279,6 +279,7 @@ const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOf
 const { createScanner: createMemoryScanner, createJobLock: createMemoryJobLock, SCAN_MODEL: MEMORY_SCAN_MODEL, SCAN_TIMEOUT_MS: MEMORY_SCAN_TIMEOUT_MS } = require('./memoryscan');
 const { createChecker: createMemoryChecker, CHECK_MODEL: MEMORY_CHECK_MODEL, CHECK_TIMEOUT_MS: MEMORY_CHECK_TIMEOUT_MS } = require('./memorycheck');
 const { registerMemoryBrainIpc } = require('./memorybrainipc');
+const { createChangeTracker: createMemoryChangeTracker } = require('./memorychanges');
 const { conflictCount: memoryConflictCount } = require('./memoryconflict');
 const { createDecayTimer: createMemoryDecay, createReferenceRecorder: createMemoryReferences } = require('./memorydecay');
 const { createInjector: createMemoryInjector } = require('./memoryinject');
@@ -3521,8 +3522,13 @@ function registerIpc() {
     machine: machineName(os.hostname()),
     openExternal: (url) => shell.openExternal(url),
   });
+  // Which files named by confirmed memories changed since they were checked
+  // (src/memorychanges.js): one cached git log per project, refreshed by the
+  // memory window's lists in the background; the hub reads the cache only.
+  const memoryChanges = createMemoryChangeTracker();
   // Luna Core Memory inbox (hub item "N memories to review" opens it).
   registerMemoryIpc({
+    changes: memoryChanges,
     ipcMain,
     dir: () => memoryPaths(userDir()).dir,
     onChanged: () => {
@@ -3575,6 +3581,8 @@ function registerIpc() {
       roots: memoryRoots,
       log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
       lock: memoryJobLock,
+      // "Check all" takes the memories whose named files changed first.
+      changes: () => memoryChanges.current(),
       onProgress: () => send('memory:changed', {}),
       onWritten: () => {
         if (memorySync) memorySync.soon();
@@ -3604,6 +3612,8 @@ function registerIpc() {
       if (memorySync) memorySync.soon();
       send('memory:changed', {});
     },
+    // The 'changed' flags (src/memorychanges.js): memory:list refreshes them in the background.
+    changes: memoryChanges,
     // read: this PC's reads (final score) and disputes (health line); roots: the anchor check.
     log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
     roots: memoryRoots,
@@ -3634,7 +3644,7 @@ function registerIpc() {
         return (
           listMemoryInbox(dir).total +
           memoryConflictCount(dir) +
-          memoryReviewCount({ dir, today, events: memoryLogOf().read(), roots: memoryRoots() })
+          memoryReviewCount({ dir, today, events: memoryLogOf().read(), roots: memoryRoots(), changes: memoryChanges.current() })
         );
       },
       // Auto-accept switches that turned themselves off lately (checked here too, src/memoryautoaccept.js).
@@ -4373,6 +4383,8 @@ app.whenReady().then(() => {
       projectOf: (repoPath) => memoryRepoKeys.resolve(repoPath).key,
       log: memoryLogOf(),
       onSaved: onMemorySaved,
+      // Memories the run made obsolete went on the review list (a log line only: nothing to sync).
+      onDisputed: () => send('memory:changed', {}),
     });
     // An unused memory loses usefulness and moves to the archive at zero (src/memorydecay.js).
     memoryDecay = createMemoryDecay({

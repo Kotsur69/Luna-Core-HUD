@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { isStale, isDecayed, anchorsOf, missingAnchors, reviewList, verify, retire, toolVerdict, STALE_DAYS, DIGEST_DAYS } = require('../src/memoryreview.js');
+const { isStale, isDecayed, anchorsOf, missingAnchors, reviewList, verify, retire, toolVerdict, STALE_DAYS, DIGEST_DAYS, FLAG_ORDER, LOW_FLAGS } = require('../src/memoryreview.js');
 const { createLog, logPath } = require('../src/memorylog.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { createIndex } = require('../src/memoryindex.js');
@@ -318,4 +318,80 @@ test('a memory the card prints in full is read from the card and never flagged a
   ]);
 
   assert.deepEqual(list({ events: readsFrom(90) }).items.map((i) => i.key), [key('line')]);
+});
+
+// ---- 'changed': a named file has commits after the memory was checked ----------------
+
+/** The commits src/memorychanges.js would hand over: anchor path -> ISO time of its newest commit. */
+const commits = (pairs) => ({ [PROJECT]: new Map(pairs) });
+
+test('a memory is flagged changed when a named file has a commit after the day it was checked', (t) => {
+  const s = setup(t, [
+    rec('newer', { body: 'See `src/here.js` and `src/b.js`.', created: '2026-11-01' }),
+    rec('older', { body: 'See `src/here.js`.', created: '2026-11-08', last_verified: '2026-11-10' }),
+    rec('same-day', { body: 'See `src/c.js`.', created: '2026-11-01', last_verified: '2026-11-09' }),
+  ]);
+  const changes = commits([
+    ['src/here.js', '2026-11-09T08:00:00.000Z'],
+    ['src/b.js', '2026-11-05T08:00:00.000Z'],
+    ['src/c.js', '2026-11-09T22:00:00.000Z'],
+  ]);
+  for (const name of ['b.js', 'c.js']) fs.writeFileSync(path.join(s.root, 'src', name), '');
+
+  const { items } = s.list({ changes });
+
+  assert.deepEqual(
+    items.map((i) => [i.id, i.flags]),
+    [['newer', [{ kind: 'changed', files: ['src/here.js', 'src/b.js'], last: '2026-11-09' }]]],
+  );
+});
+
+test('"still true" clears the changed flag: the check day moves past the commit', (t) => {
+  const s = setup(t, [rec('a', { body: 'See `src/here.js`.' })]);
+  const changes = commits([['src/here.js', '2026-11-10T08:00:00.000Z']]);
+  assert.equal(s.list({ changes }).total, 1);
+
+  assert.equal(verify(s.dir, key('a'), TODAY, { log: s.log, roots: { [PROJECT]: s.root } }).ok, true);
+
+  assert.equal(s.list({ changes }).total, 0);
+});
+
+test('no answer for a project, or no commits, means no changed flag', (t) => {
+  const s = setup(t, [rec('a', { body: 'See `src/here.js`.' })]);
+
+  assert.equal(s.list().total, 0);
+  assert.equal(s.list({ changes: {} }).total, 0);
+  assert.equal(s.list({ changes: commits([]) }).total, 0);
+  assert.equal(s.list({ changes: { 'github.com/acme/other': new Map([['src/here.js', '2026-11-10T08:00:00.000Z']]) } }).total, 0);
+  assert.equal(s.list({ changes: { [PROJECT]: { 'src/here.js': '2026-11-10T08:00:00.000Z' } } }).total, 0, 'not a Map: ignored');
+});
+
+test('a deleted file is the anchor flag only, not a change too', (t) => {
+  const s = setup(t, [rec('a', { body: 'In `src/gone.js` and `src/here.js`.' })]);
+  const changes = commits([
+    ['src/gone.js', '2026-11-10T08:00:00.000Z'],
+    ['src/here.js', '2026-11-10T08:00:00.000Z'],
+  ]);
+
+  assert.deepEqual(s.list({ changes }).items[0].flags, [
+    { kind: 'anchor', missing: ['src/gone.js'] },
+    { kind: 'changed', files: ['src/here.js'], last: '2026-11-10' },
+  ]);
+});
+
+test('changed ranks after anchor and before stale, and counts toward the hub number', (t) => {
+  const s = setup(t, [
+    rec('a-stale', { created: '2026-01-01' }),
+    rec('b-changed', { body: 'See `src/here.js`.' }),
+    rec('c-anchor', { body: 'In `src/gone.js`.' }),
+    rec('d-quiet', { type: 'decision', created: '2026-08-01' }),
+  ]);
+  const changes = commits([['src/here.js', '2026-11-10T08:00:00.000Z']]);
+
+  const res = s.list({ changes, events: readsFrom(90) });
+
+  assert.deepEqual(FLAG_ORDER, ['disputed', 'checked', 'anchor', 'changed', 'stale', 'unopened']);
+  assert.equal(LOW_FLAGS.includes('changed'), false);
+  assert.deepEqual(res.items.map((i) => i.id), ['c-anchor', 'b-changed', 'a-stale', 'd-quiet']);
+  assert.equal(res.urgent, 3);
 });

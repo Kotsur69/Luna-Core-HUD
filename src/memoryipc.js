@@ -15,6 +15,10 @@
 //
 // Phase 5, the review list (src/memoryreview.js): confirmed memories that are
 // stale, name a file that is gone, or were reported wrong by a session.
+// 'changed' (a named file has newer commits) comes from the git cache of
+// src/memorychanges.js: the list uses the cached answer and starts a refresh
+// in the background; when that lands with a different answer, onChanged
+// repaints the window. git never runs while the list is built.
 //
 //   memory:review  ()             -> {ok, items, total}
 //   memory:verify  (key)          -> {ok, key} | {ok:false, reason}   "still true"
@@ -72,6 +76,7 @@ const { CANDIDATE_TYPES } = require('./memoryextract');
 const { listConflicts } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
+const { cachedChanges, currentChanges } = require('./memorychanges');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -146,7 +151,8 @@ function cleanSearchMode(raw) {
  *   log = the memory log; roots = {<project>: its folder on this PC}, for the anchor check;
  *   searchStatus = how memory_search answers on this PC (the vector store's mode());
  *   todoProjects = LunaCore's projects ({id, path}); memoryProjectOf = a folder -> its memory
- *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js)
+ *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js);
+ *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none
  */
 function registerMemoryIpc({
   ipcMain,
@@ -163,6 +169,7 @@ function registerMemoryIpc({
   todoProjects = () => [],
   memoryProjectOf = () => null,
   todos = null,
+  changes = null,
 }) {
   /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
   const decided = (ev, record) => {
@@ -187,6 +194,11 @@ function registerMemoryIpc({
       return null;
     }
   };
+  /**
+   * The cached 'changed' answers for reviewList, and a background refresh that
+   * repaints when its answer differs. A failure there must not hide the list.
+   */
+  const changesFor = (records, rootsHere) => cachedChanges(changes, records, rootsHere, onChanged);
   /** A write: never throws to the renderer, and tells main when files changed. */
   const guarded = (label, fn) => {
     try {
@@ -263,7 +275,8 @@ function registerMemoryIpc({
     try {
       const evs = events();
       const { records } = scan(dir());
-      const res = reviewList({ records, today: isoDate(now()), events: evs, roots: knownRoots() });
+      const rootsHere = knownRoots();
+      const res = reviewList({ records, today: isoDate(now()), events: evs, roots: rootsHere, changes: changesFor(records, rootsHere) });
       const byKey = new Map(records);
       const usage = recentUsage(evs, now());
       // Each entry's last "Check if still true" answer on this PC (src/memorycheck.js), or null.
@@ -282,7 +295,8 @@ function registerMemoryIpc({
   const refusal = (key, knownHere) => {
     const found = findConfirmed(dir(), key);
     if (!found.record) return { ok: false, reason: found.reason };
-    const { items } = reviewList({ records: scan(dir()).records, today: isoDate(now()), events: events(), roots: knownHere });
+    // The cached answers only: a memory flagged 'changed' in the window is on the list here too.
+    const { items } = reviewList({ records: scan(dir()).records, today: isoDate(now()), events: events(), roots: knownHere, changes: currentChanges(changes) });
     return items.some((item) => item.key === key) ? null : { ok: false, reason: 'not-flagged' };
   };
   ipcMain.handle('memory:verify', (_event, key) =>
@@ -396,11 +410,12 @@ function registerMemoryIpc({
  * them with the inbox). A memory flagged only as "never opened" is on the
  * list but not in this number: it is a low-priority hint, not a reason to nag.
  * Never throws: a count is not worth a failed hub tick.
- * @param {{dir: string, today: string, events?: object[], roots?: object}} ctx
+ * @param {{dir: string, today: string, events?: object[], roots?: object, changes?: object}} ctx
+ *   changes = the cached 'changed' answers (memorychanges tracker current()); the hub never starts git
  */
-function reviewCount({ dir, today, events = [], roots = {} }) {
+function reviewCount({ dir, today, events = [], roots = {}, changes = {} }) {
   try {
-    return reviewList({ records: scan(dir).records, today, events, roots }).urgent;
+    return reviewList({ records: scan(dir).records, today, events, roots, changes }).urgent;
   } catch (err) {
     console.error('[memory] review count failed:', errText(err));
     return 0;

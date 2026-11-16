@@ -97,7 +97,7 @@ test('reads are trimmed before reports and decisions: a search loop cannot push 
 
   const events = readLog(file);
   assert.ok(fs.statSync(file).size < MAX_LOG_BYTES);
-  assert.deepEqual(openDisputes(events).get(key('wrong')), { at: 1, note: 'the flag is gone' });
+  assert.deepEqual(openDisputes(events).get(key('wrong')), { at: 1, note: 'the flag is gone', by: 'tool' });
   assert.equal(events.at(-1).key, key('newest'));
 });
 
@@ -202,7 +202,8 @@ test("a report stays open until the user settles it; a session's own 'it held' d
   const open = openDisputes(events);
 
   assert.deepEqual([...open.keys()], [key('a')]);
-  assert.deepEqual(open.get(key('a')), { at: 1, note: 'flag renamed' });
+  // by = who reported it; "Check all" ranks a God Mode run's report first (src/memorycheck.js).
+  assert.deepEqual(open.get(key('a')), { at: 1, note: 'flag renamed', by: 'tool' });
 });
 
 test('the missing files the user accepted are remembered per memory, latest verification wins', () => {

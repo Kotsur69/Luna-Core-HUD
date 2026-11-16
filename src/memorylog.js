@@ -19,8 +19,10 @@
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
-//   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user" | "check", "note"?, "missing"?, "evidence"?}
-//                                  by 'check' = the "Check if still true" job said it holds (src/memorycheck.js)
+//   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user" | "check" | "run", "note"?, "missing"?, "evidence"?, "run"?}
+//                                  by 'check' = the "Check if still true" job said it holds (src/memorycheck.js);
+//                                  by 'run' = a God Mode run's capture says the run made it obsolete
+//                                  (src/memoryrunstale.js): disputed only, with that run's id in `run`
 //   {"at": <ms>, "ev": "checked",  "key", "verdict", "note"?, "evidence"?: ["file:line" | "<commit> ...", ...], "suggested"?}
 //                                  that job's last answer; verdict = holds | fixed | partly | fixable | unknown;
 //                                  suggested = a corrected body (verdict partly only)
@@ -77,7 +79,10 @@ const SCORE_SWITCH = 'score';
 const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'auto-accepted', 'superseded', 'restored'];
 const VERDICTS = ['verified', 'disputed'];
 // 'check' = the "Check if still true" job (src/memorycheck.js), never a person.
-const BY = ['tool', 'user', 'check'];
+// 'run' = a God Mode run's capture (src/memoryrunstale.js); it may only dispute.
+const BY = ['tool', 'user', 'check', 'run'];
+/** A God Mode run id (orchestraReport.js RUN_ID_RE). */
+const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 /** What a memory check may answer (src/memorycheck.js parseCheckAnswer). */
 const CHECK_VERDICTS = ['holds', 'fixed', 'partly', 'fixable', 'unknown'];
 /** The verdicts that ask the user to act: the memory goes on the review list until settled. */
@@ -202,9 +207,22 @@ function cleanEvent(raw) {
   }
   if (VERDICTS.includes(ev)) {
     if (!key || !BY.includes(raw.by)) return null;
+    // A run only reports a memory as obsolete, and always names itself.
+    const byRun = raw.by === 'run';
+    if (byRun && (ev !== 'disputed' || typeof raw.run !== 'string' || !RUN_ID_RE.test(raw.run))) return null;
     const note = line(raw.note, MAX_NOTE);
     const missing = Array.isArray(raw.missing) ? raw.missing.map((p) => line(p, MAX_PATH)).filter(Boolean).slice(0, MAX_MISSING) : [];
-    return { at, ev, key, by: raw.by, ...(note ? { note } : {}), ...(missing.length ? { missing } : {}), ...evidenced(raw.evidence), ...tagged(raw.session) };
+    return {
+      at,
+      ev,
+      key,
+      by: raw.by,
+      ...(byRun ? { run: raw.run } : {}),
+      ...(note ? { note } : {}),
+      ...(missing.length ? { missing } : {}),
+      ...evidenced(raw.evidence),
+      ...tagged(raw.session),
+    };
   }
   // A "Check if still true" answer (src/memorycheck.js). An unknown verdict drops the line.
   if (ev === 'checked') {
@@ -436,12 +454,13 @@ function rejectedTitles(events, project, max = MAX_REJECTED_TITLES) {
 /**
  * The memories a session reported as wrong and nobody has looked at since.
  * The user's own "still true" settles a report; a session's "it held" does not.
- * @returns {Map<string, {at: number, note: string}>}
+ * @returns {Map<string, {at: number, note: string, by: string, run?: string}>}
+ *   by = who reported it (tool, run); run = the God Mode run's id when a run did
  */
 function openDisputes(events) {
   const open = new Map();
   for (const e of events) {
-    if (e.ev === 'disputed') open.set(e.key, { at: e.at, note: e.note || '' });
+    if (e.ev === 'disputed') open.set(e.key, { at: e.at, note: e.note || '', by: e.by, ...(e.run ? { run: e.run } : {}) });
     else if ((e.ev === 'verified' && e.by === 'user') || e.ev === 'retired' || e.ev === 'rejected') open.delete(e.key);
   }
   return open;
