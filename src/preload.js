@@ -471,6 +471,17 @@ contextBridge.exposeInMainWorld('lunacore', {
   memoryReviewVerify: (key) => ipcRenderer.invoke('memory:verify', typeof key === 'string' ? key : ''),
   /** Deletes a confirmed memory on every PC. */
   memoryReviewRetire: (key) => ipcRenderer.invoke('memory:retire', typeof key === 'string' ? key : ''),
+  // "Make a to-do" (src/memorytodo.js): a memory becomes a card in its project's
+  // To-do list, then leaves. Main checks the key, the text caps and the size.
+  /** The prefilled card of one memory. Promise<{ok, key, text, details} | {ok:false, reason}>. */
+  memoryTodoDraft: (key) => ipcRenderer.invoke('memory:todo-draft', typeof key === 'string' ? key : ''),
+  /** Writes the card, then removes the memory. Promise<{ok, key, projectId, at} | {ok:false, reason}>. */
+  memoryToTodo: (key, draft) =>
+    ipcRenderer.invoke('memory:to-todo', typeof key === 'string' ? key : '', {
+      text: draft && typeof draft.text === 'string' ? draft.text : '',
+      details: draft && typeof draft.details === 'string' ? draft.details : '',
+      size: draft && typeof draft.size === 'string' ? draft.size : '',
+    }),
   // Auto-accept per memory type (src/memoryautoaccept.js). Main refuses to switch
   // a type on unless this PC's numbers offer it, and undoes only a recent auto-accept.
   /** Switches one type on or off. Promise<{ok, type, on} | {ok:false, reason}>. */

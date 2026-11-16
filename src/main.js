@@ -3538,6 +3538,17 @@ function registerIpc() {
     onSettingsChanged: () => configSync && configSync.soon(),
     // The local graveyard of candidates dropped under the usefulness floor (never synced).
     graveyardFile: () => memoryGraveyardPath(userDir()),
+    // "Make a to-do" (src/memorytodo.js): the card goes to the list of the project whose folder is the memory's project.
+    todoProjects: () => projects,
+    memoryProjectOf: (folder) => projectFromRepoKey(memoryRepoKeys.resolve(folder).key),
+    todos: {
+      read: readTodos,
+      write: writeTodos,
+      changed: (projectId) => {
+        send('todo:changed', { projectId });
+        if (todoSync) todoSync.soon();
+      },
+    },
   });
   // The memory window's list of all memories, the usefulness scan (Sonnet,
   // through the same headless runner as capture), conflicts and the archive.

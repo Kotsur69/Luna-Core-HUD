@@ -45,6 +45,13 @@
 //   memory:graveyard-restore (key) -> {ok, key} | {ok:false, reason}   key = the new inbox key; logs `restored`
 //   memory:graveyard-delete  (key) -> {ok, key} | {ok:false, reason}
 //
+// "Make a to-do" (src/memorytodo.js): a memory becomes a card in the To-do
+// list of its project on this PC, then leaves: copied to the local graveyard,
+// then deleted (a confirmed one is retired on every PC). Global memories and projects with no list here are refused.
+//
+//   memory:todo-draft (key)                         -> {ok, key, text, details} | {ok:false, reason}
+//   memory:to-todo    (key, {text, details?, size?}) -> {ok, key, projectId, at} | {ok:false, reason}
+//
 // The renderer names a memory only by its key. src/memoryinbox.js checks the
 // key (splitKey: never a path) and refuses anything that is not waiting, so
 // these channels cannot touch a confirmed memory. Edited text is rebuilt by
@@ -54,7 +61,7 @@
 'use strict';
 
 const { listInbox, approve, reject, update, makeGlobal } = require('./memoryinbox');
-const { MAX_BODY, MAX_TITLE, finalScore } = require('./memoryrecord');
+const { MAX_BODY, MAX_TITLE, finalScore, splitKey } = require('./memoryrecord');
 const { recentUsage } = require('./memoryuse');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
@@ -63,6 +70,7 @@ const auto = require('./memoryautoaccept');
 const { CANDIDATE_TYPES } = require('./memoryextract');
 const { listConflicts } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
+const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -73,6 +81,8 @@ const EDIT_LIMITS = { title: MAX_TITLE * 2, body: MAX_BODY * 2, type: 20, area: 
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
 const keyOf = (v) => (typeof v === 'string' && v.length <= MAX_KEY_CHARS ? v : '');
+/** A memory key from the renderer that splitKey accepts, or null. */
+const memoryKeyOf = (v) => (keyOf(v) && splitKey(v) ? v : null);
 /** A graveyard entry id from the renderer, or '' (refused as 'bad-key'). */
 const entryIdOf = (v) => (graveyard.isEntryId(v) ? v : '');
 
@@ -133,7 +143,9 @@ function cleanSearchMode(raw) {
  *   searchStatus?: () => object|null}} deps
  *   dir = the mirror folder; onChanged fires after a write (sync soon, repaint);
  *   log = the memory log; roots = {<project>: its folder on this PC}, for the anchor check;
- *   searchStatus = how memory_search answers on this PC (the vector store's mode())
+ *   searchStatus = how memory_search answers on this PC (the vector store's mode());
+ *   todoProjects = LunaCore's projects ({id, path}); memoryProjectOf = a folder -> its memory
+ *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js)
  */
 function registerMemoryIpc({
   ipcMain,
@@ -147,6 +159,9 @@ function registerMemoryIpc({
   autoFile = () => null,
   onSettingsChanged = () => {},
   graveyardFile = () => null,
+  todoProjects = () => [],
+  memoryProjectOf = () => null,
+  todos = null,
 }) {
   /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
   const decided = (ev, record) => {
@@ -331,6 +346,31 @@ function registerMemoryIpc({
       console.error('[memory] graveyard delete failed:', errText(err));
       return { ok: false, reason: 'failed' };
     }
+  });
+
+  // "Make a to-do" (src/memorytodo.js). The project's list is looked up per
+  // call: projects can be added or moved while the window is open.
+  const projectIdFor = (project) => todoProjectFor(project, todoProjects(), memoryProjectOf);
+  ipcMain.handle('memory:todo-draft', (_event, key) => {
+    const k = memoryKeyOf(key);
+    if (!k) return { ok: false, reason: 'bad-key' };
+    try {
+      return draftFor({ dir: dir(), key: k, projectIdFor });
+    } catch (err) {
+      console.error('[memory] to-do draft failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  });
+  ipcMain.handle('memory:to-todo', (_event, key, raw) => {
+    const k = memoryKeyOf(key);
+    if (!k) return { ok: false, reason: 'bad-key' };
+    const draft = cleanDraft(raw);
+    if (!draft) return { ok: false, reason: 'bad-draft' };
+    if (!todos) return { ok: false, reason: 'failed' };
+    const res = guarded('to-todo', () => moveToTodo({ dir: dir(), key: k, draft, now: now(), projectIdFor, todos, graveyardFile, log }));
+    // Some of a group's files may be gone even so: sync and repaint what is left.
+    if (res.reason === 'remove-failed') onChanged();
+    return res;
   });
 
   ipcMain.handle('memory:auto-undo', (_event, key) => {

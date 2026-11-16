@@ -4,8 +4,8 @@
 // docs/untouched_docs/rag-stylememory.md, phase 4. The memories capture
 // proposed from finished sessions wait here (src/memoryinbox.js through
 // src/memoryipc.js). Per entry: approve (it joins the project card), edit the
-// title and text, make a project entry global, or reject (it is deleted on
-// every PC). Capture never files a memory as global by itself: only the
+// title and text, make a project entry global, make a to-do card of it
+// (memorytodoform.js), or reject (it is deleted on every PC). Capture never files a memory as global by itself: only the
 // 'Make global' button here does (security review of 2026-11-11).
 //
 // Entries come highest final score first (usefulness, approval and this PC's
@@ -28,6 +28,10 @@ import { COMMANDS, keyCommand, typingIn, moveSelection, keepSelection } from './
 import { autoSection } from './memoryautopanel.js';
 import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft } from './memorybrain.js';
 import { clearHistory } from './memoryhistory.js';
+import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
+import { statsLine, captureLine, searchLine } from './memoryinboxlines.js';
+
+export { statsLine, searchLine };
 
 /** Characters of a body shown before "show all". */
 export const PREVIEW_CHARS = 320;
@@ -58,6 +62,17 @@ let brainProject = '';
 /** An i18n key when main refused to start a scan, or null. */
 let scanError = null;
 
+/** "Make a to-do" (memorytodoform.js): its open form holds `editing`, so every draft lock applies to it. */
+const todo = createTodoFlow({
+  actResult: (...args) => actResult(...args),
+  failureOf: (key) => failed.get(key),
+  clearFailure: (key) => failed.delete(key),
+  reasonKey: (reason) => reasonKey(reason),
+  load: (key) => load(key),
+  getEditing: () => editing,
+  setEditing: (key) => void (editing = key),
+});
+
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
 function el(tag, cls, text) {
@@ -85,6 +100,8 @@ export function preview(body, max = PREVIEW_CHARS) {
 
 /** The i18n key of a failed action's reason. */
 export function reasonKey(reason) {
+  const todoKey = todoReasonKey(reason);
+  if (todoKey) return todoKey;
   if (['not-found', 'not-pending', 'not-confirmed', 'not-flagged', 'not-conflict', 'not-archived'].includes(reason)) return 'mem.inbox.err.gone';
   if (['empty-body', 'bad-title', 'body-too-long', 'record-too-big', 'bad-edits'].includes(reason)) return 'mem.inbox.err.text';
   return 'mem.inbox.err.failed';
@@ -196,7 +213,7 @@ function entry(item) {
   card.append(head);
 
   if (editing === item.key) {
-    card.append(editForm(item));
+    card.append(todo.formOf(item.key) || editForm(item));
   } else {
     const shown = expanded.has(item.key) ? { text: item.body, cut: false } : preview(item.body);
     card.append(el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', shown.text));
@@ -213,14 +230,16 @@ function entry(item) {
     const off = busy.has(item.key);
     const approve = button('port-btn mem-inbox__btn mem-inbox__btn--approve', t('mem.inbox.approve'), () => decide(item.key, 'memoryInboxApprove'));
     const edit = button('port-btn mem-inbox__btn', t('mem.inbox.edit'), () => {
+      todo.reset();
       editing = item.key;
       load();
     });
     // Only a project entry can be made global; a global one already is.
     const global = isGlobal(item) ? null : button('port-btn mem-inbox__btn', t('mem.inbox.makeGlobal'), () => promote(item.key));
+    const toTodo = todoButton({ global: isGlobal(item), off, onClick: () => todo.open(item.key) });
     // The destructive action sits apart from the others.
     const reject = button('port-btn port-btn--kill mem-inbox__btn mem-inbox__btn--reject', t('mem.inbox.reject'), () => decide(item.key, 'memoryInboxReject'));
-    const buttons = [approve, edit, ...(global ? [global] : []), reject];
+    const buttons = [approve, edit, ...(global ? [global] : []), toTodo, reject];
     for (const b of buttons) b.disabled = off;
     const actions = el('div', 'mem-inbox__actions');
     actions.append(...buttons);
@@ -260,7 +279,10 @@ function reviewEntry(item) {
   card.append(...item.flags.map((flag) => el('p', 'mem-inbox__note', flagLine(flag))), el('p', 'mem-inbox__note', usefulnessLine(item)));
   const off = busy.has(item.key);
   const actions = el('div', 'mem-inbox__actions');
-  if (confirming === item.key) {
+  const form = todo.formOf(item.key);
+  if (form) {
+    card.append(form);
+  } else if (confirming === item.key) {
     const ask = el('p', 'mem-inbox__ask', t('mem.inbox.review.retireAsk'));
     ask.setAttribute('role', 'alert');
     const yes = button('port-btn port-btn--kill mem-inbox__btn', t('mem.inbox.review.retireYes'), () => decide(item.key, 'memoryReviewRetire'));
@@ -278,10 +300,11 @@ function reviewEntry(item) {
       confirming = item.key;
       load(item.key);
     });
+    const toTodo = todoButton({ global: isGlobal(item), off, onClick: () => todo.open(item.key) });
     for (const b of [keep, retire]) b.disabled = off;
-    actions.append(keep, retire);
+    actions.append(keep, toTodo, retire);
   }
-  card.append(actions);
+  if (!form) card.append(actions);
   if (failed.has(item.key)) {
     const err = el('p', 'hint is-fail', t(reasonKey(failed.get(item.key))));
     err.setAttribute('role', 'alert');
@@ -293,6 +316,7 @@ function reviewEntry(item) {
 /** Why a graveyard entry was dropped, in words: the usefulness floor with its score, or main's reason. */
 export function graveLine(item) {
   if (item.reason === 'low usefulness') return t('mem.grave.low', { score: Number.isInteger(item.usefulness) ? item.usefulness : '?' });
+  if (item.reason === 'moved to to-do') return t('mem.grave.moved');
   return t('mem.grave.reason', { reason: String(item.reason || '') });
 }
 
@@ -325,13 +349,6 @@ function graveyardEntry(item) {
     card.append(err);
   }
   return card;
-}
-
-/** What capture proposed in the last week and what became of it, or '' when there is nothing to say. */
-export function statsLine(stats) {
-  if (!stats || !(stats.proposed || stats.approved || stats.rejected)) return '';
-  if (typeof stats.rate !== 'number') return t('mem.inbox.statsNone', { days: stats.days, proposed: stats.proposed });
-  return t('mem.inbox.stats', { days: stats.days, proposed: stats.proposed, approved: stats.approved, rejected: stats.rejected, rate: Math.round(stats.rate * 100) });
 }
 
 const TABS = [
@@ -381,28 +398,6 @@ function tabBar(counts) {
   return bar;
 }
 
-function captureLine(capture) {
-  if (!capture || !capture.last) return t('mem.inbox.captureNever');
-  const when = new Date(capture.last.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  return t('mem.inbox.captureLast', { when, saved: capture.last.saved });
-}
-
-const SEARCH_REASON_KEYS = {
-  checking: 'mem.inbox.search.checking',
-  building: 'mem.inbox.search.building',
-  'no-server': 'mem.inbox.search.noServer',
-  'no-model': 'mem.inbox.search.noModel',
-  'not-local': 'mem.inbox.search.notLocal',
-  failed: 'mem.inbox.search.failed',
-};
-
-/** How memory search answers on this PC: by meaning (which model) or by keywords only (why). '' when main did not say. */
-export function searchLine(search) {
-  if (!search) return '';
-  if (search.mode === 'meaning') return t('mem.inbox.search.meaning', { model: search.model, embedded: search.embedded, total: search.total });
-  return t(SEARCH_REASON_KEYS[search.reason] || SEARCH_REASON_KEYS.failed);
-}
-
 /**
  * Puts focus back on the list after a repaint: the wanted entry, or the one
  * that took its place; `fallback` when that entry has nothing to act on (a
@@ -449,7 +444,10 @@ function listView(res, review, conflicts, graves) {
   // a key that is still set would block every later repaint.
   // A merge draft is open on a pair: its id counts as listed while the pair is.
   const listed = new Set([...shown.items.map((item) => item.key), ...(tab === 'inbox' ? conflicts.items.map((pair) => pair.id) : [])]);
-  if (editing !== null && !listed.has(editing)) editing = null;
+  if (editing !== null && !listed.has(editing)) {
+    editing = null;
+    todo.reset();
+  }
   if (confirming !== null && !listed.has(confirming)) confirming = null;
   // A decided entry hands the keyboard selection to the one that took its place.
   shownItems = shown.items;
@@ -482,6 +480,11 @@ function allView(all) {
   // The keyboard commands act on the inbox and review lists only.
   shownItems = [];
   selected = null;
+  // A to-do draft whose memory left the list (another project picked, or another PC) must not lock the window.
+  if (editing !== null && !(all && Array.isArray(all.items) && all.items.some((item) => item.key === editing))) {
+    editing = null;
+    todo.reset();
+  }
   const { node, list } = memoriesPanel(all, {
     scanError,
     off: (key) => busy.has(key),
@@ -493,6 +496,8 @@ function allView(all) {
     },
     onScan: startScan,
     onRestore: (key) => decide(key, 'memoryRestore', key),
+    onTodo: (key) => todo.open(key),
+    todoFormOf: (key) => todo.formOf(key),
   });
   return { nodes: [node], list };
 }
@@ -692,6 +697,7 @@ const ENTRY_ACTIONS = {
   [COMMANDS.VERIFY]: (key) => decide(key, 'memoryReviewVerify'),
   [COMMANDS.RETIRE_CONFIRM]: (key) => decide(key, 'memoryReviewRetire'),
   [COMMANDS.EDIT]: (key) => {
+    todo.reset();
     editing = key;
     load();
   },
@@ -762,6 +768,7 @@ export async function openMemoryInbox() {
         if (stopListening) stopListening();
         stopListening = null;
         editing = null;
+        todo.reset();
         confirming = null;
         selected = null;
         shownItems = [];

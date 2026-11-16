@@ -15,7 +15,8 @@
 //                    both merged ones, are superseded, never deleted.
 //   memoriesPanel    the "All memories" list of one project, its Scan button
 //                    and the scan's progress, archived memories with Restore,
-//                    and a History expander per memory (memoryhistory.js).
+//                    a History expander per memory (memoryhistory.js), and
+//                    "Make a to-do" per memory (memorytodoform.js).
 //
 // Memory text is free text from a model: textContent only, never markup.
 // ============================================================================
@@ -24,6 +25,7 @@
 
 import { t } from './util.js';
 import { historyBlock } from './memoryhistory.js';
+import { todoButton } from './memorytodoform.js';
 
 /** Characters of a body shown in a list. */
 const PREVIEW_CHARS = 280;
@@ -184,7 +186,7 @@ export function conflictEntry(item, { off, error, onKeep, onMerge = null, form =
   return card;
 }
 
-function memoryItem(item, { off, error, onRestore }) {
+function memoryItem(item, { off, error, onRestore, onTodo = null, todoFormOf = () => null, global = false }) {
   const card = el('li', item.archived ? 'mem-inbox__item mem-brain__item--archived' : 'mem-inbox__item');
   card.dataset.key = item.key;
   const head = el('div', 'mem-inbox__head');
@@ -192,12 +194,20 @@ function memoryItem(item, { off, error, onRestore }) {
   if (item.confidence !== 'confirmed') head.append(el('span', 'mem-inbox__project', t('mem.brain.waiting')));
   head.append(el('span', 'mem-inbox__date', item.created));
   card.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', cut(item.body)), el('p', 'mem-inbox__note', usefulnessLine(item)));
-  if (item.archived) {
-    card.append(el('p', 'mem-inbox__note mem-inbox__note--warn', t('mem.brain.archived', { date: item.archived })));
+  if (item.archived) card.append(el('p', 'mem-inbox__note mem-inbox__note--warn', t('mem.brain.archived', { date: item.archived })));
+  // An open "Make a to-do" form (memorytodoform.js) takes the place of the buttons.
+  const form = todoFormOf(item.key);
+  const buttons = [];
+  if (!form && item.archived) {
     const restore = button('port-btn mem-inbox__btn', t('mem.brain.restore'), () => onRestore(item.key));
     restore.disabled = off(item.key);
+    buttons.push(restore);
+  }
+  if (!form && onTodo) buttons.push(todoButton({ global, off: off(item.key), onClick: () => onTodo(item.key) }));
+  if (form) card.append(form);
+  else if (buttons.length) {
     const actions = el('div', 'mem-inbox__actions');
-    actions.append(restore);
+    actions.append(...buttons);
     card.append(actions);
   }
   // Where it came from and what happened to it, read only when opened.
@@ -221,8 +231,10 @@ export function projectOption(p) {
  * The "All memories" list of one project.
  * @param {object} list memory:list's answer
  * @param {{scanError: string|null, off: (key: string) => boolean, error: (key: string) => string|null,
- *   onProject: (project: string) => void, onScan: (project: string) => void, onRestore: (key: string) => void}} ctx
- *   scanError = an i18n key of a refused scan start, or null
+ *   onProject: (project: string) => void, onScan: (project: string) => void, onRestore: (key: string) => void,
+ *   onTodo?: (key: string) => void, todoFormOf?: (key: string) => HTMLElement|null}} ctx
+ *   scanError = an i18n key of a refused scan start, or null; onTodo = "Make a to-do" on an
+ *   entry; todoFormOf = that entry's open to-do form (memorytodoform.js), or null
  * @returns {{node: HTMLElement, list: HTMLElement|null}}
  */
 export function memoriesPanel(list, ctx) {
@@ -269,7 +281,9 @@ export function memoriesPanel(list, ctx) {
     return { node: panel, list: null };
   }
   const ul = el('ul', 'mem-inbox__list');
-  for (const item of list.items) ul.append(memoryItem(item, { off: ctx.off, error: ctx.error, onRestore: ctx.onRestore }));
+  // A global memory has no project, so no To-do list: its button is disabled with the reason.
+  const todo = { onTodo: ctx.onTodo || null, todoFormOf: ctx.todoFormOf || (() => null), global: list.project === 'global' };
+  for (const item of list.items) ul.append(memoryItem(item, { off: ctx.off, error: ctx.error, onRestore: ctx.onRestore, ...todo }));
   panel.append(ul);
   if (list.total > list.items.length) panel.append(el('p', 'hint', t('mem.brain.more', { count: list.total - list.items.length })));
   return { node: panel, list: ul };

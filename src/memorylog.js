@@ -12,6 +12,8 @@
 //                                  restored = brought back from the graveyard into the inbox (src/memorygraveyard.js)
 //   {"at": <ms>, "ev": "merged",   "key", "type", "title"?, "from": ["<key>", ...]}   Mati merged a pair into `key`
 //                                  (src/memoryconflict.js mergePair); each original also gets a `superseded` line
+//   {"at": <ms>, "ev": "to-todo",  "key", "card", "type"?, "title"?}   the memory became the to-do card whose `at` is
+//                                  `card` (src/memorytodo.js); never a `rejected` line, the extractor must not learn from it
 //   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js);
 //                                  type = SCORE_SWITCH: the 'auto-save memories scored 90+' switch did
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
@@ -142,6 +144,12 @@ function cleanEvent(raw) {
     if (!key || !type) return null;
     const title = line(raw.title, MAX_TITLE);
     return { at, ev, key, type, ...(title ? { title } : {}), ...scored(raw.usefulness) };
+  }
+  // A memory turned into a to-do card (src/memorytodo.js): card = the card's `at`.
+  if (ev === 'to-todo') {
+    if (!key || !Number.isFinite(raw.card) || raw.card <= 0) return null;
+    const title = line(raw.title, MAX_TITLE);
+    return { at, ev, key, card: raw.card, ...(type ? { type } : {}), ...(title ? { title } : {}) };
   }
   if (ev === 'merged') {
     const from = Array.isArray(raw.from) ? [...new Set(raw.from.filter((k) => splitKey(k) && k !== key))].slice(0, MAX_MERGED_FROM) : [];

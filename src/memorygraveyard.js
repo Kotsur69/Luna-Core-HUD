@@ -10,7 +10,9 @@
 //   {"entries": [{"id", "at": <ms>, "reason", "score": 0-100, "record": {...}}]}
 //
 // Newest first, at most MAX_GRAVEYARD_ENTRIES, nothing older than
-// GRAVEYARD_KEEP_DAYS. The record is the full checked record, its text run
+// GRAVEYARD_KEEP_DAYS. A waiting memory turned into a to-do card by hand
+// (src/memorytodo.js, buryRecords) is kept here too, reason 'moved to to-do',
+// so it can be restored. The record is the full checked record, its text run
 // through the same secret scrub as the rest of capture before it is written.
 //
 // This is unreviewed model text: the file is LOCAL. It is never synced, never
@@ -148,6 +150,29 @@ function bury(file, rejected, now) {
 }
 
 /**
+ * Keeps waiting memories taken out of the inbox by hand (the "Make a to-do"
+ * button, src/memorytodo.js), so they can be restored. Unlike bury(), this
+ * throws when an entry is not kept: the caller deletes the memories only
+ * once they are here.
+ * @param {string} file
+ * @param {object[]} records the memories, as memorystore read them
+ * @param {string} reason shown in the Graveyard tab
+ * @param {number} now ms
+ * @returns {string[]} the new entry ids
+ */
+function buryRecords(file, records, reason, now) {
+  const why = reasonOf(reason);
+  if (!why) throw new Error('graveyard reason missing');
+  const fresh = (Array.isArray(records) ? records : []).map((record) => ({ id: newId(now), at: now, reason: why, score: isObject(record) ? record.usefulness : null, record }));
+  if (!fresh.length) return [];
+  const kept = capped([...fresh, ...readGraveyard(file, now)], now);
+  // A record the scrub or the check refused would be lost with its memory.
+  if (fresh.some((e) => !kept.some((k) => k.id === e.id))) throw new Error('graveyard entry refused');
+  save(file, kept);
+  return fresh.map((e) => e.id);
+}
+
+/**
  * The graveyard as the memory window lists it.
  * @returns {{items: object[], total: number}} item.key = the entry id (never a memory key)
  */
@@ -235,6 +260,7 @@ module.exports = {
   graveyardPath,
   readGraveyard,
   bury,
+  buryRecords,
   listGraveyard,
   removeEntry,
   restoreEntry,
