@@ -19,7 +19,11 @@
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
-//   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user", "note"?, "missing"?}
+//   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user" | "check", "note"?, "missing"?, "evidence"?}
+//                                  by 'check' = the "Check if still true" job said it holds (src/memorycheck.js)
+//   {"at": <ms>, "ev": "checked",  "key", "verdict", "note"?, "evidence"?: ["file:line" | "<commit> ...", ...], "suggested"?}
+//                                  that job's last answer; verdict = holds | fixed | partly | fixable | unknown;
+//                                  suggested = a corrected body (verdict partly only)
 //   {"at": <ms>, "ev": "card",     "session", "loaded": true | false, "tools"?: bool, "project"?}   a `claude` tab started, with or without its project card
 //
 // `session` (the tab id, "s3") is also kept on search / get / proposed /
@@ -48,7 +52,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { TYPES, splitKey, projectFromRepoKey, GLOBAL } = require('./memoryrecord');
+const { TYPES, splitKey, projectFromRepoKey, GLOBAL, MAX_BODY } = require('./memoryrecord');
 
 const LOG_FILE = 'memory-log.local.jsonl';
 /** Past this size the log is trimmed: reads first, then the older half (keptRows). */
@@ -72,7 +76,15 @@ const SCORE_SWITCH = 'score';
 // 'restored' = a graveyard entry put back into the inbox by hand (src/memorygraveyard.js).
 const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'auto-accepted', 'superseded', 'restored'];
 const VERDICTS = ['verified', 'disputed'];
-const BY = ['tool', 'user'];
+// 'check' = the "Check if still true" job (src/memorycheck.js), never a person.
+const BY = ['tool', 'user', 'check'];
+/** What a memory check may answer (src/memorycheck.js parseCheckAnswer). */
+const CHECK_VERDICTS = ['holds', 'fixed', 'partly', 'fixable', 'unknown'];
+/** The verdicts that ask the user to act: the memory goes on the review list until settled. */
+const CHECK_ACTION_VERDICTS = ['fixed', 'partly', 'fixable'];
+/** Evidence lines of one check ("src/x.js:12", "abc1234 fix the cap"). */
+const MAX_EVIDENCE = 5;
+const MAX_EVIDENCE_CHARS = 200;
 
 /** Decided candidates are counted per usefulness band to see whether the score predicts approval. */
 const USEFULNESS_BANDS = [
@@ -104,6 +116,21 @@ const SESSION_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const sessionOf = (v) => (typeof v === 'string' && SESSION_RE.test(v) ? v : null);
 /** `{session}` when v is a valid tab id, else nothing. */
 const tagged = (v) => (sessionOf(v) ? { session: v } : {});
+/** `{evidence}` of clean one-line strings when v holds any, else nothing. */
+const evidenced = (v) => {
+  const evidence = Array.isArray(v) ? v.map((e) => line(e, MAX_EVIDENCE_CHARS)).filter(Boolean).slice(0, MAX_EVIDENCE) : [];
+  return evidence.length ? { evidence } : {};
+};
+/** A multi-line text (a suggested body): no control characters but line breaks and tabs, capped. */
+const block = (v, max) =>
+  typeof v === 'string'
+    ? v
+        .toWellFormed()
+        .replace(/\r\n?/g, '\n')
+        .replace(/[^\P{Cc}\n\t]|\p{Cf}/gu, ' ')
+        .trim()
+        .slice(0, max)
+    : '';
 
 /** One event rebuilt from untrusted input, or null. */
 function cleanEvent(raw) {
@@ -177,7 +204,14 @@ function cleanEvent(raw) {
     if (!key || !BY.includes(raw.by)) return null;
     const note = line(raw.note, MAX_NOTE);
     const missing = Array.isArray(raw.missing) ? raw.missing.map((p) => line(p, MAX_PATH)).filter(Boolean).slice(0, MAX_MISSING) : [];
-    return { at, ev, key, by: raw.by, ...(note ? { note } : {}), ...(missing.length ? { missing } : {}), ...tagged(raw.session) };
+    return { at, ev, key, by: raw.by, ...(note ? { note } : {}), ...(missing.length ? { missing } : {}), ...evidenced(raw.evidence), ...tagged(raw.session) };
+  }
+  // A "Check if still true" answer (src/memorycheck.js). An unknown verdict drops the line.
+  if (ev === 'checked') {
+    if (!key || !CHECK_VERDICTS.includes(raw.verdict)) return null;
+    const note = line(raw.note, MAX_NOTE);
+    const suggested = raw.verdict === 'partly' ? block(raw.suggested, MAX_BODY) : '';
+    return { at, ev, key, verdict: raw.verdict, ...(note ? { note } : {}), ...evidenced(raw.evidence), ...(suggested ? { suggested } : {}) };
   }
   return null;
 }
@@ -414,6 +448,40 @@ function openDisputes(events) {
 }
 
 /**
+ * The last "Check if still true" answer per memory (src/memorycheck.js).
+ * @returns {Map<string, {at: number, verdict: string, note: string, evidence: string[], suggested: string}>}
+ */
+function lastChecks(events) {
+  const last = new Map();
+  for (const e of events) {
+    if (e.ev === 'checked') last.set(e.key, { at: e.at, verdict: e.verdict, note: e.note || '', evidence: e.evidence || [], suggested: e.suggested || '' });
+  }
+  return last;
+}
+
+/** Events after which a check's request to act is settled: the user kept, edited, retired or moved the memory. */
+const SETTLES_CHECK = new Set(['retired', 'edited', 'to-todo', 'superseded']);
+
+/**
+ * The memories whose last check asks the user to act (fixed, partly, fixable)
+ * and that nobody has settled since: the user's "still true", an edit, a
+ * retire or a move to a to-do settles it. A later check replaces it.
+ * @returns {Map<string, {at: number, verdict: string, note: string, evidence: string[], suggested: string}>}
+ */
+function openChecks(events) {
+  const open = new Map();
+  for (const e of events) {
+    if (e.ev === 'checked') {
+      if (CHECK_ACTION_VERDICTS.includes(e.verdict)) open.set(e.key, { at: e.at, verdict: e.verdict, note: e.note || '', evidence: e.evidence || [], suggested: e.suggested || '' });
+      else open.delete(e.key);
+    } else if ((e.ev === 'verified' && e.by === 'user') || SETTLES_CHECK.has(e.ev)) {
+      open.delete(e.key);
+    }
+  }
+  return open;
+}
+
+/**
  * Per memory, the missing files the user has already seen and accepted with
  * "still true": they are not flagged a second time.
  * @returns {Map<string, Set<string>>}
@@ -575,7 +643,13 @@ module.exports = {
   usage,
   rejectedTitles,
   openDisputes,
+  lastChecks,
+  openChecks,
   acceptedMissing,
+  CHECK_VERDICTS,
+  CHECK_ACTION_VERDICTS,
+  MAX_EVIDENCE,
+  MAX_EVIDENCE_CHARS,
   isoWeek,
   weeklyCounts,
   LOG_FILE,

@@ -436,7 +436,8 @@ test('without a graveyard file the list is empty and the actions fail softly', (
 });
 
 test('the graveyard tab uses channels preload exposes; its strings exist in Polish and English', () => {
-  const panel = read('src/renderer/modules/memoryinbox.js');
+  // graveLine lives in memoryinboxlines.js (split out for the size ceiling): its keys count too.
+  const panel = read('src/renderer/modules/memoryinbox.js') + read('src/renderer/modules/memoryinboxlines.js');
   const preload = read('src/preload.js');
   const i18n = read('src/renderer/i18n.js');
 

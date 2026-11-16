@@ -35,6 +35,7 @@
 
 const { execFile } = require('child_process');
 const os = require('os');
+const path = require('path');
 
 /** Every Gmail connector tool, so a job can deny all but the ones it uses. */
 const GMAIL_TOOLS = [
@@ -61,17 +62,33 @@ const DEFAULT_MISSION_MODEL = 'haiku';
 const DEFAULT_TIMEOUT_MS = 120000;
 
 /**
+ * The built-in tools of a `readOnly` job (the memory check, src/memorycheck.js):
+ * they read files and search them, nothing else. No Bash, no edits, no web.
+ * Verified live 2026-11-15 under --permission-mode dontAsk: a Read inside the
+ * job's cwd works; a Read outside it, a Read through a junction inside cwd
+ * pointing outside, and a Grep or Glob given a path outside cwd are all
+ * denied (permission_denials); Bash and Write do not exist in the session.
+ */
+const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob'];
+/** Tool rounds a readOnly job may take before the CLI stops it: a bound on cost. */
+const READ_ONLY_MAX_TURNS = 40;
+
+/**
  * Pure argv builder. Never a shell string. Unknown tool names in `allowed`
  * are dropped (only real connector tools can ever be allowed), and every
  * connector tool NOT allowed lands in --disallowedTools.
- * @param {{prompt:string, model?:string, allowed?:string[], lean?:boolean}} job
+ * `readOnly` (only together with `lean`) gives the job READ_ONLY_TOOLS and
+ * nothing else; without lean it is ignored (no tools).
+ * @param {{prompt:string, model?:string, allowed?:string[], lean?:boolean, readOnly?:boolean}} job
  * @returns {string[]}
  */
-function buildJobArgs({ prompt, model, allowed = [], lean = false }) {
+function buildJobArgs({ prompt, model, allowed = [], lean = false, readOnly = false }) {
   const safeModel = MISSION_MODELS.includes(model) ? model : DEFAULT_MISSION_MODEL;
   const allowedSet = new Set(allowed.filter((tool) => ALL_CONNECTOR_TOOLS.includes(tool)));
-  const args = ['-p', prompt, '--model', safeModel, '--output-format', 'json', '--tools', ''];
+  const tools = lean && readOnly ? READ_ONLY_TOOLS.join(',') : '';
+  const args = ['-p', prompt, '--model', safeModel, '--output-format', 'json', '--tools', tools];
   args.push('--permission-mode', 'dontAsk', '--setting-sources', '');
+  if (lean && readOnly) args.push('--max-turns', String(READ_ONLY_MAX_TURNS));
   if (lean) {
     // No connector may be allowed on a lean job - it would not exist anyway.
     args.push('--strict-mcp-config');
@@ -122,13 +139,17 @@ function parseLooseJson(text) {
 /**
  * Runs one job. Resolves { ok:true, answer, costUsd } or
  * { ok:false, reason:'no-claude'|'timeout'|'generic'|'bad-json'|'cli-error' }.
- * cwd is the OS temp dir so no project CLAUDE.md is pulled into the context.
- * @param {{prompt:string, model?:string, allowed?:string[], lean?:boolean,
+ * cwd is the OS temp dir so no project CLAUDE.md is pulled into the context,
+ * except for a `readOnly` lean job: it runs in `cwd` (an absolute folder, the
+ * project it reads), which is also the only folder its Read tool may open.
+ * @param {{prompt:string, model?:string, allowed?:string[], lean?:boolean, readOnly?:boolean, cwd?:string,
  *          env:Record<string,string>, timeoutMs?:number, exec?:Function}} job
  */
-function runJob({ prompt, model, allowed, lean, env, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile, stdin = false }) {
+function runJob({ prompt, model, allowed, lean, readOnly = false, cwd = null, env, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile, stdin = false }) {
   return new Promise((resolve) => {
-    const args = buildJobArgs({ prompt, model, allowed, lean });
+    // A read-only job without a real project folder would read the temp dir: refused instead.
+    if (readOnly && !(lean && typeof cwd === 'string' && path.isAbsolute(cwd))) return resolve({ ok: false, reason: 'bad-cwd' });
+    const args = buildJobArgs({ prompt, model, allowed, lean, readOnly });
     // `stdin`: the prompt is piped in instead of passed as an argument. A long
     // prompt does not fit a Windows command line (32,767 characters); `-p`
     // with no prompt reads it from standard input.
@@ -136,7 +157,7 @@ function runJob({ prompt, model, allowed, lean, env, timeoutMs = DEFAULT_TIMEOUT
     const child = exec(
       'claude',
       args,
-      { env, cwd: os.tmpdir(), timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
+      { env, cwd: readOnly ? cwd : os.tmpdir(), timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, windowsHide: true },
       (error, stdout) => {
         if (error) {
           if (error.code === 'ENOENT') return resolve({ ok: false, reason: 'no-claude' });
@@ -172,6 +193,8 @@ module.exports = {
   CALENDAR_TOOLS,
   MISSION_MODELS,
   DEFAULT_MISSION_MODEL,
+  READ_ONLY_TOOLS,
+  READ_ONLY_MAX_TURNS,
   buildJobArgs,
   unwrapJobOutput,
   parseLooseJson,

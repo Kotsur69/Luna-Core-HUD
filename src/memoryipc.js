@@ -65,7 +65,8 @@ const { MAX_BODY, MAX_TITLE, finalScore, splitKey } = require('./memoryrecord');
 const { recentUsage } = require('./memoryuse');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
-const { captureStats, decisionEvent, DAY_MS } = require('./memorylog');
+const { captureStats, decisionEvent, lastChecks, DAY_MS } = require('./memorylog');
+const { checkOf } = require('./memorycheck');
 const auto = require('./memoryautoaccept');
 const { CANDIDATE_TYPES } = require('./memoryextract');
 const { listConflicts } = require('./memoryconflict');
@@ -265,7 +266,9 @@ function registerMemoryIpc({
       const res = reviewList({ records, today: isoDate(now()), events: evs, roots: knownRoots() });
       const byKey = new Map(records);
       const usage = recentUsage(evs, now());
-      return { ok: true, ...res, items: res.items.map((item) => withFinal(item, byKey, usage)) };
+      // Each entry's last "Check if still true" answer on this PC (src/memorycheck.js), or null.
+      const checks = lastChecks(evs);
+      return { ok: true, ...res, items: res.items.map((item) => ({ ...withFinal(item, byKey, usage), check: checkOf(checks, item.key) })) };
     } catch (err) {
       console.error('[memory] review failed:', errText(err));
       return { ok: false, reason: 'failed' };
