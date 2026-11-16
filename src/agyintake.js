@@ -25,7 +25,8 @@
 //   - only our own key changes; every other key and server is written back as
 //     it was read (formatting and key order aside);
 //   - writes go to a temp file that is renamed over the original, so agy never
-//     reads a half-written file;
+//     reads a half-written file; a config that is a symlink (a dotfiles repo)
+//     is written through to its target, so the link survives;
 //   - an entry is removed only while it still carries the token this process
 //     wrote, so an older tab's exit never removes a newer launch's entry, nor
 //     another LunaCore instance's.
@@ -56,7 +57,9 @@ const BEARER_RE = /^Bearer [0-9a-f]{64}$/;
 const MAX_CONFIG_BYTES = 1024 * 1024;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-const errCode = (err) => (err && (err.code || err.message)) || 'error';
+// Code or class name only, never the message: a JSON.parse SyntaxError quotes
+// the text it choked on, and a tab config's text holds its bearer token.
+const errCode = (err) => (err && (err.code || err.name)) || 'error';
 
 /** agy's global MCP config file. */
 function agyMcpConfigPath(home = os.homedir()) {
@@ -117,13 +120,30 @@ function readAgyConfig(file, fsImpl = fs) {
   return { ok: true, doc };
 }
 
+/**
+ * The file a write lands in: a symlinked config's target (renaming over the
+ * link would replace it with a plain file), else `file` itself.
+ */
+function writeTarget(file, fsImpl = fs) {
+  try {
+    return fsImpl.realpathSync(file);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return file;
+    throw err;
+  }
+}
+
 /** Writes `doc` through a temp file in the same folder, renamed over `file`. */
 function writeAgyConfig(file, doc, fsImpl = fs) {
-  fsImpl.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.lunacore-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fsImpl.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  const target = writeTarget(file, fsImpl);
+  fsImpl.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.lunacore-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`;
+  // 'wx': never follow or reuse a file planted under the temp name. The mode
+  // only matters on POSIX; on Windows the file inherits the profile's ACL,
+  // like the per-tab config files in the user dir.
+  fsImpl.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   try {
-    fsImpl.renameSync(tmp, file);
+    fsImpl.renameSync(tmp, target);
   } catch (err) {
     try {
       fsImpl.unlinkSync(tmp);
@@ -217,13 +237,20 @@ function createAgyIntake({ file = agyMcpConfigPath(), fsImpl = fs, log = () => {
     return res.name;
   }
 
-  /** Removes a tab's entry, if this process wrote one. */
+  /**
+   * Removes a tab's entry, if this process wrote one. A failed removal (agy
+   * holding the file, a comment added meanwhile) stays on the list, so the
+   * tab's close or the app's quit tries again.
+   */
   function unregister(sessionId) {
     const entry = written.get(sessionId);
     if (!entry) return;
-    written.delete(sessionId);
     const res = removeAgyServer({ file, sessionId, entry, fsImpl });
-    if (!res.ok) log(`[agy-intake] session ${sessionId}: entry not removed from ${file} (${res.error})`);
+    if (!res.ok) {
+      log(`[agy-intake] session ${sessionId}: entry not removed from ${file} (${res.error})`);
+      return;
+    }
+    written.delete(sessionId);
   }
 
   /** Removes every entry this process wrote (app quit). */

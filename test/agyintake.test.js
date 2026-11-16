@@ -224,6 +224,82 @@ test('createAgyIntake: no config, a bad config or an unwritable agy file means n
   for (const line of lines) assert.equal(line.includes(TOKEN_A), false, 'a log line never carries the token');
 });
 
+test('a removal that fails is retried by the next unregister and by unregisterAll', (t) => {
+  const { dir, file } = tempConfig(t);
+  writeJson(file, USER_CONFIG);
+  const lines = [];
+  // agy holding its file: every rename fails while `busy`.
+  let busy = false;
+  const fsImpl = {
+    ...fs,
+    renameSync: (from, to) => {
+      if (busy) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return fs.renameSync(from, to);
+    },
+  };
+  const agy = createAgyIntake({ file, fsImpl, log: (line) => lines.push(line) });
+  assert.equal(agy.register('s1', writeSessionConfig(dir, 's1', URL, TOKEN_A)), 'lunacore-s1');
+
+  busy = true;
+  agy.unregister('s1');
+  assert.equal(agy.has('s1'), true, 'kept after a failed removal');
+  assert.deepEqual(readJson(file).mcpServers['lunacore-s1'], entryOf(TOKEN_A));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /entry not removed .*EBUSY/);
+
+  busy = false;
+  agy.unregisterAll();
+  assert.equal(agy.has('s1'), false);
+  assert.deepEqual(readJson(file), USER_CONFIG, 'removed on the retry');
+  for (const line of lines) assert.equal(line.includes(TOKEN_A), false, 'a log line never carries the token');
+});
+
+test('a corrupt tab config is logged by error class only, never with its text', (t) => {
+  const { dir, file } = tempConfig(t);
+  const lines = [];
+  const agy = createAgyIntake({ file, log: (line) => lines.push(line) });
+  const corrupt = path.join(dir, 'corrupt.json');
+  fs.writeFileSync(corrupt, `{"mcpServers":{"lunacore":{"headers":{"Authorization":"Bearer ${TOKEN_A}"`, 'utf8');
+  assert.equal(agy.register('s1', corrupt), null);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /unreadable \(SyntaxError\)/);
+  assert.equal(lines[0].includes(TOKEN_A), false);
+});
+
+test("writes land in the config's resolved path (fs.realpathSync), never over the link itself", (t) => {
+  const { dir, file } = tempConfig(t);
+  const target = path.join(dir, 'dotfiles', 'mcp_config.json');
+  // Stands in for a symlink where creating one needs Developer Mode.
+  writeJson(file, USER_CONFIG);
+  writeJson(target, USER_CONFIG);
+  const linkText = fs.readFileSync(file, 'utf8');
+  const fsImpl = { ...fs, realpathSync: (p) => (p === file ? target : fs.realpathSync(p)) };
+  assert.equal(addAgyServer({ file, sessionId: 's1', entry: entryOf(TOKEN_A), fsImpl }).ok, true);
+  assert.equal(fs.readFileSync(file, 'utf8'), linkText, 'the link path is not replaced');
+  assert.deepEqual(readJson(target).mcpServers['lunacore-s1'], entryOf(TOKEN_A));
+  assert.deepEqual(fs.readdirSync(path.dirname(target)), ['mcp_config.json'], 'no temp file left behind');
+});
+
+test('a symlinked agy config is written through to its target; the link survives', (t) => {
+  const { dir, file } = tempConfig(t);
+  const target = path.join(dir, 'dotfiles', 'mcp_config.json');
+  writeJson(target, USER_CONFIG);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    fs.symlinkSync(target, file, 'file');
+  } catch (err) {
+    // Windows without Developer Mode cannot create symlinks.
+    t.skip(`symlinks unavailable here (${err.code})`);
+    return;
+  }
+  assert.equal(addAgyServer({ file, sessionId: 's1', entry: entryOf(TOKEN_A) }).ok, true);
+  assert.equal(fs.lstatSync(file).isSymbolicLink(), true, 'still a link');
+  assert.deepEqual(readJson(target).mcpServers['lunacore-s1'], entryOf(TOKEN_A));
+  assert.equal(removeAgyServer({ file, sessionId: 's1', entry: entryOf(TOKEN_A) }).removed, true);
+  assert.equal(fs.lstatSync(file).isSymbolicLink(), true);
+  assert.deepEqual(readJson(target), USER_CONFIG);
+});
+
 test('createAgyIntake.unregisterAll removes every entry it wrote and nothing else', (t) => {
   const { dir, file } = tempConfig(t);
   writeJson(file, USER_CONFIG);

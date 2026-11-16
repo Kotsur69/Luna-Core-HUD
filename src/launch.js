@@ -144,7 +144,7 @@ function withMemoryCard(command, cardPath) {
  * @returns {string}
  */
 function agyMemoryCard(cmd, cardPath) {
-  if (AGY_PROMPT_DECIDED.test(cmd) || AGY_SESSION_DECIDED.test(cmd)) return cmd;
+  if (AGY_PROMPT_DECIDED.test(cmd) || AGY_SESSION_DECIDED.test(cmd) || PATH_CONTROL_RE.test(cardPath)) return cmd;
   const [bin, ...rest] = cmd.split(/\s+/);
   const message =
     `Read the LunaCore project memory card in the file \`${cardPath}\`. ` +
@@ -246,7 +246,11 @@ function withTaskBrief(command, task, firstMessage) {
   const briefPath = task && typeof task.briefPath === 'string' ? task.briefPath : '';
   // U+2018-U+201B: PowerShell treats the typographic quotes as ' too.
   if (!briefPath || /['`\r\n‘-‛]/.test(briefPath)) return null;
-  if (isAgyCommand(cmd)) return agyTaskBrief(cmd, task, briefMessage(briefPath, firstMessage));
+  if (isAgyCommand(cmd)) {
+    // A first message holding a control character falls back to "read your brief".
+    const first = typeof firstMessage === 'string' && PATH_CONTROL_RE.test(firstMessage) ? undefined : firstMessage;
+    return agyTaskBrief(cmd, task, briefMessage(briefPath, first));
+  }
   if (!isClaudeCommand(cmd)) return null;
   const [bin, ...rest] = cmd.split(/\s+/);
   const message = briefMessage(briefPath, firstMessage);
@@ -299,6 +303,8 @@ function briefMessage(briefPath, firstMessage) {
  */
 function agyTaskBrief(cmd, task, message) {
   if (AGY_PROMPT_DECIDED.test(cmd)) return null;
+  // A control character would be typed into the PTY as a keystroke (Ctrl-C...).
+  if (PATH_CONTROL_RE.test(message) || PATH_CONTROL_RE.test(task.briefPath)) return null;
   const [bin, ...rest] = cmd.split(/\s+/);
   const parts = [bin, AGY_PROMPT_FLAG, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(task.briefPath)}'`];
   parts.push(...agyPermissionFlags(cmd, task));
@@ -311,16 +317,17 @@ function agyTaskBrief(cmd, task, message) {
 
 /**
  * The agy flags of a worker's permission mode, unless the command decides it.
- * agy cannot take deny rules, so a task that carries any never skips agy's
- * own permission prompts: bypass falls back to auto-accepting edits only.
+ * agy cannot take deny rules, so a task that carries any (even ones Claude
+ * would drop as malformed) gets no permission flag at all: agy then asks
+ * before every edit and command instead of auto-accepting a denied one.
  * @param {string} cmd
  * @param {object} task
  * @returns {string[]}
  */
 function agyPermissionFlags(cmd, task) {
   if (AGY_PERMISSION_DECIDED.test(cmd)) return [];
-  const denies = Array.isArray(task.disallowedTools) && task.disallowedTools.some((r) => TOOL_RULE_RE.test(r));
-  const mode = task.permissionMode === 'bypassPermissions' && denies ? 'acceptEdits' : task.permissionMode;
+  if (Array.isArray(task.disallowedTools) && task.disallowedTools.length > 0) return [];
+  const mode = task.permissionMode;
   return WORKER_PERMISSION_MODES.includes(mode) ? [...AGY_PERMISSION_FLAGS[mode]] : [];
 }
 
@@ -385,7 +392,8 @@ function withAccountResume(command, uuid, task = null, message = null) {
  * withAccountResume() for an `agy` command: the same conversation through
  * `--conversation=<id>`, with a neutral first message (agy runs on a Google
  * account, so the Claude-account message would be wrong). A worker keeps its
- * agy flags via withTaskBrief.
+ * agy flags via withTaskBrief, and is not resumed (null) when they cannot be
+ * rebuilt: without them it would stop at every permission prompt.
  * @param {string} cmd trimmed agy command
  * @param {string} uuid conversation id (agy's are UUIDs too)
  * @param {object|null} task
@@ -395,9 +403,12 @@ function withAccountResume(command, uuid, task = null, message = null) {
 function agyResume(cmd, uuid, task, message) {
   if (!UUID_RE.test(String(uuid || '')) || AGY_SESSION_DECIDED.test(cmd) || AGY_PROMPT_DECIDED.test(cmd)) return null;
   if (task && task.lockdown) return null;
-  const first = typeof message === 'string' && message && !UNSAFE_QUOTE_RE.test(message) ? message : AGY_RESUME_MESSAGE;
-  const withFlags = task ? withTaskBrief(cmd, task, first) : null;
-  if (withFlags) return `${withFlags} --conversation=${uuid}`;
+  const safe = typeof message === 'string' && message && !UNSAFE_QUOTE_RE.test(message) && !PATH_CONTROL_RE.test(message);
+  const first = safe ? message : AGY_RESUME_MESSAGE;
+  if (task) {
+    const withFlags = withTaskBrief(cmd, task, first);
+    return withFlags ? `${withFlags} --conversation=${uuid}` : null;
+  }
   const [bin, ...rest] = cmd.split(/\s+/);
   return [bin, AGY_PROMPT_FLAG, `'${first}'`, ...rest, `--conversation=${uuid}`].join(' ');
 }

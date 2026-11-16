@@ -178,10 +178,28 @@ test('withTaskBrief maps worker permission modes to agy syntax unless the profil
   // The profile already decides: nothing is added.
   assert.equal(launch.withTaskBrief('agy --mode plan', task('bypassPermissions')).match(/--mode|--dangerously/g).length, 1);
   assert.doesNotMatch(launch.withTaskBrief('agy --dangerously-skip-permissions', task('acceptEdits')), /--mode/);
-  // agy cannot take deny rules: a task with any never skips agy's prompts.
-  const denied = launch.withTaskBrief('agy', task('bypassPermissions', { disallowedTools: ['Bash(git push:*)'] }));
-  assert.doesNotMatch(denied, /--dangerously-skip-permissions/);
-  assert.match(denied, / --mode accept-edits$/);
+  // agy cannot take deny rules: a task with any (even malformed ones) gets no
+  // permission flag at all, so agy asks before every edit and command.
+  for (const disallowedTools of [['Bash(git push:*)'], ['not a rule!'], ['Edit(src/secrets/*)', 'Write']]) {
+    for (const mode of ['bypassPermissions', 'acceptEdits']) {
+      const denied = launch.withTaskBrief('agy', task(mode, { disallowedTools }));
+      assert.equal(denied, `agy --prompt-interactive ${BRIEF_MSG} --add-dir 'C:\\cfg\\tasks'`, `${mode} ${disallowedTools}`);
+    }
+  }
+});
+
+test('agy launch helpers refuse control characters that the PTY would read as keystrokes', () => {
+  assert.equal(launch.withTaskBrief('agy', { briefPath: 'C:\\cfg\\tasks\\a\u0003b.md' }), null);
+  // A first message with one falls back to the brief message.
+  assert.equal(
+    launch.withTaskBrief('agy', { briefPath: BRIEF }, 'go\u001bon'),
+    `agy --prompt-interactive ${BRIEF_MSG} --add-dir 'C:\\cfg\\tasks'`,
+  );
+  assert.equal(launch.withMemoryCard('agy', 'C:\\cfg\\card\u0008.md'), 'agy');
+  assert.equal(
+    launch.withAccountResume('agy', RESUME_ID, null, 'go\u0003on'),
+    `agy --prompt-interactive '${launch.AGY_RESUME_MESSAGE}' --conversation=${RESUME_ID}`,
+  );
 });
 
 test('withTaskBrief drops Claude-only flags for agy and keeps the tool kit folders', () => {
@@ -249,6 +267,9 @@ test('withAccountResume resumes an agy conversation with a neutral message, keep
   assert.equal(launch.withAccountResume('agy -i hi', RESUME_ID), null);
   assert.equal(launch.withAccountResume('agy', 'nope'), null);
   assert.equal(launch.withAccountResume('agy', RESUME_ID, { briefPath: BRIEF, lockdown: { runSlug: 'x' } }), null);
+  // A worker whose flags cannot be rebuilt is not resumed without them.
+  assert.equal(launch.withAccountResume('agy', RESUME_ID, { permissionMode: 'bypassPermissions' }), null);
+  assert.equal(launch.withAccountResume('agy', RESUME_ID, { briefPath: "C:\\it's.md", permissionMode: 'acceptEdits' }), null);
   // Claude unchanged.
   assert.equal(
     launch.withAccountResume('claude', RESUME_ID),

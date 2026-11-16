@@ -2179,7 +2179,8 @@ function spawnInto(session, profile, launch = null) {
         const carded = claude || agy ? withMemoryCard(launched, prepareCard(session, hasTools)) : launched;
         proc.write(`${carded}\r`);
         session.todoTools = intakeState(startCommand, launched, Boolean(agyServer));
-        session.todoCli = agy ? 'agy' : null;
+        // An override agy command gets no server, but ✨ still words its state for agy.
+        session.todoCli = isAgyCommand(startCommand) ? 'agy' : null;
         session.todoServer = agyServer;
         session.memoryCard = claude || agy ? logCardStart(session, memoryCardLoaded(launched, carded), hasTools) : null;
         broadcastSessions();
