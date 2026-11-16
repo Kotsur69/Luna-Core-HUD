@@ -23,6 +23,10 @@
 // confirmed memory covers is named in the digest as REPEATED FAILURE, and the
 // candidate about it is saved with usefulness of at least 80.
 //
+// The same call also names the confirmed memories the run made obsolete
+// (src/memoryrunstale.js): each becomes one `disputed` line of the memory log,
+// by 'run', on Mati's review list. No memory file is edited or removed.
+//
 // Only for a project with memory switched on, and not while its inbox is full
 // (MAX_PENDING waiting, as for sessions). A run is never captured twice: a
 // ledger entry per run id is written BEFORE the model call, so a second finish
@@ -50,6 +54,7 @@ const { RUN_ID_RE } = require('./orchestraReport');
 const { createLanding, autoEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
 const { bury, graveyardPath } = require('./memorygraveyard');
+const { staleCandidates, staleSection, parseObsolete, reportObsolete } = require('./memoryrunstale');
 
 const LEDGER_FILE = 'memory-runcapture.local.json';
 /** Runs remembered; the oldest go first. Run ids are new per run, so this only bounds the file. */
@@ -105,7 +110,8 @@ function readRunLedger(file) {
  *   log?: {add: (event: object) => boolean, read: () => object[]}|null}} opts
  *   run = the small-model call (missionrunner.runJob, lean, as for sessions);
  *   projectOf = the memory project of a repository folder (its normalised remote), or null;
- *   log = the memory log (src/memorylog.js): what was proposed goes in, rejected titles come out
+ *   log = the memory log (src/memorylog.js): what was proposed goes in, rejected titles come out;
+ *   onDisputed = memories were reported obsolete by the run (the review list changed)
  */
 function createRunCapture({
   configDir,
@@ -117,6 +123,7 @@ function createRunCapture({
   transcriptsDir = CLAUDE_PROJECTS_DIR,
   countOutside = countRunOutside,
   log = null,
+  onDisputed = () => {},
 }) {
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
@@ -188,20 +195,40 @@ function createRunCapture({
     }
   }
 
+  /**
+   * The memories the answer calls obsolete, each one `disputed` line. Its own
+   * failure costs only the reports, never the candidates already saved.
+   */
+  function disputeObsolete({ answer, stale, runId, view }) {
+    if (!stale.length || !log) return 0;
+    try {
+      const entries = parseObsolete(answer, stale);
+      const written = reportObsolete({ log, entries, runId, pr: view.integrationMode === 'pr' });
+      if (written) onDisputed(written);
+      return written;
+    } catch (err) {
+      console.error('[memory] run capture: obsolete memories not reported:', errText(err));
+      return 0;
+    }
+  }
+
   async function extract({ runId, repoPath, view, project, digest, repeated }) {
     const today = isoDate(now());
     const outside = await outsideOf(repoPath, view);
-    const existing = scan(paths.dir)
-      .records.map(([, r]) => r)
-      .filter((r) => r.project === project || r.project === GLOBAL);
+    const mirror = scan(paths.dir).records;
+    const existing = mirror.map(([, r]) => r).filter((r) => r.project === project || r.project === GLOBAL);
     const notWanted = log ? rejectedTitles(log.read(), project) : [];
+    // Confirmed memories naming files the run integrated: listed in the same prompt (none = the prompt is unchanged).
+    const stale = staleCandidates({ records: mirror, project, view });
     // The digest quotes worker and test output: mask what looks like a secret before it leaves the machine.
-    const res = await run({ prompt: buildPrompt({ digest: scrub(digest.text), project, today, existing, notWanted, subject: 'run' }) });
+    const prompt = buildPrompt({ digest: scrub(digest.text), project, today, existing, notWanted, subject: 'run', extra: staleSection(stale) });
+    const res = await run({ prompt });
     if (!res || !res.ok) return { reason: `model-${(res && res.reason) || 'failed'}`, saved: 0, rejected: [] };
     const source = withNote(`captured from God Mode run ${runId} on ${machine}`, outsideNote(outside));
     // The gotcha the REPEATED FAILURE section asked for is never scored under the floor.
     const { records, rejected } = candidatesFrom(floorRepeated(res.answer, repeated), { project, today, source, existing });
     const saved = saveRecords(records);
+    disputeObsolete({ answer: res.answer, stale, runId, view });
     const reason = saved ? 'saved' : records.length ? 'write-failed' : 'nothing';
     return { reason, saved, rejected };
   }

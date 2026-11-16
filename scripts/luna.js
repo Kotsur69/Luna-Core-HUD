@@ -391,7 +391,7 @@ function rootsHere(project) {
 }
 
 const FLAG_TEXT = {
-  disputed: (f) => `REPORTED WRONG by a session${f.note ? `: ${f.note}` : ''}`,
+  disputed: (f) => `REPORTED ${f.run ? `OBSOLETE by God Mode run ${f.run}` : 'WRONG by a session'}${f.note ? `: ${f.note}` : ''}`,
   checked: (f) => `"Check if still true" said ${f.verdict}${f.note ? `: ${f.note}` : ''}`,
   anchor: (f) => `names a file that is gone: ${f.missing.join(', ')}`,
   changed: (f) => `files it names changed since it was checked: ${f.files.join(', ')} (last change ${f.last})`,

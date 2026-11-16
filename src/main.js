@@ -4368,6 +4368,8 @@ app.whenReady().then(() => {
       projectOf: (repoPath) => memoryRepoKeys.resolve(repoPath).key,
       log: memoryLogOf(),
       onSaved: onMemorySaved,
+      // Memories the run made obsolete went on the review list (a log line only: nothing to sync).
+      onDisputed: () => send('memory:changed', {}),
     });
     // An unused memory loses usefulness and moves to the archive at zero (src/memorydecay.js).
     memoryDecay = createMemoryDecay({

@@ -219,10 +219,12 @@ const STATUS_LINES = [
  * @param {{digest: string, project: string, today: string, existing: object[], notWanted?: string[], subject?: 'session'|'run'}} ctx
  *   existing = records of this project and of `global`;
  *   notWanted = titles the user rejected lately (src/memorylog.js rejectedTitles);
- *   subject = what the digest is of (SUBJECTS); a session is also asked for its status
+ *   subject = what the digest is of (SUBJECTS); a session is also asked for its status;
+ *   extra = more prompt lines, placed before the digest (a run's obsolete memories,
+ *   src/memoryrunstale.js); none = the prompt is exactly what it was without them
  * @returns {string}
  */
-function buildPrompt({ digest, project, today, existing, notWanted = [], subject = 'session' }) {
+function buildPrompt({ digest, project, today, existing, notWanted = [], subject = 'session', extra = [] }) {
   const about = SUBJECTS[subject] || SUBJECTS.session;
   // A rejected title was written by a model: one clean line, and never a section marker.
   const unwanted = notWanted
@@ -279,6 +281,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [], subject
     `  does next time) and durable (does it matter beyond this task). Under ${AUTO_REJECT_BELOW} is set aside unread; be honest, not generous.`,
     `No candidates: {"candidates":[]${about.status ? ',"status":"..."' : ''}}`,
     ...(about.status ? STATUS_LINES : []),
+    ...(Array.isArray(extra) && extra.length ? ['', ...extra] : []),
     '',
     `=== ${about.marker} ===`,
     digest.replace(MARKER_RE, '--'),

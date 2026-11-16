@@ -14,6 +14,11 @@ import { t } from './util.js';
 
 /** Why a confirmed memory is on the review list, in words (never by colour alone). */
 export function flagLine(flag) {
+  if (flag.kind === 'disputed' && flag.run) {
+    // The note repeats "God Mode run <id>: " after an optional PR prefix; the line names the run itself.
+    const note = String(flag.note || '').replace(`God Mode run ${flag.run}: `, '');
+    return t('mem.inbox.review.disputedRun', { run: flag.run, note: note || '-' });
+  }
   if (flag.kind === 'disputed') return t('mem.inbox.review.disputed', { note: flag.note || '-' });
   if (flag.kind === 'anchor') return t('mem.inbox.review.anchor', { files: (flag.missing || []).join(', ') });
   if (flag.kind === 'changed') return t('mem.inbox.review.changed', { files: (flag.files || []).join(', '), date: flag.last || '-' });

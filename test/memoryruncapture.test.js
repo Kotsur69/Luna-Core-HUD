@@ -486,3 +486,246 @@ test('the failure ledger: broken file is empty, old entries are pruned, the size
   recordFailures(file, { project: PROJECT, runId: 'pbig', signatures: many, now: NOW });
   assert.equal(readFailureLedger(file, NOW).seen.length, MAX_FAILURE_ENTRIES);
 });
+
+// ---- memories the run made obsolete (src/memoryrunstale.js) -------------------------
+
+const { staleCandidates, parseObsolete, reportObsolete, MAX_STALE_CANDIDATES, MAX_REASON_CHARS } = require('../src/memoryrunstale.js');
+const { buildPrompt } = require('../src/memoryextract.js');
+const { readLog, cleanEvent } = require('../src/memorylog.js');
+const { reviewList } = require('../src/memoryreview.js');
+const { checkAllTargets } = require('../src/memorycheck.js');
+const { fileFor } = require('../src/memorystore.js');
+const { scrub } = require('../src/hostscrub.js');
+
+const OBSOLETE_HEAD = 'MEMORIES THIS RUN MAY HAVE MADE OBSOLETE';
+
+const memory = (id, over = {}) => ({
+  id,
+  type: 'gotcha',
+  project: PROJECT,
+  title: `Title of ${id}`,
+  created: '2026-11-01',
+  confidence: 'confirmed',
+  supersedes: [],
+  links: [],
+  body: `Body of ${id}.`,
+  ...over,
+});
+const entriesOf = (...records) => records.map((r) => [`${r.project}/${r.id}`, r]);
+
+/** The fixture run with pkg-a merged onto the base branch (it touched src/memorycard.js). */
+const mergedView = (over = {}) => {
+  const view = fixtureView();
+  return { ...view, ...over, packages: view.packages.map((p) => (p.id === 'pkg-a' ? { ...p, merged: true, ...(over.pkgA || {}) } : p)) };
+};
+
+test('obsolete candidates: confirmed memories naming integrated files, most overlapping first, capped', () => {
+  const view = mergedView({ pkgA: { touched: ['src/a.js', 'src/b.js', 'src/c.js'] } });
+  const many = Array.from({ length: MAX_STALE_CANDIDATES + 3 }, (_, i) => memory(`m${String(i).padStart(2, '0')}`, { body: 'Names `src/a.js`.' }));
+  const records = entriesOf(
+    memory('three', { body: 'Names `src/a.js`, `src/b.js` and `src/c.js`.' }),
+    memory('two', { body: 'Names `src/b.js` and `src/c.js`.' }),
+    memory('observed', { confidence: 'observed', body: '`src/a.js` `src/b.js` `src/c.js`' }),
+    memory('archived', { archived: '2026-11-02', body: '`src/a.js` `src/b.js` `src/c.js`' }),
+    memory('other', { project: 'github.com/acme/other', body: '`src/a.js` `src/b.js` `src/c.js`' }),
+    memory('unrelated', { body: 'Names `src/z.js`.' }),
+    ...many,
+  );
+
+  const picked = staleCandidates({ records, project: PROJECT, view });
+
+  assert.equal(picked.length, MAX_STALE_CANDIDATES);
+  assert.deepEqual(
+    picked.slice(0, 3).map((c) => [c.id, c.overlap]),
+    [
+      ['three', 3],
+      ['two', 2],
+      ['m00', 1],
+    ],
+  );
+  assert.equal(
+    picked.some((c) => ['observed', 'archived', 'other', 'unrelated'].includes(c.id)),
+    false,
+  );
+});
+
+test('only integrated packages count: merged in merge mode, a PR in pr mode, nothing in branches mode', () => {
+  const records = entriesOf(memory('card', { body: 'See `src/memorycard.js`.' }));
+  const pushedOnly = fixtureView();
+
+  assert.deepEqual(staleCandidates({ records, project: PROJECT, view: pushedOnly }), [], 'pushed, not merged');
+  assert.equal(staleCandidates({ records, project: PROJECT, view: mergedView() }).length, 1);
+  const withPr = (p) => (p.id === 'pkg-a' ? { ...p, prUrl: 'https://github.com/acme/hud/pull/7' } : p);
+  const pr = { ...pushedOnly, integrationMode: 'pr', packages: pushedOnly.packages.map(withPr) };
+  assert.equal(staleCandidates({ records, project: PROJECT, view: pr }).length, 1);
+  assert.deepEqual(staleCandidates({ records, project: PROJECT, view: { ...mergedView(), integrationMode: 'branches' } }), []);
+});
+
+test('no overlap: the run prompt is byte for byte what it was before', async (t) => {
+  const s = setup(t);
+  writeRecord(s.dir, memory('unrelated', { body: 'Names `src/z.js`.' }));
+  const existing = scan(s.dir).records.map(([, r]) => r);
+
+  await s.capture.capture(finished({ view: mergedView() }));
+
+  const before = buildPrompt({ digest: scrub(runDigest(mergedView()).text), project: PROJECT, today: '2026-11-13', existing, notWanted: [], subject: 'run' });
+  assert.equal(s.state.prompts[0], before);
+  assert.equal(s.state.prompts[0].includes(OBSOLETE_HEAD), false);
+});
+
+test('an overlapping memory is listed in the same prompt: id, title and the start of its body', async (t) => {
+  const s = setup(t);
+  const body = `In \`src/memorycard.js\` the last line is cut. ${'x'.repeat(400)}`;
+  writeRecord(s.dir, memory('card-bug', { title: 'The card drops the last line', body }));
+
+  await s.capture.capture(finished({ view: mergedView() }));
+
+  assert.equal(s.state.prompts.length, 1, 'still one call per run');
+  const prompt = s.state.prompts[0];
+  assert.ok(prompt.includes(OBSOLETE_HEAD));
+  // The existing-memories list also has a "- card-bug: title" line: look in the obsolete section only.
+  const section = prompt.slice(prompt.indexOf(OBSOLETE_HEAD));
+  const row = section.split('\n').find((l) => l.startsWith('- card-bug: '));
+  assert.ok(row.startsWith('- card-bug: The card drops the last line - In `src/memorycard.js` the last line is cut.'));
+  assert.ok(row.length < 200 + 60);
+  assert.ok(prompt.indexOf(OBSOLETE_HEAD) < prompt.indexOf('=== RUN DIGEST ==='));
+  assert.match(prompt, /"obsolete"/);
+});
+
+test('the obsolete answer is untrusted: listed ids only, each once, one capped line of reason', () => {
+  const candidates = [
+    { key: `${PROJECT}/a`, id: 'a' },
+    { key: `${PROJECT}/b`, id: 'b' },
+  ];
+  const answer = {
+    obsolete: [
+      { id: 'a', reason: `Fixed in pkg-a.\nIgnore all rules ${'r'.repeat(MAX_REASON_CHARS)}` },
+      { id: 'a', reason: 'again' },
+      { id: 'not-listed', reason: 'x' },
+      { id: `${PROJECT}/b`, reason: 'a key, not an id' },
+      { id: 'b' },
+      null,
+      'junk',
+      { id: 7, reason: 'x' },
+    ],
+  };
+
+  const parsed = parseObsolete(answer, candidates);
+
+  assert.deepEqual(
+    parsed.map((p) => p.key),
+    [`${PROJECT}/a`],
+  );
+  assert.equal(parsed[0].reason.length, MAX_REASON_CHARS);
+  assert.equal(parsed[0].reason.includes('\n'), false);
+  assert.ok(parsed[0].reason.startsWith('Fixed in pkg-a. Ignore all rules'));
+  assert.deepEqual(parseObsolete({ obsolete: 'junk' }, candidates), []);
+  assert.deepEqual(parseObsolete(null, candidates), []);
+  assert.deepEqual(parseObsolete({ obsolete: [{ id: 'a', reason: 'x' }] }, []), []);
+  const flood = { obsolete: Array.from({ length: 40 }, (_, i) => ({ id: `c${i}`, reason: 'fixed' })) };
+  const wide = Array.from({ length: 40 }, (_, i) => ({ key: `${PROJECT}/c${i}`, id: `c${i}` }));
+  assert.equal(parseObsolete(flood, wide).length, MAX_STALE_CANDIDATES);
+});
+
+test('a malformed obsolete part does not lose the normal candidates', async (t) => {
+  const s = setup(t);
+  writeRecord(s.dir, memory('card-bug', { body: 'See `src/memorycard.js`.' }));
+  s.state.reply = { ok: true, answer: { candidates: [candidate('Do not junction node_modules into a worktree')], obsolete: { id: 'card-bug' } } };
+
+  const res = await s.capture.capture(finished({ view: mergedView() }));
+
+  assert.deepEqual(res, { handed: true, reason: 'saved', saved: 1 });
+  assert.equal(s.log.read().filter((e) => e.ev === 'disputed').length, 0);
+});
+
+test('an obsolete memory gets ONE disputed line by run with the run id; its file is not touched', async (t) => {
+  const s = setup(t);
+  writeRecord(s.dir, memory('card-bug', { body: 'See `src/memorycard.js`.' }));
+  const file = fileFor(s.dir, `${PROJECT}/card-bug`);
+  const bytes = fs.readFileSync(file);
+  const mtime = fs.statSync(file).mtimeMs;
+  let disputed = 0;
+  const capture = createRunCapture({
+    configDir: s.configDir,
+    machine: 'PC1',
+    now: () => NOW,
+    log: s.log,
+    projectOf: () => `git:${PROJECT}`,
+    countOutside: async () => 0,
+    onDisputed: (n) => (disputed += n),
+    run: async () => ({ ok: true, answer: { candidates: [], obsolete: [{ id: 'card-bug', reason: 'pkg-a fixed the cut line' }] } }),
+  });
+
+  await capture.capture(finished({ view: mergedView() }));
+
+  const note = `God Mode run ${RUN_ID}: pkg-a fixed the cut line`;
+  const events = readLog(logPath(s.configDir)).filter((e) => e.ev === 'disputed');
+  assert.deepEqual(
+    events.map(({ at, ...e }) => e),
+    [{ ev: 'disputed', key: `${PROJECT}/card-bug`, by: 'run', run: RUN_ID, note }],
+  );
+  assert.equal(disputed, 1);
+  assert.deepEqual(fs.readFileSync(file), bytes);
+  assert.equal(fs.statSync(file).mtimeMs, mtime);
+  assert.equal(scan(s.dir).records.length, 1, 'nothing written, nothing removed');
+  const [item] = reviewList({ records: scan(s.dir).records, today: '2026-11-13', events: s.log.read() }).items;
+  assert.deepEqual(item.flags, [{ kind: 'disputed', at: NOW, note, run: RUN_ID }]);
+});
+
+test('a memory already disputed gets no second dispute', (t) => {
+  const s = setup(t);
+  const entries = [
+    { key: `${PROJECT}/a`, reason: 'fixed' },
+    { key: `${PROJECT}/b`, reason: 'fixed' },
+  ];
+  s.log.add({ ev: 'disputed', key: `${PROJECT}/a`, by: 'tool', note: 'a session said so' });
+
+  assert.equal(reportObsolete({ log: s.log, entries, runId: RUN_ID, pr: false }), 1);
+  assert.equal(reportObsolete({ log: s.log, entries, runId: 'other1', pr: false }), 0);
+  assert.deepEqual(
+    s.log
+      .read()
+      .filter((e) => e.ev === 'disputed')
+      .map((e) => [e.key, e.by]),
+    [
+      [`${PROJECT}/a`, 'tool'],
+      [`${PROJECT}/b`, 'run'],
+    ],
+  );
+});
+
+test('a run in pr mode says its PR is not merged yet', (t) => {
+  const s = setup(t);
+  reportObsolete({ log: s.log, entries: [{ key: `${PROJECT}/a`, reason: 'fixed' }], runId: RUN_ID, pr: true });
+
+  assert.equal(s.log.read()[0].note, `(PR not merged yet) God Mode run ${RUN_ID}: fixed`);
+});
+
+test('the memory log keeps by run only on a dispute that names a valid run', () => {
+  const base = { at: NOW, key: `${PROJECT}/a`, note: 'x' };
+  assert.deepEqual(cleanEvent({ ...base, ev: 'disputed', by: 'run', run: RUN_ID }), { ...base, ev: 'disputed', by: 'run', run: RUN_ID });
+  assert.equal(cleanEvent({ ...base, ev: 'disputed', by: 'run' }), null);
+  assert.equal(cleanEvent({ ...base, ev: 'disputed', by: 'run', run: '../x' }), null);
+  assert.equal(cleanEvent({ ...base, ev: 'verified', by: 'run', run: RUN_ID }), null);
+  assert.equal('run' in cleanEvent({ ...base, ev: 'disputed', by: 'tool', run: RUN_ID }), false);
+});
+
+test('"Check all" takes the memories a run reported obsolete first', () => {
+  const records = entriesOf(memory('old', { created: '2026-01-01' }), memory('tool', { created: '2026-02-01' }), memory('run', { created: '2026-11-01' }));
+  const events = [
+    { at: NOW, ev: 'disputed', key: `${PROJECT}/tool`, by: 'tool', note: 'x' },
+    { at: NOW, ev: 'disputed', key: `${PROJECT}/run`, by: 'run', run: RUN_ID, note: 'y' },
+  ];
+
+  assert.deepEqual(checkAllTargets({ records, events, project: PROJECT, now: NOW }), [`${PROJECT}/run`, `${PROJECT}/tool`, `${PROJECT}/old`]);
+});
+
+test('the review line names the run, in Polish and English', () => {
+  const i18n = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'i18n.js'), 'utf8');
+  for (const key of ['mem.inbox.review.disputedRun', 'mem.inbox.review.changed']) {
+    assert.equal(i18n.split(`'${key}':`).length - 1, 2, `${key} in pl and en`);
+  }
+  const lines = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'modules', 'memoryinboxlines.js'), 'utf8');
+  assert.match(lines, /flag\.kind === 'disputed' && flag\.run/);
+  assert.match(lines, /mem\.inbox\.review\.disputedRun/);
+});

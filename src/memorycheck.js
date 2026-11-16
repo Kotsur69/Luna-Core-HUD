@@ -227,11 +227,13 @@ function checkOf(checks, key) {
 // --- which memories "Check all" takes ---------------------------------------------------
 
 /**
- * The confirmed memories of `project` a "Check all" click checks: those whose
- * named files changed since they were checked (the review list's 'changed'
- * flag) first, then disputed ones, then the longest unverified; at most
- * CHECK_ALL_CAP. A memory checked in the last RECHECK_DAYS is skipped, unless
- * its files changed after that check: then the answer may differ.
+ * The confirmed memories of `project` a "Check all" click checks: those a
+ * God Mode run reported obsolete first (src/memoryrunstale.js), then those
+ * whose named files changed since they were checked (the review list's
+ * 'changed' flag), then other disputed ones, then the longest unverified; at
+ * most CHECK_ALL_CAP. A memory checked in the last RECHECK_DAYS is skipped,
+ * unless a run report or a change of its files came after that check: then
+ * the answer may differ.
  * @param {{records: [string, object][], events: object[], project: string, now: number,
  *   changes?: Map<string, string>|null}} ctx changes = the project's cached commits per
  *   named file (src/memorychanges.js); none = no 'changed' priority
@@ -245,12 +247,14 @@ function checkAllTargets({ records, events, project, now, changes = null }) {
   const candidates = records
     .filter(([key, r]) => r.project === project && r.confidence === 'confirmed' && !r.archived && !gone.has(key))
     .map(([key, r]) => ({ key, record: r, changed: changedSince(r, changes) }));
+  const byRun = (key) => disputed.has(key) && disputed.get(key).by === 'run';
   const due = ({ key, changed }) => {
     const check = checks.get(key);
-    return !check || check.at < recent || Boolean(changed && changed.last > isoDate(check.at));
+    if (!check || check.at < recent) return true;
+    return Boolean(changed && changed.last > isoDate(check.at)) || (byRun(key) && disputed.get(key).at > check.at);
   };
   // Lower is checked first.
-  const tier = ({ key, changed }) => (changed ? 0 : disputed.has(key) ? 1 : 2);
+  const tier = ({ key, changed }) => (byRun(key) ? 0 : changed ? 1 : disputed.has(key) ? 2 : 3);
   return candidates
     .filter(due)
     .sort((a, b) => tier(a) - tier(b) || checkedOn(a.record).localeCompare(checkedOn(b.record)) || a.key.localeCompare(b.key))

@@ -192,7 +192,8 @@ function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
     if (record.confidence !== 'confirmed' || gone.has(key) || record.archived) continue;
     const flags = [];
     const dispute = disputes.get(key);
-    if (dispute) flags.push({ kind: 'disputed', at: dispute.at, note: dispute.note });
+    // run = the God Mode run that reported it obsolete (src/memoryrunstale.js), when one did.
+    if (dispute) flags.push({ kind: 'disputed', at: dispute.at, note: dispute.note, ...(dispute.run ? { run: dispute.run } : {}) });
     const check = checks.get(key);
     if (check) flags.push({ kind: 'checked', at: check.at, verdict: check.verdict, note: check.note });
     const seen = accepted.get(key) || new Set();
