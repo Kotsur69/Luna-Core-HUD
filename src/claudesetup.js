@@ -25,6 +25,10 @@
 //   * Every spawn has a timeout and kills its whole tree when it fires. Every
 //     call resolves {ok:true, ...} or {ok:false, error}; nothing throws.
 //     Calls run one at a time, so a fetch never races a `use`.
+//   * After a real `use` (never a dry run) the applied setup is mirrored into
+//     Antigravity (src/agysetupmirror.js) when that toggle is on. Its outcome
+//     rides along as `agy`; a failed or crashed mirror never fails the switch.
+//     A manual "sync to agy now" runs in the same one-at-a-time queue.
 // ============================================================================
 
 'use strict';
@@ -143,6 +147,41 @@ function normalizeUse(name, data) {
   };
 }
 
+const AGY_ERROR_RE = /^[a-z][a-z-]{0,39}$/;
+const names = (list) => (Array.isArray(list) ? list.filter((n) => typeof n === 'string').length : 0);
+
+/** A mirror result (src/agysetupmirror.js) -> counts and short lines only; no paths, no MCP values. */
+function agySummary(res) {
+  if (!isObj(res)) return bad('failed');
+  if (res.ok !== true) {
+    const error = typeof res.error === 'string' && AGY_ERROR_RE.test(res.error) ? res.error : 'failed';
+    return bad(error, typeof res.detail === 'string' ? oneLine(res.detail, MAX_DETAIL) : '');
+  }
+  return {
+    ok: true,
+    profile: typeof res.profile === 'string' && validName(res.profile) ? res.profile : null,
+    mirroredAt: typeof res.mirroredAt === 'string' ? oneLine(res.mirroredAt, 40) : null,
+    servers: names(res.servers),
+    skills: names(res.skills),
+    skipped: Array.isArray(res.skipped) ? res.skipped.length : 0,
+    warnings: linesOf(res.warnings),
+  };
+}
+
+/** The mirror's status -> whitelisted fields. */
+function agyStatusOf(res) {
+  if (!isObj(res) || res.ok !== true) return bad('failed');
+  const last = isObj(res.lastError) ? agySummary({ ok: false, ...res.lastError }) : null;
+  return {
+    ok: true,
+    available: res.available === true,
+    enabled: res.enabled === true,
+    profile: typeof res.profile === 'string' && validName(res.profile) ? res.profile : null,
+    mirroredAt: typeof res.mirroredAt === 'string' ? oneLine(res.mirroredAt, 40) : null,
+    lastError: last ? { error: last.error, detail: last.detail || '' } : null,
+  };
+}
+
 /** The last non-empty stderr line (the CLI prints `luna-setup: <message>`). */
 function lastLine(text) {
   const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -211,7 +250,8 @@ const defaultLog = (line) => console.error(line);
  * @param {{repoDir?:string, repoUrl?:string, nodePath?:string,
  *   getEnv?:()=>Record<string,string>, execFile?:Function, kill?:(pid:number)=>Promise<boolean>|boolean,
  *   fs?:{existsSync:(p:string)=>boolean}, platform?:string,
- *   timeouts?:Partial<typeof DEFAULT_TIMEOUTS>, log?:(line:string)=>void}} [deps]
+ *   timeouts?:Partial<typeof DEFAULT_TIMEOUTS>, log?:(line:string)=>void,
+ *   agyMirror?:ReturnType<typeof import('./agysetupmirror').createAgyMirror>|null}} [deps]
  */
 function createClaudeSetup(deps = {}) {
   const repoDir = deps.repoDir || path.join(os.homedir(), REPO_DIRNAME);
@@ -224,6 +264,8 @@ function createClaudeSetup(deps = {}) {
   const log = deps.log || defaultLog;
   const timeouts = { ...DEFAULT_TIMEOUTS, ...(isObj(deps.timeouts) ? deps.timeouts : {}) };
   const kill = deps.kill || ((pid) => killTree(pid, { platform, execFile, kill: process.kill.bind(process) }));
+  // src/agysetupmirror.js (or null: no Antigravity mirroring at all).
+  const agyMirror = deps.agyMirror || null;
   // Only ever pointed at repoDir after a clone LunaCore itself started there
   // failed (the folder did not exist before). Retries ride out a git child
   // that still holds a file for a moment after the kill.
@@ -376,7 +418,28 @@ function createClaudeSetup(deps = {}) {
     if (!isObj(res.data)) return bad('switcher-too-old');
     const out = normalizeUse(name, res.data);
     if (out.running === null) out.running = await countRunning();
+    if (!dryRun) {
+      const agy = await mirrorAfterUse(name);
+      if (agy) out.agy = agy;
+    }
     return out;
+  }
+
+  /**
+   * After a real `use`: mirror into agy when that is on. The Claude switch has
+   * already happened, so nothing here may fail it - every outcome, a crash
+   * included, comes back as `agy` beside the switch's own {ok:true}.
+   * null = mirroring is off (or not wired).
+   */
+  async function mirrorAfterUse(name) {
+    if (!agyMirror) return null;
+    try {
+      if (!(await agyMirror.isEnabled())) return null;
+      return agySummary(await agyMirror.sync(name));
+    } catch (err) {
+      log(`[claudesetup] agy mirror crashed: ${errText(err)}`);
+      return bad('failed');
+    }
   }
 
   // ---- the four calls -----------------------------------------------------------
@@ -453,7 +516,47 @@ function createClaudeSetup(deps = {}) {
     });
   }
 
-  return { list, status, preview, apply, repoDir };
+  // ---- Antigravity (agy) mirror -------------------------------------------------
+
+  /** -> {ok, available, enabled, profile, mirroredAt, lastError} | {ok:false, error}. */
+  async function agyStatus() {
+    if (!agyMirror) return bad('agy-off');
+    try {
+      return agyStatusOf(await agyMirror.status());
+    } catch (err) {
+      log(`[claudesetup] agy status crashed: ${errText(err)}`);
+      return bad('failed');
+    }
+  }
+
+  /** Saves the "also apply to agy" toggle, then answers the new status. */
+  async function setAgyEnabled(on) {
+    if (typeof on !== 'boolean') return bad('bad-payload');
+    if (!agyMirror) return bad('agy-off');
+    try {
+      await agyMirror.setEnabled(on);
+    } catch (err) {
+      log(`[claudesetup] agy toggle failed: ${errText(err)}`);
+      return bad('failed');
+    }
+    return agyStatus();
+  }
+
+  /** "Sync to agy now": mirrors whatever ~/.claude holds, toggle or not. Never during a switch. */
+  function syncAgy() {
+    if (!agyMirror) return Promise.resolve(bad('agy-off'));
+    if (applying) return Promise.resolve(bad('busy'));
+    return serial(async () => {
+      try {
+        return agySummary(await agyMirror.sync(null));
+      } catch (err) {
+        log(`[claudesetup] agy sync crashed: ${errText(err)}`);
+        return bad('failed');
+      }
+    });
+  }
+
+  return { list, status, preview, apply, agyStatus, setAgyEnabled, syncAgy, repoDir };
 }
 
 module.exports = {

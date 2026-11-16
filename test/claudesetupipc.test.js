@@ -24,6 +24,9 @@ function harness(setupOverrides = {}) {
     status: async () => (calls.push(['status']), { ok: true, profile: 'coding', appliedAt: null, tokens: 18000 }),
     preview: async (name) => (calls.push(['preview', name]), { ok: true, profile: name, steps: [], warnings: [], running: 1 }),
     apply: async (name) => (calls.push(['apply', name]), { ok: true, profile: name, steps: [], warnings: [], running: 1 }),
+    agyStatus: async () => (calls.push(['agyStatus']), { ok: true, available: true, enabled: true, profile: null, mirroredAt: null, lastError: null }),
+    setAgyEnabled: async (on) => (calls.push(['setAgyEnabled', on]), { ok: true, available: true, enabled: on, profile: null, mirroredAt: null, lastError: null }),
+    syncAgy: async () => (calls.push(['syncAgy']), { ok: true, profile: 'coding', servers: 1, skills: 2, skipped: 0, warnings: [] }),
     ...setupOverrides,
   };
   registerClaudeSetupIpc({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, setup });
@@ -57,8 +60,54 @@ const BAD_PAYLOADS = [
   'x'.repeat(41),
 ];
 
-test('exactly the four channels', () => {
-  assert.deepEqual(harness().channels, ['claudeSetup:apply', 'claudeSetup:list', 'claudeSetup:preview', 'claudeSetup:status']);
+test('exactly the seven channels', () => {
+  assert.deepEqual(harness().channels, [
+    'claudeSetup:agySetEnabled',
+    'claudeSetup:agyStatus',
+    'claudeSetup:agySync',
+    'claudeSetup:apply',
+    'claudeSetup:list',
+    'claudeSetup:preview',
+    'claudeSetup:status',
+  ]);
+});
+
+test('agySync and agyStatus take no payload: anything sent is refused before the switcher', async () => {
+  const h = harness();
+  for (const payload of [42, true, 'coding', {}, [], { profile: 'x' }, '']) {
+    assert.deepEqual(await h.call('claudeSetup:agySync', payload), { ok: false, error: 'bad-payload' }, JSON.stringify(payload));
+    assert.deepEqual(await h.call('claudeSetup:agyStatus', payload), { ok: false, error: 'bad-payload' }, JSON.stringify(payload));
+  }
+  assert.deepEqual(h.calls, []);
+  assert.equal((await h.call('claudeSetup:agySync')).ok, true);
+  assert.equal((await h.call('claudeSetup:agyStatus', null)).ok, true);
+  assert.deepEqual(h.calls, [['syncAgy'], ['agyStatus']]);
+});
+
+test('agySetEnabled takes a real boolean only', async () => {
+  const h = harness();
+  for (const payload of [undefined, null, 'true', 1, 0, {}, [true], { enabled: true }]) {
+    assert.deepEqual(await h.call('claudeSetup:agySetEnabled', payload), { ok: false, error: 'bad-payload' }, JSON.stringify(payload));
+  }
+  assert.deepEqual(h.calls, []);
+  assert.equal((await h.call('claudeSetup:agySetEnabled', false)).enabled, false);
+  assert.equal((await h.call('claudeSetup:agySetEnabled', true)).enabled, true);
+  assert.deepEqual(h.calls, [['setAgyEnabled', false], ['setAgyEnabled', true]]);
+});
+
+test('an agy call that throws becomes {ok:false}', async () => {
+  const original = console.error;
+  console.error = () => {};
+  try {
+    const h = harness({
+      syncAgy: async () => {
+        throw new Error('boom');
+      },
+    });
+    assert.deepEqual(await h.call('claudeSetup:agySync'), { ok: false, error: 'failed' });
+  } finally {
+    console.error = original;
+  }
 });
 
 test('list and status ignore whatever the renderer sends', async () => {

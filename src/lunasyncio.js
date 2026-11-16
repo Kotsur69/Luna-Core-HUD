@@ -307,9 +307,10 @@ function selectSkills(setup, pickedSkillIds) {
  * Replaces the overlay's managed skill folders. A folder LunaCore did not
  * create (not in the previous manifest) is never removed or overwritten - the
  * skill is skipped as `name-taken` instead.
+ * @param {{onCopyError?:(name:string, err:unknown)=>void}} [opts] hears why a copy failed
  * @returns {{copied:string[], skipped:Array}}
  */
-function writeSkills(skillsDir, previous, skills) {
+function writeSkills(skillsDir, previous, skills, { onCopyError } = {}) {
   for (const name of previous) {
     if (isSafeSkillName(name)) fs.rmSync(path.join(skillsDir, name), { recursive: true, force: true });
   }
@@ -337,7 +338,8 @@ function writeSkills(skillsDir, previous, skills) {
         });
       }
       copied.push(skill.name);
-    } catch {
+    } catch (err) {
+      if (onCopyError) onCopyError(skill.name, err);
       // A half-copied folder is not in the manifest, so remove it now or it would be orphaned.
       fs.rmSync(dest, { recursive: true, force: true });
       skipped.push({ kind: 'skill', name: skill.name, reason: 'copy-failed' });
@@ -450,4 +452,4 @@ function syncOverlay({ cli, overlayRoot, setup, pickedSkillIds = [], homeDir = o
   }
 }
 
-module.exports = { readClaudeSetup, listPluginSkills, syncOverlay, overlayEnv, writeAtomic, samePathKey };
+module.exports = { readClaudeSetup, listPluginSkills, syncOverlay, overlayEnv, writeAtomic, writeSkills, samePathKey };

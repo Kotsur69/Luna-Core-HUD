@@ -15,6 +15,11 @@
 // Sessions are never killed or restarted from here, and there is no restore
 // button (that stays a deliberate `luna-setup restore` in a terminal).
 //
+// Below that: "Also apply to Antigravity (agy)" (main mirrors the switched
+// setup into ~/.gemini/config, src/agysetupmirror.js) and "Sync to agy now".
+// The mirror's outcome has its own status line - a failed mirror never turns
+// a good switch into an error.
+//
 // All DOM text goes through textContent. State lives at module level so a
 // remount repaints without asking main again. Nothing loads until both
 // initClaudeSetup() (renderer.js) has run and the widget is on screen.
@@ -41,6 +46,18 @@ const ERROR_KEYS = Object.freeze({
   failed: 'claudesetup.err.failed',
 });
 
+/** Antigravity mirror error codes -> i18n keys. */
+const AGY_ERROR_KEYS = Object.freeze({
+  'agy-not-found': 'claudesetup.agy.err.notFound',
+  'broken-json': 'claudesetup.agy.err.brokenJson',
+  'block-damaged': 'claudesetup.agy.err.damaged',
+  'source-unreadable': 'claudesetup.agy.err.source',
+  unreadable: 'claudesetup.agy.err.unreadable',
+  'linked-folder': 'claudesetup.agy.err.linked',
+  busy: 'claudesetup.err.busy',
+  failed: 'claudesetup.agy.err.failed',
+});
+
 // ---- module state (survives a remount) -----------------------------------------
 let initialized = false;
 let loaded = false;
@@ -55,6 +72,10 @@ let working = false; // a preview or an apply is in flight
 let note = null; // {kind:'info'|'ok'|'error', key, params, detail}
 let noteTimer = null;
 let refocus = false; // put focus back on the select after the next reload
+let agy = null; // {available, enabled, profile, mirroredAt, lastError} | null before a good load
+let agyBusy = false; // a toggle save or a manual sync is in flight
+let agyNote = null; // {kind, key, params, detail} from the last sync this session
+let agySeq = 0; // a status answer older than the last toggle is dropped
 
 let els = null; // elements of the current mount, or null when off screen
 
@@ -74,6 +95,28 @@ function errorNote(res) {
   const code = res && typeof res.error === 'string' ? res.error : 'failed';
   const detail = code === 'failed' && res && typeof res.detail === 'string' ? res.detail : '';
   return { kind: 'error', key: ERROR_KEYS[code] || ERROR_KEYS.failed, params: {}, detail };
+}
+
+/** An agy mirror answer (after a switch or a manual sync) -> the agy status line. */
+function agyResultNote(res) {
+  if (res && res.ok) {
+    const params = {
+      name: typeof res.profile === 'string' && res.profile ? res.profile : '-',
+      servers: count(res.servers) || 0,
+      skills: count(res.skills) || 0,
+      skipped: count(res.skipped) || 0,
+    };
+    return { kind: 'ok', key: 'claudesetup.agy.synced', params, detail: '' };
+  }
+  const code = res && typeof res.error === 'string' ? res.error : 'failed';
+  const detail = res && typeof res.detail === 'string' ? res.detail : '';
+  return { kind: 'error', key: AGY_ERROR_KEYS[code] || AGY_ERROR_KEYS.failed, params: {}, detail };
+}
+
+/** An ISO time -> the local date and time, or '' when it does not parse. */
+function whenText(iso) {
+  const d = typeof iso === 'string' ? new Date(iso) : null;
+  return d && Number.isFinite(d.getTime()) ? d.toLocaleString() : '';
 }
 
 function setNote(next, { autoHide = false } = {}) {
@@ -184,12 +227,43 @@ function renderNote() {
   noteLine.hidden = false;
 }
 
+/** The note the agy line shows: this session's last sync first, then the saved state. */
+function agyLine() {
+  if (agyNote) return agyNote;
+  if (!agy) return null;
+  if (!agy.available) return { kind: 'info', key: 'claudesetup.agy.missing', params: {}, detail: '' };
+  if (agy.lastError) return agyResultNote({ ok: false, ...agy.lastError });
+  if (agy.profile) return { kind: 'info', key: 'claudesetup.agy.last', params: { name: agy.profile, when: whenText(agy.mirroredAt) }, detail: '' };
+  return { kind: 'info', key: 'claudesetup.agy.never', params: {}, detail: '' };
+}
+
+function renderAgy() {
+  const { agyToggle, agySync, agyStatus } = els;
+  const blocked = !agy || !agy.available || agyBusy || working || !!pending;
+  agyToggle.checked = !!(agy && agy.enabled);
+  agyToggle.disabled = blocked;
+  agySync.disabled = blocked;
+  agySync.textContent = t(agyBusy ? 'claudesetup.agy.syncing' : 'claudesetup.agy.sync');
+  const line = agyBusy ? { kind: 'info', key: 'claudesetup.agy.syncing', params: {}, detail: '' } : agyLine();
+  if (!line) {
+    agyStatus.hidden = true;
+    agyStatus.textContent = '';
+    return;
+  }
+  const text = t(line.key, line.params);
+  agyStatus.textContent = line.detail ? `${text} (${line.detail})` : text;
+  agyStatus.classList.toggle('is-error', line.kind === 'error');
+  agyStatus.classList.toggle('is-ok', line.kind === 'ok');
+  agyStatus.hidden = false;
+}
+
 function render() {
   if (!els) return;
   renderSelect();
   renderInfo();
   renderConfirm();
   renderNote();
+  renderAgy();
 }
 
 // ---- actions -------------------------------------------------------------------
@@ -200,6 +274,7 @@ async function load() {
   const seq = ++loadSeq;
   loading = true;
   render();
+  loadAgy();
   try {
     const list = await window.lunacore.claudeSetupList();
     if (seq !== loadSeq) return;
@@ -233,6 +308,68 @@ async function load() {
       restoreFocus();
     }
   }
+}
+
+/** The agy mirror's state (installed, toggle, last sync). Independent of the profile list. */
+async function loadAgy() {
+  if (!window.lunacore || typeof window.lunacore.claudeSetupAgyStatus !== 'function') return;
+  const seq = ++agySeq;
+  let res = null;
+  try {
+    res = await window.lunacore.claudeSetupAgyStatus();
+  } catch {
+    res = null;
+  }
+  if (seq !== agySeq) return;
+  if (res && res.ok) {
+    agy = res;
+  } else {
+    // Keep what was loaded before; say that this read failed.
+    agyNote = agyResultNote(res);
+  }
+  render();
+}
+
+/** "Also apply to Antigravity": saved in main, which answers the new status. */
+async function onAgyToggle() {
+  if (!els || !agy || agyBusy) return;
+  const wanted = els.agyToggle.checked === true;
+  agyBusy = true;
+  // A status read already in flight predates this toggle: drop its answer.
+  agySeq += 1;
+  render();
+  let res = null;
+  try {
+    res = await window.lunacore.claudeSetupAgySetEnabled(wanted);
+  } catch {
+    res = null;
+  }
+  agyBusy = false;
+  if (res && res.ok) {
+    agy = res;
+    if (agyNote && agyNote.kind === 'error') agyNote = null;
+  } else {
+    agyNote = agyResultNote(res);
+  }
+  render();
+}
+
+/** "Sync to agy now": mirrors the setup ~/.claude holds right now. */
+async function onAgySync() {
+  if (!els || !agy || agyBusy || working || pending) return;
+  agyBusy = true;
+  agyNote = null;
+  render();
+  let res = null;
+  try {
+    res = await window.lunacore.claudeSetupAgySync();
+  } catch {
+    res = null;
+  }
+  agyBusy = false;
+  agyNote = agyResultNote(res);
+  render();
+  loadAgy();
 }
 
 /** Puts focus back on the select once a reload has re-enabled it. */
@@ -310,6 +447,8 @@ async function onApply() {
   emitSetupSwitched();
   active = name;
   if (typeof res.tokens === 'number') tokens = res.tokens;
+  // The agy mirror reports separately: its failure never turns the switch into one.
+  if (res.agy) agyNote = agyResultNote(res.agy);
   const n = count(res.running);
   const key = n ? 'claudesetup.applied.running' : 'claudesetup.applied';
   setNote({ kind: 'ok', key, params: { name, n: n || 0 } }, { autoHide: true });
@@ -320,6 +459,8 @@ async function onApply() {
 function onRefresh() {
   if (working || pending) return;
   setNote(null);
+  // A refresh shows the saved agy state again instead of this session's last sync.
+  agyNote = null;
   load();
 }
 
@@ -347,8 +488,13 @@ defineWidget({
       running: root.querySelector('#claude-setup-running'),
       apply: root.querySelector('#claude-setup-apply'),
       cancel: root.querySelector('#claude-setup-cancel'),
+      agyToggle: root.querySelector('#claude-setup-agy-toggle'),
+      agySync: root.querySelector('#claude-setup-agy-sync'),
+      agyStatus: root.querySelector('#claude-setup-agy-status'),
     };
     els.select.addEventListener('change', onPick);
+    els.agyToggle.addEventListener('change', onAgyToggle);
+    els.agySync.addEventListener('click', onAgySync);
     els.refresh.addEventListener('click', onRefresh);
     els.apply.addEventListener('click', onApply);
     els.cancel.addEventListener('click', onCancel);

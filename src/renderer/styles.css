@@ -6324,3 +6324,17 @@ section.orchestra__planrun {
 }
 .claude-setup__note.is-ok { color: var(--good); }
 .claude-setup__note.is-error { color: var(--bad); }
+/* Antigravity mirror: toggle and "sync now" on one row, its status line under them. */
+.claude-setup__agy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--border-w) solid var(--edge);
+}
+.claude-setup__agy .claude-setup__agy-toggle { margin-bottom: 0; }
+.claude-setup__agy-toggle:has(input:disabled) { opacity: 0.5; }
+.claude-setup__agy .claude-setup__agy-status { flex-basis: 100%; margin-top: 0; }
