@@ -273,6 +273,57 @@ function runStoredLedger(registry, log) {
   });
 }
 
+// --- the brief section ------------------------------------------------------------
+
+/**
+ * What a God Mode session is told about the channel when its run has the
+ * option on. Worker, plan-run, merge fix-up and self-check briefs share it.
+ */
+const FOLLOWUP_BRIEF_LINES = Object.freeze([
+  '## Follow-up to-dos',
+  "This run lets you file new To-do cards for what you discover. They go to the project's normal To-do list for Mati to triage: they are never added to this run and never started automatically.",
+  'While you work, and before you end with LUNA_DONE or LUNA_BLOCKED, file a card with `mcp__lunacore__luna_todo_add` (set `kind` on every card) when you find:',
+  '- `gap`: something the feature needs to be fully complete that your task does not cover.',
+  '- `bug`: a defect, even outside your package. File it; do not fix it outside your scope.',
+  '- `deps`: a dependency, build, tooling or flaky-test problem, even one you worked around.',
+  '- `idea`: the "you should also build X" point you would otherwise only put in your final message.',
+  'Every card must be self-contained, readable by someone who never saw this session: what you saw; where (files, command, error excerpt); why it matters; the acceptance criteria (`acceptance`); how to verify it. Put the evidence in `details`.',
+  'Call `mcp__lunacore__luna_todo_list` first and do not file what is already listed (a duplicate title is refused anyway).',
+  'Filing a card never replaces finishing your own task.',
+  'In your final message, list every card you filed (title + `at`).',
+]);
+
+/**
+ * The brief lines for the follow-up channel: none unless the run has the
+ * option on, so a brief without it stays byte-identical.
+ * @param {unknown} followups the run's plan.followups
+ * @returns {string[]} the section plus a trailing blank line, or []
+ */
+function followupBriefLines(followups) {
+  return followups === true ? [...FOLLOWUP_BRIEF_LINES, ''] : [];
+}
+
+/** The heading the self-check and merge fix-up briefs end with: their end-marker rule is in it. */
+const RULES_HEADING = '\n## Rules\n';
+
+/**
+ * A finished brief (fix-up, self-check) with the section when the option is
+ * on: before its last "## Rules" block, so the LUNA_DONE / LUNA_BLOCKED rule
+ * stays the brief's last line; appended to a brief without one. The brief
+ * itself when the option is off.
+ * @param {string} brief
+ * @param {unknown} followups
+ * @returns {string}
+ */
+function withFollowupBrief(brief, followups) {
+  if (followups !== true) return brief;
+  const base = String(brief);
+  const section = followupBriefLines(true).join('\n');
+  const rules = base.lastIndexOf(RULES_HEADING);
+  if (rules >= 0) return `${base.slice(0, rules + 1)}${section}\n${base.slice(rules + 1)}`;
+  return `${base}${base.endsWith('\n') ? '' : '\n'}\n${section}`;
+}
+
 // --- the channel ------------------------------------------------------------------
 
 /**
@@ -323,6 +374,8 @@ module.exports = {
   RUN_ID_RE,
   PACKAGE_ID_RE,
   channelTools,
+  followupBriefLines,
+  withFollowupBrief,
   normalizeTitle,
   prepareFollowups,
   normalizeFollowupEntries,

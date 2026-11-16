@@ -43,6 +43,7 @@ const { withTaskBrief, isClaudeCommand } = require('./launch');
 const { PROTECTED_BRANCHES } = require('./orchestraFree');
 const { validateRunSlug, planFolder } = require('./orchestraPlanRun');
 const { lockdownExtraTools } = require('./orchestraFollowupsLaunch');
+const { followupBriefLines } = require('./orchestraFollowups');
 
 /** The profile every plan-run worker (and the free topic planner) runs on. */
 const PLAN_PROFILE_ID = 'freellm-auto';
@@ -261,7 +262,8 @@ function canLockdown(command) {
  * LunaCore commits and pushes its document.
  * @param {{id:string, title:string, prompt:string, planRun:{runSlug:string}}} pkg
  * @param {string} branch
- * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null}, depMerge?:object|null}} [opts]
+ * @param {{resume?:boolean, escalation?:{reason:string, detail:string|null}, depMerge?:object|null, followups?:boolean}} [opts]
+ *   followups: the run's plan.followups (the follow-up to-do section only when true)
  * @returns {string}
  */
 function planBriefText(pkg, branch, opts = {}) {
@@ -285,6 +287,7 @@ function planBriefText(pkg, branch, opts = {}) {
     '',
     pkg.prompt,
     '',
+    ...followupBriefLines(opts.followups),
     '## How this run works',
     `- You can read the whole repo and search and read the web. You can write ONLY inside \`${folder}\`: every other edit, every shell command and every form is refused without asking.`,
     '- Create your document with the Write tool; change it with Edit. Never try a shell command or git: you have none.',

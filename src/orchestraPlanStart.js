@@ -67,10 +67,11 @@ function planTarget(ctx, session) {
  * @param {{registry: object, toolEnv: () => object, send: Function}} ctx
  * @param {{projectId?: string|null, profileId?: string}} session
  * @param {{projectId: string|null, repoPath: string}} target planTarget()'s answer
- * @param {{picked: number[]|null, effort?: unknown, planner?: unknown, workers?: unknown, model?: unknown}} opts
- *   model: the Claude planner's model, allow-listed here (orchestraPlan.js PLANNER_MODELS)
+ * @param {{picked: number[]|null, effort?: unknown, planner?: unknown, workers?: unknown, model?: unknown, followups?: unknown}} opts
+ *   model: the Claude planner's model, allow-listed here (orchestraPlan.js PLANNER_MODELS);
+ *   followups: "Sessions may file new to-dos" (orchestraFollowups.js), on for the boolean true only
  */
-async function runPlan(ctx, session, target, { picked, effort, planner, workers, model }) {
+async function runPlan(ctx, session, target, { picked, effort, planner, workers, model, followups }) {
   // D1 "Planner: Claude / Free": exactly 'free' picks the free planner on the
   // coding profile's env; anything else is today's Claude planner.
   const free = planner === 'free';
@@ -93,6 +94,8 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
     // F6 "Workers": only "Plan with free models in mind" changes planning; a
     // Claude-only request passes no key (the makePlan call as before).
     ...(!free && normalizeWorkers(workers) === 'hybrid' ? { workers: 'hybrid' } : {}),
+    // Off by default and then no key at all (the makePlan call as before); the plan keeps it.
+    ...(followups === true ? { followups: true } : {}),
   });
   if (res.ok) ctx.send('orchestra:changed', { projectId: target.projectId, view: res.plan });
   return res;

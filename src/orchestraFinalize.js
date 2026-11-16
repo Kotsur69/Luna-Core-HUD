@@ -29,6 +29,7 @@ const sup = require('./orchestraSupervisor');
 const { topoOrder } = require('./orchestraPlan');
 const { prBody } = require('./orchestraIntegrate');
 const { buildReport, syncStallNotes } = require('./orchestraReport');
+const { followupCounts, entriesOf } = require('./orchestraFollowupsReport');
 const { gitDirExists } = require('./orchestraDiagnose');
 const { runEntry } = require('./godmodesnapshot');
 const { selfCheckGate } = require('./orchestraSelfCheck');
@@ -594,7 +595,10 @@ function createFinalizer(deps) {
     const text = buildReport(view, { ...extra, ...repoFacts(plan) });
     const file = deps.writeReport ? deps.writeReport(plan.id, text) : null;
     const pushed = plan.packages.filter((p) => p.state === 'pushed').length;
-    if (deps.notify) deps.notify({ pushed, total: plan.packages.length, failed: plan.integration.state === 'failed' });
+    if (deps.notify) {
+      // followups: cards per kind the run's sessions filed ({} = none, no count text in the toast).
+      deps.notify({ pushed, total: plan.packages.length, failed: plan.integration.state === 'failed', followups: followupCounts(entriesOf(view)) });
+    }
     putSnapshot(view, { ...extra, report: text });
     sendReport(plan, view, extra, text);
     return file;

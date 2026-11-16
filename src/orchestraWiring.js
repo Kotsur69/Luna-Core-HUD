@@ -56,6 +56,7 @@ const planRunStart = require('./orchestraPlanRunStart');
 const planRunView = require('./orchestraPlanRunView');
 const planLaunch = require('./orchestraPlanRunLaunch');
 const { followupDeps } = require('./orchestraFollowupsLaunch');
+const { runToastBody } = require('./orchestraFollowupsReport');
 const { validateRunSlug, planPath: planDocPath } = require('./orchestraPlanRun');
 const { sizePackages } = require('./orchestraPlanBuild');
 const orchestraReview = require('./orchestraReview');
@@ -409,9 +410,11 @@ function reportDeps(projectId, ctx, self) {
     appendReport: appendRunReport(ctx),
     // The morning report toast, when OS notifications are on (Settings). It
     // names the repo: several projects can finish overnight.
-    notify: ({ pushed, total, failed }) => {
-      if (!ctx.readUiPrefs().notificationsEnabled) return;
-      const body = `${pushed}/${total} pushed${failed ? ' - integration needs you' : ''}`;
+    notify: (summary) => {
+      const prefs = ctx.readUiPrefs();
+      if (!prefs.notificationsEnabled) return;
+      // "3/4 pushed", plus the follow-up cards per kind when the run filed any.
+      const body = runToastBody(summary, prefs.lang);
       ctx.toast(TOAST_TITLE, withRepo(repoNameOf(projectId, ctx, self), body));
     },
     onRunEvent: (kind, data) => {

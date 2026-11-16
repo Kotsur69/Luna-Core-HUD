@@ -486,3 +486,301 @@ test('settledSessions lists only settled packages that still have a tab', () => 
     { sessionId: 's4', runId: RUN, packageId: 'd' },
   ]);
 });
+
+// ---- the run option: briefs ---------------------------------------------------------
+// test/fixtures/gm-briefs-followups-off.json holds every brief kind as it was
+// BEFORE the option existed: with the option off they must not change a byte.
+
+const { briefText } = require('../src/orchestra.js');
+const { fixupBrief } = require('../src/orchestraSelfCheck.js');
+const { mergeFixupBrief } = require('../src/orchestraMergeFixup.js');
+const { buildReport, renderRunReportHtml } = require('../src/orchestraReport.js');
+const { registerOrchestraIpc } = require('../src/orchestraIpc.js');
+const { createOrchestraRegistry } = require('../src/orchestraRegistry.js');
+const R = require('../src/orchestraFollowupsReport.js');
+const uiprefs = require('../src/uiprefs.js');
+const paths = require('../src/paths.js');
+
+const SNAPSHOT = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'gm-briefs-followups-off.json'), 'utf8')).cases;
+const SECTION = '## Follow-up to-dos';
+
+/** A fix-up runner's written brief for `brief` under a plan with `followups`. */
+function runnerBrief(brief, packageId, followups) {
+  let written = null;
+  const runner = createFixupRunner({
+    getPlan: () => ({ id: RUN, profileId: 'p', projectId: 'proj', ...(followups === undefined ? {} : { followups }) }),
+    createSession: () => ({ id: 's1' }),
+    writeBrief: (_p, text) => ((written = text), true),
+    briefDir: () => '/cfg/tasks',
+    closeSession: () => {},
+    sessionAlive: () => false,
+    model: () => null,
+    permissionMode: () => null,
+    setTimer: () => null,
+    clearTimer: () => {},
+  });
+  runner.run({ root: '/wt', brief, packageId });
+  runner.abort();
+  return written;
+}
+
+/** One snapshot case rendered today, with the run option set to `followups`. */
+function render(c, followups) {
+  if (c.kind === 'worker') return briefText(c.pkg, c.branch, followups === undefined ? c.opts : { ...c.opts, followups });
+  if (c.kind === 'selfcheck') return runnerBrief(fixupBrief(c.result, c.checkCommand), 'selfcheck', followups);
+  if (c.kind === 'mergeFixup') return runnerBrief(mergeFixupBrief(c.args), 'fixup', followups);
+  return runnerBrief(c.brief, c.packageId, followups);
+}
+
+test('option off: worker, plan-run, self-check and merge fix-up briefs are byte-identical to before', () => {
+  assert.equal(SNAPSHOT.length, 8);
+  for (const c of SNAPSHOT) {
+    // The fixture's self-check / merge fix-up texts are the builders' own output; through the runner they must not change.
+    if (c.kind === 'selfcheck') assert.equal(fixupBrief(c.result, c.checkCommand), c.text);
+    if (c.kind === 'mergeFixup') assert.equal(mergeFixupBrief(c.args), c.text);
+    for (const off of [undefined, false, 'true', 1]) {
+      assert.equal(render(c, off), c.text, `${c.name} with followups=${String(off)}`);
+    }
+  }
+});
+
+test('option on: every brief kind gets the section with all four kinds and the card rules', () => {
+  for (const c of SNAPSHOT) {
+    const text = render(c, true);
+    assert.notEqual(text, c.text, c.name);
+    assert.equal(text.split(SECTION).length, 2, `${c.name}: the section exactly once`);
+    for (const kind of F.FOLLOWUP_KINDS) assert.match(text, new RegExp(`- \`${kind}\`: `), `${c.name}: ${kind}`);
+    assert.match(text, /mcp__lunacore__luna_todo_add/);
+    assert.match(text, /Call `mcp__lunacore__luna_todo_list` first/);
+    assert.match(text, /self-contained/);
+    assert.match(text, /what you saw; where \(files, command, error excerpt\); why it matters; the acceptance criteria/);
+    assert.match(text, /how to verify it/);
+    assert.match(text, /never added to this run and never started automatically/);
+    assert.match(text, /do not fix it outside your scope/);
+    assert.match(text, /never replaces finishing your own task/);
+    assert.match(text, /list every card you filed \(title \+ `at`\)/);
+    // Nothing of the brief without the option is lost.
+    for (const line of c.text.split('\n').filter(Boolean)) assert.ok(text.includes(line), `${c.name} keeps: ${line}`);
+  }
+});
+
+test('a worker brief puts the section before Verify; the end marker stays the last line', () => {
+  const c = SNAPSHOT.find((x) => x.name === 'worker-plain');
+  const text = render(c, true);
+  assert.ok(text.indexOf(SECTION) < text.indexOf('## Verify'));
+  assert.match(text.trimEnd().split('\n').at(-1), /^- End your final message with the line `LUNA_DONE auth-flow`/);
+});
+
+test('the run controller writes briefs with the run option: on for an opted-in run only', async () => {
+  for (const followups of [false, true]) {
+    const briefs = [];
+    const { orch, ctx } = godMode({ writeBrief: (_p, text) => (briefs.push(text), true) });
+    const { plan } = await orch.makePlan(followups ? { ...ctx, followups } : ctx);
+    await orch.launch({ planId: plan.id });
+    assert.equal(briefs.length, 1);
+    assert.equal(briefs[0].includes(SECTION), followups, `followups=${followups}`);
+  }
+});
+
+// ---- the run option: IPC, prefs and the stored run -------------------------------------
+
+function planIpc() {
+  const handlers = new Map();
+  const calls = [];
+  const registry = createOrchestraRegistry({
+    makeController: () => ({
+      view: () => null,
+      planWait: () => null,
+      makePlan: async (planCtx) => (calls.push(planCtx), { ok: true, plan: { id: 'p1', packages: [] } }),
+    }),
+  });
+  registerOrchestraIpc({ handle: (ch, fn) => handlers.set(ch, fn), on: () => {} }, {
+    registry,
+    projects: () => [{ id: 'alpha', path: '/repo/alpha' }],
+    activeProjectId: () => 'alpha',
+    resolveSession: (id) => (id === 'tab-a' ? { id, projectId: 'alpha', profileId: 'claude' } : null),
+    repoFor: () => '/repo/alpha',
+    toolEnv: () => ({ PATH: 'x' }),
+    maxTodoItems: 5,
+    godModeBlock: () => null,
+    send: () => {},
+    playCue: () => {},
+    openExternal: () => {},
+    openPath: async () => '',
+    runsDir: () => os.tmpdir(),
+    readUiPrefs: () => ({}),
+    writeUiPrefs: () => {},
+  });
+  const plan = (followups) => handlers.get('orchestra:plan')({}, 'tab-a', [1], 'high', 'claude', 'claude', 'opus', followups);
+  return { plan, calls };
+}
+
+test('orchestra:plan turns the option on for the boolean true only', async () => {
+  const { plan, calls } = planIpc();
+  const sent = [true, false, 'true', 1, { followups: true }, [true], null, undefined];
+  for (const value of sent) assert.equal((await plan(value)).ok, true);
+  assert.deepEqual(calls.map((c) => c.followups === true), [true, false, false, false, false, false, false, false]);
+  // Off passes no key at all: the makePlan call is the one from before the option.
+  assert.ok(calls.slice(1).every((c) => !('followups' in c)));
+});
+
+test('ui pref orchestraFollowups: off by default, booleans only, the last choice kept', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-followups-pref-'));
+  const origLocal = paths.local;
+  const origEnsure = paths.ensureUserDir;
+  paths.local = (name) => path.join(dir, name);
+  paths.ensureUserDir = () => {};
+  t.after(async () => {
+    paths.local = origLocal;
+    paths.ensureUserDir = origEnsure;
+    await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  });
+  assert.equal(uiprefs.readUiPrefs().orchestraFollowups, false, 'missing file -> off');
+  assert.equal(uiprefs.writeUiPrefs({ orchestraFollowups: true }).orchestraFollowups, true);
+  for (const bad of ['true', 1, null, {}]) {
+    assert.equal(uiprefs.writeUiPrefs({ orchestraFollowups: bad }).orchestraFollowups, true, `ignores ${String(bad)}`);
+  }
+  assert.equal(uiprefs.readUiPrefs().orchestraFollowups, true);
+  assert.equal(uiprefs.writeUiPrefs({ orchestraFollowups: false }).orchestraFollowups, false);
+  const file = path.join(dir, 'ui.local.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), orchestraFollowups: 'yes' }), 'utf8');
+  assert.equal(uiprefs.readUiPrefs().orchestraFollowups, false, 'a hand-edited non-boolean reads as off');
+});
+
+test('plan.followups survives a store round-trip: the restored run keeps the option and its record', async () => {
+  const { orch, saved, ctx } = godMode();
+  const { plan } = await orch.makePlan({ ...ctx, repoPath: path.resolve('/repo'), followups: true });
+  orch.noteFollowups(plan.id, [{ packageId: 'auth-flow', kind: 'bug', title: 'Login crashes', at: 7 }]);
+  const stored = JSON.parse(JSON.stringify(saved.at(-1)));
+  assert.equal(stored.followups, true);
+
+  const briefs = [];
+  const after = godMode({ loadState: () => stored, writeBrief: (_p, text) => (briefs.push(text), true) });
+  assert.equal(after.orch.restore(), true);
+  const view = after.orch.view();
+  assert.equal(view.followups, true);
+  assert.deepEqual(view.followupsFiled.map((e) => [e.packageId, e.kind, e.title, e.at]), [['auth-flow', 'bug', 'Login crashes', 7]]);
+  // The restored run still launches its workers with the option.
+  await after.orch.launch({ planId: plan.id });
+  assert.ok(briefs.length >= 1 && briefs.every((b) => b.includes(SECTION)));
+  assert.equal(after.sessions[0].task.godMode.followups, true);
+});
+
+// ---- the run option: report and notification --------------------------------------------
+
+const ENTRIES = [
+  { packageId: 'auth-flow', kind: 'bug', title: 'Login crashes on empty password', at: 11 },
+  { packageId: 'data-model', kind: 'idea', title: 'Add an export button', at: 12 },
+  { packageId: 'auth-flow', kind: 'idea', title: 'Remember the last user', at: 13 },
+  { packageId: 'data-model', kind: 'bug', title: 'Migration drops <b>index</b>', at: 14 },
+  { packageId: 'auth-flow', kind: 'bug', title: 'Token\nnever expires', at: 15 },
+  { packageId: 'selfcheck', kind: 'deps', title: 'electron-builder warns on Node 24', at: 16 },
+];
+const reportView = (entries) => ({
+  id: RUN,
+  repoPath: '/repo',
+  workerModel: 'sonnet',
+  permissionMode: 'bypassPermissions',
+  packages: [],
+  integration: {},
+  followupsFiled: entries,
+});
+
+test('report: grouped by kind, then by package, with title and to-do at', () => {
+  const groups = R.groupFollowups(F.normalizeFollowupEntries(ENTRIES, RUN));
+  assert.deepEqual(groups.map((g) => [g.kind, g.count]), [['bug', 3], ['deps', 1], ['idea', 2]]);
+  assert.deepEqual(groups[0].packages, [
+    { packageId: 'auth-flow', cards: [{ title: 'Login crashes on empty password', at: 11 }, { title: 'Token never expires', at: 15 }] },
+    { packageId: 'data-model', cards: [{ title: 'Migration drops <b>index</b>', at: 14 }] },
+  ]);
+
+  const md = buildReport(reportView(ENTRIES), { now: NOW, suggestions: [] });
+  const section = md.slice(md.indexOf('## New to-dos from this run'), md.indexOf('## What went wrong'));
+  assert.equal(section, [
+    '## New to-dos from this run',
+    '',
+    '### Bugs (3)',
+    '',
+    '- `auth-flow`',
+    '  - Login crashes on empty password (to-do at 11)',
+    '  - Token never expires (to-do at 15)',
+    '- `data-model`',
+    '  - Migration drops \\<b\\>index\\</b\\> (to-do at 14)',
+    '',
+    '### Dependency / build (1)',
+    '',
+    '- `selfcheck`',
+    '  - electron-builder warns on Node 24 (to-do at 16)',
+    '',
+    '### Ideas (2)',
+    '',
+    // Packages in the order they first filed a card of this kind.
+    '- `data-model`',
+    '  - Add an export button (to-do at 12)',
+    '- `auth-flow`',
+    '  - Remember the last user (to-do at 13)',
+    '',
+    '',
+  ].join('\n'));
+  assert.ok(md.indexOf('## Needs you') < md.indexOf('## New to-dos from this run'));
+
+  const html = renderRunReportHtml(reportView(ENTRIES), { now: NOW });
+  assert.match(html, /<h2>New to-dos from this run<\/h2>/);
+  assert.match(html, /Migration drops &lt;b&gt;index&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<b>index<\/b>/);
+});
+
+test('report: a title cannot form a link, image, tag or reordered text in the markdown', () => {
+  const rlo = String.fromCodePoint(0x202e);
+  const zwsp = String.fromCodePoint(0x200b);
+  const emoji = String.fromCodePoint(0x1f41b);
+  const evil = [
+    { packageId: 'a', kind: 'bug', title: '![x](https://evil.example/p.png) [Click](javascript:alert(1)) <img src=x> **bold** `code`', at: 1 },
+    { packageId: 'a', kind: 'idea', title: `left${rlo}right${zwsp}end`, at: 2 },
+    { packageId: 'a', kind: 'gap', title: `${'x'.repeat(159)}${emoji}`, at: 3 },
+  ];
+  const md = buildReport(reportView(evil), { now: NOW, suggestions: [] });
+  assert.ok(
+    md.includes('  - \\!\\[x\\]\\(https://evil.example/p.png\\) \\[Click\\]\\(javascript:alert\\(1\\)\\) \\<img src=x\\> \\*\\*bold\\*\\* \\`code\\` (to-do at 1)'),
+    md,
+  );
+  assert.doesNotMatch(md, /[^\\]\]\(/, 'no unescaped "](" survives');
+  assert.ok(md.includes('  - left right end (to-do at 2)'), 'bidi override and zero-width space are stripped');
+  // A 160 code-point cap never splits the emoji's surrogate pair.
+  const capped = R.groupFollowups(F.normalizeFollowupEntries(evil, RUN)).find((g) => g.kind === 'gap').packages[0].cards[0].title;
+  assert.equal(Array.from(capped).length, 160);
+  assert.ok(capped.endsWith(emoji));
+});
+
+test('option on: a fix-up brief keeps its end-marker rule as the last line', () => {
+  for (const c of SNAPSHOT.filter((x) => x.kind === 'selfcheck' || x.kind === 'mergeFixup')) {
+    const on = render(c, true);
+    assert.equal(on.trimEnd().split('\n').at(-1), c.text.trimEnd().split('\n').at(-1), c.name);
+    assert.ok(on.indexOf(SECTION) < on.lastIndexOf('## Rules'), `${c.name}: the section comes before the rules`);
+  }
+});
+
+test('report: no section when the run filed nothing', () => {
+  for (const entries of [[], undefined, [{ packageId: '../x', kind: 'bug', title: 't', at: 1 }]]) {
+    assert.doesNotMatch(buildReport(reportView(entries), { now: NOW, suggestions: [] }), /New to-dos/);
+    assert.doesNotMatch(renderRunReportHtml(reportView(entries), { now: NOW }), /New to-dos/);
+  }
+});
+
+test('notification: counts per kind in English and Polish, nothing when nothing was filed', () => {
+  const counts = R.followupCounts(F.normalizeFollowupEntries(ENTRIES, RUN));
+  assert.deepEqual(counts, { bug: 3, deps: 1, idea: 2 });
+  assert.equal(R.followupCountText({ bug: 2, deps: 1, idea: 3 }, 'en'), '2 bugs, 1 deps, 3 ideas');
+  assert.equal(R.followupCountText({ gap: 1, bug: 1, idea: 1 }, 'en'), '1 gap, 1 bug, 1 idea');
+  assert.equal(R.followupCountText({ bug: 2, deps: 1, idea: 3 }, 'pl'), '2 bugi, 1 deps, 3 pomysly');
+  assert.equal(R.followupCountText({ gap: 5, bug: 1, idea: 12 }, 'pl'), '5 brakow, 1 bug, 12 pomyslow');
+  assert.equal(R.followupCountText({ gap: 22 }, 'pl'), '22 braki');
+  assert.equal(R.followupCountText({}, 'en'), '');
+  assert.equal(R.followupCountText({ bug: 0, idea: -1, deps: 'x' }, 'pl'), '');
+
+  assert.equal(R.runToastBody({ pushed: 3, total: 4, failed: false, followups: { bug: 2, deps: 1, idea: 3 } }, 'en'), '3/4 pushed - New to-dos: 2 bugs, 1 deps, 3 ideas');
+  assert.equal(R.runToastBody({ pushed: 3, total: 4, failed: true, followups: { bug: 2 } }, 'pl'), '3/4 pushed - integration needs you - Nowe to-do: 2 bugi');
+  // Nothing filed (or an older caller without the key): the toast as before.
+  assert.equal(R.runToastBody({ pushed: 4, total: 4, failed: false, followups: {} }, 'en'), '4/4 pushed');
+  assert.equal(R.runToastBody({ pushed: 1, total: 2, failed: true }, 'pl'), '1/2 pushed - integration needs you');
+});

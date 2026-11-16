@@ -712,7 +712,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   // planner: 'claude' | 'free' (D1); main treats anything but 'free' as Claude.
   // workers: 'claude' | 'hybrid' | 'free' (F6); main treats anything else as Claude only.
   // model: the Claude planner's model alias; main allow-lists it (anything else = opus).
-  planOrchestra: (sessionId, todoAts, effort, planner, workers, model) =>
+  // followups: "Sessions may file new to-dos"; only an exact true turns it on (main checks again).
+  planOrchestra: (sessionId, todoAts, effort, planner, workers, model, followups) =>
     ipcRenderer.invoke(
       'orchestra:plan',
       typeof sessionId === 'string' ? sessionId : null,
@@ -721,6 +722,7 @@ contextBridge.exposeInMainWorld('lunacore', {
       planner === 'free' ? 'free' : 'claude',
       typeof workers === 'string' ? workers : null,
       typeof model === 'string' ? model : null,
+      followups === true,
     ),
   /**
    * Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js). Two fixed
