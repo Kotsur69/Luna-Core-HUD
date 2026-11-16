@@ -42,6 +42,7 @@
 const { withTaskBrief, isClaudeCommand } = require('./launch');
 const { PROTECTED_BRANCHES } = require('./orchestraFree');
 const { validateRunSlug, planFolder } = require('./orchestraPlanRun');
+const { lockdownExtraTools } = require('./orchestraFollowupsLaunch');
 
 /** The profile every plan-run worker (and the free topic planner) runs on. */
 const PLAN_PROFILE_ID = 'freellm-auto';
@@ -211,6 +212,8 @@ function withPlanLockdown(command, task) {
     PLAN_PERMISSION_MODE,
     '--allowedTools',
     ...planAllowedTools(slug.slug).map(quoted),
+    // The follow-up channel's two tools, only when the run option is on (orchestraFollowupsLaunch.js).
+    ...lockdownExtraTools(task.lockdown).map(quoted),
     '--disallowedTools',
     ...DENIED_TOOLS.map(quoted),
   ].join(' ');

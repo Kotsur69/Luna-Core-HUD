@@ -349,13 +349,62 @@ function callTool(name, args, store) {
   return toolText(name === 'luna_todo_done' ? { ticked: outcome.card } : { updated: outcome.card });
 }
 
+// --- scoped tokens (God Mode sessions, src/orchestraFollowups.js) ------------
+
+/** Token scopes besides the full one: a God Mode session with / without the follow-up channel. */
+const TOKEN_SCOPES = Object.freeze(['worker', 'godmode']);
+const SCOPE_RUN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const SCOPE_PACKAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * A validated token scope, or null for the full (tab) scope.
+ * @param {unknown} raw issueToken's options
+ * @returns {{scope:string, runId:string, packageId:string}|null}
+ * @throws {TypeError} for scope options that are present but invalid
+ */
+function normalizeTokenScope(raw) {
+  if (raw === undefined || raw === null) return null;
+  const o = typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  if (!TOKEN_SCOPES.includes(o.scope)) throw new TypeError('token scope must be "worker" or "godmode"');
+  if (typeof o.runId !== 'string' || !SCOPE_RUN_ID_RE.test(o.runId)) throw new TypeError('token scope needs a valid runId');
+  if (typeof o.packageId !== 'string' || !SCOPE_PACKAGE_ID_RE.test(o.packageId)) {
+    throw new TypeError('token scope needs a valid packageId');
+  }
+  return { scope: o.scope, runId: o.runId, packageId: o.packageId };
+}
+
+/** The memory / asset tools the session's own store grants (same rule as the full scope). */
+function sessionTools(store) {
+  return [...(store.memory ? MEMORY_TOOLS : []), ...(store.assets ? ASSET_TOOLS : [])];
+}
+
+/**
+ * tools/list and tools/call for a scoped token. Memory and asset tools stay
+ * exactly what the session's store grants (a God Mode worker had them before
+ * scopes existed); every to-do tool goes through the channel, which decides
+ * what this scope may do. No channel = no to-do tool at all (fail closed).
+ * @param {{scope:object, channel:object|null}} scoped
+ */
+function scopedTools(store, scoped) {
+  const own = scoped.channel ? scoped.channel.tools(scoped.scope) : [];
+  return [...own, ...sessionTools(store)];
+}
+
+function callScoped(name, args, store, scoped) {
+  if (sessionTools(store).some((tool) => tool.name === name)) return callTool(name, args, store);
+  const out = scoped.channel ? scoped.channel.call(name, args && typeof args === 'object' ? args : {}, store, scoped.scope) : null;
+  return out || toolText(`${String(name).slice(0, 80)} is not available to God Mode sessions`, true);
+}
+
 /**
  * Answers one JSON-RPC message. Returns null for a notification (no reply).
  * @param {unknown} msg
  * @param {{read:Function, write:Function, now?:Function}} store
  * @param {string} version server version for serverInfo
+ * @param {{scope:object, channel:object|null}|null} [scoped] set for a scoped
+ *   (God Mode) token: its tool list and calls go through callScoped
  */
-function handleRpc(msg, store, version = '0.0.0') {
+function handleRpc(msg, store, version = '0.0.0', scoped = null) {
   if (!msg || typeof msg !== 'object' || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return rpcError(msg && msg.id, -32600, 'Invalid Request');
   }
@@ -376,9 +425,9 @@ function handleRpc(msg, store, version = '0.0.0') {
     case 'ping':
       return rpcResult(id, {});
     case 'tools/list':
-      return rpcResult(id, { tools: [...TOOLS, ...(store.memory ? MEMORY_TOOLS : []), ...(store.assets ? ASSET_TOOLS : [])] });
+      return rpcResult(id, { tools: scoped ? scopedTools(store, scoped) : [...TOOLS, ...sessionTools(store)] });
     case 'tools/call': {
-      const result = callTool(params.name, params.arguments, store);
+      const result = scoped ? callScoped(params.name, params.arguments, store, scoped) : callTool(params.name, params.arguments, store);
       const reply = (done) => (done ? rpcResult(id, done) : rpcError(id, -32602, `Unknown tool: ${params.name}`));
       // A memory search and the asset tools are asynchronous; every other tool answers at once.
       return result && typeof result.then === 'function' ? result.then(reply) : reply(result);
@@ -409,19 +458,24 @@ function sendJson(res, status, body, extraHeaders = {}) {
 class IntakeServer {
   /**
    * @param {{storeFor:(sessionId:string) => ({read:Function, write:Function}|null),
-   *   version?:string, httpImpl?:Object}} opts storeFor resolves a session to
-   *   its project's list store, or null once the session is gone.
+   *   version?:string, httpImpl?:Object, channel?:object}} opts storeFor resolves a session to
+   *   its project's list store, or null once the session is gone. channel =
+   *   the God Mode follow-up channel (src/orchestraFollowups.js
+   *   createFollowupChannel) that serves scoped tokens' to-do tools; without
+   *   one a scoped token gets no to-do tool at all.
    */
-  constructor({ storeFor, version = '0.0.0', httpImpl = http }) {
+  constructor({ storeFor, version = '0.0.0', httpImpl = http, channel = null }) {
     this.storeFor = storeFor;
     this.version = version;
     this.httpImpl = httpImpl;
+    this.channel = channel;
     this.server = null;
     this.port = null;
     this.starting = null;
     this.sockets = new Set();
-    // sha256(token) -> sessionId. Hashed so a lookup never compares the raw
-    // secret byte by byte against attacker-chosen input.
+    // sha256(token) -> {sessionId, scope}. Hashed so a lookup never compares
+    // the raw secret byte by byte against attacker-chosen input. scope null =
+    // the full tab scope; otherwise normalizeTokenScope()'s shape.
     this.tokens = new Map();
   }
 
@@ -465,18 +519,70 @@ class IntakeServer {
     return this.port ? `http://127.0.0.1:${this.port}${MCP_PATH}` : null;
   }
 
-  /** A fresh token for a session, replacing any it had (a restarted tab). */
-  issueToken(sessionId) {
+  /**
+   * A fresh token for a session, replacing any it had (a restarted tab): a
+   * session never holds two tokens, so a scoped one is never next to a full one.
+   * @param {string} sessionId
+   * @param {{scope:'worker'|'godmode', runId:string, packageId:string}} [scopeOpts]
+   *   omitted = the full tab scope
+   * @throws {TypeError} for invalid scope options (nothing is issued)
+   */
+  issueToken(sessionId, scopeOpts) {
+    const scope = normalizeTokenScope(scopeOpts);
     this.revoke(sessionId);
     const token = crypto.randomBytes(32).toString('hex');
-    this.tokens.set(hashToken(token), sessionId);
+    this.tokens.set(hashToken(token), { sessionId, scope });
     return token;
   }
 
   revoke(sessionId) {
-    for (const [hash, id] of this.tokens) {
-      if (id === sessionId) this.tokens.delete(hash);
+    for (const [hash, entry] of this.tokens) {
+      if (entry.sessionId === sessionId) this.tokens.delete(hash);
     }
+  }
+
+  /**
+   * Drops a session's scoped token only when it belongs to this run and
+   * package: a settled package never revokes a newer worker's token, nor a
+   * user tab's token.
+   * @returns {number} how many tokens were dropped
+   */
+  revokeScoped(sessionId, { runId, packageId } = {}) {
+    let dropped = 0;
+    for (const [hash, entry] of this.tokens) {
+      const s = entry.scope;
+      if (entry.sessionId === sessionId && s && s.runId === runId && s.packageId === packageId) {
+        this.tokens.delete(hash);
+        dropped += 1;
+      }
+    }
+    return dropped;
+  }
+
+  /**
+   * Drops every scoped token of one run (restart recovery, discard). Matched
+   * by run id, never by session id: session ids start over after a restart.
+   * @returns {number}
+   */
+  revokeRun(runId) {
+    let dropped = 0;
+    for (const [hash, entry] of this.tokens) {
+      if (entry.scope && entry.scope.runId === runId) {
+        this.tokens.delete(hash);
+        dropped += 1;
+      }
+    }
+    return dropped;
+  }
+
+  /**
+   * The cards God Mode sessions filed during one run, in filing order.
+   * @param {string} runId
+   * @param {string} [packageId] only this package's
+   * @returns {Array<{runId:string, packageId:string, kind:string, title:string, at:number}>}
+   */
+  followupsFor(runId, packageId) {
+    return this.channel && typeof this.channel.followupsFor === 'function' ? this.channel.followupsFor(runId, packageId) : [];
   }
 
   isAllowedHost(host) {
@@ -493,8 +599,8 @@ class IntakeServer {
       return;
     }
     const token = bearerToken(req.headers.authorization);
-    const sessionId = token ? this.tokens.get(hashToken(token)) : undefined;
-    const store = sessionId ? this.storeFor(sessionId) : null;
+    const entry = token ? this.tokens.get(hashToken(token)) : undefined;
+    const store = entry ? this.storeFor(entry.sessionId) : null;
     if (!store) {
       req.resume();
       sendJson(res, 401, rpcError(null, -32001, 'Unauthorized'));
@@ -505,7 +611,8 @@ class IntakeServer {
       sendJson(res, 405, rpcError(null, -32000, 'Method not allowed'), { allow: 'POST' });
       return;
     }
-    this.readBody(req, res, (body) => this.answer(res, body, store));
+    const scoped = entry.scope ? { scope: entry.scope, channel: this.channel } : null;
+    this.readBody(req, res, (body) => this.answer(res, body, store, scoped));
   }
 
   readBody(req, res, done) {
@@ -528,7 +635,7 @@ class IntakeServer {
     });
   }
 
-  answer(res, body, store) {
+  answer(res, body, store, scoped = null) {
     let parsed;
     try {
       parsed = JSON.parse(body);
@@ -550,7 +657,15 @@ class IntakeServer {
       sendJson(res, 400, rpcError(null, -32600, 'Too many messages in one batch'));
       return;
     }
-    const answers = messages.map((msg) => handleRpc(msg, store, this.version));
+    let answers;
+    try {
+      answers = messages.map((msg) => handleRpc(msg, store, this.version, scoped));
+    } catch (err) {
+      // A throwing tool must not take the main process down with it.
+      console.error('[intake] tool call failed:', (err && (err.code || err.message)) || 'error');
+      sendJson(res, 500, rpcError(null, -32603, 'Internal error'));
+      return;
+    }
     if (!answers.some((r) => r && typeof r.then === 'function')) return send(answers);
     Promise.all(answers)
       .then(send)
@@ -607,7 +722,8 @@ function removeSessionConfig(dir, sessionId, fsImpl = fs) {
 }
 
 module.exports = {
-  TOOLS,
+  TOKEN_SCOPES,
+  normalizeTokenScope,
   sessionConfigPath,
   writeSessionConfig,
   removeSessionConfig,
@@ -621,6 +737,7 @@ module.exports = {
   applyDone,
   listView,
   callTool,
+  toolText,
   handleRpc,
   bearerToken,
   mcpConfigFor,

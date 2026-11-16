@@ -60,7 +60,8 @@ function createMergeRunDeps(deps) {
         ...extra,
         fixup: (fx) => {
           fixups = { ...fixups, n: fixups.n + 1 };
-          return deps.runFixup(fx);
+          // Recorded as the merge fix-up by the follow-up channel (orchestraFixup.js).
+          return deps.runFixup({ ...fx, packageId: 'fixup' });
         },
         stopped: () => deps.getPlan() !== run || (run.killed === true && !killedBefore) || Boolean(run.pausedUntil),
       },

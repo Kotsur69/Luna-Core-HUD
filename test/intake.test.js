@@ -291,6 +291,123 @@ test('IntakeServer waits for an asynchronous memory search, alone and in a batch
   }
 });
 
+// ---- scoped tokens (God Mode follow-up channel, src/orchestraFollowups.js) ----------
+
+const { createFollowupChannel, createFollowupLedger } = require('../src/orchestraFollowups.js');
+
+const WORKER_SCOPE = { scope: 'worker', runId: 'pabc123', packageId: 'auth-flow' };
+const rpcCall = (id, name, args) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+const toolBody = (reply) => reply.json.result;
+
+async function scopedServer(store, scopeOpts = WORKER_SCOPE) {
+  const ledger = createFollowupLedger();
+  const server = new IntakeServer({ storeFor: () => store, version: '1.0.0', channel: createFollowupChannel({ ledger }) });
+  await server.start();
+  const auth = { authorization: `Bearer ${server.issueToken('s7', scopeOpts)}`, 'content-type': 'application/json' };
+  return { server, auth, ledger };
+}
+
+test('a worker-scoped token lists only luna_todo_add and luna_todo_list', async () => {
+  const { server, auth } = await scopedServer(memoryStore());
+  try {
+    const listed = await post(server.port, { headers: auth, body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } });
+    assert.deepEqual(listed.json.result.tools.map((t) => t.name), ['luna_todo_add', 'luna_todo_list']);
+    const add = listed.json.result.tools[0];
+    assert.deepEqual(add.inputSchema.properties.tasks.items.required, ['text', 'kind']);
+    assert.equal('tags' in add.inputSchema.properties.tasks.items.properties, false, 'tags are the server\'s call');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a worker-scoped token is refused update, done, memory and asset tools with a clear error', async () => {
+  const card = normalizeTodo({ text: 'existing', done: false, at: 5 });
+  const store = memoryStore([card]);
+  const { server, auth } = await scopedServer(store);
+  try {
+    for (const [name, args] of [
+      ['luna_todo_update', { at: 5, patch: { text: 'hijacked' } }],
+      ['luna_todo_done', { at: 5 }],
+      ['memory_search', { query: 'x' }],
+      ['memory_get', { key: 'x' }],
+      ['luna_asset_search', { query: 'x' }],
+    ]) {
+      const reply = await post(server.port, { headers: auth, body: rpcCall(2, name, args) });
+      assert.equal(reply.status, 200);
+      assert.equal(toolBody(reply).isError, true, name);
+      assert.match(toolBody(reply).content[0].text, /not available to God Mode sessions/, name);
+    }
+    assert.deepEqual(store.list, [card], 'nothing changed');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a scoped token keeps exactly the memory tools its session store grants', async () => {
+  const memory = { project: null, get: () => null, search: () => [] };
+  const { server, auth } = await scopedServer({ ...memoryStore(), memory });
+  try {
+    const listed = await post(server.port, { headers: auth, body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } });
+    const names = listed.json.result.tools.map((t) => t.name);
+    assert.deepEqual(names.slice(0, 2), ['luna_todo_add', 'luna_todo_list']);
+    assert.ok(names.includes('memory_search'));
+    assert.ok(!names.includes('luna_todo_update') && !names.includes('luna_todo_done'));
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a godmode-scoped token (followups off) has no to-do tool at all', async () => {
+  const store = memoryStore();
+  const { server, auth } = await scopedServer(store, { ...WORKER_SCOPE, scope: 'godmode' });
+  try {
+    const listed = await post(server.port, { headers: auth, body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } });
+    assert.deepEqual(listed.json.result.tools, []);
+    const add = await post(server.port, { headers: auth, body: rpcCall(2, 'luna_todo_add', { tasks: [{ text: 'x', kind: 'bug' }] }) });
+    assert.equal(toolBody(add).isError, true);
+    assert.equal(store.list.length, 0);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a scoped token without a channel fails closed', async () => {
+  const store = memoryStore();
+  const server = new IntakeServer({ storeFor: () => store });
+  await server.start();
+  try {
+    const auth = { authorization: `Bearer ${server.issueToken('s1', WORKER_SCOPE)}`, 'content-type': 'application/json' };
+    const listed = await post(server.port, { headers: auth, body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } });
+    assert.deepEqual(listed.json.result.tools, []);
+    const add = await post(server.port, { headers: auth, body: rpcCall(2, 'luna_todo_add', { tasks: [{ text: 'x', kind: 'bug' }] }) });
+    assert.equal(toolBody(add).isError, true);
+    assert.equal(store.list.length, 0);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('issueToken refuses invalid scope options and issues nothing', () => {
+  const server = new IntakeServer({ storeFor: () => null });
+  assert.throws(() => server.issueToken('s1', { scope: 'admin', runId: 'p1', packageId: 'a' }), TypeError);
+  assert.throws(() => server.issueToken('s1', { scope: 'worker', runId: '../x', packageId: 'a' }), TypeError);
+  assert.throws(() => server.issueToken('s1', { scope: 'worker', runId: 'p1', packageId: '' }), TypeError);
+  assert.equal(server.tokens.size, 0);
+});
+
+test('revokeScoped drops only the matching run + package token; revokeRun drops a whole run', () => {
+  const server = new IntakeServer({ storeFor: () => null });
+  server.issueToken('s1', WORKER_SCOPE);
+  server.issueToken('s2', { ...WORKER_SCOPE, packageId: 'data-model' });
+  server.issueToken('s3');
+  server.issueToken('s4', { ...WORKER_SCOPE, runId: 'pother' });
+  assert.equal(server.revokeScoped('s1', { runId: 'pabc123', packageId: 'data-model' }), 0, 'another package of the run');
+  assert.equal(server.revokeScoped('s3', { runId: 'pabc123', packageId: 'auth-flow' }), 0, 'a full-scope tab is never touched');
+  assert.equal(server.revokeScoped('s1', { runId: 'pabc123', packageId: 'auth-flow' }), 1);
+  assert.equal(server.revokeRun('pabc123'), 1);
+  assert.deepEqual([...server.tokens.values()].map((e) => e.sessionId).sort(), ['s3', 's4']);
+});
+
 test('intakeState tells a tools-attached claude from a bare one and from a shell', () => {
   const cmd = 'claude --model opus';
   assert.equal(intakeState(cmd, withIntakeMcp(cmd, 'C:/cfg.json')), 'ready');

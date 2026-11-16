@@ -85,7 +85,6 @@ const { withColorSupport, buildSessionEnv, setAccountLayer } = require('./sessio
 const {
   withSessionId,
   withPlainResume,
-  withIntakeMcp,
   withMemoryCard,
   memoryCardLoaded,
   intakeState,
@@ -293,6 +292,8 @@ let hubApi = null;
 // Task intake (DONE_ORCHESTRATOR_PLAN.md slice 0): a loopback MCP server through
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
+const { createFollowupChannel, runStoredLedger } = require('./orchestraFollowups');
+const { writeGodModeConfig, withGodModeMcp } = require('./orchestraFollowupsLaunch');
 const {
   addWorktree,
   dirtyCount,
@@ -1289,6 +1290,8 @@ function memoryRoots() {
 // every request, so a tab switched to another project writes there.
 const intakeServer = new IntakeServer({
   version: app.getVersion(),
+  // God Mode sessions' scoped to-do tools; what they file is stored with their run.
+  channel: createFollowupChannel({ ledger: runStoredLedger(() => orchestraRuns, (line) => console.error(line)) }),
   storeFor: (sessionId) => {
     const session = sessions.get(sessionId);
     if (!session) return null;
@@ -1519,6 +1522,8 @@ const orchestraCtx = {
   writeTodos,
   createSession,
   closeSession: (id) => closeSession(id),
+  // Scoped intake tokens of God Mode sessions, revoked when they settle.
+  intake: intakeServer,
   usageResetAt,
   toolEnv: orchestraToolEnv,
   userDir,
@@ -1748,6 +1753,15 @@ async function prepareIntake(session) {
   if (readUiPrefs().todoToolsEnabled === false) return null;
   const started = await intakeServer.start();
   if (!started.ok || !ensureUserDir()) return null;
+  // Closed while the server started: no token (it would outlive the tab's revoke).
+  if (sessions.get(session.id) !== session) return null;
+  // A God Mode session gets a scoped token instead of the full one (src/orchestraFollowupsLaunch.js).
+  // Any marker, valid or not: an invalid one gets no lunacore server at all (fail closed).
+  const task = session.launchTask || null;
+  if (task && task.godMode !== undefined) {
+    const log = (line) => console.error(line);
+    return writeGodModeConfig({ dir: userDir(), sessionId: session.id, url: intakeServer.url(), server: intakeServer, task, log });
+  }
   return writeSessionConfig(userDir(), session.id, intakeServer.url(), intakeServer.issueToken(session.id));
 }
 
@@ -2123,7 +2137,8 @@ function spawnInto(session, profile, launch = null) {
     setTimeout(() => {
       intakeConfig.then((configPath) => {
         if (session.proc !== proc) return;
-        const launched = withIntakeMcp(startCommand, isOverride ? null : configPath);
+        // withIntakeMcp, plus a God Mode plan worker's per-session config (orchestraFollowupsLaunch.js).
+        const launched = withGodModeMcp(startCommand, isOverride ? null : configPath, session.launchTask || null);
         // Luna Core Memory phase 3: the project card rides in the system prompt.
         // The memory tools come with the intake server, so the card only names
         // them when that was attached.
