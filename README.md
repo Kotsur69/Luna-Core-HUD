@@ -7,7 +7,19 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.30.0 — Antigravity provider, plus everything from v0.29.0.**
+> **Current release: v0.31.0 — god Mode run capture reports the memories a run made obso.**
+> - God Mode run capture reports the memories a run made obsolete
+> - 'changed' review flag when files a memory names have newer commits
+> - "Check if still true" - Sonnet checks a memory against the code
+> - per-run "Sessions may file new to-dos" option, brief and report
+> - worker-scoped to-do channel for God Mode sessions
+> - turn a fixable memory into a To-do card, then remove it
+> - Fix: a failed git log says what git said, never the command line
+> - Fix: review findings on "Check if still true"
+> - Fix: keep a graveyard copy of every memory moved to a to-do
+> - Fix: harden the follow-up channel after review
+>
+> **v0.30.0 — Antigravity provider, plus everything from v0.29.0.**
 > - Antigravity (`agy`) replaces the retired Gemini CLI template: native tab,
 >   Google account sign-in kept in Windows Credential Manager, no key needed
 > - "Use my Luna setup" is offered only for CLIs with an overlay layout
