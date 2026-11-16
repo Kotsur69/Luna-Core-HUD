@@ -15,10 +15,14 @@
 //   3. commit `chore(release): vX - <title>` (+ Co-Authored-By), tag vX on
 //      that commit
 //   4. push that commit to the base branch, then the tag - never --force
-//   5. `npm run dist`; 'dist/LunaCore Setup X.exe' (+ .blockmap) copied to
-//      the dashed names dist/latest.yml points to
+//   5. `npm run dist` into a fresh dist/release-vX/ (a running LunaCore can
+//      hold dist/win-unpacked/resources/app.asar open, so an old output
+//      folder is never reused); 'LunaCore Setup X.exe' (+ .blockmap) copied
+//      to the dashed names latest.yml points to. A dist failure says the tag
+//      is already pushed; an EBUSY one also names the holding process
 //   6. `gh release create vX --latest` with latest.yml, the portable exe, the
-//      setup exe and its blockmap; the notes file sits in dist/ (gitignored)
+//      setup exe and its blockmap, all from dist/release-vX/; the notes file
+//      sits there too (dist/ is gitignored)
 //
 // `npm test` takes minutes: right before step 1 the branch, the clean tree
 // and HEAD are checked again, and the tag and the push name the release
@@ -36,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile, exec } = require('child_process');
+const { findLockHolders, describeHolders, lockedPathOf } = require('./fileLockHolder');
 
 const SEMVER_RE = /^(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/;
 const TAG_RE = /^v\d{1,4}\.\d{1,4}\.\d{1,4}$/;
@@ -115,11 +120,28 @@ function nextVersion(version, subjects) {
   return feat ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
 }
 
-/** The release title: the newest feature, else the newest fix, lower-case first letter, no end dot. */
+/**
+ * `text` cut to at most `max` characters on a word boundary: whole words
+ * only, no ellipsis (the README line adds its own end dot), trailing
+ * punctuation dropped. A first word longer than the limit is the one case
+ * cut mid-word.
+ */
+function truncateWords(text, max) {
+  const src = String(text || '').trim();
+  if (src.length <= max) return src;
+  const cut = src.slice(0, max + 1).lastIndexOf(' ');
+  return (cut > 0 ? src.slice(0, cut) : src.slice(0, max)).replace(/[\s.,;:!?-]+$/, '');
+}
+
+/**
+ * The release title: the newest feature, else the newest fix, cut on a word
+ * boundary, no end dot. The subject keeps its own casing; only its first
+ * letter is made upper case.
+ */
 function releaseTitle(notes) {
   const raw = notes.features[0] || notes.fixes[0] || 'maintenance release';
-  const short = raw.length > MAX_TITLE ? `${raw.slice(0, MAX_TITLE - 3).trimEnd()}...` : raw;
-  return short.replace(/[.\s]+$/, '').replace(/^[A-Z](?![A-Z])/, (c) => c.toLowerCase());
+  const short = truncateWords(raw.replace(/[.\s]+$/, ''), MAX_TITLE);
+  return short.replace(/^\p{Ll}/u, (c) => c.toUpperCase());
 }
 
 /** One bullet, wrapped like the README's hand-written ones. */
@@ -176,9 +198,14 @@ function releaseNotes(version, title, notes) {
   return `${out.join('\n').trimEnd()}\n`;
 }
 
-/** The dist file names of a version: what electron-builder writes and what latest.yml names. */
+/**
+ * The dist file names of a version: what electron-builder writes and what
+ * latest.yml names, plus `dir`, the version's own output folder (posix,
+ * relative to the repo).
+ */
 function distAssets(version) {
   return {
+    dir: `dist/release-v${version}`,
     setup: `${PRODUCT} Setup ${version}.exe`,
     setupBlockmap: `${PRODUCT} Setup ${version}.exe.blockmap`,
     dashedSetup: `${PRODUCT}-Setup-${version}.exe`,
@@ -187,6 +214,17 @@ function distAssets(version) {
     latest: 'latest.yml',
     notes: `release-notes-v${version}.md`,
   };
+}
+
+/**
+ * The step-5 build command: electron-builder writes into the version's own
+ * folder. The string goes through the shell, so the version must be x.y.z.
+ * @param {string} version
+ * @returns {string|null} null for anything that is not x.y.z
+ */
+function distCommand(version) {
+  if (typeof version !== 'string' || !SEMVER_RE.test(version)) return null;
+  return `npm run dist -- -c.directories.output=${distAssets(version).dir}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +249,7 @@ function execShell(command, opts) {
   });
 }
 
-const DEFAULT_DEPS = { exec: execBin, shell: execShell, fs };
+const DEFAULT_DEPS = { exec: execBin, shell: execShell, fs, lockHolders: findLockHolders };
 
 // ---------------------------------------------------------------------------
 // The release
@@ -312,15 +350,45 @@ function isPlainFile(d, file) {
 
 /** Step 5: the build's dashed copies, checked against latest.yml. Returns an error reason or null. */
 function prepareAssets(d, repoPath, assets) {
-  const inDist = (name) => path.join(repoPath, 'dist', name);
+  const inDist = (name) => path.join(repoPath, assets.dir, name);
   for (const name of [assets.setup, assets.setupBlockmap, assets.portable, assets.latest]) {
-    if (!isPlainFile(d, inDist(name))) return `dist/${name} missing or not a regular file`;
+    if (!isPlainFile(d, inDist(name))) return `${assets.dir}/${name} missing or not a regular file`;
   }
   const latest = d.fs.readFileSync(inDist(assets.latest), 'utf8');
-  if (!latest.includes(assets.dashedSetup)) return `dist/latest.yml does not point to ${assets.dashedSetup}`;
+  if (!latest.includes(assets.dashedSetup)) return `${assets.dir}/latest.yml does not point to ${assets.dashedSetup}`;
   d.fs.copyFileSync(inDist(assets.setup), inDist(assets.dashedSetup));
   d.fs.copyFileSync(inDist(assets.setupBlockmap), inDist(assets.dashedBlockmap));
   return null;
+}
+
+/**
+ * Step 5 failed: why, in words. The tag is already pushed by then, so the
+ * reason says the release has to be published by hand; an EBUSY failure
+ * also names the process holding the file. Never rejects.
+ * @param {{output:string, timedOut:boolean}} dist the npm answer
+ */
+async function distFailure(d, repoPath, tag, dist) {
+  const pushed = `tag ${tag} is already pushed, publish the GitHub release by hand`;
+  if (dist.timedOut) return `npm run dist timed out (${pushed})`;
+  const locked = lockedPathOf(dist.output);
+  if (!locked) return `npm run dist failed (${pushed}): ${lastLine(dist.output)}`;
+  const rel = path.relative(repoPath, locked);
+  const inRepo = !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  // Only a file inside the repo is looked up: a path from tool output could
+  // name anything, a UNC share included.
+  let found = { ok: false, reason: 'holder not looked up (outside the repo)' };
+  if (inRepo) {
+    try {
+      found = await d.lockHolders(locked, { env: d.env });
+    } catch (err) {
+      found = { ok: false, reason: `lock holder lookup failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+  let holder = 'holder not found';
+  if (!found || !found.ok) holder = (found && found.reason) || 'lock holder lookup failed';
+  else if (found.holders.length) holder = `held by ${describeHolders(found.holders)}`;
+  // The holder before the path: the reason is cut at 300 characters.
+  return `npm run dist failed (${pushed}): EBUSY, ${holder}, on ${oneLine(inRepo ? rel : locked, 120)}`;
 }
 
 /**
@@ -328,7 +396,8 @@ function prepareAssets(d, repoPath, assets) {
  * @param {{repoPath:string, base:string, landedSha:string|null, title?:string}} opts
  *   landedSha: the head the run's merge pushed (integration.headSha) - it
  *   must be in HEAD, so only what landed is released
- * @param {{exec?:Function, shell?:Function, fs?:object, env?:object, log?:(line:string)=>void}} [deps]
+ * @param {{exec?:Function, shell?:Function, fs?:object, env?:object, log?:(line:string)=>void,
+ *   lockHolders?:(file:string)=>Promise<object>}} [deps] lockHolders: fileLockHolder.findLockHolders
  * @returns {Promise<{ok:true, version:string, tag:string, title:string, url:string|null}
  *   | {ok:false, refused:boolean, stage:string, reason:string}>} never rejects
  */
@@ -351,7 +420,7 @@ async function cutRelease(opts, deps = {}) {
     if (pre.refusal) return pre.refusal;
     const { version, notes } = pre;
     const tag = `v${version}`;
-    const title = oneLine(o.title, MAX_TITLE) || releaseTitle(notes);
+    const title = truncateWords(oneLine(o.title), MAX_TITLE) || releaseTitle(notes);
 
     // 1. The version (package.json + package-lock.json).
     const bump = await npm(`npm version ${version} --no-git-tag-version`, GIT_TIMEOUT_MS * 2);
@@ -377,27 +446,32 @@ async function cutRelease(opts, deps = {}) {
     const pushTag = await git(['push', 'origin', `refs/tags/${tag}`], PUSH_TIMEOUT_MS);
     if (!pushTag.ok) return fail('push', `push ${tag} failed: ${lastLine(pushTag.stderr)}`);
 
-    // 5. Build, then the dashed copies latest.yml points to, and the notes.
-    log(`release: npm run dist for ${tag}`);
-    const dist = await npm('npm run dist', DIST_TIMEOUT_MS);
-    if (!dist.ok) return fail('dist', dist.timedOut ? 'npm run dist timed out' : `npm run dist failed: ${lastLine(dist.output)}`);
+    // 5. Build into the version's own folder, then the dashed copies
+    //    latest.yml points to, and the notes. The version goes into a shell
+    //    command: checked against SEMVER_RE again right here.
     const assets = distAssets(version);
+    const distCmd = distCommand(version);
+    if (!distCmd) return fail('dist', `refusing to build: version ${version} is not x.y.z`);
+    log(`release: npm run dist for ${tag} into ${assets.dir}`);
+    const dist = await npm(distCmd, DIST_TIMEOUT_MS);
+    if (!dist.ok) return fail('dist', await distFailure(d, repoPath, tag, dist));
     const assetError = prepareAssets(d, repoPath, assets);
     if (assetError) return fail('assets', assetError);
-    d.fs.writeFileSync(file('dist', assets.notes), releaseNotes(version, title, notes), 'utf8');
+    const inDir = (name) => path.join(...assets.dir.split('/'), name);
+    d.fs.writeFileSync(path.join(repoPath, inDir(assets.notes)), releaseNotes(version, title, notes), 'utf8');
 
-    // 6. The GitHub release.
+    // 6. The GitHub release, every asset from the version's folder.
     const gh = await d.exec(
       'gh',
       [
         'release', 'create', tag,
         '--title', `${PRODUCT} ${tag}`,
-        '--notes-file', path.join('dist', assets.notes),
+        '--notes-file', inDir(assets.notes),
         '--latest',
-        path.join('dist', assets.latest),
-        path.join('dist', assets.portable),
-        path.join('dist', assets.dashedSetup),
-        path.join('dist', assets.dashedBlockmap),
+        inDir(assets.latest),
+        inDir(assets.portable),
+        inDir(assets.dashedSetup),
+        inDir(assets.dashedBlockmap),
       ],
       { cwd: repoPath, timeout: GH_TIMEOUT_MS, env: d.env },
     );
@@ -429,6 +503,8 @@ module.exports = {
   updateReadme,
   releaseNotes,
   distAssets,
+  distCommand,
+  truncateWords,
   isSkippedSubject,
   redact,
   CO_AUTHOR,

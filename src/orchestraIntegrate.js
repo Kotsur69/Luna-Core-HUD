@@ -34,6 +34,7 @@ const { execFile } = require('child_process');
 const { runGit, firstLine, gitError, slugify, branchFor } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
 const { checkCwd } = require('./projects');
+const { shouldSkipEntry } = require('./repoWalkSkip');
 const { verifyDetail } = require('./orchestraVerifyDetail');
 const { fixAfterMerge } = require('./orchestraMergeFixup');
 const { secondPass, skippedDependency, skipEntry } = require('./orchestraSecondPass');
@@ -233,7 +234,7 @@ function npmSubfolders(root) {
     return [];
   }
   return entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules' && !shouldSkipEntry(e.name, true))
     .map((e) => e.name)
     .filter((name) => fs.existsSync(path.join(root, name, 'package-lock.json')) && !fs.existsSync(path.join(root, name, 'node_modules')))
     .sort();

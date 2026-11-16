@@ -36,6 +36,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 
 const paths = require('./paths');
+const { shouldSkipEntry, isAsarName } = require('./repoWalkSkip');
 const { resolveStoredPath, toPortablePath, checkCwd } = require('./projects');
 
 const localFile = () => paths.local('repos.local.json');
@@ -123,7 +124,11 @@ function discoverRepos(roots = DEFAULT_ROOTS, depth = SCAN_DEPTH) {
     for (const e of entries) {
       if (!e.isDirectory()) continue;
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
-      walk(path.join(dir, e.name), left - 1);
+      const full = path.join(dir, e.name);
+      // Build output and .asar are never walked; a real repo checked out as
+      // release/ or out/ still counts (the .git probe never touches an .asar).
+      if (shouldSkipEntry(e.name, true) && (isAsarName(e.name) || !isRepo(full))) continue;
+      walk(full, left - 1);
     }
   };
 

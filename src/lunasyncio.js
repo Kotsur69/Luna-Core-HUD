@@ -24,6 +24,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { isAsarName } = require('./repoWalkSkip');
 const {
   buildInstructions,
   upsertManagedBlock,
@@ -117,6 +118,8 @@ function listMarkdown(dir) {
     if (seen.has(real)) return;
     seen.add(real);
     for (const entry of listDir(d)) {
+      // isDir stats the entry: under Electron that opens an .asar as an archive and locks it.
+      if (isAsarName(entry.name)) continue;
       const full = path.join(d, entry.name);
       if (isDir(full)) walk(full);
       else if (entry.name.endsWith('.md')) out.push({ rel: path.relative(dir, full).split(path.sep).join('/'), abs: full });
