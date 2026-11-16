@@ -47,8 +47,43 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** A loose ref or HEAD file is a line or two; anything bigger is not read. */
 const MAX_REF_BYTES = 4096;
 
+/** Characters of git's own first stderr line kept in a failure's reason. */
+const MAX_STDERR_REASON_CHARS = 200;
+/** Node's code for a child whose output passed maxBuffer (it is killed too). */
+const MAXBUFFER_CODE = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isMap = (v) => v instanceof Map;
+
+/** The first non-empty line of git's stderr: no colour codes, no control characters, capped. */
+function firstStderrLine(stderr) {
+  const lines = String(stderr || '').split(/\r?\n/);
+  const said = lines.find((l) => l.trim()) || '';
+  return said
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .trim()
+    .slice(0, MAX_STDERR_REASON_CHARS)
+    .trim();
+}
+
+/**
+ * Why a git call failed, in a few words. Never err.message: it repeats the
+ * whole command line (the repository folder and every anchor path).
+ * @param {Error & {code?: string|number|null, killed?: boolean, signal?: string|null}} error execFile's error
+ * @param {string} stderr
+ * @returns {string}
+ */
+function gitFailure(error, stderr) {
+  // A child over maxBuffer is killed as well: say which limit it hit.
+  if (error.code === MAXBUFFER_CODE) return 'output too large';
+  if (error.killed) return 'timeout';
+  if (typeof error.code === 'number') {
+    const said = firstStderrLine(stderr);
+    return said ? `exit ${error.code}: ${said}` : `exit ${error.code}`;
+  }
+  return error.code || error.signal || 'error';
+}
 
 /** The day before `day` (YYYY-MM-DD): git reads a bare date as that day at the current time of day. */
 const dayBefore = (day) => new Date(Date.parse(`${day}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
@@ -142,8 +177,8 @@ function readChanges(query, { exec = execFile } = {}) {
   }
   return new Promise((resolve) => {
     try {
-      exec('git', gitArgs({ root, since, paths }), { timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true }, (error, stdout) => {
-        if (error) return resolve({ ok: false, reason: error.killed ? 'timeout' : errText(error) });
+      exec('git', gitArgs({ root, since, paths }), { timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true }, (error, stdout, stderr) => {
+        if (error) return resolve({ ok: false, reason: gitFailure(error, stderr) });
         resolve({ ok: true, changes: parseChanges(stdout, paths) });
       });
     } catch (err) {

@@ -50,7 +50,7 @@ function stubGit(answer = () => ({ stdout: '' })) {
     calls.push({ cmd, args, opts });
     pending.push(() => {
       const res = answer(args);
-      cb(res.error || null, res.stdout || '', '');
+      cb(res.error || null, res.stdout || '', res.stderr || '');
     });
   };
   const flush = () => {
@@ -227,6 +227,28 @@ test('an answer that turns into a failure repaints, so its flags go away', async
   const errors = await capturedErrors(async () => assert.equal(await refresh(), true));
   assert.match(errors[0], /timeout/);
   assert.deepEqual(tracker.current(), {});
+});
+
+test("a failure's reason says what git said, never the whole command line", async () => {
+  const query = { root: ROOT, since: '2026-11-01', paths: ['src/a.js'] };
+  const failing = (fields) => Object.assign(new Error(`Command failed: git -C ${ROOT} log -- src/a.js`), fields);
+  const flushed = async (res) => {
+    const git = stubGit(() => res);
+    const p = readChanges(query, { exec: git.exec });
+    git.flush();
+    return (await p).reason;
+  };
+
+  const ownership = "fatal: detected dubious ownership in repository at 'C:/repo'\nTo add an exception for this directory, call:";
+  assert.equal(await flushed({ error: failing({ code: 128 }), stderr: ownership }), "exit 128: fatal: detected dubious ownership in repository at 'C:/repo'");
+  assert.equal(await flushed({ error: failing({ code: 128 }) }), 'exit 128');
+  assert.equal(await flushed({ error: failing({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true }) }), 'output too large');
+  assert.equal(await flushed({ error: failing({ killed: true, signal: 'SIGTERM' }) }), 'timeout');
+  assert.equal(await flushed({ error: failing({ code: null, signal: 'SIGKILL' }) }), 'SIGKILL');
+  assert.equal(await flushed({ error: failing({ code: 'ENOENT' }) }), 'ENOENT');
+  const noisy = await flushed({ error: failing({ code: 1 }), stderr: `error: \u001b[31mred\u001b[0m ${'y'.repeat(500)}` });
+  assert.equal(noisy.includes('\u001b'), false);
+  assert.ok(noisy.length <= 'exit 1: '.length + 200);
 });
 
 test('readChanges refuses a bad query without running git', async () => {
