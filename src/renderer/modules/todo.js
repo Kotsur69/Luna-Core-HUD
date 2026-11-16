@@ -83,8 +83,16 @@ let settle = null;
 // Whether ✨ can work in the active tab, as main reports it per session
 // (sessionSummary's todoTools): 'ready' when a `claude` process started with
 // the intake MCP tools attached, 'off' when it is Claude without them,
-// anything else when the tab is not running Claude at all.
+// anything else when the tab is not running Claude at all. An Antigravity
+// (`agy`) tab reports the same states.
 let todoToolsState = null;
+// Which CLI the active tab runs for ✨ (sessionSummary's todoCli / todoServer):
+// cli 'agy' words the prompt and tooltips for Antigravity and names its server.
+let todoAgent = { cli: null, server: null };
+
+// Tooltip keys of ✨ per tools state, for a Claude tab and for an agy tab.
+const REFINE_TITLE_KEYS = { ready: 'todo.refine', off: 'todo.refineOff', none: 'todo.refineNotClaude' };
+const AGY_REFINE_TITLE_KEYS = { ...REFINE_TITLE_KEYS, ready: 'todo.refineAgy', off: 'todo.refineAgyOff' };
 
 /**
  * Appends an item. Returns a NEW array (immutability rule) and rejects
@@ -679,14 +687,11 @@ function rowActions(item, index) {
 
   const edit = rowButton('✎', t('todo.edit'), () => toggleEdit(item));
 
-  const refineTitle = t({
-    ready: 'todo.refine',
-    off: 'todo.refineOff',
-    none: 'todo.refineNotClaude',
-  }[todoToolsState] || 'todo.refineStarting');
+  const agy = todoAgent.cli === 'agy';
+  const refineTitle = t((agy ? AGY_REFINE_TITLE_KEYS : REFINE_TITLE_KEYS)[todoToolsState] || 'todo.refineStarting');
   const refine = rowButton('✨', refineTitle, () => {
     if (todoToolsState !== 'ready') return;
-    window.lunacore.pastePrompt(refinePrompt(item), true);
+    window.lunacore.pastePrompt(agy ? refinePrompt(item, todoAgent) : refinePrompt(item), true);
     pulse(refine);
     term.focus();
   });
@@ -712,17 +717,31 @@ function rowActions(item, index) {
 /**
  * Called by sessions.js with the active tab's summary whenever the tab list
  * or the active tab changes, so ✨ is only live where it can work.
- * @param {{todoTools?:string}|undefined} meta
+ * @param {{todoTools?:string, todoCli?:string, todoServer?:string, alive?:boolean}|undefined} meta
  */
 export function setTodoToolsState(meta) {
   // A tab whose process has exited is a dead shell now, whatever it started as.
   const exited = Boolean(meta) && meta.alive === false;
   const next = exited ? 'none' : meta && typeof meta.todoTools === 'string' ? meta.todoTools : null;
-  if (next === todoToolsState) return;
+  const agent = agentOf(exited ? null : meta);
+  if (next === todoToolsState && agent.cli === todoAgent.cli && agent.server === todoAgent.server) return;
   todoToolsState = next;
+  todoAgent = agent;
   // A repaint mid-drag would tear out the row being carried; the drop's own
   // commit repaints with the new state anyway.
   if (!drag && !settle) renderRows();
+}
+
+/**
+ * The active tab's CLI for ✨ from its summary: only 'agy' is told apart
+ * (with its server entry name when it is a string); anything else is Claude's
+ * wording. refinePrompt checks the server name's shape again.
+ * @param {{todoCli?:unknown, todoServer?:unknown}|null|undefined} meta
+ * @returns {{cli:'agy'|null, server:string|null}}
+ */
+function agentOf(meta) {
+  if (!meta || meta.todoCli !== 'agy') return { cli: null, server: null };
+  return { cli: 'agy', server: typeof meta.todoServer === 'string' ? meta.todoServer : null };
 }
 
 /** A small text chip for a card's meta line. */

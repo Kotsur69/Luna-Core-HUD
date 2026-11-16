@@ -31,9 +31,11 @@ const MAX_ENTRY_CHARS = 300;
 const MAX_FILES = 50;
 const MAX_DEPENDS = 50;
 const SIZES = ['S', 'M', 'L'];
-// A card's suggested worker model. 'fable' is a manual pick: the intake and
-// the God Mode planner only ever suggest sonnet / opus.
-const MODELS = ['sonnet', 'opus', 'fable'];
+// A card's suggested worker model. 'fable' and 'agy' (the Antigravity CLI,
+// src/claudeModels.js AGY_MODEL) are manual picks: the intake and the God
+// Mode planner only ever suggest sonnet / opus. A literal here, not a require:
+// the phone app bundles this file.
+const MODELS = ['sonnet', 'opus', 'fable', 'agy'];
 // Tags (docs/tbc_docs/LUNAS_WORK_PLAN.md): Luna's Work files its backlog under a run
 // tag and reads Mati's `steer` cards. God Mode ignores them.
 const MAX_TAGS = 10;

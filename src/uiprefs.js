@@ -27,7 +27,7 @@
 const fs = require('fs');
 const paths = require('./paths');
 const { EFFORTS, isEffort } = require('./efforts');
-const { CLAUDE_MODELS } = require('./claudeModels');
+const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
 
 // Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
@@ -104,7 +104,9 @@ const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
 // 'default', which adds no flag.
 // 'plan' = the planner's per-package pick. Fable is a manual choice only: the
 // planner itself still assigns sonnet / opus (orchestraPlan.js MODELS).
-const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'fable', 'plan'];
+// 'agy' = every worker on the Antigravity CLI (src/claudeModels.js AGY_MODEL),
+// also a manual choice; never passed to `claude --model`.
+const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'fable', AGY_MODEL, 'plan'];
 const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // Worker --effort: 'plan' = the planner's per-package pick (medium if none);
 // the others force one level. Never 'low' (src/efforts.js).

@@ -24,9 +24,23 @@ const MODEL_RANK = Object.freeze(Object.fromEntries(CLAUDE_MODELS.map((m, i) => 
 
 const MODEL_LABELS = Object.freeze({ haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' });
 
+// Not a Claude model: the Antigravity CLI (`agy`, src/launch.js isAgyCommand)
+// as a worker choice. It belongs in lists of where a worker RUNS (God Mode's
+// worker model, a task card's model) and never in CLAUDE_MODELS, so no
+// `claude --model` flag ever carries it.
+const AGY_MODEL = 'agy';
+
+/** Every model a worker-model choice list may hold: the Claude aliases plus agy. */
+const WORKER_MODEL_CHOICES = Object.freeze([...CLAUDE_MODELS, AGY_MODEL]);
+
 /** True for one of the aliases above. */
 function isClaudeModel(model) {
   return CLAUDE_MODELS.includes(model);
+}
+
+/** True for a Claude alias or agy: a valid worker-model choice. */
+function isWorkerModelChoice(model) {
+  return WORKER_MODEL_CHOICES.includes(model);
 }
 
 /**
@@ -41,4 +55,13 @@ function strongerModel(a, b) {
   return known.reduce((best, m) => (MODEL_RANK[m] > MODEL_RANK[best] ? m : best));
 }
 
-module.exports = { CLAUDE_MODELS, MODEL_RANK, MODEL_LABELS, isClaudeModel, strongerModel };
+module.exports = {
+  CLAUDE_MODELS,
+  MODEL_RANK,
+  MODEL_LABELS,
+  AGY_MODEL,
+  WORKER_MODEL_CHOICES,
+  isClaudeModel,
+  isWorkerModelChoice,
+  strongerModel,
+};

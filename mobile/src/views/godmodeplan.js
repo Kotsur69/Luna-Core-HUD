@@ -24,7 +24,7 @@ import { confirmSheet } from './sheet.js';
 
 const INTEGRATION_KEY = { pr: 'gmIntegrationPr', merge: 'gmIntegrationMerge', branches: 'gmIntegrationBranches' };
 /** Product names; 'plan' = each package on the planner's pick. */
-const WORKER_MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', fable: 'Fable' };
+const WORKER_MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', fable: 'Fable', agy: 'Antigravity' };
 const workerModelName = (m) => (m === 'plan' ? t('gmWorkerModelPlan') : WORKER_MODEL_NAMES[m] || m);
 
 const planKey = (plan) => `${plan.machine.toLowerCase()}|${plan.projectId}`;
