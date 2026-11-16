@@ -80,7 +80,17 @@ test('Approve with workerModel "plan": each package on its planner pick', async 
   assert.deepEqual(models(log), ['sonnet', 'opus']);
 });
 
-for (const bad of ['gpt-5', 'OPUS', '', 42, { model: 'opus' }, ['sonnet'], true]) {
+test('Approve with workerModel "agy": the run freezes it and the pref is saved', async () => {
+  const { orch, log } = setup();
+  const { plan } = await orch.makePlan(ctx);
+  const res = await orch.launch(approve(plan, { workerModel: 'agy' }));
+  assert.equal(res.ok, true);
+  assert.equal(res.plan.workerModel, 'agy');
+  assert.deepEqual(models(log), ['agy', 'agy']);
+  assert.deepEqual(log.saved, ['agy']);
+});
+
+for (const bad of ['gpt-5', 'OPUS', 'AGY', 'antigravity', '', 42, { model: 'opus' }, ['sonnet'], true]) {
   test(`Approve with an invalid workerModel (${JSON.stringify(bad)}) is ignored: the pref decides`, async () => {
     const { orch, log } = setup({ prefModel: 'sonnet' });
     const { plan } = await orch.makePlan(ctx);
@@ -239,6 +249,7 @@ test('modelName: product names, raw id otherwise', () => {
   assert.equal(rules.modelName('opus'), 'Opus');
   assert.equal(rules.modelName('sonnet'), 'Sonnet');
   assert.equal(rules.modelName('fable'), 'Fable');
+  assert.equal(rules.modelName('agy'), 'Antigravity');
   assert.equal(rules.modelName('auto:easy'), 'auto:easy');
   assert.equal(rules.modelName('constructor'), 'constructor');
   assert.equal(rules.modelName(null), '');
