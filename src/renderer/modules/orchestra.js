@@ -41,6 +41,8 @@ import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
 import { runTypeSwitch, planOnlyForm, resetPlanOnlyForm, planRunPanel } from './orchestraPlanRun.js';
 import { resumeBanner, pauseRow } from './orchestraResumeBanner.js';
+import { isRunFinished } from './orchestraFinished.js';
+import { finishedPanel, backToSummaryRow } from './orchestraFinishedView.js';
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
 const q = (sel) => (overlay ? overlay.querySelector(sel) : null);
@@ -101,6 +103,10 @@ let optionsBusy = false;
 let picking = false;
 /** Edited prompts, `${planId}:${pkgId}` -> text, until launched. */
 const drafts = new Map();
+/** The finished run whose full board was opened from its summary ("Show run board"), or null. */
+let boardOfFinished = null;
+/** A finished run shows its summary instead of the board (orchestraFinishedView.js). */
+const showFinished = () => !!plan && isRunFinished(plan) && boardOfFinished !== plan.id;
 /** Where a new run starts: 'build' (the to-do picker) or 'plan' (Plan only). */
 let runMode = 'build';
 /** Start options picked on the board before Approve. */
@@ -501,6 +507,14 @@ function countdownKey(next) {
 }
 
 function renderPlan() {
+  if (isRunFinished(plan)) {
+    body.append(
+      backToSummaryRow(() => {
+        boardOfFinished = null;
+        render();
+      }),
+    );
+  }
   const banner = powerBanner(plan, { onCancel: cancelPower });
   if (banner) body.append(banner);
   // This run's own resume-after-shutdown banner (one per run / board).
@@ -616,8 +630,11 @@ function hasReady() {
 function updateButtons() {
   const idle = phase === 'idle';
   const running = !!plan && plan.packages.some(isActive);
+  // A finished run: its summary carries the actions; Discard would read as throwing a real run away.
+  const finished = !!plan && isRunFinished(plan);
+  const summary = showFinished();
   if (approveBtn) {
-    approveBtn.hidden = !plan || picking;
+    approveBtn.hidden = !plan || picking || summary;
     approveBtn.disabled =
       !idle || !plan || plan.errors.length > 0 || !hasReady() || (plan.started && !plan.killed && running) || !!plan.scheduledAt;
     const scheduling = !!plan && !plan.started && startOpts.when !== 'now';
@@ -625,11 +642,11 @@ function updateButtons() {
   }
   if (replanBtn) {
     // Planning goes by the active tab: no Replan on another project's board.
-    replanBtn.hidden = picking || !board.onActiveProject();
+    replanBtn.hidden = picking || !board.onActiveProject() || summary;
     replanBtn.disabled = !idle || running;
   }
   if (discardBtn) {
-    discardBtn.hidden = !plan || picking;
+    discardBtn.hidden = !plan || picking || finished;
     discardBtn.disabled = !idle || running;
   }
   // Kill is never locked by `phase`: an Approve/Retry holds the board busy
@@ -681,6 +698,8 @@ function render() {
   if (phase === 'planning') body.append(msg(t('orch.planning')));
   renderPlanWait();
   if (failure) body.append(msg(failText(failure, failureDetail), 'is-bad'));
+  // A Retry from the opened board un-finishes the run: once it ends again, the new summary shows.
+  if (boardOfFinished && !(plan && isRunFinished(plan))) boardOfFinished = null;
   if (picking && phase === 'idle') {
     body.append(runTypeSwitch({ mode: runMode, disabled: phase !== 'idle', onChange: setRunMode }));
   }
@@ -699,8 +718,26 @@ function render() {
         repaint: render,
       }),
     );
-  } else if (plan) renderPlan();
+  } else if (plan && showFinished()) renderFinished();
+  else if (plan) renderPlan();
   updateButtons();
+}
+
+/** The finished run's summary in place of the board (orchestraFinishedView.js). */
+function renderFinished() {
+  body.append(
+    finishedPanel(plan, {
+      scope: board.project(),
+      disabled: phase !== 'idle',
+      rerender: () => isOpen && render(),
+      onPlanAnother: planAnother,
+      onShowBoard: () => {
+        boardOfFinished = plan.id;
+        render();
+      },
+      onOpenPr: (id) => window.lunacore.openOrchestraPr(id, board.project()),
+    }),
+  );
 }
 
 /** Shows the to-do picker; the planner starts from its "Plan selected". */
@@ -914,15 +951,39 @@ async function act(call, opts = {}) {
   return res;
 }
 
-async function discard() {
+/**
+ * Main drops the board's run (orchestra:discard); the board forgets it too.
+ * @returns {Promise<boolean>} whether main dropped it
+ */
+async function dropRun() {
   const scope = board.project();
-  const res = await act(() => window.lunacore.discardOrchestra(scope));
-  if (!res || !res.ok) return;
   const planId = plan ? plan.id : null;
+  const res = await act(() => window.lunacore.discardOrchestra(scope));
+  if (!res || !res.ok) return false;
   board.apply(null, scope);
   plan = board.view();
   for (const key of [...drafts.keys()]) if (key.startsWith(`${planId}:`)) drafts.delete(key);
+  if (boardOfFinished === planId) boardOfFinished = null;
+  return true;
+}
+
+async function discard() {
+  if (await dropRun()) render();
+}
+
+/**
+ * "Plan another God Mode run": closes the finished run (its report, the
+ * settled-run ledger and the git branches stay; only the live run state goes)
+ * and opens the to-do picker for the active tab's project.
+ */
+async function planAnother() {
+  if (!plan || !isRunFinished(plan) || phase !== 'idle') return;
+  if (!(await dropRun())) return;
+  // Planning goes by the active tab, so the board moves there.
+  if (!board.onActiveProject()) board.select(board.activeProject());
+  plan = board.view();
   render();
+  if (!plan) await openPicker();
 }
 
 async function retry(id) {
