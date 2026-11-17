@@ -45,6 +45,7 @@
 
 const nodeFs = require('fs');
 const path = require('path');
+const { shouldSkipEntry } = require('./repoWalkSkip');
 const { runTag, cleanTags } = require('./todorows');
 const { validateCritique } = require('./lunasworkCritic');
 
@@ -58,7 +59,8 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 const ROOTS = ['', 'src', 'public', 'app', 'assets', 'static'];
 const DICT_DIRS = ['locales', 'locale', 'messages', 'i18n', 'lang', 'langs', 'translations'];
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage', 'release']);
+// Build output (dist, out, release) and *.asar come from repoWalkSkip.
+const SKIP_DIRS = new Set(['node_modules', '.git', 'build', '.next', 'coverage']);
 const OBJECT_FILE_RE = /(i18n|locale|translation|localized|messages|lang|strings)[^/\\]*\.(c|m)?(j|t)sx?$/i;
 const UI_FILE_RE = /\.(jsx|tsx|html?|vue|svelte)$/i;
 
@@ -280,6 +282,7 @@ function sourceFiles(fs, dir, depth, acc) {
   if (depth > MAX_SCAN_DEPTH || acc.length >= MAX_SCAN_FILES) return acc;
   for (const e of listDir(fs, dir)) {
     if (acc.length >= MAX_SCAN_FILES) break;
+    if (shouldSkipEntry(e.name, e.isDirectory())) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) sourceFiles(fs, full, depth + 1, acc);

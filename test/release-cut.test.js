@@ -129,9 +129,12 @@ function fakeTools(opts = {}) {
       files.set(path.join(REPO, 'package.json'), JSON.stringify({ ...pkg, version: bump[1] }));
       return { ok: true, output: `v${bump[1]}`, timedOut: false };
     }
-    if (command === 'npm run dist') {
+    const build = /^npm run dist -- -c\.directories\.output=dist\/release-v(\d+\.\d+\.\d+)$/.exec(command);
+    if (build) {
       const v = JSON.parse(files.get(path.join(REPO, 'package.json'))).version;
-      const dist = (name) => path.join(REPO, 'dist', name);
+      assert.equal(build[1], v, 'the build folder is the bumped version');
+      if (opts.distFails) return { ok: false, output: opts.distFails, timedOut: false };
+      const dist = (name) => path.join(REPO, 'dist', `release-v${v}`, name);
       files.set(dist(`LunaCore Setup ${v}.exe`), 'EXE');
       files.set(dist(`LunaCore Setup ${v}.exe.blockmap`), 'MAP');
       files.set(dist(`LunaCore-${v}-portable.exe`), 'PORTABLE');
@@ -140,7 +143,12 @@ function fakeTools(opts = {}) {
     }
     return { ok: false, output: `unexpected ${command}`, timedOut: false };
   };
-  return { deps: { exec, shell, fs }, calls, writes, files };
+  const lockHolders = async (file) => {
+    calls.push(`lockHolders ${file}`);
+    if (opts.lockHolders instanceof Error) throw opts.lockHolders;
+    return opts.lockHolders || { ok: true, holders: [] };
+  };
+  return { deps: { exec, shell, fs, lockHolders }, calls, writes, files };
 }
 
 const cut = (tools, over = {}) => release.cutRelease({ repoPath: REPO, base: 'main', landedSha: LANDED, ...over }, tools.deps);
@@ -172,9 +180,9 @@ test('notes: feat/fix subjects only, wip commits and merges left out, prefixes s
   const notes = release.buildNotes(SUBJECTS);
   assert.deepEqual(notes.features, ['release after finish', 'resend the report email']);
   assert.deepEqual(notes.fixes, ['keep the email line']);
-  assert.equal(release.releaseTitle(notes), 'release after finish');
-  assert.equal(release.releaseTitle({ features: [], fixes: ['Stop the chip stretching.'] }), 'stop the chip stretching');
-  assert.equal(release.releaseTitle({ features: [], fixes: [] }), 'maintenance release');
+  assert.equal(release.releaseTitle(notes), 'Release after finish');
+  assert.equal(release.releaseTitle({ features: [], fixes: ['Stop the chip stretching.'] }), 'Stop the chip stretching');
+  assert.equal(release.releaseTitle({ features: [], fixes: [] }), 'Maintenance release');
   assert.ok(release.isSkippedSubject('chore: luna wip'));
   assert.ok(release.isSkippedSubject("Merge pull request #4 from x"));
 });
@@ -207,6 +215,7 @@ test('release notes file and the dist asset names', () => {
   const text = release.releaseNotes('0.21.0', 'release after finish', release.buildNotes(SUBJECTS));
   assert.match(text, /^## LunaCore v0\.21\.0 - release after finish\n\n### Features\n\n- release after finish\n- resend the report email\n\n### Fixes\n\n- keep the email line\n$/);
   assert.deepEqual(release.distAssets('0.21.0'), {
+    dir: 'dist/release-v0.21.0',
     setup: 'LunaCore Setup 0.21.0.exe',
     setupBlockmap: 'LunaCore Setup 0.21.0.exe.blockmap',
     dashedSetup: 'LunaCore-Setup-0.21.0.exe',
@@ -228,7 +237,7 @@ test('a release runs exactly the manual steps, in order, and never forces', asyn
     ok: true,
     version: '0.21.0',
     tag: 'v0.21.0',
-    title: 'release after finish',
+    title: 'Release after finish',
     url: 'https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.21.0',
   });
   const order = (needle) => tools.calls.findIndex((c) => c.startsWith(needle));
@@ -244,7 +253,7 @@ test('a release runs exactly the manual steps, in order, and never forces', asyn
     'git tag -a v0.21.0',
     `git push origin ${RELEASE_SHA}:refs/heads/main`,
     'git push origin refs/tags/v0.21.0',
-    'npm run dist',
+    'npm run dist -- -c.directories.output=dist/release-v0.21.0',
     'copy LunaCore Setup 0.21.0.exe -> LunaCore-Setup-0.21.0.exe',
     'copy LunaCore Setup 0.21.0.exe.blockmap -> LunaCore-Setup-0.21.0.exe.blockmap',
     'gh release create v0.21.0',
@@ -253,30 +262,30 @@ test('a release runs exactly the manual steps, in order, and never forces', asyn
   assert.ok(at.every((i) => i >= 0), `missing step: ${steps[at.indexOf(-1)]}`);
   assert.deepEqual([...at].sort((a, b) => a - b), at, 'steps in order');
 
-  assert.ok(tools.calls.includes(`git tag -a v0.21.0 -m v0.21.0 - release after finish ${RELEASE_SHA}`), 'the tag names the release commit');
-  assert.match(tools.files.get(path.join(REPO, 'dist', 'release-notes-v0.21.0.md')), /^## LunaCore v0.21.0/);
+  assert.ok(tools.calls.includes(`git tag -a v0.21.0 -m v0.21.0 - Release after finish ${RELEASE_SHA}`), 'the tag names the release commit');
+  assert.match(tools.files.get(path.join(REPO, 'dist', 'release-v0.21.0', 'release-notes-v0.21.0.md')), /^## LunaCore v0.21.0/);
   const commit = tools.calls.find((c) => c.startsWith('git commit'));
-  assert.equal(commit, `git commit -m chore(release): v0.21.0 - release after finish -m ${release.CO_AUTHOR}`);
+  assert.equal(commit, `git commit -m chore(release): v0.21.0 - Release after finish -m ${release.CO_AUTHOR}`);
   const gh = tools.calls.find((c) => c.startsWith('gh release'));
   assert.equal(
     gh,
     [
       'gh release create v0.21.0 --title LunaCore v0.21.0 --notes-file',
-      path.join('dist', 'release-notes-v0.21.0.md'),
+      path.join('dist', 'release-v0.21.0', 'release-notes-v0.21.0.md'),
       '--latest',
-      path.join('dist', 'latest.yml'),
-      path.join('dist', 'LunaCore-0.21.0-portable.exe'),
-      path.join('dist', 'LunaCore-Setup-0.21.0.exe'),
-      path.join('dist', 'LunaCore-Setup-0.21.0.exe.blockmap'),
+      path.join('dist', 'release-v0.21.0', 'latest.yml'),
+      path.join('dist', 'release-v0.21.0', 'LunaCore-0.21.0-portable.exe'),
+      path.join('dist', 'release-v0.21.0', 'LunaCore-Setup-0.21.0.exe'),
+      path.join('dist', 'release-v0.21.0', 'LunaCore-Setup-0.21.0.exe.blockmap'),
     ].join(' '),
   );
   for (const c of tools.calls) {
     assert.ok(!/(^|\s)(--force|-f|--force-with-lease)(\s|$)/.test(c), `forced: ${c}`);
     assert.ok(!/^git (reset|stash|checkout|clean)\b/.test(c), `unexpected: ${c}`);
   }
-  assert.match(tools.files.get(path.join(REPO, 'README.md')), /^> \*\*Current release: v0\.21\.0 — release after finish\.\*\*$/m);
+  assert.match(tools.files.get(path.join(REPO, 'README.md')), /^> \*\*Current release: v0\.21\.0 — Release after finish\.\*\*$/m);
   assert.equal(JSON.parse(tools.files.get(path.join(REPO, 'package.json'))).version, '0.21.0');
-  assert.equal(tools.files.get(path.join(REPO, 'dist', 'LunaCore-Setup-0.21.0.exe')), 'EXE');
+  assert.equal(tools.files.get(path.join(REPO, 'dist', 'release-v0.21.0', 'LunaCore-Setup-0.21.0.exe')), 'EXE');
 });
 
 test('patch release when only fixes came since the last tag', async () => {
@@ -339,7 +348,7 @@ test('a rejected push is a failure with its stage, never retried with force', as
   assert.equal(res.ok, false);
   assert.equal(res.stage, 'push');
   assert.equal(tools.calls.filter((c) => c.startsWith('git push')).length, 1);
-  assert.ok(!tools.calls.includes('npm run dist'));
+  assert.ok(!tools.calls.some((c) => c.startsWith('npm run dist')));
 });
 
 test('releaseResult: released / skipped (refusal) / error', () => {
@@ -705,4 +714,127 @@ test('the run is checked again after the dialog: a changed board cancels the rel
   });
   assert.deepEqual(await ipcMain.call('orchestra:release-now', 'luna'), { ok: false, reason: 'busy' });
   assert.deepEqual(cuts, []);
+});
+
+// ---------------------------------------------------------------------------
+// Release title: whole words, the subject's own casing (v0.31.0 regression)
+// ---------------------------------------------------------------------------
+
+const V031_SUBJECT = 'feat(memory): God Mode run capture reports the memories a run made obsolete';
+
+test('v0.31.0 subject: the title starts with "God Mode" and ends on a whole word', () => {
+  const title = release.releaseTitle(release.buildNotes([V031_SUBJECT]));
+  assert.ok(title.startsWith('God Mode'), title);
+  assert.ok(title.length <= 60, title);
+  const words = 'God Mode run capture reports the memories a run made obsolete'.split(' ');
+  for (const word of title.split(' ')) assert.ok(words.includes(word), `partial word "${word}" in "${title}"`);
+  assert.equal(title, 'God Mode run capture reports the memories a run made');
+});
+
+test('long subject: cut on a word boundary, casing kept, only the first letter raised', () => {
+  const long = 'fix: keep the IPC payload checks in sync with the preload bridge when a renderer module reloads mid-run';
+  const title = release.releaseTitle(release.buildNotes([long]));
+  assert.equal(title, 'Keep the IPC payload checks in sync with the preload bridge');
+  assert.ok(long.includes(title.replace(/^K/, 'k')), 'a prefix of the subject, nothing cut mid-word');
+  assert.equal(release.truncateWords('alpha beta gamma', 11), 'alpha beta');
+  assert.equal(release.truncateWords('alpha beta, gamma', 12), 'alpha beta', 'trailing punctuation dropped');
+  assert.equal(release.truncateWords('short', 60), 'short');
+  assert.equal(release.truncateWords('x'.repeat(70), 60), 'x'.repeat(60), 'one oversized word is the only mid-word cut');
+  assert.equal(release.releaseTitle({ features: ['iOS widget lands'], fixes: [] }), 'IOS widget lands');
+  assert.equal(release.releaseTitle({ features: ['LunaCore gets a map'], fixes: [] }), 'LunaCore gets a map');
+});
+
+test('a release from the v0.31.0 subject carries the whole-word title into the commit and the tag', async () => {
+  const tools = fakeTools({ subjects: [V031_SUBJECT] });
+  const res = await cut(tools);
+  assert.equal(res.ok, true);
+  assert.equal(res.title, 'God Mode run capture reports the memories a run made');
+  assert.ok(tools.calls.includes(`git commit -m chore(release): v0.21.0 - ${res.title} -m ${release.CO_AUTHOR}`));
+});
+
+// ---------------------------------------------------------------------------
+// Build output folder, version check, EBUSY reporting
+// ---------------------------------------------------------------------------
+
+test('distCommand builds into dist/release-v<version> and refuses anything but x.y.z', () => {
+  assert.equal(release.distCommand('0.31.0'), 'npm run dist -- -c.directories.output=dist/release-v0.31.0');
+  for (const bad of ['0.31', 'v0.31.0', '0.31.0 && calc', '0.31.0\n', '', null, undefined, 31, '../0.1.0']) {
+    assert.equal(release.distCommand(bad), null, String(bad));
+  }
+});
+
+test('a dist failure says the tag is already pushed; no gh release follows', async () => {
+  const tools = fakeTools({ distFails: 'electron-builder\n  ⨯ cannot find icon' });
+  const res = await cut(tools);
+  assert.equal(res.ok, false);
+  assert.equal(res.stage, 'dist');
+  assert.match(res.reason, /tag v0\.21\.0 is already pushed, publish the GitHub release by hand/);
+  assert.match(res.reason, /cannot find icon/);
+  assert.ok(!tools.calls.some((c) => c.startsWith('lockHolders')), 'no lock lookup without EBUSY');
+  assert.ok(!tools.calls.some((c) => c.startsWith('gh release')));
+});
+
+const ebusyOutput = (file) => `  ⨯ EBUSY: resource busy or locked, unlink '${file}'  failedTask=build`;
+const LOCKED = path.join(REPO, 'dist', 'release-v0.21.0', 'win-unpacked', 'resources', 'app.asar');
+
+test('an EBUSY dist failure names the holding process and the pushed tag', async () => {
+  const tools = fakeTools({
+    distFails: ebusyOutput(LOCKED),
+    lockHolders: { ok: true, holders: [{ pid: 4242, app: 'Electron', exe: 'electron.exe' }] },
+  });
+  const res = await cut(tools);
+  assert.equal(res.stage, 'dist');
+  assert.ok(tools.calls.includes(`lockHolders ${LOCKED}`), 'the holder is asked about the locked file');
+  assert.match(res.reason, /tag v0\.21\.0 is already pushed/);
+  assert.match(res.reason, /EBUSY, held by electron\.exe \(pid 4242\), on dist[\\/]release-v0\.21\.0[\\/]win-unpacked[\\/]resources[\\/]app\.asar$/);
+});
+
+test('an EBUSY path outside the repo (a UNC share too) is never looked up', async () => {
+  for (const outside of ['\\\\host\\share\\app.asar', path.resolve('/elsewhere/app.asar')]) {
+    const tools = fakeTools({ distFails: ebusyOutput(outside) });
+    const res = await cut(tools);
+    assert.equal(res.stage, 'dist');
+    assert.ok(!tools.calls.some((c) => c.startsWith('lockHolders')), outside);
+    assert.match(res.reason, /already pushed.*EBUSY, holder not looked up \(outside the repo\)/);
+  }
+});
+
+test('an EBUSY failure whose holder lookup fails or throws still answers plainly', async () => {
+  const failed = await cut(fakeTools({ distFails: ebusyOutput(LOCKED), lockHolders: { ok: false, reason: 'lock holder lookup failed: lookup timed out' } }));
+  assert.equal(failed.stage, 'dist');
+  assert.match(failed.reason, /already pushed.*EBUSY, lock holder lookup failed: lookup timed out, on .*app\.asar$/);
+  const thrown = await cut(fakeTools({ distFails: ebusyOutput(LOCKED), lockHolders: new Error('boom') }));
+  assert.equal(thrown.stage, 'dist');
+  assert.match(thrown.reason, /lock holder lookup failed: boom/);
+  const none = await cut(fakeTools({ distFails: ebusyOutput(LOCKED) }));
+  assert.match(none.reason, /holder not found/);
+});
+
+test('fileLockHolder: EBUSY path, holder lines and words are parsed; no Windows means no lookup', async () => {
+  const holder = require('../src/fileLockHolder.js');
+  assert.equal(holder.lockedPathOf(ebusyOutput('C:\\r\\dist\\win-unpacked\\resources\\app.asar')), 'C:\\r\\dist\\win-unpacked\\resources\\app.asar');
+  assert.equal(holder.lockedPathOf("x EBUSY: resource busy or locked, open 'C:\\Users\\O'Brien\\app.asar' failedTask=build"), "C:\\Users\\O'Brien\\app.asar");
+  assert.equal(holder.lockedPathOf('npm ERR! code 1'), null);
+  assert.deepEqual(holder.parseHolders('4242\tElectron\telectron.exe\r\nnoise\n17\tCode\t\n'), [
+    { pid: 4242, app: 'Electron', exe: 'electron.exe' },
+    { pid: 17, app: 'Code', exe: '' },
+  ]);
+  assert.equal(holder.describeHolders([{ pid: 1, app: 'A', exe: 'a.exe' }, { pid: 2, app: 'B', exe: '' }]), 'a.exe (pid 1), B (pid 2)');
+  assert.deepEqual(await holder.findLockHolders('/x/app.asar', { platform: 'linux' }), { ok: false, reason: 'lookup needs Windows' });
+  const seen = [];
+  const exec = (bin, args, opts, cb) => {
+    seen.push({ bin, args, file: opts.env.LUNA_LOCKED_FILE, timeout: opts.timeout });
+    cb(null, '4242\tElectron\telectron.exe\n', '');
+  };
+  const res = await holder.findLockHolders('C:\\r\\app.asar', { platform: 'win32', exec, env: {} });
+  assert.deepEqual(res, { ok: true, holders: [{ pid: 4242, app: 'Electron', exe: 'electron.exe' }] });
+  assert.equal(path.basename(seen[0].bin), 'powershell.exe');
+  assert.ok(path.isAbsolute(seen[0].bin), 'the system powershell by full path');
+  assert.ok(!seen[0].args.some((a) => a.includes('app.asar')), 'the path never reaches the command line');
+  assert.equal(seen[0].file, 'C:\\r\\app.asar');
+  assert.equal(seen[0].timeout, holder.LOOKUP_TIMEOUT_MS);
+  const failing = (bin, args, opts, cb) => cb(Object.assign(new Error('spawn failed'), { killed: true }), '', '');
+  assert.deepEqual(await holder.findLockHolders('C:\\r\\app.asar', { platform: 'win32', exec: failing, env: {} }), { ok: false, reason: 'lock holder lookup failed: lookup timed out' });
+  const throwing = () => { throw new Error('EACCES'); };
+  assert.deepEqual(await holder.findLockHolders('C:\\r\\app.asar', { platform: 'win32', exec: throwing, env: {} }), { ok: false, reason: 'lock holder lookup failed: EACCES' });
 });

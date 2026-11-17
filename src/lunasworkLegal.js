@@ -28,6 +28,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { shouldSkipEntry } = require('./repoWalkSkip');
 
 const LEGAL_DRAFT_MARKER = 'DRAFT - check before publishing';
 const LEGAL_TAG_PREFIX = 'legal:';
@@ -38,7 +39,8 @@ const MAX_WALK_DEPTH = 8;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_DRAFTS = 50;
 const SKIP_DIRS = new Set([
-  'node_modules', 'dist', 'build', 'out', 'coverage', 'vendor', 'venv', '__pycache__', 'design',
+  // Build output (dist, out, release) and *.asar come from repoWalkSkip.
+  'node_modules', 'build', 'coverage', 'vendor', 'venv', '__pycache__', 'design',
 ]);
 const SOURCE_EXT_RE = /\.(html?|[cm]?[jt]sx?|vue|svelte|astro|php|erb|ejs|hbs|liquid|jinja2?|py)$/i;
 const DRAFT_EXT_RE = /\.(html?|[cm]?[jt]sx?|vue|svelte|astro|php|erb|ejs|hbs|liquid|jinja2?|py|mdx?|txt|json)$/i;
@@ -120,7 +122,7 @@ function walkRepo(root, extRe) {
     }
     for (const e of entries) {
       if (out.length >= MAX_WALK_FILES) return;
-      if (e.isSymbolicLink()) continue;
+      if (e.isSymbolicLink() || shouldSkipEntry(e.name, e.isDirectory())) continue;
       const full = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (depth < MAX_WALK_DEPTH && !SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) walk(full, depth + 1);

@@ -19,6 +19,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { isAsarName } = require('./repoWalkSkip');
 
 /** Bump when this fingerprint's inputs change, so old fingerprints never match. */
 const FINGERPRINT_VERSION = 1;
@@ -76,7 +77,8 @@ function treeLines(dir, { stat = fs.statSync, readdir = fs.readdirSync, realpath
         lines.push(`${dir}|truncated`);
         return;
       }
-      if (SKIPPED_NAMES.has(name)) continue;
+      // The stat below would open an .asar as an archive under Electron and lock it.
+      if (SKIPPED_NAMES.has(name) || isAsarName(name)) continue;
       const full = path.join(d, name);
       let s;
       try {
