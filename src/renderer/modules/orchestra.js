@@ -59,6 +59,8 @@ const FAIL_CODES = new Set([
   'noTab', 'noPlan', 'planErrors', 'nothingToLaunch', 'notRetryable', 'briefFailed', 'paused',
   'noNodeModules', 'notHeld', 'installFailed',
   'badSchedule', 'noReset', 'badRule', 'mergeDeclined', 'noFreeProfile', 'badOptions', 'noneSelected',
+  // Antigravity (agy) runs (src/orchestraAgy.js) and the Workers allow-list.
+  'noAgyProfile', 'noAgy', 'badWorkers',
   'lunasWorkActive', 'batteryLow', 'notFinishing', 'tooEarly', 'notAbortable', 'repoBusy',
   // Free God Mode v2 plan runs (orchestraPlanRun.js).
   'noPlanProfile', 'noLockdown', 'badTopics', 'emptyRequest', 'requestTooLong', 'badPlanner', 'badRepo',
@@ -184,7 +186,8 @@ const chosenIntegration = () => startOpts.integration || plan.integrationMode ||
  */
 function workerOptions() {
   if (plan.buildPlanner === 'free') return ['free'];
-  return plan.workers === 'hybrid' ? ['claude', 'hybrid', 'free'] : ['claude', 'free'];
+  // 'agy' = every package on the Antigravity CLI (src/orchestraAgy.js).
+  return plan.workers === 'hybrid' ? ['claude', 'agy', 'hybrid', 'free'] : ['claude', 'agy', 'free'];
 }
 const chosenWorkers = () => {
   const options = workerOptions();
