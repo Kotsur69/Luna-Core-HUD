@@ -7,7 +7,25 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.31.0 — god Mode run capture reports the memories a run made obso.**
+> **Current release: v0.32.0 — google (agy) usage limits and per-tab-kind usage visibility.**
+> - Google (agy) usage limits and per-tab-kind usage visibility
+> - active files and context window for Antigravity (agy) tabs
+> - Antigravity (agy) as a role, fallback and second-opinion CLI
+> - agy runs review and resolve merge conflicts on agy
+> - Antigravity (agy) in the picker, Approve, Plan only and badges
+> - Antigravity (agy) as planner and Workers choice in main
+> - mirror the active Claude setup profile into Antigravity (agy)
+> - run Antigravity (agy) tabs as a first-class CLI
+> - finished-run summary with "Plan another God Mode run"
+> - Fix: agy watcher never leaves a tool lit or a tab without telemetry
+> - Fix: harden the agy transcript watcher after review
+> - Fix: refuse off-list Workers at Approve; Plan only splits on agy
+> - Fix: harden agy launch flags and the agy intake config entry
+> - Fix: release cut survives a locked app.asar, walkers skip dist/,
+>   whole-word title
+> - Fix: stack clipboard history vertically again
+>
+> **v0.31.0 — god Mode run capture reports the memories a run made obso.**
 > - God Mode run capture reports the memories a run made obsolete
 > - 'changed' review flag when files a memory names have newer commits
 > - "Check if still true" - Sonnet checks a memory against the code
