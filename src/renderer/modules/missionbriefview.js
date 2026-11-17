@@ -10,12 +10,31 @@
 // unusable shows its inputs instead. Regenerate asks first (main answers
 // 'exists' until the overwrite is confirmed). The weekly card links to the
 // Sunday review on the Life dashboard's Week tab. textContent only.
+//
+// Layout (reportvisuals.js): headline, a row of stat tiles (commits, events,
+// open to-dos, mail, goals, Claude hours), commits-per-repo bars, the
+// weekend's Claude work/fun split and goal chips; then each list as a
+// <details> section with a count (priorities, calendar and mail open, the
+// rest folded). The meta line with the call's cost stays last, via cost().
 // ============================================================================
 
 'use strict';
 
 import { t } from './util.js';
 import { openLifeTab } from './lifepanel.js';
+import {
+  barList,
+  briefClaudeSplit,
+  briefGoals,
+  briefRepoBars,
+  briefStats,
+  caption,
+  chip,
+  details,
+  goalTone,
+  stackBar,
+  statTiles,
+} from './reportvisuals.js';
 
 let view = null;
 let pending = null; // kind waiting for an overwrite confirm
@@ -48,45 +67,115 @@ function errText(reason) {
   return text === key ? t('mc.brief.err.failed') : text;
 }
 
-function eventLine(ev, note) {
-  const w = ev.weather;
-  const weather = w ? ` · ${w.tMin}-${w.tMax}°C${w.rain !== null && w.rain !== undefined ? ` · ${w.rain}%` : ''}` : '';
-  const start = ev.allDay ? ev.start : new Date(ev.start).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-  return `${start} - ${ev.title}${weather}${note ? ` - ${note}` : ''}`;
+const list = (v) => (Array.isArray(v) ? v : []);
+// Sections open on first sight: what needs a decision today. The rest folds.
+const OPEN_SECTIONS = new Set(['mc.brief.priorities', 'mc.brief.events', 'mc.brief.mail']);
+const MAX_RAW_TODOS = 8;
+const RAIN_WARN_PCT = 50;
+const GOAL_WORD = { ok: 'done', warn: 'partly', muted: 'notyet' };
+
+/** Weather as one short chip text ('4-9°C · 60%'), or '' without data. */
+function weatherText(w) {
+  if (!w || !Number.isFinite(w.tMin) || !Number.isFinite(w.tMax)) return '';
+  return `${w.tMin}-${w.tMax}°C${Number.isFinite(w.rain) ? ` · ${w.rain}%` : ''}`;
 }
 
-function section(titleKey, lines) {
-  if (!lines.length) return null;
-  const box = el('div', 'mission-brief__part');
-  box.append(el('h4', 'mission-brief__sub', t(titleKey)));
-  const ul = el('ul', 'mission-brief__list');
-  for (const line of lines) ul.append(el('li', '', line));
-  box.append(ul);
-  return box;
+function startText(ev) {
+  if (ev.allDay) return String(ev.start || '');
+  const d = new Date(ev.start);
+  return Number.isNaN(d.getTime()) ? String(ev.start || '') : d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** One calendar row: time, title, a weather chip (heavy rain warns) and the brief's note. */
+function eventRow(ev, note) {
+  const li = el('li', 'mission-brief__event');
+  if (!ev) {
+    li.append(el('span', 'mission-brief__what', note || ''));
+    return li;
+  }
+  li.append(el('span', 'mission-brief__when', startText(ev)), el('span', 'mission-brief__what', ev.title || ''));
+  const weather = weatherText(ev.weather);
+  if (weather) li.append(chip(weather, Number.isFinite(ev.weather.rain) && ev.weather.rain >= RAIN_WARN_PCT ? 'warn' : 'info'));
+  if (note) li.append(el('span', 'mission-brief__note', note));
+  return li;
+}
+
+/** "project: text" rows with the project as a chip. */
+function todoRow(project, text) {
+  const li = el('li', 'mission-brief__todo');
+  li.append(chip(project, 'muted'), el('span', '', text));
+  return li;
+}
+
+function mailRow(m) {
+  const li = el('li', 'mission-brief__mail');
+  li.append(el('span', 'mission-brief__from', m.from || ''), el('span', 'mission-brief__subject', m.subject || ''));
+  if (m.why) li.append(el('span', 'mission-brief__note', m.why));
+  return li;
+}
+
+/** A folding section of rows (strings or <li> nodes); none -> null. */
+function section(titleKey, rows, listTag = 'ul') {
+  const items = list(rows).filter((r) => r !== null && r !== undefined && r !== '');
+  if (!items.length) return null;
+  const ul = el(listTag, 'mission-brief__list');
+  for (const row of items) ul.append(typeof row === 'string' ? el('li', '', row) : row);
+  return details(t(titleKey), items.length, [ul], { open: OPEN_SECTIONS.has(titleKey), cls: 'mission-brief__part' });
+}
+
+function goalChips(goals) {
+  const ul = el('ul', 'rv-chips');
+  ul.setAttribute('aria-label', t('rv.brief.goals'));
+  for (const g of goals) {
+    const tone = goalTone(g.status);
+    const li = el('li');
+    li.append(chip(`${g.text} - ${t(`rv.goal.${GOAL_WORD[tone]}`)}`, tone));
+    ul.append(li);
+  }
+  return ul;
+}
+
+/** Tiles, commits-per-repo bars, the weekend's Claude split and goal chips. */
+function visuals(entry) {
+  const parts = [statTiles(briefStats(entry), t('rv.brief.stats'))];
+  const bars = barList(briefRepoBars(entry), t('rv.brief.byRepo'));
+  if (bars) parts.push(caption(t('rv.brief.byRepo')), bars);
+  const split = stackBar(briefClaudeSplit(entry), t('rv.brief.claudeSplit'));
+  if (split) parts.push(caption(t('rv.brief.claudeSplit')), split);
+  const goals = briefGoals(entry);
+  if (goals.length) parts.push(caption(t('rv.brief.goals')), goalChips(goals));
+  return parts.filter(Boolean);
 }
 
 function body(entry) {
   const box = el('div', 'mission-brief__body');
   const inputs = entry.inputs || {};
-  const events = Array.isArray(inputs.events) ? inputs.events : [];
+  const events = list(inputs.events);
   const b = entry.brief;
   if (b) {
     box.append(el('p', 'mission-brief__headline', b.headline));
-    if (b.weekend) box.append(el('p', '', b.weekend));
-    if (b.nudge) box.append(el('p', 'hint mission-brief__nudge', b.nudge));
+    box.append(...visuals(entry));
+    if (b.weekend) box.append(el('p', 'mission-brief__lead', b.weekend));
+    if (b.nudge) {
+      const nudge = el('p', 'mission-brief__nudge');
+      nudge.append(chip(t('rv.brief.nudge'), 'warn'), el('span', '', b.nudge));
+      box.append(nudge);
+    }
     const byKey = new Map(events.map((e) => [e.key, e]));
     const parts = [
-      section('mc.brief.priorities', b.priorities),
-      section('mc.brief.events', b.events.map((x) => eventLine(byKey.get(x.key), x.note))),
-      section('mc.brief.todos', b.todos.map((x) => `${x.project}: ${x.text}`)),
-      section('mc.brief.mail', b.mail.map((m) => `${m.from} - ${m.subject}${m.why ? ` (${m.why})` : ''}`)),
+      section('mc.brief.priorities', b.priorities, 'ol'),
+      section('mc.brief.events', list(b.events).map((x) => eventRow(byKey.get(x.key), x.note))),
+      section('mc.brief.mail', list(b.mail).map(mailRow)),
+      section('mc.brief.todos', list(b.todos).map((x) => todoRow(x.project, x.text))),
       section('mc.brief.news', b.news),
     ];
     box.append(...parts.filter(Boolean));
   } else {
-    box.append(el('p', 'hint is-fail', t('mc.brief.raw', { reason: entry.failure || 'bad-json' })));
-    const todos = inputs.todos && Array.isArray(inputs.todos.projects) ? inputs.todos.projects.flatMap((p) => p.items.map((x) => `${p.project}: ${x}`)) : [];
-    const parts = [section('mc.brief.events', events.map((e) => eventLine(e, ''))), section('mc.brief.todos', todos.slice(0, 8))];
+    const fail = el('p', 'mission-brief__fail');
+    fail.append(chip(t('rv.brief.rawChip'), 'bad'), el('span', 'hint', t('mc.brief.raw', { reason: entry.failure || 'bad-json' })));
+    box.append(fail, ...visuals(entry));
+    const todos = inputs.todos && Array.isArray(inputs.todos.projects) ? inputs.todos.projects.flatMap((p) => list(p.items).map((x) => todoRow(p.project, x))) : [];
+    const parts = [section('mc.brief.events', events.map((e) => eventRow(e, ''))), section('mc.brief.todos', todos.slice(0, MAX_RAW_TODOS))];
     box.append(...parts.filter(Boolean));
   }
   const meta = [t('mc.brief.made', { at: when(entry.at), model: entry.model })];
