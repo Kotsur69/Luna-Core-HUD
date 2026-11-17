@@ -394,6 +394,21 @@ test("openReport opens the run's own report file and nothing else", async (t) =>
   assert.deepEqual(s.out.opened, [path.join(s.runsDir, 'pa.md')]);
 });
 
+test('openReport prefers the charted <id>.html next to the .md, never a folder by that name', async (t) => {
+  const s = setup({ runs: { alpha: view('pa'), beta: view('pb') } });
+  t.after(s.cleanup);
+  fs.writeFileSync(path.join(s.runsDir, 'pa.md'), '# report');
+  fs.writeFileSync(path.join(s.runsDir, 'pa.html'), '<!doctype html>');
+  assert.deepEqual(await s.invoke('orchestra:openReport', 'pa', { projectId: 'alpha' }), { ok: true });
+  fs.writeFileSync(path.join(s.runsDir, 'pb.md'), '# report');
+  fs.mkdirSync(path.join(s.runsDir, 'pb.html'));
+  assert.deepEqual(await s.invoke('orchestra:openReport', 'pb', { projectId: 'beta' }), { ok: true });
+  assert.deepEqual(s.out.opened, [path.join(s.runsDir, 'pa.html'), path.join(s.runsDir, 'pb.md')]);
+  // An .html alone is not a report: the .md must exist.
+  fs.rmSync(path.join(s.runsDir, 'pa.md'));
+  assert.deepEqual(await s.invoke('orchestra:openReport', 'pa', { projectId: 'alpha' }), { ok: false, error: 'noReport' });
+});
+
 test('allow accepts only a rule the resolved run logged, and keeps the list unique', async (t) => {
   const s = setup({ runs: { alpha: view('pa'), beta: view('pb', { suggestions: [] }) } });
   t.after(s.cleanup);

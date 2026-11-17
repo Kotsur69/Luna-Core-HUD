@@ -690,11 +690,19 @@ function runCards(view, packages, integ, now) {
   ]);
 }
 
+/** A check's state -> pill tone. */
+const checkTone = (state) => (state === 'ok' ? 'ok' : state === 'failed' ? 'bad' : 'muted');
+
+/** One pill per check (icon + colour + text), then the fix-up count. */
 function selfCheckHtml(integ) {
   const sc = isObject(integ.selfCheck) ? integ.selfCheck : null;
-  const fixups = sc && Number.isFinite(sc.fixups) ? Math.max(0, Math.round(sc.fixups)) : 0;
-  const checks = sc ? [...CHECKS.map(([key, title]) => `${title}: ${checkText(sc, key)}`), `Fix-ups: ${fixups}`] : [];
-  return h.section('Self-check', h.list(checks, 'Not run.'));
+  if (!sc) return h.section('Self-check', h.empty('Not run.'));
+  const fixups = Number.isFinite(sc.fixups) ? Math.max(0, Math.round(sc.fixups)) : 0;
+  const rows = [
+    ...CHECKS.map(([key, title]) => `<li>${h.pill(`${title}: ${checkText(sc, key)}`, checkTone(oneLine(sc[key], 16)))}</li>`),
+    `<li>${h.pill(`Fix-ups: ${fixups}`, fixups ? 'warn' : 'muted')}</li>`,
+  ];
+  return h.section('Self-check', `<ul class="pills">${rows.join('')}</ul>`);
 }
 
 function runCharts(view, packages, integ, now) {
@@ -730,13 +738,20 @@ function needsHtml(view, integ) {
   const needs = needsYouLines(view).map(noTicks);
   const tail = tailLines(integ.selfCheck).map((l) => l.trim());
   const body = needs.length ? h.list(needs) : '<p class="empty">Nothing - all done</p>';
-  return h.section('Needs you', `${body}${tail.length ? `<pre>${h.escapeHtml(tail.join('\n'))}</pre>` : ''}`);
+  // The self-check's failing output folds: the list above says what to do.
+  const tailHtml = tail.length ? h.fold('Failing output', `<pre>${h.escapeHtml(tail.join('\n'))}</pre>`, { count: tail.length }) : '';
+  return h.section('Needs you', `${body}${tailHtml}`);
 }
 
+/**
+ * One folding block per problem: the summary line is its title with a
+ * "bad" pill; what / why / fix stay one click away, the log tail two.
+ * The first problem opens by itself.
+ */
 function wrongHtml(view, facts) {
   const items = problems(view, facts);
-  if (!items.length) return h.section('What went wrong', '<p class="empty">Nothing.</p>');
-  const blocks = items.map((it) => {
+  if (!items.length) return h.section('What went wrong', `<p class="empty">${h.pill('Nothing.', 'ok')}</p>`);
+  const blocks = items.map((it, i) => {
     const rows = [
       `What happened: ${it.what}`,
       `Why: ${it.why}`,
@@ -744,10 +759,10 @@ function wrongHtml(view, facts) {
       ...it.evidence.map(noTicks),
       ...(it.lastWords ? [`Worker's last words: "${it.lastWords}"`] : []),
     ];
-    const tail = it.tail.length ? `<pre>${h.escapeHtml(it.tail.join('\n'))}</pre>` : '';
-    return `<h3>${h.escapeHtml(noTicks(it.title))}</h3>${h.list(rows)}${tail}`;
+    const tail = it.tail.length ? h.fold('Log tail', `<pre>${h.escapeHtml(it.tail.join('\n'))}</pre>`, { count: it.tail.length }) : '';
+    return h.fold(noTicks(it.title), `${h.list(rows)}${tail}`, { open: i === 0 });
   });
-  return h.section('What went wrong', blocks.join('\n'));
+  return h.section('What went wrong', `<p>${h.pill(`${items.length} problem${items.length === 1 ? '' : 's'}`, 'bad')}</p>${blocks.join('\n')}`);
 }
 
 function packageTable(view, packages, now) {
