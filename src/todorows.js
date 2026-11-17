@@ -11,6 +11,7 @@
 'use strict';
 
 const { normalizeEffort } = require('./efforts');
+const { CARD_MODELS } = require('./workerModels');
 
 // A pin-board, not an issue tracker. Beyond this the widget stops being a
 // glanceable list, and the honest answer is that the work belongs somewhere
@@ -33,9 +34,9 @@ const MAX_DEPENDS = 50;
 const SIZES = ['S', 'M', 'L'];
 // A card's suggested worker model. 'fable' and 'agy' (the Antigravity CLI,
 // src/claudeModels.js AGY_MODEL) are manual picks: the intake and the God
-// Mode planner only ever suggest sonnet / opus. A literal here, not a require:
-// the phone app bundles this file.
-const MODELS = ['sonnet', 'opus', 'fable', 'agy'];
+// Mode planner only ever suggest sonnet / opus. Every God Mode worker model
+// but 'plan' (src/workerModels.js CARD_MODELS, also bundled by the phone app).
+const MODELS = CARD_MODELS;
 // Tags (docs/tbc_docs/LUNAS_WORK_PLAN.md): Luna's Work files its backlog under a run
 // tag and reads Mati's `steer` cards. God Mode ignores them.
 const MAX_TAGS = 10;

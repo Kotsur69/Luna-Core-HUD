@@ -24,6 +24,7 @@ const { isUsageLimitText } = require('./orchestraPlanWait');
 const { checkCwd } = require('./projects');
 const { EFFORTS, normalizeEffort } = require('./efforts');
 const { CLAUDE_MODELS } = require('./claudeModels');
+const { CARD_MODELS } = require('./workerModels');
 const { usageFromEnvelope } = require('./orchestraUsage');
 const { FREE_PLANNER_MODEL, planContextLines } = require('./orchestraPlanBuild');
 // A/B builds (opt-in): the planner may give a package two variants.
@@ -78,7 +79,9 @@ const MODELS = ['sonnet', 'opus'];
 // is a manual choice - Luna's Work sets it on a package from its builder model
 // (lunasworkBuild.wrapPlanner) - and must survive validatePlan().
 // 'agy' (the Antigravity CLI) is a manual card pick, and a hybrid planner's pick.
-const PACKAGE_MODELS = [...MODELS, 'fable', 'agy'];
+// So: the offered MODELS first, then every other card model (src/workerModels.js).
+const withCardModels = (list) => [...list, ...CARD_MODELS.filter((m) => !list.includes(m))];
+const PACKAGE_MODELS = withCardModels(MODELS);
 
 /** JSON schema handed to `--json-schema`. Mirrors validatePlan() below. */
 const PLAN_SCHEMA = {
@@ -385,7 +388,7 @@ function topoOrder(packages) {
  */
 function validatePlan(raw, openTodos, { hybrid = false, abBuild = false } = {}) {
   // "free" is a valid pick only in a hybrid plan (F6).
-  const models = hybrid === true ? [...HYBRID_MODELS, 'fable'] : PACKAGE_MODELS;
+  const models = hybrid === true ? withCardModels(HYBRID_MODELS) : PACKAGE_MODELS;
   const warnings = [];
   const errors = [];
   const openAts = new Set(openTodos.map((t) => t.at));
