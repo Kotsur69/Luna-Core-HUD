@@ -343,6 +343,22 @@ test('"Check all" checks memories whose files changed first, even one checked la
 
 // ---- one real git log ------------------------------------------------------------------
 
+/** git's kill timer in the real-repository test: generous, the suite may run under heavy load. */
+const REAL_GIT_TIMEOUT_MS = 5 * 60 * 1000;
+
+test('createChangeTracker: gitTimeoutMs is the kill timer of git log; 15 s by default', async () => {
+  const timeouts = [];
+  const exec = (bin, args, opts, cb) => {
+    timeouts.push(opts.timeout);
+    setImmediate(() => cb(null, '', ''));
+  };
+  const records = entries(rec('a', { body: 'Names `src/a.js`.', created: '2026-11-05' }));
+  const root = path.resolve('repo-root');
+  await createChangeTracker({ exec, now: () => NOW, headOf: () => null }).refresh(records, { [PROJECT]: root });
+  await createChangeTracker({ exec, now: () => NOW, headOf: () => null, gitTimeoutMs: 1234 }).refresh(records, { [PROJECT]: root });
+  assert.deepEqual(timeouts, [15000, 1234]);
+});
+
 /** git with no user config, hooks or signing in the way. */
 function git(cwd, args, date) {
   const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
@@ -363,7 +379,8 @@ test('a real repository: a commit after the check flags the memory, one before d
   git(root, ['commit', '-q', '--no-verify', '-am', 'second'], '2026-11-14T10:00:00Z');
 
   const records = entries(rec('a', { body: 'Names `src/old.js` and `src/new.js`.', created: '2026-11-05' }));
-  const tracker = createChangeTracker({ now: () => NOW });
+  // A loaded machine (parallel suites) can take longer than the HUD's 15 s for one git call.
+  const tracker = createChangeTracker({ now: () => NOW, gitTimeoutMs: REAL_GIT_TIMEOUT_MS });
   assert.ok(headSignature(root), 'HEAD is read without running git');
   assert.equal(await tracker.refresh(records, { [PROJECT]: root }), true);
 

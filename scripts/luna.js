@@ -489,7 +489,9 @@ const TAG_RE = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
  */
 const GIT_START_DIR = path.dirname(process.execPath);
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
-const GIT_TIMEOUT_MS = 15000;
+// A command Mati runs by hand, not a poller: room for git on a busy machine
+// (15 s was cut short while LunaCore and test suites ran git in parallel).
+const GIT_TIMEOUT_MS = 60000;
 const execFileAsync = promisify(execFile);
 
 /**
