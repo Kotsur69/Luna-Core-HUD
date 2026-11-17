@@ -73,6 +73,7 @@ function harness({
   timeouts,
   env = { PATH: '/bin', HOME: '/fake-home' },
   killEndsChild = false,
+  agyMirror = null,
 } = {}) {
   const files = new Set(exists);
   const calls = [];
@@ -118,6 +119,7 @@ function harness({
     platform,
     timeouts,
     log: (line) => logs.push(line),
+    agyMirror,
   });
   return { setup, calls, kills, removed, files, logs, kinds: () => calls.map((c) => c.kind) };
 }
@@ -448,6 +450,148 @@ test('calls run one at a time: status waits for the list', async () => {
   assert.equal(list.ok, true);
   assert.equal(status.ok, true);
   assert.deepEqual(h.kinds(), ['fetch', 'merge', 'list', 'status']);
+});
+
+// ---- the Antigravity (agy) mirror after `use` -------------------------------------
+
+/** A fake src/agysetupmirror.js: records syncs, answers what it is told. */
+function fakeMirror({ enabled = true, result, throws = false, enabledThrows = false } = {}) {
+  const syncs = [];
+  const toggles = [];
+  return {
+    syncs,
+    toggles,
+    isEnabled: () => {
+      if (enabledThrows) throw new Error('settings exploded');
+      return enabled;
+    },
+    setEnabled: (on) => toggles.push(on),
+    sync: (profile) => {
+      syncs.push(profile);
+      if (throws) throw new Error('mirror exploded');
+      return (
+        result || {
+          ok: true,
+          profile: profile || 'coding',
+          mirroredAt: '2026-11-16T12:00:00.000Z',
+          rulesFile: '/home/.gemini/config/AGENTS.md',
+          servers: ['supabase', 'files'],
+          skills: ['alpha'],
+          skipped: [{ kind: 'mcp', name: 'x', reason: 'name-taken' }],
+          warnings: [],
+          backups: ['/home/.gemini/lunacore-backup/x.bak'],
+        }
+      );
+    },
+    status: () => ({ ok: true, available: true, enabled, profile: 'coding', mirroredAt: '2026-11-16T12:00:00.000Z', lastError: null }),
+  };
+}
+
+test('agy: a real `use` mirrors the applied profile when mirroring is on', async () => {
+  const mirror = fakeMirror();
+  const h = harness({ agyMirror: mirror });
+  const res = await h.setup.apply('minimal');
+  assert.equal(res.ok, true);
+  assert.deepEqual(mirror.syncs, ['minimal']);
+  assert.deepEqual(res.agy, {
+    ok: true,
+    profile: 'minimal',
+    mirroredAt: '2026-11-16T12:00:00.000Z',
+    servers: 2,
+    skills: 1,
+    skipped: 1,
+    warnings: [],
+  });
+  assert.doesNotMatch(JSON.stringify(res.agy), /gemini|bak/, 'no local paths cross to the renderer');
+});
+
+test('agy: a dry run never mirrors', async () => {
+  const mirror = fakeMirror();
+  const h = harness({ agyMirror: mirror });
+  const res = await h.setup.preview('minimal');
+  assert.equal(res.ok, true);
+  assert.deepEqual(mirror.syncs, []);
+  assert.equal('agy' in res, false);
+});
+
+test('agy: mirroring off means no sync and no agy field', async () => {
+  const mirror = fakeMirror({ enabled: false });
+  const h = harness({ agyMirror: mirror });
+  const res = await h.setup.apply('minimal');
+  assert.equal(res.ok, true);
+  assert.deepEqual(mirror.syncs, []);
+  assert.equal('agy' in res, false);
+});
+
+test('agy: a failed mirror is reported beside a successful switch', async () => {
+  const mirror = fakeMirror({ result: { ok: false, error: 'broken-json', detail: 'mcp_config.json' } });
+  const h = harness({ agyMirror: mirror });
+  const res = await h.setup.apply('minimal');
+  assert.equal(res.ok, true, 'the Claude switch still succeeded');
+  assert.equal(res.profile, 'minimal');
+  assert.deepEqual(res.agy, { ok: false, error: 'broken-json', detail: 'mcp_config.json' });
+});
+
+test('agy: a mirror that throws (or whose toggle throws) never fails `use`', async () => {
+  for (const opts of [{ throws: true }, { enabledThrows: true }]) {
+    const mirror = fakeMirror(opts);
+    const h = harness({ agyMirror: mirror });
+    const res = await h.setup.apply('minimal');
+    assert.equal(res.ok, true, JSON.stringify(opts));
+    assert.deepEqual(res.agy, { ok: false, error: 'failed' });
+    assert.ok(h.logs.some((l) => /agy mirror crashed/.test(l)));
+  }
+});
+
+test('agy: a failed `use` never mirrors', async () => {
+  const mirror = fakeMirror();
+  const h = harness({ agyMirror: mirror, handlers: { apply: { error: 'boom', stderr: 'luna-setup: boom' } } });
+  const res = await h.setup.apply('minimal');
+  assert.equal(res.ok, false);
+  assert.deepEqual(mirror.syncs, []);
+});
+
+test('agy: an unknown error code from the mirror reads as failed', async () => {
+  const mirror = fakeMirror({ result: { ok: false, error: 'Weird Code!', detail: 'x\ny' } });
+  const h = harness({ agyMirror: mirror });
+  assert.deepEqual((await h.setup.syncAgy()).error, 'failed');
+});
+
+test('agy: manual sync mirrors whatever is applied, toggle or not, and waits its turn', async () => {
+  const mirror = fakeMirror({ enabled: false });
+  const h = harness({ agyMirror: mirror });
+  const res = await h.setup.syncAgy();
+  assert.equal(res.ok, true);
+  assert.deepEqual(mirror.syncs, [null], 'null = the mirror reads the applied profile itself');
+
+  const switching = h.setup.apply('minimal');
+  assert.deepEqual(await h.setup.syncAgy(), { ok: false, error: 'busy' });
+  await switching;
+});
+
+test('agy: status and toggle answer whitelisted fields; a non-boolean toggle is refused', async () => {
+  const mirror = fakeMirror();
+  const h = harness({ agyMirror: mirror });
+  assert.deepEqual(await h.setup.agyStatus(), {
+    ok: true,
+    available: true,
+    enabled: true,
+    profile: 'coding',
+    mirroredAt: '2026-11-16T12:00:00.000Z',
+    lastError: null,
+  });
+  assert.equal((await h.setup.setAgyEnabled(false)).ok, true);
+  assert.deepEqual(mirror.toggles, [false]);
+  assert.deepEqual(await h.setup.setAgyEnabled('false'), { ok: false, error: 'bad-payload' });
+  assert.deepEqual(mirror.toggles, [false]);
+});
+
+test('agy: without a mirror the agy calls answer agy-off', async () => {
+  const h = harness();
+  assert.deepEqual(await h.setup.agyStatus(), { ok: false, error: 'agy-off' });
+  assert.deepEqual(await h.setup.syncAgy(), { ok: false, error: 'agy-off' });
+  assert.deepEqual(await h.setup.setAgyEnabled(true), { ok: false, error: 'agy-off' });
+  assert.equal('agy' in (await h.setup.apply('minimal')), false);
 });
 
 // ---- the widget's wiring (renderer side) -------------------------------------------

@@ -77,6 +77,9 @@ const IDS = {
   'claude-setup-running': 'p',
   'claude-setup-apply': 'button',
   'claude-setup-cancel': 'button',
+  'claude-setup-agy-toggle': 'input',
+  'claude-setup-agy-sync': 'button',
+  'claude-setup-agy-status': 'p',
 };
 
 function fakeRoot() {
@@ -98,6 +101,12 @@ const bridge = {
   listAnswer: null, // override for the next list() only
   previewAnswer: null, // override for the next preview() only
   previewGate: null, // a promise preview() waits on, to hold it in flight
+  // Antigravity mirror. Its calls go to agyCalls, so the switch flow's call
+  // lists above stay exactly what they were.
+  agyCalls: [],
+  agy: { ok: true, available: true, enabled: true, profile: null, mirroredAt: null, lastError: null },
+  applyAgy: null, // the `agy` field of the next apply() answer
+  agySyncAnswer: null, // override for the next agySync() only
 };
 
 globalThis.window = {
@@ -131,7 +140,24 @@ globalThis.window = {
     claudeSetupApply: async (name) => {
       bridge.calls.push(['apply', name]);
       bridge.active = name;
-      return { ok: true, profile: name, steps: [], warnings: [], running: 2, tokens: 4200 };
+      const agy = bridge.applyAgy ? { agy: bridge.applyAgy } : {};
+      bridge.applyAgy = null;
+      return { ok: true, profile: name, steps: [], warnings: [], running: 2, tokens: 4200, ...agy };
+    },
+    claudeSetupAgyStatus: async () => {
+      bridge.agyCalls.push(['agyStatus']);
+      return { ...bridge.agy };
+    },
+    claudeSetupAgySetEnabled: async (on) => {
+      bridge.agyCalls.push(['agySetEnabled', on]);
+      bridge.agy = { ...bridge.agy, enabled: on };
+      return { ...bridge.agy };
+    },
+    claudeSetupAgySync: async () => {
+      bridge.agyCalls.push(['agySync']);
+      const answer = bridge.agySyncAnswer || { ok: true, profile: bridge.active, mirroredAt: '2026-11-16T12:00:00.000Z', servers: 1, skills: 3, skipped: 0, warnings: [] };
+      bridge.agySyncAnswer = null;
+      return answer;
     },
   },
 };
@@ -302,4 +328,102 @@ test('unmounting mid-preview is safe, and a remount shows the open confirm', asy
   again['claude-setup-cancel'].fire('click');
   assert.equal(again['claude-setup-select'].value, 'minimal');
   unmount();
+});
+
+// ---- the Antigravity (agy) mirror row ------------------------------------------
+
+test('the agy row shows the saved state: toggle on, never synced', async () => {
+  const els = mount();
+  await settle();
+  assert.ok(bridge.agyCalls.some((c) => c[0] === 'agyStatus'), 'loading the widget asks for the agy status');
+  assert.equal(els['claude-setup-agy-toggle'].checked, true);
+  assert.equal(els['claude-setup-agy-toggle'].disabled, false);
+  assert.equal(els['claude-setup-agy-sync'].disabled, false);
+  assert.equal(els['claude-setup-agy-status'].textContent, 'claudesetup.agy.never');
+  assert.equal(els['claude-setup-agy-status'].hidden, false);
+});
+
+test('unchecking the toggle saves false in main and shows the answer', async () => {
+  const els = root.els;
+  bridge.agyCalls = [];
+  els['claude-setup-agy-toggle'].checked = false;
+  els['claude-setup-agy-toggle'].fire('change');
+  await settle();
+  assert.deepEqual(bridge.agyCalls, [['agySetEnabled', false]]);
+  assert.equal(els['claude-setup-agy-toggle'].checked, false);
+  assert.equal(els['claude-setup-agy-toggle'].disabled, false);
+});
+
+test('Sync to agy now reports the counts, then re-reads the status', async () => {
+  const els = root.els;
+  bridge.agyCalls = [];
+  bridge.calls = [];
+  els['claude-setup-agy-sync'].fire('click');
+  await settle();
+  assert.deepEqual(bridge.agyCalls, [['agySync'], ['agyStatus']]);
+  assert.deepEqual(bridge.calls, [], 'a manual sync never touches the Claude switch');
+  const line = els['claude-setup-agy-status'];
+  assert.match(line.textContent, /^claudesetup\.agy\.synced /);
+  assert.match(line.textContent, /"servers":1/);
+  assert.match(line.textContent, /"skills":3/);
+  assert.ok(line.classList.contains('is-ok'));
+});
+
+test('a switch whose agy mirror failed is still a switch; the agy line shows the error', async () => {
+  const els = root.els;
+  bridge.applyAgy = { ok: false, error: 'broken-json', detail: 'mcp_config.json' };
+  els['claude-setup-select'].value = 'coding';
+  els['claude-setup-select'].fire('change');
+  await settle();
+  els['claude-setup-apply'].fire('click');
+  await settle();
+  const note = els['claude-setup-note'];
+  assert.match(note.textContent, /^claudesetup\.applied/);
+  assert.ok(note.classList.contains('is-ok'), 'the Claude switch reads as done');
+  const line = els['claude-setup-agy-status'];
+  assert.equal(line.textContent, 'claudesetup.agy.err.brokenJson (mcp_config.json)');
+  assert.ok(line.classList.contains('is-error'));
+});
+
+test('a failed manual sync shows its error and never throws', async () => {
+  const els = root.els;
+  bridge.agySyncAnswer = { ok: false, error: 'busy' };
+  els['claude-setup-agy-sync'].fire('click');
+  await settle();
+  assert.equal(els['claude-setup-agy-status'].textContent, 'claudesetup.err.busy');
+  assert.equal(els['claude-setup-agy-sync'].disabled, false);
+});
+
+test('without agy installed the row is disabled and says so', async () => {
+  const els = root.els;
+  bridge.agy = { ...bridge.agy, available: false, enabled: false };
+  els['claude-setup-refresh'].fire('click');
+  await settle();
+  assert.equal(els['claude-setup-agy-toggle'].disabled, true);
+  assert.equal(els['claude-setup-agy-sync'].disabled, true);
+  assert.equal(els['claude-setup-agy-status'].textContent, 'claudesetup.agy.missing');
+  unmount();
+});
+
+test('a failed agy status read keeps the loaded state and says it failed', async () => {
+  const els = mount();
+  const original = window.lunacore.claudeSetupAgyStatus;
+  bridge.agy = { ...bridge.agy, available: true, enabled: true };
+  els['claude-setup-refresh'].fire('click');
+  await settle();
+  assert.equal(els['claude-setup-agy-sync'].disabled, false);
+
+  window.lunacore.claudeSetupAgyStatus = async () => {
+    throw new Error('ipc gone');
+  };
+  try {
+    els['claude-setup-refresh'].fire('click');
+    await settle();
+    assert.equal(els['claude-setup-agy-status'].textContent, 'claudesetup.agy.err.failed');
+    assert.equal(els['claude-setup-agy-toggle'].checked, true, 'the last good state stays');
+    assert.equal(els['claude-setup-agy-sync'].disabled, false);
+  } finally {
+    window.lunacore.claudeSetupAgyStatus = original;
+    unmount();
+  }
 });

@@ -655,6 +655,13 @@ contextBridge.exposeInMainWorld('lunacore', {
   claudeSetupPreview: (name) => ipcRenderer.invoke('claudeSetup:preview', typeof name === 'string' ? name : ''),
   /** Rewrites ~/.claude (with a backup). Same shape as the preview. */
   claudeSetupApply: (name) => ipcRenderer.invoke('claudeSetup:apply', typeof name === 'string' ? name : ''),
+  // Antigravity (agy) mirror of the applied setup (src/agysetupmirror.js).
+  /** Promise<{ok, available, enabled, profile, mirroredAt, lastError} | {ok:false, error}>. */
+  claudeSetupAgyStatus: () => ipcRenderer.invoke('claudeSetup:agyStatus'),
+  /** "Also apply to Antigravity": only a boolean crosses. Answers the new status. */
+  claudeSetupAgySetEnabled: (on) => ipcRenderer.invoke('claudeSetup:agySetEnabled', on === true),
+  /** Mirrors ~/.claude into agy now. Promise<{ok, profile, servers, skills, skipped, warnings} | {ok:false, error}>. */
+  claudeSetupAgySync: () => ipcRenderer.invoke('claudeSetup:agySync'),
 
   // --- Host mode in this HUD (src/hostmodeipc.js) ---
   /** action: 'status' | 'start' | 'stop' | 'make-default' (whitelisted in main).

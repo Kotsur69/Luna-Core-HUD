@@ -943,6 +943,17 @@
         </div>
       </div>
       <p id="claude-setup-note" class="claude-setup__note" role="status" aria-live="polite" hidden></p>
+      <!-- Antigravity (agy) mirror (src/agysetupmirror.js): after a switch the same
+           setup is written into ~/.gemini/config when the toggle is on. -->
+      <div class="claude-setup__agy">
+        <!-- clip-toggle: the themed checkbox shared with the clipboard widget. -->
+        <label class="clip-toggle claude-setup__agy-toggle">
+          <input type="checkbox" id="claude-setup-agy-toggle" />
+          <span data-i18n="claudesetup.agy.toggle">Zastosuj tez w Antigravity (agy)</span>
+        </label>
+        <button type="button" id="claude-setup-agy-sync" class="claude-setup__btn" data-i18n="claudesetup.agy.sync">Synchronizuj z agy teraz</button>
+        <p id="claude-setup-agy-status" class="claude-setup__note claude-setup__agy-status" role="status" aria-live="polite" hidden></p>
+      </div>
       <p class="hint" data-i18n="claudesetup.hint">Zmienia ~/.claude dla wszystkich nowych sesji. Dzialajace zakladki trzeba zrestartowac.</p>
     </div>
   </template>

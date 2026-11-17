@@ -1,8 +1,9 @@
 // ============================================================================
 // LunaCore - Claude setup switcher IPC (the `setup` widget)
 // ----------------------------------------------------------------------------
-// Four channels. list and status take nothing; preview and apply take one
-// profile name. The renderer is not trusted: a name that is not a string
+// Seven channels. list and status take nothing; preview and apply take one
+// profile name; the Antigravity mirror adds agyStatus and agySync (no
+// payload) and agySetEnabled (a boolean). The renderer is not trusted: a name that is not a string
 // matching NAME_RE is refused here, before src/claudesetup.js is touched, and
 // claudesetup.js then checks it against the CLI's own list. Answers are the
 // whitelisted shapes claudesetup.js builds; the only free CLI text that
@@ -12,6 +13,7 @@
 'use strict';
 
 const { createClaudeSetup, validName } = require('./claudesetup');
+const { createAgyMirror } = require('./agysetupmirror');
 
 const bad = (error) => ({ ok: false, error });
 
@@ -33,7 +35,7 @@ async function safely(label, fn) {
  *   session gets (so `claude plugin install` finds claude).
  */
 function registerClaudeSetupIpc({ ipcMain, setup = null, getEnv } = {}) {
-  const switcher = setup || createClaudeSetup({ getEnv });
+  const switcher = setup || createClaudeSetup({ getEnv, agyMirror: createAgyMirror() });
 
   ipcMain.handle('claudeSetup:list', () => safely('list', () => switcher.list()));
   ipcMain.handle('claudeSetup:status', () => safely('status', () => switcher.status()));
@@ -42,6 +44,19 @@ function registerClaudeSetupIpc({ ipcMain, setup = null, getEnv } = {}) {
   );
   ipcMain.handle('claudeSetup:apply', (_event, name) =>
     validName(name) ? safely('apply', () => switcher.apply(name)) : bad('bad-name'),
+  );
+
+  // Antigravity (agy) mirror. agyStatus and agySync take nothing - anything
+  // the renderer sends is refused, not ignored; agySetEnabled takes a boolean.
+  const noPayload = (payload) => payload === undefined || payload === null;
+  ipcMain.handle('claudeSetup:agyStatus', (_event, payload) =>
+    noPayload(payload) ? safely('agyStatus', () => switcher.agyStatus()) : bad('bad-payload'),
+  );
+  ipcMain.handle('claudeSetup:agySetEnabled', (_event, on) =>
+    typeof on === 'boolean' ? safely('agySetEnabled', () => switcher.setAgyEnabled(on)) : bad('bad-payload'),
+  );
+  ipcMain.handle('claudeSetup:agySync', (_event, payload) =>
+    noPayload(payload) ? safely('agySync', () => switcher.syncAgy()) : bad('bad-payload'),
   );
 }
 
