@@ -37,6 +37,10 @@ const {
   isLongTurn,
   encodeProjectDir,
 } = require('./observer');
+// The same for an Antigravity (agy) tab, from agy's own transcript: files it
+// touches and an ESTIMATED context fill (agy logs no token counts).
+const { transcriptKindFor, conversationIdFromCommand } = require('./agytranscript');
+const { AgyTranscriptWatcher } = require('./agywatcher');
 // Session -> Markdown export: pure transcript renderer. The disk read + save
 // dialog live here in main; the parsing is all in the module (unit-tested).
 const { transcriptToMarkdown } = require('./sessionExport');
@@ -450,7 +454,7 @@ const { failoverTab } = createTabFailover({
  * @typedef {{
  *   id: string, proc: import('node-pty').IPty|null, profileId: string,
  *   projectId: string|null, cwd: string, branch: string|null, size: {cols:number,rows:number},
- *   watcher: TranscriptWatcher|null, alive: boolean
+ *   watcher: TranscriptWatcher|null, agyWatcher?: AgyTranscriptWatcher|null, alive: boolean
  * }} Session
  */
 
@@ -2049,10 +2053,11 @@ function spawnInto(session, profile, launch = null) {
   if (session.watcher) session.watcher.stop();
   // Fresh per restart, like both watchers: a new process owns nothing yet.
   session.gitAttribution = new SessionAttribution();
-  // A foreign agent CLI (codex, gemini) writes no Claude transcript - a watcher
-  // there would only adopt ANOTHER tab's newest .jsonl in the same cwd.
-  const isForeignCli = Boolean(command) && !isClaudeCommand(command);
-  session.watcher = isForeignCli ? null : new TranscriptWatcher(
+  // A foreign agent CLI (codex, gemini, agy) writes no Claude transcript - a
+  // watcher there would only adopt ANOTHER tab's newest .jsonl in the same cwd.
+  // agy gets its own reader below.
+  const transcriptKind = transcriptKindFor(command);
+  session.watcher = transcriptKind !== 'claude' ? null : new TranscriptWatcher(
     (metrics) => {
       // God Mode books its own worker tabs' tokens (orchestraUsage.js); other tabs are ignored there.
       // The context fill feeds a run's opt-in context guard (orchestraContextGuard.js).
@@ -2131,6 +2136,25 @@ function spawnInto(session, profile, launch = null) {
     },
   );
   if (session.watcher) session.watcher.start();
+
+  // An agy tab: Active files, Skill Tracker and an estimated context fill from
+  // agy's transcript (src/agywatcher.js). Its tool events also make the tab
+  // count as active for the git attribution below, which needs them to claim
+  // anything. No token booking for God Mode: agy logs no real token counts.
+  if (session.agyWatcher) session.agyWatcher.stop();
+  session.agyWatcher = transcriptKind !== 'agy' ? null : new AgyTranscriptWatcher(
+    (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
+    {
+      cwd,
+      conversationId: conversationIdFromCommand(command),
+      onTools: (events) => {
+        session.gitAttribution.noteToolEvents(events, Date.now());
+        statusBoard.activity(session.id);
+        send('metrics:tools', { sessionId: session.id, events });
+      },
+    },
+  );
+  if (session.agyWatcher) session.agyWatcher.start();
 
   // Active-Files Heatmap's git-sourced signal, scoped to this session's own
   // cwd - same lifecycle as the transcript watcher above (stopped + recreated
@@ -2348,6 +2372,10 @@ function teardownSession(session) {
   if (session.watcher) {
     session.watcher.stop();
     session.watcher = null;
+  }
+  if (session.agyWatcher) {
+    session.agyWatcher.stop();
+    session.agyWatcher = null;
   }
   if (session.gitWatcher) {
     session.gitWatcher.stop();
