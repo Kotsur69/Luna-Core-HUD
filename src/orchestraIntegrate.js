@@ -34,6 +34,7 @@ const { execFile } = require('child_process');
 const { runGit, firstLine, gitError, slugify, branchFor } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
 const { checkCwd } = require('./projects');
+const { runAgyPrint } = require('./orchestraAgy');
 const { verifyDetail } = require('./orchestraVerifyDetail');
 const { fixAfterMerge } = require('./orchestraMergeFixup');
 const { secondPass, skippedDependency, skipEntry } = require('./orchestraSecondPass');
@@ -252,9 +253,21 @@ function resolverPrompt(branch, files) {
  * One headless `claude -p` to resolve the conflicts in `cwd`. `attempt: 2`
  * is the integration's second try: 3x the budget and twice the time.
  */
-async function runResolver({ cwd, env, branch, files, isDirImpl, attempt }, execImpl) {
+async function runResolver({ cwd, env, branch, files, isDirImpl, attempt, cli = 'claude' }, execImpl) {
   if (!checkCwd(cwd, isDirImpl).ok) return { ok: false, detail: `working folder missing: ${cwd || ''}` };
   const stronger = attempt === 2;
+  // An agy run resolves its conflicts on agy (src/orchestraAgy.js), edits auto-accepted.
+  if (cli === 'agy') {
+    const res = await runAgyPrint({
+      cwd,
+      env,
+      prompt: resolverPrompt(branch, files),
+      timeout: stronger ? RESOLVER_TIMEOUT_MS * 2 : RESOLVER_TIMEOUT_MS,
+      edits: true,
+      ...(execImpl ? { execImpl } : {}),
+    });
+    return { ok: res.ok, detail: res.ok ? '' : res.detail || res.error || 'agy resolver failed' };
+  }
   const res = await run(
     'claude',
     [

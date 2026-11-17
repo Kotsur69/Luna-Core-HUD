@@ -151,6 +151,58 @@ test('runPlanner agy: a hybrid run gets the hybrid schema; a non-JSON answer is 
   assert.equal(res.error, 'noAgy');
 });
 
+// ---- helper jobs on agy ------------------------------------------------------------
+
+test('runReview cli agy: one agy call with the schema in the prompt, the caller validator decides', async () => {
+  const { runReview } = require('../src/orchestraReview.js');
+  const schema = { type: 'object', properties: { choice: { type: 'string' } } };
+  const validate = (raw) => (raw && typeof raw.choice === 'string' ? { choice: raw.choice } : null);
+  const ok = fakeExec({ stdout: 'Verdict:\n{"choice":"a"}' });
+  const res = await runReview({ cwd: __dirname, env: { G: '1' }, prompt: 'review this', schema, validate, cli: 'agy', execImpl: ok.exec });
+  assert.deepEqual(res, { ok: true, choice: 'a', costUsd: null });
+  assert.equal(ok.calls[0].file, 'agy');
+  assert.deepEqual(ok.calls[0].args, ['--print']);
+  assert.match(ok.calls[0].stdin, /^review this/);
+  assert.ok(ok.calls[0].stdin.includes(JSON.stringify(schema)));
+  const bad = fakeExec({ stdout: '{"other":1}' });
+  assert.deepEqual(await runReview({ cwd: __dirname, env: {}, prompt: 'p', schema, validate, cli: 'agy', execImpl: bad.exec }), { ok: false, error: 'badVerdict' });
+  // Without cli the review is the Claude call, unchanged.
+  const claude = fakeExec({ stdout: JSON.stringify({ structured_output: { choice: 'b' }, total_cost_usd: 0 }) });
+  await runReview({ cwd: __dirname, env: {}, prompt: 'p', schema, validate, execImpl: claude.exec });
+  assert.equal(claude.calls[0].file, 'claude');
+});
+
+test('runResolver cli agy: agy --print with accept-edits and the resolver prompt; claude stays the default', async () => {
+  const { runResolver } = require('../src/orchestraIntegrate.js');
+  const agyCall = fakeExec({ stdout: 'done' });
+  const res = await runResolver({ cwd: __dirname, env: { G: '1' }, branch: 'luna/x', files: ['a.js'], cli: 'agy' }, agyCall.exec);
+  assert.equal(res.ok, true);
+  assert.equal(agyCall.calls[0].file, 'agy');
+  assert.deepEqual(agyCall.calls[0].args, ['--print', '--mode', 'accept-edits']);
+  assert.match(agyCall.calls[0].stdin, /resolving a git merge conflict/);
+  const missing = fakeExec({ error: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) });
+  const failed = await runResolver({ cwd: __dirname, env: {}, branch: 'luna/x', files: ['a.js'], cli: 'agy' }, missing.exec);
+  assert.equal(failed.ok, false);
+  assert.match(failed.detail, /agy not found/);
+});
+
+test('createMergeRunDeps: an agy run asks the integration for the agy resolver; a Claude run does not', async () => {
+  const { createMergeRunDeps } = require('../src/orchestraMergeRun.js');
+  const seen = [];
+  for (const run of [{ id: 'p1', repoPath: '/r', workers: 'agy' }, { id: 'p2', repoPath: '/r' }]) {
+    const mr = createMergeRunDeps({
+      getPlan: () => run,
+      integrateMerge: async (_args, extra) => {
+        seen.push(extra.cli);
+        return { ok: true };
+      },
+      runFixup: async () => ({ ok: true }),
+    });
+    await mr.integrateMerge({ packages: [], checkOnly: true }, {});
+  }
+  assert.deepEqual(seen, ['agy', undefined]);
+});
+
 test('validatePlan: "agy" is a valid package model (hybrid pick and manual card pick)', () => {
   const raw = { packages: [{ ...PLAN_JSON.packages[0], model: 'agy' }] };
   assert.equal(plan.validatePlan(raw, TODOS).packages[0].model, 'agy');

@@ -27,6 +27,21 @@
 const { execFile } = require('child_process');
 const { parsePlannerOutput } = require('./orchestraPlan');
 const { isUsageLimitText } = require('./orchestraPlanWait');
+const { runAgyPrint, agyJsonPrompt, parseAgyJson } = require('./orchestraAgy');
+
+/**
+ * runReview() on agy: one headless `agy --print`, the answer's schema in the
+ * prompt, parsed from agy's text and checked by the caller's validator.
+ * Always resolves; agy reports no cost.
+ */
+async function runAgyReview({ cwd, env, prompt, timeout, execImpl, schema, check }) {
+  const res = await runAgyPrint({ cwd, env, timeout, maxBuffer: 10 * 1024 * 1024, prompt: agyJsonPrompt(prompt, schema), ...(execImpl ? { execImpl } : {}) });
+  if (!res.ok) return res;
+  const parsed = parseAgyJson(res.stdout);
+  if (!parsed.ok) return parsed;
+  const verdict = check(parsed.raw);
+  return verdict ? { ok: true, ...verdict, costUsd: null } : { ok: false, error: 'badVerdict' };
+}
 
 /** Headless Sonnet: a short, cheap second look (never a free model). */
 const REVIEW_MODEL = 'sonnet';
@@ -184,10 +199,13 @@ function buildBranchReviewPrompt({ branch, base, diff, stat, titles }) {
  * @returns {Promise<{ok:true, verdict:'pass'|'fail', reasons:string[], costUsd:number|null}
  *   | {ok:false, error:'noClaude'|'timeout'|'failed'|'limit'|'budget'|'badJson'|'badVerdict', detail?:string}>}
  */
-function runReview({ cwd, env, prompt, execImpl = execFile, timeoutMs, schema, validate }) {
+function runReview({ cwd, env, prompt, execImpl = execFile, timeoutMs, schema, validate, cli = 'claude' }) {
   const custom = !!schema && typeof validate === 'function';
   const check = custom ? validate : validateVerdict;
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : REVIEW_TIMEOUT_MS;
+  // An agy run reviews on agy (src/orchestraAgy.js): the schema goes into the
+  // prompt, the answer is checked by the same validator.
+  if (cli === 'agy') return runAgyReview({ cwd, env, prompt, timeout, execImpl, schema: custom ? schema : REVIEW_SCHEMA, check });
   return new Promise((resolve) => {
     let child;
     try {

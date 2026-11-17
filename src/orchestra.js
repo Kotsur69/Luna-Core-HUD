@@ -609,7 +609,12 @@ function createOrchestra(deps) {
   /** deps.runReview, with the review's reported tokens booked; the result is untouched. */
   const meteredReview = deps.runReview
     ? async (args) => {
-        const res = await deps.runReview(args);
+        // An agy run's reviews (hybrid gate, free review, A/B critic) run on
+        // agy too (orchestraAgy.js runUsesAgy) - never silently on Claude.
+        const agyRun = agyRules.runUsesAgy(plan);
+        const agyEnv = agyRun && deps.agyEnv ? deps.agyEnv() : null;
+        if (agyRun && !agyEnv) return { ok: false, error: 'noAgyProfile' };
+        const res = await deps.runReview(agyRun ? { ...args, cli: 'agy', env: agyEnv } : args);
         if (res && res.ok && res.usage) usageBook.add('review', res.usage);
         return res;
       }

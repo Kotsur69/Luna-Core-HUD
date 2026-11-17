@@ -326,7 +326,14 @@ function integrationDeps(ctx) {
       return orchestraIntegrate.integrateMerge(args, {
         addWorktree: wt.addWorktree,
         removeWorktree: wt.removeWorktree,
-        resolve: scope ? (r) => orchestraIntegrate.runResolver({ ...r, env: ctx.toolEnv() }, scope.execFile) : resolve,
+        // extra.cli 'agy' (orchestraMergeRun.js): an agy run resolves on the agy profile's env.
+        resolve: (r) => {
+          const agy = extra && extra.cli === 'agy';
+          const env = agy ? (ctx.agyEnv ? ctx.agyEnv() : null) : ctx.toolEnv();
+          if (agy && !env) return Promise.resolve({ ok: false, detail: 'no Antigravity (agy) profile' });
+          const args = { ...r, env, ...(agy ? { cli: 'agy' } : {}) };
+          return scope ? orchestraIntegrate.runResolver(args, scope.execFile) : orchestraIntegrate.runResolver(args);
+        },
         // The integration worktree's install queues behind the package installs;
         // verifyImpl comes from integrateMerge, so a scoped pass stays killable.
         installImpl: (root, verifyImpl) => orchestraDeps.runQueued(() => orchestraIntegrate.ensureInstall(root, verifyImpl)),
