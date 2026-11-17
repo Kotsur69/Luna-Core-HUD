@@ -33,9 +33,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFile } = require('child_process');
-
 const paths = require('./paths');
+const { runPooledGit } = require('./gitpool');
 const { shouldSkipEntry, isAsarName } = require('./repoWalkSkip');
 const { resolveStoredPath, toPortablePath, checkCwd } = require('./projects');
 
@@ -60,6 +59,7 @@ const SCAN_DEPTH = 2;
 // A fetch waits on the network, so it gets a longer leash than a status read.
 const STATUS_TIMEOUT_MS = 10000;
 const FETCH_TIMEOUT_MS = 30000;
+const MAX_BUFFER = 4 * 1024 * 1024;
 
 /** Safe read + JSON parse. Returns null when the file is missing or invalid. */
 function readJson(file) {
@@ -77,16 +77,14 @@ function readJson(file) {
  * output (progress, "Everything up-to-date", rejection reasons) goes to
  * stderr by convention - a helper that dropped it would make every push
  * result look silently empty.
+ *
+ * Goes through the shared pool (src/gitpool.js): at most MAX_CONCURRENT_GIT
+ * git processes at once across the HUD, and identical read-only calls in
+ * flight share one process. Writes (add, commit, push, fetch) are queued,
+ * never shared.
  */
 function git(dir, args, timeout = STATUS_TIMEOUT_MS) {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      ['-C', dir, ...args],
-      { windowsHide: true, timeout, maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '' })
-    );
-  });
+  return runPooledGit(dir, args, { timeout, maxBuffer: MAX_BUFFER });
 }
 
 /** Is this a directory holding a .git entry (dir for a clone, file for a worktree)? */
@@ -311,10 +309,28 @@ function saveRepoList(repos, roots) {
   }
 }
 
-/** Reads every configured repo, in parallel. */
-async function readAllRepos() {
+// The readAllRepos pass in flight: the panel, the cloud snapshot and the host
+// all call it on their own timers, and a second caller while one pass is still
+// waiting on git gets that pass's answer instead of starting another.
+let allReposInFlight = null;
+
+/**
+ * Reads every configured repo, in parallel (git itself is capped by the pool).
+ * Single-flight: concurrent callers share one pass.
+ * @param {(dir:string) => Promise<object>} [readOne] injected by tests
+ */
+function readAllRepos(readOne = readRepoStatus) {
+  if (allReposInFlight) return allReposInFlight;
+  const pass = readAllReposOnce(typeof readOne === 'function' ? readOne : readRepoStatus).finally(() => {
+    allReposInFlight = null;
+  });
+  allReposInFlight = pass;
+  return pass;
+}
+
+async function readAllReposOnce(readOne) {
   const { repos } = loadRepoList();
-  const rows = await Promise.all(repos.map((dir) => readRepoStatus(dir)));
+  const rows = await Promise.all(repos.map((dir) => readOne(dir)));
   // Attention first, name second - the same principle as the MCP panel: the
   // rows you have to do something about should not need looking for.
   const rank = {
