@@ -29,6 +29,32 @@ let lastCtxMetrics = null;
 let lastCtxLevel = null;
 
 /**
+ * The percentage as shown. An estimated reading (an agy tab: agy logs no token
+ * counts, src/agytranscript.js) gets a "≈" so it never passes for an exact one.
+ * @param {{percent:number, estimated?:boolean}} metrics
+ * @returns {string}
+ */
+export function ctxPercentText(metrics) {
+  const pct = Math.max(0, Math.min(1, metrics.percent));
+  return `${metrics.estimated === true ? '≈' : ''}${Math.round(pct * 100)}%`;
+}
+
+/** i18n key of the token line under the bar - an estimate says it is one. */
+export function ctxTokensKey(metrics) {
+  return metrics && metrics.estimated === true ? 'ctx.tokens.estimated' : 'ctx.tokens';
+}
+
+/** Tooltip explaining an estimated reading; cleared for an exact one. */
+function renderEstimateTitle(metrics) {
+  const title = metrics && metrics.estimated === true ? t('ctx.estimated.title') : '';
+  for (const el of [els && els.percent, els && els.tokens]) {
+    if (!el) continue;
+    if (title) el.title = title;
+    else el.removeAttribute('title');
+  }
+}
+
+/**
  * Paints the context bar.
  * `live` marks a fresh metric; a plain tab switch only restores the view, so it
  * passes false and nothing downstream may fire off the back of it.
@@ -64,7 +90,7 @@ export function applyCtxMetrics(metrics, live = true) {
   // A live reading whose displayed digits actually move gets a quick roll (CSS
   // .is-ticked, full motion tier). A replayed tab switch passes live=false and
   // never ticks; a reading that rounds to the same percent is not a change.
-  const pctText = `${Math.round(pct * 100)}%`;
+  const pctText = ctxPercentText(metrics);
   if (live && els.percent.textContent !== pctText) pulse(els.percent, 'is-ticked');
   els.percent.textContent = pctText;
   renderModelBadge(metrics);
@@ -202,6 +228,7 @@ export function resetCtxUI() {
   renderModelBadge(null);
   renderCostLine(null);
   renderCopyPath(null);
+  renderEstimateTitle(null);
 }
 
 /** The two text lines under the bar (warning + token counts) - i18n-aware. */
@@ -210,10 +237,12 @@ function renderCtxText() {
   const pct = Math.max(0, Math.min(1, lastCtxMetrics.percent));
   els.warn.textContent = pct >= CTX_WARN_HIGH ? t('ctx.warn.compact') : '';
   const k = (n) => `${Math.round(n / 1000)}k`;
-  els.tokens.textContent = t('ctx.tokens', {
+  els.tokens.textContent = t(ctxTokensKey(lastCtxMetrics), {
     used: k(lastCtxMetrics.tokens),
     limit: k(lastCtxMetrics.limit),
   });
+  // Here rather than in applyCtxMetrics: a language switch re-runs this.
+  renderEstimateTitle(lastCtxMetrics);
 }
 
 // ---- Subscriptions that maintain STATE stay at module scope ----------------

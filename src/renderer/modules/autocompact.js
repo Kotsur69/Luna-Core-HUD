@@ -130,6 +130,19 @@ export function canAutoCompactFire({ armed, mounted, ledDead, sinceLastFireMs })
   return sinceLastFireMs >= AUTO_COMPACT_COOLDOWN_MS;
 }
 
+/**
+ * The context fill a live reading gives auto-compact, or null to ignore it.
+ * An ESTIMATED reading (an agy tab, src/agytranscript.js) never drives an
+ * injection: typing /compact on a guess is exactly the surprise spend §A2
+ * rules out.
+ * @param {{percent?: number, estimated?: boolean}|null|undefined} metrics
+ * @returns {number|null} 0..1
+ */
+export function autoCompactReading(metrics) {
+  if (!metrics || typeof metrics.percent !== 'number' || metrics.estimated === true) return null;
+  return Math.max(0, Math.min(1, metrics.percent));
+}
+
 /** Clamp a stored or typed mode to one of the three known values. */
 export function normalizeMode(mode) {
   return MODES.includes(mode) ? mode : 'context';
@@ -326,8 +339,8 @@ defineWidget({
     });
 
     const offContext = onActiveContext((metrics) => {
-      if (!metrics || typeof metrics.percent !== 'number') return;
-      onContext(Math.max(0, Math.min(1, metrics.percent)));
+      const pct = autoCompactReading(metrics);
+      if (pct !== null) onContext(pct);
     });
     const offLang = onLangChange(renderAutoCompact);
 

@@ -66,15 +66,19 @@ let sparkBuf = []; // [{ t, tokens, percent, limit }]
 export function pushSample(buf, metrics) {
   const now = Date.now();
   const prev = buf[buf.length - 1];
+  // An estimated reading (agy tab) makes the rate an estimate too - renderBurn labels it.
+  const estimated = metrics.estimated === true;
   if (prev && prev.tokens === metrics.tokens) {
     prev.t = now;
     prev.limit = metrics.limit;
+    prev.estimated = estimated;
   } else {
     buf.push({
       t: now,
       tokens: metrics.tokens,
       percent: metrics.percent,
       limit: metrics.limit,
+      estimated,
     });
     if (buf.length > SPARK_MAX) buf.shift();
   }
@@ -173,6 +177,7 @@ function renderBurn() {
   if (dtMin <= 0) { ctxBurn.textContent = '—'; return; }
 
   const rate = (last.tokens - first.tokens) / dtMin; // tokens / min
+  const approx = last.estimated === true ? '≈ ' : '';
   if (rate > 5) {
     const min = etaMinutes(last, rate);
     // null = the limit is not known yet: show the rate and claim nothing. The
@@ -183,9 +188,9 @@ function renderBurn() {
     } else if (min !== null) {
       eta = t('burn.eta.to85', { min: min < 1 ? '<1' : Math.round(min) });
     }
-    ctxBurn.textContent = t('burn.up', { rate: fmtRate(rate), eta });
+    ctxBurn.textContent = approx + t('burn.up', { rate: fmtRate(rate), eta });
   } else if (rate < -5) {
-    ctxBurn.textContent = t('burn.down', { rate: fmtRate(rate) });
+    ctxBurn.textContent = approx + t('burn.down', { rate: fmtRate(rate) });
   } else {
     ctxBurn.textContent = t('burn.stable');
   }

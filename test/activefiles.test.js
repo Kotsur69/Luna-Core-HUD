@@ -442,3 +442,46 @@ test('maximize / restore strings exist in pl and en', () => {
     assert.ok(src.includes(`'${key}': '${text}'`), `${key} -> ${text} missing`);
   }
 });
+
+// ---- agy tabs (src/agytranscript.js): same rows, same git attribution --------------
+
+// fs / path are required further up this file.
+const { parseSteps, AgyTranscriptState, normalizeAgyPath } = require('../src/agytranscript');
+const { SessionAttribution } = require('../src/gitattribution');
+
+const AGY_CWD = process.platform === 'win32' ? 'C:\\repo' : '/repo';
+const agyEvents = () => {
+  const text = fs.readFileSync(path.join(__dirname, 'fixtures', 'agy-transcript.assumed.jsonl'), 'utf8');
+  return new AgyTranscriptState({ cwd: AGY_CWD }).apply(parseSteps(text).steps);
+};
+
+test('agy tool events build Active-files rows exactly like Claude ones', () => {
+  const map = new Map();
+  for (const ev of agyEvents()) applyFileEvent(map, ev);
+  const appJs = normalizeAgyPath('C:/repo/src/app.js', AGY_CWD);
+  const helperJs = normalizeAgyPath('C:/repo/src/helper.js', AGY_CWD);
+  assert.deepEqual([...map.keys()].sort(), [appJs, helperJs].sort(), 'no row for the Grep / Shell calls');
+
+  const app = map.get(appJs);
+  assert.deepEqual([app.touches, app.added, app.removed, app.reads, app.inProgress], [2, 2, 1, 1, false]);
+  assert.ok(app.contextTokens > 0, 'the read is charged to the context share');
+  const helper = map.get(helperJs);
+  assert.deepEqual([helper.touches, helper.added, helper.removed, helper.inProgress], [1, 0, 0, false]);
+  // The transcript's touches win over git's second opinion, as for Claude rows.
+  applyGitStat(map, { file: appJs, added: 40, removed: 40 });
+  assert.equal(map.get(appJs).added, 2);
+});
+
+test('an agy tab claims the git changes it makes while its tools run (not gated on Claude)', () => {
+  const now = 1_000_000;
+  const changed = [{ file: path.join(AGY_CWD, 'src', 'out.txt'), added: 3, removed: 0 }];
+  const idle = new SessionAttribution();
+  assert.deepEqual(idle.attribute(changed, { now, foreignEdited: new Set() }), [], 'no activity, no claim');
+
+  const agyTab = new SessionAttribution();
+  agyTab.noteToolEvents(agyEvents(), now);
+  assert.deepEqual(agyTab.attribute(changed, { now: now + 1000, foreignEdited: new Set() }), changed);
+  // Its replace edit is exact, so another tab never claims that file.
+  const appJs = normalizeAgyPath('C:/repo/src/app.js', AGY_CWD);
+  assert.ok([...agyTab.edited].some((key) => key === (process.platform === 'win32' ? appJs.toLowerCase() : appJs)));
+});
