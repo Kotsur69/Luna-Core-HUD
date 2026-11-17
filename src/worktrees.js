@@ -71,7 +71,6 @@ const NPM_CI_TIMEOUT_MS = 10 * 60 * 1000;
 const SHELL_MAX_BUFFER = 8 * 1024 * 1024;
 // Files whose change between the old and new local HEAD means a fresh install.
 const DEP_FILES = ['package.json', 'package-lock.json'];
-const NODE_MODULES = 'node_modules';
 
 /**
  * Turns a free-form tab name into a safe folder + branch name: lower-case
@@ -407,9 +406,17 @@ function linksIn(dir, fsImpl) {
 }
 
 /**
- * Unlinks every dependency junction / symlink under `root` (see the header):
- * git would otherwise delete THROUGH it and empty the target.
- * @returns {{ok:true, unlinked:string[]} | {ok:false, detail:string}}
+ * THE helper every `git worktree remove` caller runs first (removeWorktree
+ * here, lunasworkCheckpoint's throwaway revert worktree): unlinks every
+ * dependency junction / symlink under `root` (see the header) - the link only,
+ * with a non-recursive unlink / rmdir, never what it points at. git would
+ * otherwise delete THROUGH it and empty the target (the main checkout's
+ * node_modules). A real node_modules folder is the worktree's own and is left
+ * for git to remove with the rest. Stops at the first link that will not go:
+ * the caller must then not run git at all.
+ * @param {string} root the worktree's top folder
+ * @param {typeof fs} [fsImpl]
+ * @returns {{ok:true, unlinked:string[]} | {ok:false, detail:string, unlinked:string[]}}
  */
 function unlinkDependencyLinks(root, fsImpl = plainFs()) {
   const unlinked = [];
@@ -420,59 +427,11 @@ function unlinkDependencyLinks(root, fsImpl = plainFs()) {
         unlinked.push(link);
       } catch (err) {
         const why = err && err.code ? err.code : err instanceof Error ? err.message : String(err);
-        return { ok: false, detail: `cannot unlink ${link} (${why}); git worktree remove was not run` };
+        return { ok: false, detail: `cannot unlink ${link} (${why}); git worktree remove was not run`, unlinked };
       }
     }
   }
   return { ok: true, unlinked };
-}
-
-/**
- * Unlinks `node_modules` links (Windows junctions, symlinks) in a worktree's
- * top folder and its direct subfolders: the link only, with a non-recursive
- * unlink / rmdir, never what it points at. `git worktree remove` would
- * otherwise walk into a junction and empty the real node_modules (the main
- * checkout's). A real node_modules folder is the worktree's own and is left
- * for git to remove with the rest.
- * @param {string} root the worktree's top folder
- * @param {typeof fs} [fsImpl]
- * @returns {string[]} the unlinked paths
- */
-function unlinkNodeModulesLinks(root, fsImpl = plainFs()) {
-  const candidates = [path.join(root, NODE_MODULES)];
-  try {
-    for (const entry of fsImpl.readdirSync(root, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name !== NODE_MODULES && entry.name !== '.git') {
-        candidates.push(path.join(root, entry.name, NODE_MODULES));
-      }
-    }
-  } catch {
-    /* an unreadable root: only its own node_modules is checked */
-  }
-  const unlinked = [];
-  for (const link of candidates) {
-    let stat;
-    try {
-      stat = fsImpl.lstatSync(link);
-    } catch {
-      continue;
-    }
-    if (!stat.isSymbolicLink()) continue;
-    try {
-      fsImpl.unlinkSync(link);
-    } catch {
-      try {
-        // A directory junction some Windows setups refuse to unlink: rmdir
-        // without `recursive` removes the reparse point only.
-        fsImpl.rmdirSync(link);
-      } catch (err) {
-        console.error('[worktrees] could not unlink', link, err && err.message);
-        continue;
-      }
-    }
-    unlinked.push(link);
-  }
-  return unlinked;
 }
 
 /**
@@ -734,7 +693,6 @@ module.exports = {
   gitDetail,
   GIT_TIMEOUT_MS,
   REMOVE_TIMEOUT_MS,
-  unlinkNodeModulesLinks,
   listWorktrees,
   pruneWorktrees,
   deleteMergedBranch,

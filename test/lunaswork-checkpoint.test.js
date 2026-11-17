@@ -336,6 +336,53 @@ test('a rejected push leaves origin as it was and makes no card', async (t) => {
   assert.equal(git(origin, 'tag', '--list', 'luna-work/lwrun1/iter-2-rolled-back'), '', 'no rolled-back tag for a rollback that did not happen');
 });
 
+const junctionTest = process.platform === 'win32' ? test : test.skip;
+
+junctionTest('the temporary revert worktree: a node_modules junction is unlinked first, its target keeps every file', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  mergePackage(repo, 'good');
+  await createCheckpoints({ git: recorder(), tmpDir: () => root }).tagIteration({ repoPath: repo, runId: RUN, iteration: 1 });
+  mergePackage(repo, 'bad');
+  const broken = originMain(origin);
+  // node_modules ignored, as in every real project: an untracked one makes git
+  // refuse the removal, an ignored one is deleted - through the junction.
+  fs.appendFileSync(path.join(repo, '.git', 'info', 'exclude'), '\nnode_modules\n');
+  // The trap: the throwaway worktree's node_modules junctioned to a real one.
+  const target = path.join(root, 'main-node_modules');
+  fs.mkdirSync(path.join(target, 'left-pad'), { recursive: true });
+  fs.writeFileSync(path.join(target, 'left-pad', 'index.js'), 'module.exports = 1;');
+  const links = [];
+  const run = async (cwd, args) => {
+    issued.push([...args]);
+    if (args[0] === 'push' && args.includes('HEAD:refs/heads/main')) return { ok: false, out: '', err: 'rejected (fetch first)' };
+    const res = await execGit(cwd, args);
+    if (res.ok && args[0] === 'worktree' && args[1] === 'add') {
+      const link = path.join(args[args.length - 2], 'node_modules');
+      fs.symlinkSync(target, link, 'junction');
+      links.push(link);
+    }
+    return res;
+  };
+  t.after(() => {
+    // Never delete through a link left behind by a failed run.
+    for (const link of links) {
+      try {
+        fs.unlinkSync(link);
+      } catch {
+        /* already gone */
+      }
+    }
+  });
+  const res = await createCheckpoints({ git: run, tmpDir: () => root }).rollback({ repoPath: repo, runId: RUN, iteration: 2, toIteration: 1, reason: 'scoreDrop', todoStore: memoryStore() });
+  assert.equal(res.error, 'pushFailed', JSON.stringify(res));
+  assert.equal(originMain(origin), broken);
+  assert.equal(links.length, 1, 'the junction was planted');
+  assert.equal(fs.existsSync(links[0]), false, 'the worktree (and its link) is gone');
+  assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1);
+  assert.deepEqual(fs.readdirSync(target), ['left-pad']);
+  assert.equal(fs.readFileSync(path.join(target, 'left-pad', 'index.js'), 'utf8'), 'module.exports = 1;');
+});
+
 test('no good tag: nothing is reverted', async (t) => {
   const { root, origin, repo } = makeRepo(t);
   mergePackage(repo, 'x');
