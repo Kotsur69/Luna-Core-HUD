@@ -39,6 +39,8 @@ const rec = (id, over = {}) => ({
   supersedes: [],
   links: [],
   body: `Body of ${id}.`,
+  // Above the usefulness floor (MIN_AUTO_USEFULNESS), so only the rule under test decides.
+  usefulness: 70,
   ...over,
 });
 
@@ -229,6 +231,119 @@ test('a broken switch file means every switch is off and the candidate waits', a
 
   assert.equal(scan(s.dir).records[0][1].confidence, 'observed');
   assert.ok(quiet.mock.callCount() >= 1);
+});
+
+// ---- the usefulness floor -------------------------------------------------------------
+
+test('decide: a switched-on candidate under the usefulness floor, or without a score, is held; at the floor it is accepted', () => {
+  assert.equal(auto.MIN_AUTO_USEFULNESS, 60);
+  const ctx = { enabled: ['gotcha'], stats: auto.typeStats(decisions(20, 0), NOW), pending: [] };
+
+  assert.deepEqual(auto.decide(rec('x', { usefulness: 59 }), ctx), { accept: false, reason: 'low-usefulness' });
+  assert.deepEqual(auto.decide(rec('x', { usefulness: 60 }), ctx), { accept: true, reason: 'auto' });
+  assert.deepEqual(auto.decide(rec('x', { usefulness: 85 }), ctx), { accept: true, reason: 'auto' });
+  for (const usefulness of [undefined, null, 'high', Number.NaN]) {
+    assert.deepEqual(auto.decide(rec('x', { usefulness }), ctx), { accept: false, reason: 'no-usefulness' }, String(usefulness));
+  }
+  // The floor comes last: another rule's reason wins, so a hold means only the score stopped it.
+  assert.equal(auto.decide(rec('x', { usefulness: 10, supersedes: ['old'] }), ctx).reason, 'supersedes');
+  assert.equal(auto.decide(rec('x', { usefulness: 10 }), { ...ctx, enabled: [] }).reason, 'off');
+  // A floor passed in the context replaces the default.
+  assert.equal(auto.decide(rec('x', { usefulness: 70 }), { ...ctx, minUsefulness: 80 }).reason, 'low-usefulness');
+  // An invalid floor falls back to the default instead of opening the gate.
+  for (const minUsefulness of [null, Number.NaN, -5, 101, '0']) {
+    assert.equal(auto.decide(rec('x', { usefulness: 59 }), { ...ctx, minUsefulness }).reason, 'low-usefulness', String(minUsefulness));
+  }
+  // The score switch obeys a floor above its own bar too.
+  const scoreCtx = { ...ctx, enabled: [], scoreOn: true, scoreStat: auto.scoreStats([], NOW), minUsefulness: 95 };
+  assert.equal(auto.decide(rec('x', { usefulness: 92 }), scoreCtx).reason, 'low-usefulness');
+});
+
+test('a switched-on candidate under the floor stays in the inbox and its hold is logged; one above it is accepted', async (t) => {
+  const s = runCapture(t, {
+    candidates: [
+      candidate('Barely useful note about tabs', { usefulness: 55 }),
+      candidate('Clearly useful note about the asar lock', { usefulness: 85 }),
+      candidate('A note the model did not score', { usefulness: undefined }),
+    ],
+  });
+
+  assert.equal((await s.go()).saved, 3);
+
+  const byTitle = Object.fromEntries(scan(s.dir).records.map(([key, r]) => [r.title, { key, r }]));
+  const low = byTitle['Barely useful note about tabs'];
+  const high = byTitle['Clearly useful note about the asar lock'];
+  const none = byTitle['A note the model did not score'];
+  assert.equal(low.r.confidence, 'observed');
+  assert.equal(auto.isAutoAccepted(low.r), false);
+  assert.equal(high.r.confidence, 'confirmed');
+  assert.equal(auto.isAutoAccepted(high.r), true);
+  assert.equal(none.r.confidence, 'observed');
+  assert.deepEqual(listInbox(s.dir).items.map((i) => i.title).sort(), ['A note the model did not score', 'Barely useful note about tabs']);
+
+  const lines = (key) => s.log.read().filter((e) => e.at === NOW && e.key === key).map(({ at, ...e }) => e);
+  assert.deepEqual(lines(low.key), [
+    { ev: 'proposed', key: low.key, type: 'gotcha', usefulness: 55 },
+    { ev: 'held', key: low.key, type: 'gotcha', reason: 'low-usefulness', usefulness: 55 },
+  ]);
+  assert.deepEqual(lines(none.key).map((e) => [e.ev, e.reason]), [['proposed', undefined], ['held', 'no-usefulness']]);
+  assert.deepEqual(lines(high.key).map((e) => e.ev), ['proposed', 'auto-accepted']);
+});
+
+test('a candidate whose type is off is not logged as held, whatever its score', async (t) => {
+  const s = runCapture(t, { on: [], candidates: [candidate('Low and switched off', { usefulness: 52 })] });
+  await s.go();
+  assert.equal(s.log.read().filter((e) => e.ev === 'held').length, 0);
+});
+
+test('the usefulness floor is configurable per PC, validated, kept across switch changes and never synced', (t) => {
+  const file = path.join(tmp(t, 'luna-auto-floor-'), auto.SETTINGS_FILE);
+  assert.equal(auto.readMinUsefulness(file), auto.MIN_AUTO_USEFULNESS, 'no file');
+
+  fs.writeFileSync(file, JSON.stringify({ types: ['gotcha'], score: false, minUsefulness: 75 }));
+  assert.equal(auto.readMinUsefulness(file), 75);
+  auto.setAuto(file, 'how-to', true);
+  auto.setScoreAuto(file, true);
+  const provider = auto.createAutoAcceptProvider(file);
+  provider.write([['memory-auto:gotcha', { on: true }]]);
+  assert.equal(auto.readMinUsefulness(file), 75, 'kept by setAuto, setScoreAuto and the sync');
+  assert.deepEqual(provider.read(NOW).units, [['memory-auto:gotcha', { on: true }]], 'the floor is no sync unit');
+
+  const quiet = t.mock.method(console, 'error', () => {});
+  for (const bad of [-1, 101, 60.5, '70', null, true]) {
+    fs.writeFileSync(file, JSON.stringify({ types: [], score: false, minUsefulness: bad }));
+    assert.equal(auto.readMinUsefulness(file), auto.MIN_AUTO_USEFULNESS, `invalid ${JSON.stringify(bad)}`);
+  }
+  assert.equal(quiet.mock.callCount(), 6, 'each invalid value is reported');
+  fs.writeFileSync(file, '{not json');
+  assert.equal(auto.readMinUsefulness(file), auto.MIN_AUTO_USEFULNESS, 'broken file');
+});
+
+test('a run landing honours a configured floor', async (t) => {
+  const s = runCapture(t, { candidates: [candidate('Useful but under a strict floor', { usefulness: 70 })] });
+  const file = memoryPaths(s.configDir).autoAccept;
+  fs.writeFileSync(file, JSON.stringify({ types: ['gotcha'], score: false, minUsefulness: 80 }));
+
+  await s.go();
+
+  assert.equal(scan(s.dir).records[0][1].confidence, 'observed');
+  assert.deepEqual(s.log.read().filter((e) => e.ev === 'held').map((e) => [e.reason, e.usefulness]), [['low-usefulness', 70]]);
+});
+
+test('the log keeps a held line, rebuilt field by field', () => {
+  const key = `${PROJECT}/x`;
+  assert.deepEqual(cleanEvent({ at: 1, ev: 'held', key, type: 'gotcha', reason: 'low-usefulness', usefulness: 40, extra: 1 }), {
+    at: 1,
+    ev: 'held',
+    key,
+    type: 'gotcha',
+    reason: 'low-usefulness',
+    usefulness: 40,
+  });
+  assert.deepEqual(auto.heldEvent(rec('x', { usefulness: undefined }), 'no-usefulness'), { ev: 'held', key, type: 'gotcha', reason: 'no-usefulness' });
+  for (const bad of [{ at: 1, ev: 'held', key, type: 'gotcha' }, { at: 1, ev: 'held', key: 'nope', type: 'gotcha', reason: 'x' }, { at: 1, ev: 'held', key, reason: 'x' }]) {
+    assert.equal(cleanEvent(bad), null);
+  }
 });
 
 // ---- the undo window ----------------------------------------------------------------
@@ -488,7 +603,7 @@ test('decide: a 95 with the score switch on is accepted under the per-type rules
   assert.equal(auto.decide(scoredRec('x', 90), ctx).accept, true, '90 is the bar');
   assert.equal(auto.decide(scoredRec('x', 89), ctx).reason, 'off');
   assert.equal(auto.decide(scoredRec('x', 70), ctx).reason, 'off');
-  assert.equal(auto.decide(rec('x'), ctx).reason, 'off', 'no score, no auto-save');
+  assert.equal(auto.decide(rec('x', { usefulness: undefined }), ctx).reason, 'off', 'no score, no auto-save');
   assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, scoreOn: false }).reason, 'off');
   // The per-type rules still hold.
   assert.equal(auto.decide(scoredRec('x', 95), { ...ctx, stats: auto.typeStats(decisions(10, 0), NOW) }).reason, 'no-evidence');
