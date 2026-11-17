@@ -27,6 +27,19 @@
 // --strict-mcp-config, which drops the claude.ai connectors too: much
 // cheaper, but only a job with no tools may use it.
 //
+// ANTIGRAVITY (`agy`, model AGY_MODEL)
+// ------------------------------------
+// A lean job without tools (calendar parse, News summary, a trending README,
+// the weekly review) may run on the Antigravity CLI instead: one `agy --print`
+// in the OS temp dir, prompt on stdin, in the agy profile's env (agyEnv - never
+// the Claude env). Every other job is refused with 'agy-needs-claude': agy has
+// no claude.ai Gmail / Calendar connectors and no tool allow-list, so the
+// argv boundary above cannot be built for it. Known difference on agy: "no
+// tools" is not enforced by flags - agy runs without `--mode accept-edits`
+// (an edit needs an approval nobody gives) but keeps its own read tools and
+// the MCP servers in ~/.gemini/config/mcp_config.json. The answer is parsed
+// and validated by the caller exactly like a Claude answer.
+//
 // Same "always resolves, never rejects" shape as runAsk(): every failure is a
 // typed { ok:false, reason }.
 // ============================================================================
@@ -36,6 +49,8 @@
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
+const { AGY_MODEL } = require('./claudeModels');
+const { runAgyPrint } = require('./orchestraAgy');
 
 /** Every Gmail connector tool, so a job can deny all but the ones it uses. */
 const GMAIL_TOOLS = [
@@ -55,11 +70,29 @@ const CALENDAR_TOOLS = [
 
 const ALL_CONNECTOR_TOOLS = [...GMAIL_TOOLS, ...CALENDAR_TOOLS];
 
-/** Models the user can pick for Mission Control jobs (Settings -> missionModel). */
+/**
+ * The Claude models a Mission Control job can run on. Alone they are the
+ * choice for a job that always needs the claude.ai connectors (the brief).
+ */
 const MISSION_MODELS = ['haiku', 'sonnet', 'opus'];
+/**
+ * Every model a picker may offer when the jobs behind it can be lean
+ * (Settings -> missionModel, the weekly review): the Claude models plus agy.
+ * runJob runs only a lean, tool-less job on agy and refuses any other.
+ */
+const JOB_MODELS = Object.freeze([...MISSION_MODELS, AGY_MODEL]);
 const DEFAULT_MISSION_MODEL = 'haiku';
 
 const DEFAULT_TIMEOUT_MS = 120000;
+
+/**
+ * Appended to every agy job's prompt. A request, not a boundary (agy has no
+ * flag that removes its tools), but the jobs' data blocks are untrusted text.
+ */
+const AGY_NO_TOOLS = 'Use no tools: do not read or write files, run commands or call any MCP server. Answer only from the text above.';
+
+/** runAgyPrint's failure -> the job's reason (the renderer maps reasons to text). */
+const AGY_REASONS = Object.freeze({ noAgy: 'no-agy', timeout: 'timeout', limit: 'agy-limit', failed: 'agy-failed' });
 
 /**
  * The built-in tools of a `readOnly` job (the memory check, src/memorycheck.js):
@@ -137,15 +170,45 @@ function parseLooseJson(text) {
 }
 
 /**
+ * One job on the Antigravity CLI: `agy --print` in the OS temp dir, prompt on
+ * stdin, in the agy profile's env. Only a lean job without tools can run
+ * there - agy has no claude.ai connectors, no tool allow-list and no
+ * --strict-mcp-config - so any other job is refused, never run on claude
+ * instead. agy reports no cost.
+ * @param {{prompt:string, allowed?:string[], lean?:boolean, readOnly?:boolean, agyEnv?:object|null,
+ *          timeoutMs:number, exec:Function}} job
+ * @returns {Promise<{ok:true, answer:object, costUsd:null}|{ok:false, reason:string, costUsd?:null}>}
+ */
+async function runAgyJob({ prompt, allowed, lean, readOnly, agyEnv, timeoutMs, exec }) {
+  // A job that names connector tools needs them, even when it also says lean.
+  const wantsTools = Array.isArray(allowed) && allowed.length > 0;
+  if (lean !== true || readOnly || wantsTools) return { ok: false, reason: 'agy-needs-claude' };
+  if (!agyEnv || typeof agyEnv !== 'object' || Array.isArray(agyEnv)) return { ok: false, reason: 'no-agy-profile' };
+  const text = `${String(prompt || '')}\n\n${AGY_NO_TOOLS}`;
+  const res = await runAgyPrint({ cwd: os.tmpdir(), env: agyEnv, prompt: text, timeout: timeoutMs, execImpl: exec });
+  if (!res.ok) {
+    console.error('[mission] agy job failed:', res.error, res.detail || '');
+    return { ok: false, reason: AGY_REASONS[res.error] || 'agy-failed', costUsd: null };
+  }
+  const answer = parseLooseJson(res.stdout);
+  return answer ? { ok: true, answer, costUsd: null } : { ok: false, reason: 'bad-json', costUsd: null };
+}
+
+/**
  * Runs one job. Resolves { ok:true, answer, costUsd } or
  * { ok:false, reason:'no-claude'|'timeout'|'generic'|'bad-json'|'cli-error' }.
  * cwd is the OS temp dir so no project CLAUDE.md is pulled into the context,
  * except for a `readOnly` lean job: it runs in `cwd` (an absolute folder, the
  * project it reads), which is also the only folder its Read tool may open.
+ * model 'agy' (AGY_MODEL) runs the job on agy in `agyEnv` (the agy profile's
+ * env; `env` is never used for agy) - see runAgyJob; its extra reasons are
+ * 'agy-needs-claude' (not a lean, tool-less job), 'no-agy-profile', 'no-agy',
+ * 'agy-limit' and 'agy-failed'.
  * @param {{prompt:string, model?:string, allowed?:string[], lean?:boolean, readOnly?:boolean, cwd?:string,
- *          env:Record<string,string>, timeoutMs?:number, exec?:Function}} job
+ *          env:Record<string,string>, agyEnv?:Record<string,string>|null, timeoutMs?:number, exec?:Function}} job
  */
-function runJob({ prompt, model, allowed, lean, readOnly = false, cwd = null, env, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile, stdin = false }) {
+function runJob({ prompt, model, allowed, lean, readOnly = false, cwd = null, env, agyEnv = null, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile, stdin = false }) {
+  if (model === AGY_MODEL) return runAgyJob({ prompt, allowed, lean, readOnly, agyEnv, timeoutMs, exec });
   return new Promise((resolve) => {
     // A read-only job without a real project folder would read the temp dir: refused instead.
     if (readOnly && !(lean && typeof cwd === 'string' && path.isAbsolute(cwd))) return resolve({ ok: false, reason: 'bad-cwd' });
@@ -192,6 +255,7 @@ module.exports = {
   GMAIL_TOOLS,
   CALENDAR_TOOLS,
   MISSION_MODELS,
+  JOB_MODELS,
   DEFAULT_MISSION_MODEL,
   READ_ONLY_TOOLS,
   READ_ONLY_MAX_TURNS,

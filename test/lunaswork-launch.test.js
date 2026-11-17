@@ -147,6 +147,18 @@ test('a fixed command line: the agent, schema and tools are constants; the pack 
   assert.match(call.prompt, /- pl: the same landing and pitch and store in Polish/);
 });
 
+test('roles set to agy do not move the launch agent: it is a Claude Code --agent, which agy cannot run', async (t) => {
+  const p = makeProject(t, BRIEF_APP_PL);
+  const agent = fakeAgent();
+  const allAgy = { director: 'agy', builder: 'agy', playtester: 'agy', critic: 'agy', reviewer: 'agy', researcher: 'agy' };
+  const res = await runLaunchAssets({ run: shipRun(p, { models: allAgy }), runClaude: agent.runClaude, log: () => {} });
+  assert.equal(res.ok, true);
+  const { args } = agent.calls[0];
+  assert.deepEqual(args, buildLaunchArgs({ addDirs: [p.evidenceDir] }), 'the same fixed command line');
+  assert.notEqual(args[args.indexOf('--model') + 1], 'agy');
+  assert.equal(args[args.indexOf('--agent') + 1], LAUNCH_AGENT);
+});
+
 test('SHIP writes marketing/: landing, pitch, store listing, Polish versions, curated screenshots', async (t) => {
   const p = makeProject(t, BRIEF_APP_PL);
   const res = await runLaunchAssets({ run: shipRun(p), runClaude: fakeAgent().runClaude, log: () => {} });

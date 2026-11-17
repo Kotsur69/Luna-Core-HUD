@@ -717,6 +717,157 @@ test('freeFallback without a free profile waits for the reset after all', async 
   assert.equal(h.ctl.status().waitUntil, START_CLOCK + 2 * HOUR);
 });
 
+// ---- agyFallback: the Antigravity CLI during a Claude usage limit -------------------
+
+const AGY_ON = { models: {}, freeFallback: false, agyFallback: true, projects: {} };
+const agyHarness = (opts = {}) => harness({ settings: AGY_ON, ...opts, deps: { agyReady: () => true, ...(opts.deps || {}) } });
+
+test('agyFallback: a Director limit moves the Director, the Builder and the Critic to agy until the reset', async () => {
+  const h = agyHarness();
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.equal(h.timers.length, 0, 'no wait: the step is retried on agy at once');
+  assert.deepEqual(h.calls.director.map((c) => c.models.director), ['opus', 'agy']);
+  assert.equal(h.calls.build.length, 1);
+  assert.equal(h.calls.build[0].agy, true, 'God Mode plans and works on agy');
+  assert.equal(h.calls.build[0].free, false, 'agy and the free providers never mix');
+  assert.equal(h.calls.critic[0].models.critic, 'agy');
+  assert.equal(h.calls.critic[0].models.playtester, DEFAULT_MODELS.playtester, 'the Playtester is not covered');
+  assert.equal(h.calls.playtest[0].free, false);
+  assert.match(logText(h), /switch to Antigravity \(agy\) until/);
+  assert.equal(h.ctl.status().verdict, 'ship');
+});
+
+test('agyFallback: the run status says how long it runs on agy', async () => {
+  const h = agyHarness();
+  h.next.critic.push({ ok: false, error: 'limit' }, () => {
+    // The status the panel paints while the retried Critic runs on agy.
+    h.agyStatus = h.ctl.status();
+    return shipCritic();
+  });
+  await h.start();
+  assert.equal(h.agyStatus.agyUntil, START_CLOCK + HOUR);
+  assert.equal(h.agyStatus.freeUntil, null);
+  assert.deepEqual(h.calls.critic.map((c) => c.models.critic), [DEFAULT_MODELS.critic, 'agy']);
+});
+
+test('agyFallback without an agy profile waits for the reset', async () => {
+  const h = agyHarness({ deps: { agyReady: () => false } });
+  h.next.build.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + 2 * HOUR);
+  assert.match(logText(h), /no agy profile is configured/);
+});
+
+test('agyFallback without agyReady never switches (no way to know a profile exists)', async () => {
+  const h = harness({ settings: AGY_ON });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.calls.director.length, 1);
+});
+
+test('agyFallback does not cover the Playtester or the SHIP pass: they wait', async () => {
+  const h = agyHarness();
+  h.next.playtest.push({ ok: false, error: 'limit' });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.doesNotMatch(logText(h), /Antigravity/);
+});
+
+test('agyFallback + freeFallback: the Builder goes to agy, a later Playtester limit to the free providers', async () => {
+  const h = agyHarness({ settings: { ...AGY_ON, freeFallback: true } });
+  h.next.build.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR });
+  h.next.playtest.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.deepEqual(h.calls.build.map((b) => [b.agy === true, b.free]), [[false, false], [true, false]]);
+  assert.deepEqual(h.calls.playtest.filter((c) => c.mode === 'explore').map((c) => c.free), [false, true]);
+  assert.equal(h.timers.length, 0);
+  assert.equal(h.ctl.status().verdict, 'ship');
+});
+
+test('agyFallback: an agy build that finds no agy profile waits for the Claude reset', async () => {
+  const h = agyHarness();
+  h.next.build.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR }, { ok: false, error: 'noAgyProfile' });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + 2 * HOUR);
+});
+
+test("a role set to agy that hits agy's own limit waits: the fallback never switches agy to agy", async () => {
+  const h = agyHarness({ settings: { ...AGY_ON, models: { director: 'agy' } } });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.calls.director.length, 1);
+  assert.equal(h.calls.director[0].models.director, 'agy');
+});
+
+/** A Director limit switches to agy; the retried (agy) Director call runs `after` and returns one card. */
+function agyThenChange(after) {
+  let ready = true;
+  const h = agyHarness({ deps: { agyReady: () => ready } });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] }, (o) => {
+    after(h, () => (ready = false));
+    return { ok: true, stop: false, cards: [card(1)], model: o.models.director, modelReason: 'setting' };
+  });
+  h.next.critic.push(shipCritic());
+  return h;
+}
+
+test('agyFallback: the agy profile going away mid-window returns the run to Claude at once', async () => {
+  const h = agyThenChange((_, dropProfile) => dropProfile());
+  await h.start();
+  assert.deepEqual(h.calls.director.map((c) => c.models.director), ['opus', 'agy']);
+  assert.equal(h.calls.build[0].agy, undefined, 'no agy build without a profile');
+  assert.equal(h.calls.critic[0].models.critic, DEFAULT_MODELS.critic);
+  assert.equal(h.ctl.status().agyUntil, null);
+});
+
+test('agyFallback: switching the fallback off mid-window returns the run to Claude at once', async () => {
+  const h = agyThenChange((harnessRef) => {
+    harnessRef.settings = { ...AGY_ON, agyFallback: false };
+  });
+  await h.start();
+  assert.deepEqual(h.calls.director.map((c) => c.models.director), ['opus', 'agy']);
+  assert.equal(h.calls.build[0].agy, undefined);
+  assert.equal(h.calls.critic[0].models.critic, DEFAULT_MODELS.critic);
+  assert.equal(h.ctl.status().agyUntil, null);
+});
+
+test("a Builder set to agy that hits agy's limit waits instead of retrying on agy via freeFallback", async () => {
+  const h = harness({ settings: { models: { builder: 'agy' }, freeFallback: true, projects: {} } });
+  h.next.build.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR });
+  await h.start();
+  assert.equal(h.calls.build.length, 1, 'no second agy call');
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.ctl.status().waitUntil, START_CLOCK + 2 * HOUR);
+  assert.equal(h.ctl.status().freeUntil, null);
+});
+
+test('Builder set to agy: every card carries model agy and the build runs on agy', async () => {
+  const h = harness({ settings: { models: { builder: 'agy' }, freeFallback: true, projects: {} } });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.equal(h.calls.build.length, 1);
+  assert.equal(h.calls.build[0].agy, true);
+  assert.equal(h.calls.build[0].free, false);
+  assert.ok(h.calls.build[0].cards.length > 0);
+  assert.ok(h.calls.build[0].cards.every((c) => c.model === 'agy'), 'cleanCard keeps agy (never coerced to opus)');
+  assert.deepEqual(modelEntries(h, 'builder').map((e) => e.model), h.calls.build[0].cards.map(() => 'agy'));
+});
+
+test('A Claude Builder never builds on agy', async () => {
+  const h = harness({ settings: { models: { builder: 'sonnet' }, freeFallback: false, agyFallback: true, projects: {} } });
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.equal(h.calls.build[0].agy, undefined);
+  assert.ok(h.calls.build[0].cards.every((c) => c.model === 'sonnet'));
+});
+
 // ---- account failover (deps.accountFailover, src/claudeaccounts.js) ------------------
 
 // src/lunaswork.js ACCOUNT_SWITCH_RETRY_MS (not exported): another account took over.

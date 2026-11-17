@@ -70,6 +70,41 @@ test('pickModel returns null for an unknown role', () => {
   assert.equal(rules.pickModel('janitor', rules.DEFAULT_MODELS, {}), null);
 });
 
+// ---- Antigravity (agy) as a role choice ----------------------------------------------
+
+test('MODEL_CHOICES offers agy (the shared AGY_MODEL constant) for every role', () => {
+  const { AGY_MODEL } = require('../src/claudeModels');
+  assert.equal(AGY_MODEL, 'agy');
+  assert.ok(rules.MODEL_CHOICES.includes(AGY_MODEL));
+  assert.equal(rules.ROLES.length, 6);
+  const all = Object.fromEntries(rules.ROLES.map((r) => [r, 'agy']));
+  assert.deepEqual(rules.normalizeModels(all), all);
+  for (const role of rules.ROLES) assert.deepEqual(rules.pickModel(role, all, { gate: true, size: 'L' }), { model: 'agy', reason: 'setting' }, role);
+});
+
+test('agy next to Claude choices: each role keeps its own pick', () => {
+  const models = rules.normalizeModels({ director: 'agy', builder: 'sonnet', critic: 'agy', reviewer: 'auto' });
+  assert.deepEqual(models, { ...rules.DEFAULT_MODELS, director: 'agy', builder: 'sonnet', critic: 'agy', reviewer: 'auto' });
+  assert.equal(rules.pickModel('builder', models, {}).model, 'sonnet');
+  assert.equal(rules.pickModel('playtester', models, {}).model, rules.DEFAULT_MODELS.playtester);
+});
+
+test('look-alike agy values are rejected and fall back to the defaults', () => {
+  const bad = ['AGY', 'Agy', 'agy.exe', ' agy', 'antigravity', 'gemini', 'agy;rm', ['agy'], { agy: true }, 1];
+  for (const value of bad) {
+    const models = Object.fromEntries(rules.ROLES.map((r) => [r, value]));
+    assert.deepEqual(rules.normalizeModels(models), rules.DEFAULT_MODELS, String(value));
+  }
+});
+
+test('auto never picks agy: it stays a manual choice', () => {
+  const auto = Object.fromEntries(rules.ROLES.map((r) => [r, 'auto']));
+  const ctxs = [{}, { size: 'L', risky: true }, { shipConfirm: true }, { gate: true }, { stepBack: true }];
+  for (const role of rules.ROLES) {
+    for (const ctx of ctxs) assert.notEqual(rules.pickModel(role, auto, ctx).model, 'agy', `${role} ${JSON.stringify(ctx)}`);
+  }
+});
+
 // ---- phases ---------------------------------------------------------------------
 
 test('nextPhase walks one iteration and wraps back to directing', () => {

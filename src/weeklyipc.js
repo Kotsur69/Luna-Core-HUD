@@ -20,7 +20,7 @@
 
 const { isWeek, isoWeek, ymd } = require('./lifedays');
 const { generatable } = require('./weeklyreview');
-const { MISSION_MODELS } = require('./missionrunner');
+const { JOB_MODELS } = require('./missionrunner');
 const { weeklyEmailOn } = require('./mailprefs');
 
 /** 'Email it' sends a real mail: no bursts. */
@@ -44,7 +44,8 @@ function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = 
       weeks: keys.map((k) => ({ week: k, at: s.weeks[k].at, ok: Boolean(s.weeks[k].review), costUsd: s.weeks[k].costUsd })),
       entry: picked ? s.weeks[picked] : null,
       model: s.model,
-      models: MISSION_MODELS,
+      // A lean, tool-less call: the Claude models and agy (src/missionrunner.js JOB_MODELS).
+      models: JOB_MODELS,
       current: isoWeek(ymd(now())),
       generatable: generatable(now()),
       busy: review.isBusy(),
@@ -108,8 +109,10 @@ function writeWeeklyHtml(dir, week, html) {
  * readers, the mailer, the review and its IPC. main.js only calls this and
  * then review.start().
  * @param {{ipcMain:object, ledgerRange:Function, github:object|null, body:()=>Promise<object|null>,
- *   projectNames:()=>Map<string,string>, getEnv:()=>object, sender:object, prefs:object,
- *   onResume?:(fn:Function)=>void, reportDir?:()=>string|null}} deps  reportDir: where <week>.html goes
+ *   projectNames:()=>Map<string,string>, getEnv:()=>object, getAgyEnv?:()=>object|null,
+ *   sender:object, prefs:object,
+ *   onResume?:(fn:Function)=>void, reportDir?:()=>string|null}} deps  reportDir: where <week>.html goes;
+ *   getAgyEnv: the agy profile's env (null = none) for a review on model 'agy'
  */
 function setupWeeklyReview(deps) {
   const { createWeeklyStore, createWeeklyReview } = require('./weeklyreview');
@@ -135,39 +138,7 @@ function setupWeeklyReview(deps) {
     collect: collect.collect,
     run: runJob,
     getEnv: deps.getEnv,
-    store,
-    mailer: mail,
-    onResume: deps.onResume,
-    writeHtml: deps.reportDir ? (week, html) => writeWeeklyHtml(deps.reportDir(), week, html) : null,
-  });
-  registerWeeklyIpc({ ipcMain: deps.ipcMain, review, store, mail, sender: deps.sender, prefs: deps.prefs });
-  return review;
-}
-
-module.exports = { registerWeeklyIpc, setupWeeklyReview };function setupWeeklyReview(deps) {
-  const { createWeeklyStore, createWeeklyReview } = require('./weeklyreview');
-  const { createWeeklyCollect } = require('./weeklycollect');
-  const { createWeeklyMail } = require('./weeklymail');
-  const { runJob } = require('./missionrunner');
-  const store = createWeeklyStore();
-  const collect = createWeeklyCollect({
-    ledgerRange: deps.ledgerRange,
-    listRepos: () => require('./gitstation').loadRepoList().repos,
-    readTodoStore: () => require('./todo').readStore(),
-    projectNames: deps.projectNames,
-    github: deps.github,
-    loadGoals: () => require('./lifegoals').loadGoals(),
-    loadBudget: () => require('./lifebudget').loadBudget(),
-    body: deps.body,
-    loadCheckin: () => require('./lifecheckin').loadCheckin(),
-    loadHabits: () => require('./lifehabits').loadHabits(),
-    loadSeries: () => require('./lifeseries').loadSeries(),
-  });
-  const mail = createWeeklyMail({ sender: deps.sender, prefs: deps.prefs, store });
-  const review = createWeeklyReview({
-    collect: collect.collect,
-    run: runJob,
-    getEnv: deps.getEnv,
+    getAgyEnv: typeof deps.getAgyEnv === 'function' ? deps.getAgyEnv : () => null,
     store,
     mailer: mail,
     onResume: deps.onResume,

@@ -23,6 +23,7 @@
 
 const { parseRemote } = require('./hostrepos');
 const { buildNewsPrompt, parseNewsSummary, newsSnapshot } = require('./missionnews');
+const { AGY_MODEL } = require('./claudeModels');
 
 const NEWS_TIMEOUT_MS = 180000;
 const LANGS = ['pl', 'en'];
@@ -51,6 +52,7 @@ const fullSelection = (saved) => ({
  *   loadNews: () => object,                   missionnewsstore.loadNews
  *   runJob: Function,                         missionrunner.runJob
  *   model: () => string, env: () => object, lang?: () => string,
+ *   agyEnv?: () => object|null,               the agy profile's env, asked only when model() is agy
  *   snapshots: () => ({put: Function}|null),  the cloud's snapshots
  *   repoDirs: () => string[],                 the git station's repos
  *   fetchDir: (dir: string) => Promise<{ok: boolean}>,
@@ -70,7 +72,10 @@ function createHostActions(deps) {
     const sections = await deps.news.fetchSections(saved, fullSelection(saved));
     if (!sections.some((s) => s.entries.length)) return { status: 'empty', items: 0 };
     const lang = LANGS.includes(deps.lang && deps.lang()) ? deps.lang() : 'pl';
-    const res = await deps.runJob({ prompt: buildNewsPrompt(sections, lang), model: deps.model(), env: deps.env(), timeoutMs: NEWS_TIMEOUT_MS, lean: true });
+    const model = deps.model();
+    // The pref may be agy: the job then runs in the agy profile's env (none: runJob refuses).
+    const agyEnv = model === AGY_MODEL && typeof deps.agyEnv === 'function' ? deps.agyEnv() : null;
+    const res = await deps.runJob({ prompt: buildNewsPrompt(sections, lang), model, env: deps.env(), agyEnv, timeoutMs: NEWS_TIMEOUT_MS, lean: true });
     if (!res.ok) throw new Error(`news job: ${res.reason}`);
     const { briefing, summaries } = parseNewsSummary(res.answer, sections);
     const snap = newsSnapshot({ briefing, sections, summaries, at: now(), lang });

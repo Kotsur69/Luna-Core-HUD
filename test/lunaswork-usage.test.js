@@ -163,6 +163,22 @@ test('meter.runner records the usage of a runClaude result and passes the result
   assert.deepEqual(meter.drain(), [], 'drain clears');
 });
 
+test('a role call answered by agy books no Claude usage: agy reports no tokens and no cost', async () => {
+  const { agyEnvelope } = require('../src/agyexec');
+  const stdout = agyEnvelope('{"verdict":"continue"}');
+  assert.equal(usageFromStdout(stdout), null);
+  const meter = createUsageMeter();
+  const run = meter.runner('critic', async () => ({ stdout }));
+  const res = await run({ args: ['-p', '--model', 'agy'], prompt: 'p' });
+  assert.equal(res.stdout, stdout, 'the answer passes through unchanged');
+  assert.deepEqual(meter.drain(), [], 'nothing booked against the Claude ledger');
+  // The Playtester's execFile meter books only the claude binary, never agy.
+  const { AGY_BIN } = require('../src/orchestraAgy');
+  const exec = meter.exec('playtester', (file, args, options, cb) => cb(null, envelope(USAGE), ''));
+  await new Promise((resolve) => exec(AGY_BIN, [], {}, resolve));
+  assert.deepEqual(meter.drain(), []);
+});
+
 test('meter.exec records only claude calls of an execFile-style function', async () => {
   const meter = createUsageMeter();
   const fakeExec = (file, _args, _opts, cb) => setImmediate(() => cb(null, file === 'claude' ? envelope(USAGE, 1) : envelope(USAGE, 9), ''));

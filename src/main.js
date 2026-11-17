@@ -1421,6 +1421,8 @@ const lunasworkBuilder = createGodModeBuilder({
   profileId: () => activeProfileId,
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),
+  // An agy build (Builder set to agy, or the agy fallback) plans in this env (src/agyprofile.js).
+  agyEnv: () => lunasworkAgyEnv(),
   // Per-project tool kit of the build's workers (src/lunasworkToolkit.js).
   toolsFor: createLunasworkToolsFor({ readSettings: () => readLunasworkSettings(), dir: userDir, log: (line) => console.info(line) }),
   log: (line) => console.info(line),
@@ -3437,10 +3439,12 @@ function registerIpc() {
   // profile env, same reason as /ask's default: a tab's local-model profile
   // must never leak into a job that can trash mail. The model comes from the
   // missionModel pref (Haiku by default) and is re-checked in the runner.
+  // The pref may be agy: lean jobs then run in the agy profile's env, never this one.
   const mission = registerMissionIpc({
     ipcMain,
     getModel: () => readUiPrefs().missionModel,
     getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+    getAgyEnv: () => lunasworkAgyEnv(),
     gcal,
     // Read on the ledger's first use, after startCloud() below has run.
     cloudSnapshots: () => (cloud ? cloud.snapshots : null),
@@ -3707,6 +3711,8 @@ function registerIpc() {
     body: life.body,
     projectNames: () => new Map(projects.map((p) => [p.id, p.label])),
     getEnv: () => withClaudeOnPath(buildSessionEnv(process.env, {})),
+    // A review on the agy model runs in the agy profile's env (null = refused).
+    getAgyEnv: () => lunasworkAgyEnv(),
     sender: reportMail.sender,
     prefs: reportMail.prefs,
     onResume: (fn) => powerMonitor.on('resume', fn),

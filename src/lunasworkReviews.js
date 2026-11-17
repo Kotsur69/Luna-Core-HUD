@@ -274,6 +274,7 @@ async function runReviews(opts) {
 }
 
 module.exports = {
+  REVIEW_ROLE,
   REVIEW_TYPES,
   REVIEW_AGENTS,
   REVIEW_TOOLS,

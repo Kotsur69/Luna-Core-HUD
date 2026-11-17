@@ -38,13 +38,15 @@ const { appendResult } = require('./lunasworkLighthouse');
 const { cleanLedger } = require('./lunasworkUsage');
 const { cleanTargets, cleanVariants } = require('./lunasworkVariants');
 const { cleanGuardFields } = require('./lunasworkToolGuard');
+const { WORKER_MODEL_CHOICES } = require('./claudeModels');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
 // C11: `handed` - paused between iterations while Mati works by hand.
 const ALL_PHASES = [PREPROD, ...PHASES, HANDED, DONE];
 const FINAL_VERDICTS = ['ship', 'plateau', 'red', 'stop'];
-const BUILDER_MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
+// A card's builder model: a Claude alias, or 'agy' (the build runs on the Antigravity CLI).
+const BUILDER_MODELS = WORKER_MODEL_CHOICES;
 const MODEL_SOURCES = ['run', 'project', 'global'];
 
 const MAX_LOG = 400;
@@ -698,6 +700,8 @@ function restoreRun(raw) {
     waitUntil: phase === DONE ? null : finite(raw.waitUntil),
     waitReason: str(raw.waitReason, 40),
     limitedUntil: finite(raw.limitedUntil),
+    // On the Antigravity CLI until then (agyFallback during a Claude usage limit).
+    agyUntil: finite(raw.agyUntil),
     stopRequested: raw.stopRequested === true,
     endedAt: finite(raw.endedAt),
     endNotified: raw.endNotified === true,

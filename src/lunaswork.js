@@ -29,8 +29,10 @@
 //            is running finishes first. Also after MAX_STEP_FAILURES failed
 //            tries of one phase (stepFailed) - never an endless retry.
 //   WAIT     a usage limit: the run pauses until the reset and goes on, no
-//            cap. With freeFallback the builders and the Playtester first
-//            switch to the free providers until the reset instead.
+//            cap. With agyFallback the Director, the builders and the Critic
+//            first switch to the Antigravity CLI (agy) until the reset; with
+//            freeFallback the builders and the Playtester switch to the free
+//            providers instead (agy wins for the builders when both are on).
 //
 // The profile (start command, URL) and the self-check command are pinned in
 // the run when Mati confirms the start; later settings changes never reach it.
@@ -136,6 +138,7 @@ const {
   nextFailCounts,
   stuckOutcome,
 } = require('./lunasworkRules');
+const { AGY_MODEL } = require('./claudeModels');
 const { syncMailReplies } = require('./lunasworkMailReplies');
 const { checkList } = require('./lunasworkChecks');
 const { createLoadTest } = require('./lunasworkLoad');
@@ -233,6 +236,11 @@ const PHASE_ROLE = {
 };
 // Roles the optional free-provider fallback covers (plan: "Models per role").
 const FREE_ROLES = new Set(['builder', 'playtester']);
+// Roles the optional Antigravity (agy) fallback covers. Not the Playtester:
+// its app tools come in through --mcp-config, and agy takes no MCP flag
+// (src/agyexec.js), so it keeps the free fallback or waits. Never the SHIP
+// confirmation pass either (always the paid Claude pass).
+const AGY_FALLBACK_ROLES = new Set(['director', 'builder', 'critic']);
 // No reset time known for a usage limit: look again after this long.
 const FALLBACK_WAIT_MS = 30 * 60 * 1000;
 // Another Claude account took over (src/claudeaccounts.js): retry this soon.
@@ -282,6 +290,7 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
  *   errorTracking?: {store:object, log?:Function},
  *   limitResumeAt?: (res:object)=>number|null,
  *   accountFailover?: (resetsAt:number|null)=>boolean,
+ *   agyReady?: ()=>boolean  (an agy profile exists: the agy fallback may take over; without it it never does),
  *   awake?: {hold:()=>void, release:()=>void},
  *   recordDecision?: (ctx:{repoPath:string, line:string, decision:object})=>boolean,
  *   handback?: {head:(repoPath:string)=>Promise<string|null>,
@@ -571,9 +580,50 @@ function createLunasWork(deps) {
   /** On the free providers right now (freeFallback, during a usage limit). */
   const onFree = () => Number.isFinite(run.limitedUntil) && run.limitedUntil > now();
 
+  /** The agy fallback may still run: it is switched on and an agy profile exists (read live). */
+  function agyStillOn() {
+    const settings = deps.settings();
+    return isObj(settings) && settings.agyFallback === true && typeof deps.agyReady === 'function' && deps.agyReady() === true;
+  }
+
   /**
-   * A step hit the usage limit. Builders and the Playtester may switch to the
-   * free providers (freeFallback); everything else waits for the reset.
+   * On the Antigravity CLI right now (agyFallback, during a Claude usage
+   * limit). agyUntil survives a restart, so the switch and the profile are
+   * checked live: turning the fallback off or removing the agy profile
+   * returns the run to Claude at once (which then waits for its reset).
+   * The settings are read only inside the agy window.
+   */
+  const onAgy = () => Number.isFinite(run.agyUntil) && run.agyUntil > now() && agyStillOn();
+
+  /**
+   * The run's role models for the next call: while the agy fallback is on,
+   * every role it covers runs on agy; otherwise the models pinned at start.
+   */
+  const modelsNow = () => {
+    if (!onAgy()) return run.models;
+    const out = { ...run.models };
+    for (const role of AGY_FALLBACK_ROLES) out[role] = AGY_MODEL;
+    return out;
+  };
+
+  /**
+   * agyFallback may take over `role`: it is on, covers the role, is not on
+   * already, the role is not set to agy anyway (agy's own limit must not
+   * "switch" to agy), and an agy profile exists (deps.agyReady).
+   */
+  function agyFallbackFor(settings, role) {
+    if (!settings || settings.agyFallback !== true || !AGY_FALLBACK_ROLES.has(role) || onAgy()) return false;
+    if (isObj(run.models) && run.models[role] === AGY_MODEL) return false;
+    if (typeof deps.agyReady === 'function' && deps.agyReady()) return true;
+    logEvent(`usage limit (${role}): the Antigravity fallback is on, but no agy profile is configured`);
+    return false;
+  }
+
+  /**
+   * A step hit the usage limit. The Director, the builders and the Critic may
+   * switch to the Antigravity CLI (agyFallback, checked first); builders and
+   * the Playtester may switch to the free providers (freeFallback); everything
+   * else waits for the reset.
    */
   function limited(res, role) {
     const at = Number.isFinite(res && res.resumeAt) ? res.resumeAt : deps.limitResumeAt ? deps.limitResumeAt(res) : null;
@@ -586,7 +636,15 @@ function createLunasWork(deps) {
       return;
     }
     const settings = deps.settings();
-    if (settings && settings.freeFallback === true && FREE_ROLES.has(role) && !onFree()) {
+    if (agyFallbackFor(settings, role)) {
+      logEvent(`usage limit: the director, builders and critic switch to Antigravity (agy) until ${new Date(until).toISOString()}`);
+      update({ agyUntil: until });
+      return;
+    }
+    // A build that runs on agy anyway (its cards say agy) cannot move to the
+    // free providers: agy wins over free, so the retry would hit agy again.
+    const agyBuild = role === 'builder' && isObj(run.current) && Array.isArray(run.current.cards) && buildsOnAgy(run.current.cards);
+    if (settings && settings.freeFallback === true && FREE_ROLES.has(role) && !onFree() && !agyBuild) {
       logEvent(`usage limit: ${role} switches to the free providers until ${new Date(until).toISOString()}`);
       update({ limitedUntil: until });
       return;
@@ -896,7 +954,8 @@ function createLunasWork(deps) {
       iteration: run.iteration,
       todoStore: deps.todoStore(run.projectId),
       lastCritic: run.lastCritic,
-      models: run.models,
+      // On agy while the agy fallback is on (modelsNow).
+      models: modelsNow(),
       // Cards waiting for a decision (or refused by one): never scheduled.
       holdCards: [...held],
       // B4: stuck cards are left out; B5: a card a decision covers passes the scope guard.
@@ -927,7 +986,14 @@ function createLunasWork(deps) {
     });
   }
 
-  function buildRecord(r, cards, free) {
+  /**
+   * The build runs on agy (God Mode planner and workers): the agy fallback is
+   * on, or the Builder is set to agy (every card then carries model 'agy').
+   */
+  const buildsOnAgy = (cards) => onAgy() || cards.some((c) => isObj(c) && c.model === AGY_MODEL);
+
+  /** @param {string|null} on where the build ran when not on Claude (for the run log) */
+  function buildRecord(r, cards, on) {
     const integration = isObj(r.integration) ? r.integration : {};
     const selfCheck = isObj(integration.selfCheck) ? integration.selfCheck : {};
     // Red = the merged result did not reach main (self-check, merge, verify).
@@ -957,7 +1023,7 @@ function createLunasWork(deps) {
     );
     logEvent(
       `build ${build.selfCheck}${build.error ? ` (${build.error})` : ''}, ${closed.length}/${cards.length} cards landed`
-        + `${build.integrationBranch ? `, red result kept on ${build.integrationBranch}` : ''}${free ? ', free providers' : ''}`,
+        + `${build.integrationBranch ? `, red result kept on ${build.integrationBranch}` : ''}${on ? `, ${on}` : ''}`,
     );
     return build;
   }
@@ -969,7 +1035,9 @@ function createLunasWork(deps) {
       transition('launching', { current: { ...run.current, build: { selfCheck: 'green', skipped: true, closed: [] } } });
       return;
     }
-    const free = onFree();
+    const agy = buildsOnAgy(cards);
+    // agy and the free providers never mix: agy covers the builder too.
+    const free = !agy && onFree();
     const res = await deps.build({
       runId: run.id,
       iteration: run.iteration,
@@ -979,6 +1047,8 @@ function createLunasWork(deps) {
       // Pinned at start (the profile's, else God Mode's setting).
       checkCommand: run.checkCommand,
       free,
+      // God Mode plans and works on the Antigravity CLI (src/lunasworkBuild.js).
+      ...(agy ? { agy: true } : {}),
       // Set after a restart mid-build: the builder finishes that plan first.
       resumePlanId: run.current.planId,
       // Paid tools past the run's spend cap: read again for every worker tab, so a
@@ -995,6 +1065,8 @@ function createLunasWork(deps) {
     if (isLimit(r)) return limited(r, 'builder');
     // No free profile to fall back to: wait for the reset after all.
     if (free && r.error === 'noFreeProfile') return armWait(run.limitedUntil, 'limit');
+    // The agy profile went away during the agy fallback: wait for the Claude reset after all.
+    if (agy && onAgy() && r.error === 'noAgyProfile') return armWait(run.agyUntil, 'limit');
     if (r.error === 'godModeBusy') {
       logEvent('God Mode is busy with another run - building later');
       return armWait(now() + GODMODE_RETRY_MS, 'godModeBusy');
@@ -1005,7 +1077,7 @@ function createLunasWork(deps) {
     // God Mode's own error (planner, launch, a discarded plan): try the build again.
     else if (!r.ok) return retryLater(`build: ${r.error || 'failed'}`);
     const files = conflictedPaths(r);
-    const build = buildRecord(r, cards, free);
+    const build = buildRecord(r, cards, free ? 'free providers' : agy ? 'Antigravity (agy)' : null);
     refreshFeedback();
     await syncCheckout();
     // LW 2.23 + B11: graph, codemaps and the i18n card after a merge.
@@ -1113,7 +1185,8 @@ function createLunasWork(deps) {
       report: run.current.report || cleanReport({}),
       history: run.history,
       gitLog,
-      models: run.models,
+      // On agy while the agy fallback is on (modelsNow).
+      models: modelsNow(),
       // B4: the stuck cards to split (a held one is Mati's to decide already).
       stuckCards: cardFlow.stuckNow(),
       todoStore: deps.todoStore(run.projectId),
@@ -1864,6 +1937,7 @@ function createLunasWork(deps) {
       failures: run.failures ? { ...run.failures } : null,
       maxStepFailures: MAX_STEP_FAILURES,
       freeUntil: onFree() ? run.limitedUntil : null,
+      agyUntil: onAgy() ? run.agyUntil : null,
       scores: scoresByMilestone(run.history),
       // B9: the flaky tests quarantined in this run.
       quarantine: run.quarantine.map((q) => q.name),

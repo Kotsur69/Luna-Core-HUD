@@ -133,6 +133,18 @@ test('payloads are validated on the host: repo id, model, mode, timeout, prompt'
   assert.equal(spawns[0].opts.cwd, REPO_DIR, 'a path in the payload is ignored');
 });
 
+test('agy and junk model values are refused at the allow-list; nothing is spawned', async () => {
+  const { host, spawns } = setup();
+  const start = host.handlers['chat.start'];
+  // agy has no stream-json / approval protocol: a phone chat cannot run on it.
+  for (const model of ['agy', 'AGY', 'Sonnet', 'sonnet ', '__proto__', 'constructor', 'toString', 'hasOwnProperty', '', 0, false, {}, ['sonnet']]) {
+    assert.deepEqual(chat.sessionOptions({ model }), { error: 'refused: model' }, JSON.stringify(model));
+    assert.equal((await start({ repoId: 'luna', prompt: 'x', model })).status, 'refused: model', JSON.stringify(model));
+  }
+  assert.equal(spawns.length, 0);
+  assert.equal(chat.sessionOptions({}).model, 'sonnet');
+});
+
 test('max 2 live sessions per host', async () => {
   const { host } = setup();
   const start = host.handlers['chat.start'];

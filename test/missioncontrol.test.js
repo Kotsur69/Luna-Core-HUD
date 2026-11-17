@@ -63,7 +63,152 @@ test('unknown model falls back to haiku; lean jobs drop settings and MCP', () =>
 });
 
 test('uiprefs and runner agree on the model list', () => {
-  assert.deepEqual(PREF_MODELS, runner.MISSION_MODELS);
+  assert.deepEqual(PREF_MODELS, runner.JOB_MODELS);
+});
+
+// ---- Antigravity (agy): lean jobs only, in the agy profile env ------------------
+
+const AGY_ENV = { PATH: '/agy/bin', LUNA_MARK: 'agy-profile' };
+const CLAUDE_ENV = { PATH: '/claude/bin', LUNA_MARK: 'claude' };
+
+/** Fake execFile: records each spawn and its stdin, answers with `reply(call)` -> [error, stdout, stderr]. */
+function fakeExec(reply) {
+  const spawns = [];
+  const exec = (file, args, opts, cb) => {
+    const call = { file, args, opts, stdin: null };
+    spawns.push(call);
+    return {
+      stdin: {
+        on: () => {},
+        end: (text) => {
+          call.stdin = text;
+          const [error, stdout, stderr] = reply(call);
+          cb(error, stdout, stderr);
+        },
+      },
+    };
+  };
+  return { exec, spawns };
+}
+
+test('model list: agy is a job choice, never a Claude model, never a --model flag', () => {
+  assert.deepEqual(runner.MISSION_MODELS, ['haiku', 'sonnet', 'opus']);
+  assert.deepEqual(runner.JOB_MODELS, ['haiku', 'sonnet', 'opus', 'agy']);
+  assert.equal(Object.isFrozen(runner.JOB_MODELS), true);
+  assert.equal(argAfter(runner.buildJobArgs({ prompt: 'p', model: 'agy', lean: true }), '--model'), 'haiku');
+});
+
+test('runJob on agy: a lean job runs `agy --print` in the temp dir with the agy env, prompt on stdin', async () => {
+  const os = require('os');
+  const f = fakeExec(() => [null, 'Sure:\n```json\n{"title":"T"}\n```', '']);
+  const res = await runner.runJob({ prompt: 'parse this', model: 'agy', lean: true, env: CLAUDE_ENV, agyEnv: AGY_ENV, exec: f.exec, timeoutMs: 1234 });
+  assert.deepEqual(res, { ok: true, answer: { title: 'T' }, costUsd: null });
+  assert.equal(f.spawns.length, 1);
+  assert.equal(f.spawns[0].file, 'agy');
+  assert.deepEqual(f.spawns[0].args, ['--print']);
+  assert.equal(f.spawns[0].opts.env, AGY_ENV);
+  assert.equal(f.spawns[0].opts.cwd, os.tmpdir());
+  assert.equal(f.spawns[0].opts.timeout, 1234);
+  // The prompt, then the no-tools request (agy has no flag that removes its tools).
+  assert.ok(f.spawns[0].stdin.startsWith('parse this\n\n'));
+  assert.match(f.spawns[0].stdin, /Use no tools/);
+});
+
+test('runJob on agy: connector, tool and profile-less jobs are refused without a spawn', async () => {
+  const f = fakeExec(() => [null, '{}', '']);
+  const base = { prompt: 'p', model: 'agy', env: CLAUDE_ENV, exec: f.exec };
+  // Mail and the brief need the claude.ai connectors; the memory check needs Read / Grep / Glob.
+  assert.deepEqual(await runner.runJob({ ...base, allowed: mail.PREVIEW_TOOLS, agyEnv: AGY_ENV }), { ok: false, reason: 'agy-needs-claude' });
+  assert.deepEqual(await runner.runJob({ ...base, allowed: mail.APPLY_TOOLS, agyEnv: AGY_ENV }), { ok: false, reason: 'agy-needs-claude' });
+  assert.deepEqual(await runner.runJob({ ...base, lean: true, readOnly: true, cwd: __dirname, agyEnv: AGY_ENV }), { ok: false, reason: 'agy-needs-claude' });
+  // A job naming connector tools needs them, even when it also says lean.
+  assert.deepEqual(await runner.runJob({ ...base, lean: true, allowed: mail.PREVIEW_TOOLS, agyEnv: AGY_ENV }), { ok: false, reason: 'agy-needs-claude' });
+  // No agy profile: refused, never run in the Claude env.
+  for (const agyEnv of [undefined, null, 'env', ['PATH']]) {
+    assert.deepEqual(await runner.runJob({ ...base, lean: true, agyEnv }), { ok: false, reason: 'no-agy-profile' });
+  }
+  assert.equal(f.spawns.length, 0);
+});
+
+test('runJob on agy: failures become typed reasons', async () => {
+  const fail = (error, stdout = '', stderr = '') => fakeExec(() => [error, stdout, stderr]).exec;
+  const job = (exec) => runner.runJob({ prompt: 'p', model: 'agy', lean: true, agyEnv: AGY_ENV, exec });
+  const err = (props) => Object.assign(new Error('x'), props);
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    assert.equal((await job(fail(err({ code: 'ENOENT' })))).reason, 'no-agy');
+    assert.equal((await job(fail(err({ killed: true })))).reason, 'timeout');
+    assert.equal((await job(fail(err({ code: 1 }), '', 'RESOURCE_EXHAUSTED: quota exceeded'))).reason, 'agy-limit');
+    assert.equal((await job(fail(err({ code: 1 }), '', 'something broke'))).reason, 'agy-failed');
+  } finally {
+    console.error = quiet;
+  }
+  assert.deepEqual(await job(fail(null, 'no json at all')), { ok: false, reason: 'bad-json', costUsd: null });
+});
+
+/** registerMissionIpc over a fake ipcMain with model `model` and the given run. */
+function agyHarness({ model = 'agy', run, agyEnv = AGY_ENV } = {}) {
+  const handlers = new Map();
+  const asked = [];
+  registerMissionIpc({
+    gcal: fakeGcal(),
+    github: fakeGithub(),
+    ipcMain: { handle: (ch, fn) => handlers.set(ch, fn), on: () => {} },
+    getModel: () => model,
+    getEnv: () => CLAUDE_ENV,
+    getAgyEnv: () => {
+      asked.push(true);
+      return agyEnv;
+    },
+    run,
+  });
+  return { invoke: (ch, arg) => handlers.get(ch)({}, arg), asked };
+}
+
+test('mission IPC on agy: lean jobs get the agy env, the picker offers agy', async () => {
+  const calls = [];
+  const h = agyHarness({
+    run: async (job) => {
+      calls.push(job);
+      return { ok: true, answer: { title: 'T', start: '2026-10-10T09:00:00+02:00', end: '2026-10-10T10:00:00+02:00' }, costUsd: null };
+    },
+  });
+  const cfg = await h.invoke('mission:config');
+  assert.equal(cfg.model, 'agy');
+  assert.deepEqual(cfg.models, runner.JOB_MODELS);
+  assert.equal((await h.invoke('mission:cal-parse', 'meeting Saturday 9am')).ok, true);
+  assert.equal(calls[0].model, 'agy');
+  assert.equal(calls[0].lean, true);
+  assert.equal(calls[0].agyEnv, AGY_ENV);
+  assert.equal(calls[0].env, CLAUDE_ENV);
+});
+
+test('mission IPC on agy: a mail scan is refused with a reason, never run on claude', async () => {
+  const f = fakeExec(() => [null, '{}', '']);
+  const h = agyHarness({ run: (job) => runner.runJob({ ...job, exec: f.exec }) });
+  assert.deepEqual(await h.invoke('mission:mail-preview'), { ok: false, reason: 'agy-needs-claude' });
+  assert.equal(f.spawns.length, 0);
+  const noProfile = agyHarness({ agyEnv: null, run: (job) => runner.runJob({ ...job, exec: f.exec }) });
+  assert.deepEqual(await noProfile.invoke('mission:cal-parse', 'lunch at noon'), { ok: false, reason: 'no-agy-profile' });
+  assert.equal(f.spawns.length, 0);
+});
+
+test('mission IPC on a Claude model never asks for the agy env; junk falls back to haiku', async () => {
+  for (const model of ['sonnet', 'AGY', 'agy ', '__proto__', null]) {
+    const calls = [];
+    const h = agyHarness({
+      model,
+      run: async (job) => {
+        calls.push(job);
+        return { ok: true, answer: { title: 'T', start: '2026-10-10T09:00:00+02:00', end: '2026-10-10T10:00:00+02:00' }, costUsd: 0 };
+      },
+    });
+    await h.invoke('mission:cal-parse', 'x');
+    assert.equal(calls[0].model, model === 'sonnet' ? 'sonnet' : 'haiku', String(model));
+    assert.equal(calls[0].agyEnv, null);
+    assert.equal(h.asked.length, 0);
+  }
 });
 
 // ---- unwrapJobOutput -----------------------------------------------------------

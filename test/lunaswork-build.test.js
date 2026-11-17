@@ -91,6 +91,58 @@ test('a free build asks God Mode for the free providers, planning included', asy
   await paid;
 });
 
+test('an agy build plans and works on agy (planner + Workers agy) in the agy profile env', async () => {
+  const orchestra = fakeOrchestra();
+  const builder = createGodModeBuilder({
+    orchestra,
+    profileId: () => 'default',
+    env: () => ({ PAID: '1' }),
+    freeEnv: () => ({ FREE: '1' }),
+    agyEnv: () => ({ AGY: '1' }),
+  });
+  const agyCards = CARDS.map((c) => ({ ...c, model: 'agy' }));
+  const building = builder.build(buildOpts({ agy: true, cards: agyCards }));
+  await tick();
+  const ctx = orchestra.calls.makePlan[0];
+  assert.equal(ctx.planner, 'agy');
+  assert.equal(ctx.workers, 'agy');
+  assert.deepEqual(ctx.env, { AGY: '1' });
+  assert.deepEqual(orchestra.calls.launch, [{ planId: 'p1', integration: 'merge', workers: 'agy' }]);
+  orchestra.settle({ planId: 'p1', killed: false, integration: { state: 'done' } });
+  assert.equal((await building).ok, true);
+
+  // A build without agy keeps God Mode's Claude defaults: no planner / workers key.
+  const paid = builder.build(buildOpts());
+  await tick();
+  assert.equal('planner' in orchestra.calls.makePlan[1], false);
+  assert.equal('workers' in orchestra.calls.makePlan[1], false);
+  assert.deepEqual(orchestra.calls.makePlan[1].env, { PAID: '1' });
+  assert.deepEqual(orchestra.calls.launch[1], { planId: 'p1', integration: 'merge' });
+  orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await paid;
+});
+
+test('an agy build wins over free: never the free providers, never both flags', async () => {
+  const orchestra = fakeOrchestra();
+  const builder = createGodModeBuilder({ orchestra, profileId: () => 'default', env: () => ({}), freeEnv: () => ({ FREE: '1' }), agyEnv: () => ({ AGY: '1' }) });
+  const building = builder.build(buildOpts({ agy: true, free: true }));
+  await tick();
+  assert.deepEqual(orchestra.calls.makePlan[0].env, { AGY: '1' });
+  assert.deepEqual(orchestra.calls.launch[0], { planId: 'p1', integration: 'merge', workers: 'agy' });
+  orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await building;
+});
+
+test('an agy build without an agy profile is refused before God Mode is asked', async () => {
+  for (const agyEnv of [undefined, () => null]) {
+    const orchestra = fakeOrchestra();
+    const builder = createGodModeBuilder({ orchestra, profileId: () => 'default', env: () => ({ PAID: '1' }), ...(agyEnv ? { agyEnv } : {}) });
+    assert.deepEqual(await builder.build(buildOpts({ agy: true })), { ok: false, error: 'noAgyProfile' });
+    assert.equal(orchestra.calls.makePlan.length, 0, 'never planned on Claude instead');
+    assert.equal(builder.isBuilding(), false, 'the build slot is free again');
+  }
+});
+
 test('a kill while the merge is still running keeps the overlays until the merge is done', async () => {
   const { builder } = setup();
   const building = builder.build(buildOpts());

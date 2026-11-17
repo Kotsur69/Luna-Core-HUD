@@ -192,6 +192,30 @@ test('createHookDeps: the second opinion is off without a CLI order; no review d
   for (const key of ['refreshGraph', 'i18n', 'lighthouse', 'reviews', 'secondOpinion']) assert.equal(typeof on[key], 'function', key);
 });
 
+test('createHookDeps: a reviewer set to agy runs the reviews with --model agy through the injected runner', async () => {
+  const { DEFAULT_MODELS } = require('../src/lunasworkRules');
+  const modelsSeen = [];
+  const runClaude = async ({ args }) => {
+    modelsSeen.push(args[args.indexOf('--model') + 1]);
+    return { error: 'failed', detail: 'fake runner' };
+  };
+  const deps = createHookDeps({ env: () => process.env, settings: () => ({ secondOpinionOrder: [] }), runClaude });
+  // Iteration 3: the security review is due.
+  const agy = await deps.reviews({ iteration: 3, isGate: false, runId: 'lwtest1', repoPath: os.tmpdir(), models: { reviewer: 'agy' } });
+  assert.deepEqual(agy.due, ['security']);
+  assert.deepEqual(modelsSeen, ['agy']);
+
+  // Any Claude choice keeps the reviews on runReviews' own default, as before.
+  for (const reviewer of ['opus', 'auto', undefined]) {
+    modelsSeen.length = 0;
+    await deps.reviews({ iteration: 3, isGate: false, runId: 'lwtest1', repoPath: os.tmpdir(), models: { reviewer } });
+    assert.deepEqual(modelsSeen, [DEFAULT_MODELS.reviewer], String(reviewer));
+  }
+  modelsSeen.length = 0;
+  await deps.reviews({ iteration: 3, isGate: false, runId: 'lwtest1', repoPath: os.tmpdir() });
+  assert.deepEqual(modelsSeen, [DEFAULT_MODELS.reviewer], 'no models at all');
+});
+
 test('meteredPass: a Playtester pass outside a run gets its own claude -p tokens as usage', async () => {
   const stdout = JSON.stringify({ type: 'result', total_cost_usd: 0.5, usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 7 } });
   const fakeExec = (file, args, options, callback) => callback(null, stdout, '');

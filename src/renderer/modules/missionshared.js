@@ -1,7 +1,8 @@
 // ============================================================================
 // LunaCore - Mission Control: helpers shared by the Mission Control widgets
 // ----------------------------------------------------------------------------
-// The model picker (one pref, missionModel, read by both widgets), the error
+// The model picker (one pref, missionModel, read by both widgets; it offers
+// agy too, which runs the lean jobs and is refused for mail), the error
 // reason -> i18n key table, and the "$0.04" cost suffix. Every job result from
 // main carries `costUsd`, and showing it is the point: these are real model
 // calls, and the user should see what a scan costs before making it a habit.
@@ -45,8 +46,17 @@ const ERROR_KEYS = {
   'news-timeout': 'mc.err.newsTimeout',
   'news-nothing-selected': 'mc.err.newsNothing',
   'rate-limited': 'mc.news.err.rate-limited',
+  // Jobs on Antigravity (src/missionrunner.js runAgyJob).
+  'agy-needs-claude': 'mc.err.agyNeedsClaude',
+  'no-agy-profile': 'mc.err.noAgyProfile',
+  'no-agy': 'mc.err.noAgy',
+  'agy-limit': 'mc.err.agyLimit',
+  'agy-failed': 'mc.err.agyFailed',
   generic: 'mc.err.generic',
 };
+
+/** Picker labels that are not just the capitalized model name. */
+const MODEL_LABELS = { agy: 'Antigravity (agy)' };
 
 /** Human message for a failed job's `reason`; unknown reasons -> generic. */
 export function errorText(reason) {
@@ -69,7 +79,7 @@ export function bindModelSelect(select, config) {
     ...config.models.map((m) => {
       const opt = document.createElement('option');
       opt.value = m;
-      opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+      opt.textContent = MODEL_LABELS[m] || m.charAt(0).toUpperCase() + m.slice(1);
       return opt;
     })
   );

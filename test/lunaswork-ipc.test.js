@@ -125,8 +125,40 @@ test('getSettings returns the defaults for a fresh machine', async () => {
   assert.equal(res.ok, true);
   assert.deepEqual(res.models, DEFAULT_MODELS);
   assert.equal(res.freeFallback, false);
+  assert.equal(res.agyFallback, false);
   assert.equal(res.profile, null);
-  assert.deepEqual(res.choices, ['opus', 'sonnet', 'haiku', 'fable', 'auto']);
+  assert.deepEqual(res.choices, ['opus', 'sonnet', 'haiku', 'fable', 'agy', 'auto']);
+  s.done();
+});
+
+test('saveSettings stores agy for every role and the agyFallback switch', async () => {
+  const s = setup();
+  const all = Object.fromEntries(Object.keys(DEFAULT_MODELS).map((role) => [role, 'agy']));
+  const saved = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', models: all, agyFallback: true });
+  assert.equal(saved.ok, true);
+  const again = await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' });
+  assert.deepEqual(again.models, all);
+  assert.equal(again.agyFallback, true);
+  assert.equal(again.freeFallback, false, 'the two fallbacks are separate switches');
+  // Turning it off again stores false.
+  await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', agyFallback: false });
+  assert.equal((await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' })).agyFallback, false);
+  s.done();
+});
+
+test('saveSettings refuses a non-boolean agyFallback and look-alike agy models without writing', async () => {
+  const s = setup();
+  for (const junk of ['true', 1, null, {}, ['agy']]) {
+    assert.deepEqual(await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', agyFallback: junk }), { ok: false, reason: 'bad-value' }, String(junk));
+  }
+  for (const model of ['AGY', 'antigravity', 'agy.exe']) {
+    assert.deepEqual(await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', models: { builder: model } }), { ok: false, reason: 'bad-models' }, model);
+  }
+  // A bad model next to a good agyFallback refuses the whole save.
+  await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', agyFallback: true, models: { critic: 'Agy' } });
+  const res = await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' });
+  assert.equal(res.agyFallback, false);
+  assert.equal(res.models.critic, DEFAULT_MODELS.critic);
   s.done();
 });
 

@@ -116,10 +116,11 @@ const ORCHESTRA_WORKER_EFFORTS = ['plan', ...EFFORTS];
 function workerEffortOf(raw) {
   return ORCHESTRA_WORKER_EFFORTS.includes(raw) ? raw : null;
 }
-// Mission Control jobs (src/missionrunner.js MISSION_MODELS - kept in sync by
+// Mission Control jobs (src/missionrunner.js JOB_MODELS - kept in sync by
 // test/missioncontrol.test.js). Haiku by default: mail triage and calendar
-// parsing are cheap, high-volume chores.
-const MISSION_MODELS = ['haiku', 'sonnet', 'opus'];
+// parsing are cheap, high-volume chores. agy runs the lean jobs only; the
+// runner refuses the mail ones on it with a reason.
+const MISSION_MODELS = ['haiku', 'sonnet', 'opus', AGY_MODEL];
 // Slice 5: what a settled run does with its pushed branches (default PRs,
 // Mati 2026-10-06). Allowed tools (idea #5) are worker --allowedTools rules
 // added from the run board's evidence; the shape check keeps them safe inside

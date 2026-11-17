@@ -22,7 +22,8 @@
 
 'use strict';
 
-const { runJob, MISSION_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
+const { runJob, MISSION_MODELS, JOB_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
+const { AGY_MODEL } = require('./claudeModels');
 const { loadMissionConfig } = require('./missionconfig');
 const mail = require('./missionmail');
 const { createGcal } = require('./gcal');
@@ -87,8 +88,11 @@ const OPEN_GAP_MS = 500;
 const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, news: 180000, describe: 90000 };
 
 /**
- * @param {{ipcMain:object, getModel:()=>string, getEnv:()=>Record<string,string>, run?:Function,
+ * @param {{ipcMain:object, getModel:()=>string, getEnv:()=>Record<string,string>,
+ *          getAgyEnv?:()=>Record<string,string>|null, run?:Function,
  *          gcal?:object, github?:object, news?:object, store?:object, openExternal?:(url:string)=>void}} deps
+ *   getAgyEnv: the agy profile's env (null = none) for jobs on model 'agy';
+ *   asked only when the picked model is agy.
  *   Everything after getEnv is injectable so tests can exercise the handlers
  *   without a CLI, Python, the network, the disk or a browser.
  */
@@ -96,6 +100,7 @@ function registerMissionIpc({
   ipcMain,
   getModel,
   getEnv,
+  getAgyEnv = () => null,
   run = runJob,
   gcal = createGcal(),
   weather = createWeather(),
@@ -136,9 +141,10 @@ function registerMissionIpc({
     openExternal(url);
   };
 
+  // agy is a valid pick: runJob runs the lean jobs on it and refuses the mail ones.
   const model = () => {
     const m = getModel();
-    return MISSION_MODELS.includes(m) ? m : DEFAULT_MISSION_MODEL;
+    return JOB_MODELS.includes(m) ? m : DEFAULT_MISSION_MODEL;
   };
 
   /** Runs `fn` under the per-kind busy guard; always resolves. */
@@ -165,14 +171,17 @@ function registerMissionIpc({
     sources: briefSources || defaultBriefSources({ getLedger, gcal, weather, projectNames }),
   });
 
-  const job = (kind, prompt, opts) =>
-    run({ prompt, model: model(), env: getEnv(), timeoutMs: TIMEOUTS[kind], ...opts });
+  const job = (kind, prompt, opts) => {
+    const m = model();
+    const agyEnv = m === AGY_MODEL ? getAgyEnv() : null;
+    return run({ prompt, model: m, env: getEnv(), agyEnv, timeoutMs: TIMEOUTS[kind], ...opts });
+  };
 
   ipcMain.handle('mission:config', () => {
     const { calendar } = loadMissionConfig();
     return {
       model: model(),
-      models: MISSION_MODELS,
+      models: JOB_MODELS,
       categories: calendar.categories,
       days: calendar.days,
       // Trackday events default to the trackday calendar in quick add.
@@ -304,6 +313,7 @@ function registerMissionIpc({
 
   // ---- Brief (src/missionbrief.js): weekly on its own, daily on click ----
 
+  // The brief always reads Gmail through the claude.ai connector: Claude models only, never agy.
   const briefView = (req) => {
     const s = briefStore.load();
     const pick = (kind) => {

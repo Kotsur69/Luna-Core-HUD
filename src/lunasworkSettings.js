@@ -9,8 +9,12 @@
 //   freeFallback  false = on a usage limit the run waits for the reset
 //                 (Mati's decision); true = builders and playtester may use the
 //                 free providers (orchestraFree.js) while Claude is limited
+//   agyFallback   false = as above; true = on a Claude usage limit the
+//                 Director, the Builder and the Critic run on the Antigravity
+//                 CLI (agy) until the reset (src/lunaswork.js limited()). Takes
+//                 precedence over freeFallback for those roles
 //   secondOpinionOrder  optional CLI order for the milestone-gate second
-//                 opinion (lunasworkSecondOpinion: 'codex' / 'gemini'); empty =
+//                 opinion (lunasworkSecondOpinion: 'codex' / 'gemini' / 'agy'); empty =
 //                 off. Opt-in: the gate's evidence goes to that vendor
 //   projects      keyed like the to-dos (todo.keyFor): { models, profile, lighthouseBudgets }
 //                 models  - partial per-role override, merged over the global
@@ -349,7 +353,7 @@ function normalizeProject(raw) {
 
 /**
  * @param {unknown} raw parsed file content (or anything)
- * @returns {{models: Record<string,string>, freeFallback: boolean, secondOpinionOrder: string[],
+ * @returns {{models: Record<string,string>, freeFallback: boolean, agyFallback: boolean, secondOpinionOrder: string[],
  *   toolServers: Record<string,object>, projects: Record<string,object>}}
  */
 function normalizeSettings(raw) {
@@ -364,6 +368,7 @@ function normalizeSettings(raw) {
   return {
     models: normalizeModels(src.models),
     freeFallback: src.freeFallback === true,
+    agyFallback: src.agyFallback === true,
     secondOpinionOrder: normalizeCliOrder(src.secondOpinionOrder),
     toolServers: toolkitRules.normalizeToolServers(src.toolServers),
     assetTools: normalizeAssetTools(src.assetTools),

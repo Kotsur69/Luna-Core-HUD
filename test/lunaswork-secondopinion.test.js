@@ -15,6 +15,7 @@ const path = require('path');
 
 const S = require('../src/lunasworkSecondOpinion.js');
 const { REPRO_ACCEPTANCE } = require('../src/lunasworkCritic.js');
+const { AGY_MODEL } = require('../src/claudeModels.js');
 
 const LOG_ENTRY = { played: 'p', good: [], bad: [], broken: [], missing: [], scores: '', verdict: '' };
 const critique = (cards, verdict = 'CONTINUE') => ({
@@ -305,6 +306,98 @@ test('runSecondOpinion: a throwing logger or clock never makes it reject', async
   assert.equal(out.ok, false);
   assert.deepEqual(out.notes, ['codex second opinion failed: timeout']);
   assert.equal(out.durationMs, 0);
+});
+
+// ---- Antigravity (agy) ------------------------------------------------------------
+
+const AGY_ENV = { PATH: '/agy/bin', LUNA_MARK: 'agy-profile' };
+const CLAUDE_ENV = { PATH: '/claude/bin', LUNA_MARK: 'claude' };
+
+test('agy: a read-only headless invocation, never in the default order', () => {
+  const spec = S.SECOND_OPINION_CLIS[AGY_MODEL];
+  assert.equal(spec.command, 'agy');
+  assert.deepEqual(spec.args, ['--print']);
+  assert.equal(spec.args.includes('accept-edits'), false);
+  assert.equal(Object.isFrozen(spec.args), true);
+  assert.deepEqual(S.DEFAULT_ORDER, ['codex', 'gemini']);
+});
+
+test('agy: runs with the agy profile env, never the Claude env, and its text answer is parsed', async () => {
+  const d = detector({ agy: { installed: true, loggedIn: true }, codex: { installed: true, loggedIn: true } });
+  const answer = `Here is the review.\n${JSON.stringify(critique([card('Pause menu ignores Escape', 'bug', 'high')]))}\nDone.`;
+  const r = runner(answer);
+  const out = await S.runSecondOpinion({
+    isGate: true, inputs: INPUTS, order: ['agy', 'codex'], detect: d.detect, runCli: r.runCli, env: CLAUDE_ENV, agyEnv: AGY_ENV,
+  });
+  assert.equal(out.ok, true);
+  assert.equal(out.cli, 'agy');
+  assert.deepEqual(d.asked, ['agy']);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].command, 'agy');
+  assert.deepEqual(r.calls[0].args, ['--print']);
+  assert.equal(r.calls[0].env, AGY_ENV);
+  assert.match(r.calls[0].prompt, /READ-ONLY/);
+  assert.deepEqual(out.cards.map((c) => c.text), ['Pause menu ignores Escape']);
+  assert.equal(out.cards[0].acceptance[0], REPRO_ACCEPTANCE);
+  assert.deepEqual(out.notes, []);
+});
+
+test('agy: without an agy profile it is skipped with a note and the order moves on', async () => {
+  // The detector would say yes: the missing profile wins and agy is never even asked about.
+  const d = detector({ agy: { installed: true, loggedIn: true }, gemini: { installed: true, loggedIn: true } });
+  const r = runner(JSON.stringify(critique([])));
+  const out = await S.runSecondOpinion({ isGate: true, inputs: INPUTS, order: ['agy', 'gemini'], detect: d.detect, runCli: r.runCli, env: CLAUDE_ENV });
+  assert.equal(out.ok, true);
+  assert.equal(out.cli, 'gemini');
+  assert.deepEqual(d.asked, ['gemini']);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].env, CLAUDE_ENV);
+  assert.deepEqual(out.notes, ['second opinion: agy no Antigravity (agy) profile, skipped']);
+
+  for (const agyEnv of [undefined, null, 'env', ['PATH']]) {
+    const only = await S.runSecondOpinion({ isGate: true, inputs: INPUTS, order: ['agy'], detect: d.detect, runCli: r.runCli, env: CLAUDE_ENV, agyEnv });
+    assert.deepEqual(only, { skipped: true, note: 'second opinion skipped: agy no Antigravity (agy) profile' });
+  }
+  assert.equal(r.calls.length, 1, 'agy never runs without its profile');
+});
+
+test('agy: a failed agy run keeps the passed-over notes and never throws', async () => {
+  const d = detector({ agy: { installed: true, loggedIn: true } });
+  const out = await S.runSecondOpinion({
+    isGate: true, inputs: INPUTS, order: ['agy'], detect: d.detect, agyEnv: AGY_ENV,
+    runCli: async () => ({ error: 'notInstalled' }),
+  });
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.notes, ['agy second opinion failed: notInstalled']);
+});
+
+test('agy: the default detector looks agy up on the PATH of the agy env', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lc-agy-path-'));
+  try {
+    for (const name of ['agy', 'agy.cmd']) fs.writeFileSync(path.join(dir, name), '');
+    const agyEnv = { PATH: dir, Path: dir, PATHEXT: '.CMD' };
+    const r = runner(JSON.stringify(critique([])));
+    const out = await S.runSecondOpinion({ isGate: true, inputs: INPUTS, order: ['agy'], runCli: r.runCli, env: { PATH: '' }, agyEnv });
+    assert.equal(out.cli, 'agy');
+    assert.equal(r.calls[0].env, agyEnv);
+    const missing = await S.runSecondOpinion({ isGate: true, inputs: INPUTS, order: ['agy'], runCli: r.runCli, env: agyEnv, agyEnv: { PATH: '' } });
+    assert.deepEqual(missing, { skipped: true, note: 'second opinion skipped: agy not installed' });
+  } finally {
+    await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('detectCli: agy on PATH counts as logged in (the agy profile is the gate)', () => {
+  const env = { PATH: '/usr/bin' };
+  assert.deepEqual(S.detectCli('agy', { ...fakeFs({ onPath: ['/usr/bin/agy'] }), env }), { installed: true, loggedIn: true });
+  assert.deepEqual(S.detectCli('agy', { ...fakeFs(), env }), { installed: false, loggedIn: false });
+});
+
+test('the settings order accepts agy as a known second-opinion CLI', () => {
+  const { normalizeCliOrder } = require('../src/lunasworkSettings.js');
+  assert.deepEqual(normalizeCliOrder(['agy', 'codex', 'agy', 'claude']), ['agy', 'codex']);
 });
 
 test('parseCliOutput: plain, gemini envelope, fenced; junk is badJson', () => {

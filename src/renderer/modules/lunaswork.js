@@ -2,7 +2,8 @@
 // LunaCore - Luna's Work entry point (docs/tbc_docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // ----------------------------------------------------------------------------
 // Its own button (next to God Mode in the to-do widget) and its own Settings
-// pane: models per role, the free-providers fallback, the project profile and
+// pane: models per role (Claude models or Antigravity / agy), the free-providers
+// and agy fallbacks, the project profile and
 // pre-production (scaffold design/ + the interview tab, and the per-project
 // LW 2.25 toggles: design variants, clickable mockup first). God Mode's
 // controls are not touched.
@@ -31,7 +32,8 @@ import { mountLunasWorkAsk } from './lunasworkAsk.js';
 import { mountLunasWorkQueue } from './lunasworkQueuePanel.js';
 import { mountLunasWorkPlaytestPass } from './lunasworkPlaytestPass.js';
 
-const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+// 'agy' is the Antigravity CLI, not a Claude model (src/claudeModels.js AGY_MODEL).
+const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', agy: 'Antigravity (agy)' };
 const SAVED_FLASH_MS = 2000;
 
 let refreshPane = null;
@@ -101,6 +103,9 @@ export function mountLunasWorkSettings(root) {
     ['designVariants', root.querySelector('#lw-variants-toggle'), root.querySelector('#lw-variants-status')],
     ['mockupFirst', root.querySelector('#lw-mockup-toggle'), root.querySelector('#lw-mockup-status')],
   ].filter(([, input, status]) => input && status);
+  // The Antigravity (agy) fallback switch: optional, like the toggles above.
+  const agySwitch = { input: root.querySelector('#lw-agy-toggle'), status: root.querySelector('#lw-agy-status') };
+  const hasAgySwitch = Boolean(agySwitch.input && agySwitch.status);
   if (Object.values(el).some((v) => !v)) return;
 
   let state = null;
@@ -126,6 +131,10 @@ export function mountLunasWorkSettings(root) {
     for (const select of el.selects) select.value = state.models[select.dataset.lwRole];
     el.free.checked = state.freeFallback === true;
     el.freeStatus.textContent = t(state.freeFallback ? 'lw.free.on' : 'lw.free.off');
+    if (hasAgySwitch) {
+      agySwitch.input.checked = state.agyFallback === true;
+      agySwitch.status.textContent = t(state.agyFallback ? 'lw.agy.on' : 'lw.agy.off');
+    }
     for (const [key, input, status] of toggles) {
       input.checked = state[key] === true;
       status.textContent = t(state[key] === true ? 'lw.toggle.on' : 'lw.toggle.off');
@@ -250,6 +259,13 @@ export function mountLunasWorkSettings(root) {
     sfx.modeToggle();
     save({ freeFallback: el.free.checked });
   });
+
+  if (hasAgySwitch) {
+    agySwitch.input.addEventListener('change', () => {
+      sfx.modeToggle();
+      save({ agyFallback: agySwitch.input.checked });
+    });
+  }
 
   for (const [key, input] of toggles) {
     input.addEventListener('change', () => {

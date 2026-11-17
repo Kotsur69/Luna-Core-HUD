@@ -25,10 +25,13 @@
 'use strict';
 
 const path = require('path');
+const { AGY_MODEL } = require('./claudeModels');
 
 const ROLES = ['director', 'builder', 'playtester', 'critic', 'reviewer', 'researcher'];
-// 'fable' is a manual choice only: `auto` never picks it (autoModel below).
-const MODEL_CHOICES = ['opus', 'sonnet', 'haiku', 'fable', 'auto'];
+// 'fable' and 'agy' are manual choices only: `auto` never picks them (autoModel below).
+// 'agy' runs the role on the Antigravity CLI (src/agyexec.js; the Builder's
+// God Mode run plans and works on agy, src/lunasworkBuild.js).
+const MODEL_CHOICES = ['opus', 'sonnet', 'haiku', 'fable', AGY_MODEL, 'auto'];
 // Mati's standard (2026-10-22): director + builders opus, playtester sonnet.
 // Critic and reviewers are Luna's defaults for the roles he did not name.
 const DEFAULT_MODELS = Object.freeze({

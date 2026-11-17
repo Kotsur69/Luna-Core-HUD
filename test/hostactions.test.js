@@ -74,6 +74,30 @@ test('news.scan: full briefing, one lean job, the news snapshot', async () => {
   assert.deepEqual(res, { status: 'done', items: 1, costUsd: 0.002 });
 });
 
+test('news.scan on agy: the job gets the agy env, a Claude pick never asks for it', async () => {
+  const agyEnv = { AGY_PROFILE: 'agy-test' };
+  let asked = 0;
+  const onAgy = fakes({ model: () => 'agy', agyEnv: () => (asked++, agyEnv) });
+  await onAgy.handlers['news.scan']({});
+  assert.equal(onAgy.calls.jobs[0].model, 'agy');
+  assert.equal(onAgy.calls.jobs[0].agyEnv, agyEnv);
+  assert.deepEqual(onAgy.calls.jobs[0].env, { PATH: '/bin' });
+
+  const onClaude = fakes({ agyEnv: () => (asked++, agyEnv) });
+  await onClaude.handlers['news.scan']({});
+  assert.equal(onClaude.calls.jobs[0].agyEnv, null);
+  assert.equal(asked, 1, 'asked only for the agy job');
+});
+
+test('news.scan on agy without an agy profile fails the row, never runs on claude', async () => {
+  const { runJob } = require('../src/missionrunner');
+  const spawns = [];
+  const exec = (file) => spawns.push(file);
+  const { handlers } = fakes({ model: () => 'agy', agyEnv: () => null, runJob: (job) => runJob({ ...job, exec }) });
+  await assert.rejects(handlers['news.scan']({}), /no-agy-profile/);
+  assert.equal(spawns.length, 0);
+});
+
 test('news.scan: nothing fetched -> no paid job, no snapshot', async () => {
   const { handlers, calls } = fakes({ news: { fetchSections: async () => [{ id: 's1', entries: [] }] } });
   assert.deepEqual(await handlers['news.scan']({}), { status: 'empty', items: 0 });

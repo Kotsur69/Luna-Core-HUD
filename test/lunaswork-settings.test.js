@@ -34,6 +34,25 @@ test('freeFallback defaults to false and only exactly true turns it on', () => {
   assert.equal(S.normalizeSettings({ freeFallback: true }).freeFallback, true);
 });
 
+test('agyFallback defaults to false, only exactly true turns it on, and it is independent of freeFallback', () => {
+  assert.equal(S.defaultSettings().agyFallback, false);
+  for (const junk of ['true', 1, null, {}, 'agy']) {
+    assert.equal(S.normalizeSettings({ agyFallback: junk }).agyFallback, false, String(junk));
+  }
+  const both = S.normalizeSettings({ agyFallback: true, freeFallback: false });
+  assert.equal(both.agyFallback, true);
+  assert.equal(both.freeFallback, false);
+  assert.equal(S.normalizeSettings({ freeFallback: true }).agyFallback, false);
+});
+
+test('agy is a valid global and per-project role model', () => {
+  const settings = S.normalizeSettings({ models: { director: 'agy' }, projects: { p: { models: { builder: 'agy', critic: 'AGY' } } } });
+  const models = S.modelsFor(settings, 'p');
+  assert.equal(models.director, 'agy');
+  assert.equal(models.builder, 'agy');
+  assert.equal(models.critic, DEFAULT_MODELS.critic, 'a look-alike value is dropped');
+});
+
 // ---- models -----------------------------------------------------------------------
 
 test('a per-project override merges over the global models', () => {

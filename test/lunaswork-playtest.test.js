@@ -296,6 +296,52 @@ test('shipConfirm always uses opus, whatever the playtester setting', async () =
   assert.equal(res.screenDiff, null, 'the ship pass does not diff screens');
 });
 
+test('a Playtester set to agy plays on agy in the agy env; the SHIP pass stays on opus', async () => {
+  const { AGY_BIN } = require('../src/orchestraAgy');
+  const report = { findings: [], scores: [], journeys: [], screens: [] };
+  // agy answers with the bare JSON object, not Claude's envelope.
+  const fake = fakeClaude({ stdout: JSON.stringify(report) });
+  const agyEnv = { AGY_PROFILE: 'agy-test' };
+  const res = await P.runPlaytest({
+    projectDir: fakeProject(),
+    adapter: await fakeAdapter(),
+    url: URL_,
+    models: { playtester: 'agy' },
+    env: { CLAUDE: '1' },
+    agyEnv,
+    execImpl: fake.execImpl,
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.model, 'agy');
+  assert.match(res.modelReason, /^setting; on agy: no adapter MCP tools and no read sandbox/, 'the run log says what agy loses');
+  assert.equal(fake.calls[0].file, AGY_BIN);
+  assert.deepEqual(fake.calls[0].options.env, agyEnv, 'the Claude env never reaches agy');
+  assert.ok(fake.calls[0].args.includes('--print'));
+  assert.equal(fake.calls[0].args.includes('accept-edits'), false, 'the Playtester never edits code');
+  assert.match(fake.calls[0].prompt, /exactly ONE JSON object/, 'the report schema travels in the prompt');
+
+  const ship = fakeClaude({ raw: report });
+  const shipRes = await P.runPlaytest({
+    projectDir: fakeProject(),
+    adapter: await fakeAdapter(),
+    url: URL_,
+    mode: 'shipConfirm',
+    models: { playtester: 'agy' },
+    agyEnv,
+    execImpl: ship.execImpl,
+  });
+  assert.equal(shipRes.model, 'opus');
+  assert.notEqual(ship.calls[0].file, AGY_BIN);
+});
+
+test('a Playtester set to agy without an agy profile fails the pass, never plays on claude', async () => {
+  const fake = fakeClaude({ stdout: '{}' });
+  const res = await P.runPlaytest({ projectDir: fakeProject(), adapter: await fakeAdapter(), url: URL_, models: { playtester: 'agy' }, execImpl: fake.execImpl });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'noAgyProfile');
+  assert.equal(fake.calls.length, 0);
+});
+
 test('explore follows the playtester setting, default sonnet', () => {
   assert.equal(P.playtestModel('explore', undefined).model, 'sonnet');
   assert.equal(P.playtestModel('explore', { playtester: 'haiku' }).model, 'haiku');

@@ -3,7 +3,9 @@
 // ----------------------------------------------------------------------------
 // Every Sunday at 20:00 local (and on "Generate now") the week collected by
 // src/weeklycollect.js goes to ONE lean `claude -p` call (no tools, Haiku by
-// default, model picker on the Week tab) that answers JSON:
+// default, model picker on the Week tab; the picker also offers agy, which
+// runs it as one `agy --print` in the agy profile's env - src/missionrunner.js)
+// that answers JSON:
 //   {headline, fun:{summary, projects[]}, work:[{project, status, openTodos[]}],
 //    claudeTable[], goals:[{goal, verdict, evidence[]}], suggestions[3],
 //    doMore[], doLess[]}
@@ -30,7 +32,9 @@
 const { createStore } = require('./lifestore');
 const { ymd, parseDay, addDays, isoWeek, isWeek } = require('./lifedays');
 const { weekBounds, knownProjects } = require('./weeklycollect');
-const { MISSION_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
+// The review is one lean call with no tools, so agy is a valid pick (JOB_MODELS).
+const { JOB_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
+const { AGY_MODEL } = require('./claudeModels');
 const h = require('./reportHtml');
 
 const MAX_WEEKS = 12;
@@ -311,7 +315,7 @@ function entryOf(week, raw) {
   return {
     week,
     at: raw.at,
-    model: MISSION_MODELS.includes(raw.model) ? raw.model : DEFAULT_MISSION_MODEL,
+    model: JOB_MODELS.includes(raw.model) ? raw.model : DEFAULT_MISSION_MODEL,
     costUsd: typeof raw.costUsd === 'number' && Number.isFinite(raw.costUsd) ? raw.costUsd : null,
     review,
     failure: review ? null : reasonOf(raw.failure) || 'bad-json',
@@ -327,7 +331,7 @@ function normalize(raw) {
     const e = entryOf(k, src[k]);
     if (e) weeks[k] = e;
   }
-  const model = raw && MISSION_MODELS.includes(raw.model) ? raw.model : DEFAULT_MISSION_MODEL;
+  const model = raw && JOB_MODELS.includes(raw.model) ? raw.model : DEFAULT_MISSION_MODEL;
   return { v: 1, model, weeks };
 }
 
@@ -345,7 +349,7 @@ function createWeeklyStore(opts = {}) {
     setMail: (week, mail) =>
       store.update((s) => (s.weeks[week] ? { ...s, weeks: { ...s.weeks, [week]: { ...s.weeks[week], mail } } } : s), file),
     setModel: (model) => {
-      if (!MISSION_MODELS.includes(model)) throw new Error('bad value');
+      if (!JOB_MODELS.includes(model)) throw new Error('bad value');
       return store.update((s) => ({ ...s, model }), file);
     },
   };
@@ -377,9 +381,11 @@ function generatable(nowMs) {
 
 /**
  * @param {{collect:(week:string)=>Promise<object|null>, run:Function, getEnv:()=>object,
+ *   getAgyEnv?:()=>object|null,
  *   store:ReturnType<typeof createWeeklyStore>, mailer?:{afterScheduled:Function}|null,
  *   now?:()=>number, onResume?:(fn:Function)=>void,
- *   writeHtml?:(week:string, html:string)=>void}} deps  writeHtml: the standalone page, after each save
+ *   writeHtml?:(week:string, html:string)=>void}} deps  writeHtml: the standalone page, after each save;
+ *   getAgyEnv: the agy profile's env (null = none), asked only when the model is agy
  */
 function createWeeklyReview(deps) {
   const now = deps.now || Date.now;
@@ -402,7 +408,9 @@ function createWeeklyReview(deps) {
       const data = await deps.collect(week);
       if (!data) return { ok: false, reason: 'bad-week' };
       const model = deps.store.load().model;
-      const res = await deps.run({ prompt: buildReviewPrompt(data), model, lean: true, env: deps.getEnv(), timeoutMs: JOB_TIMEOUT_MS });
+      // agy runs in its own profile's env; without one the runner refuses (no-agy-profile).
+      const agyEnv = model === AGY_MODEL && typeof deps.getAgyEnv === 'function' ? deps.getAgyEnv() : null;
+      const res = await deps.run({ prompt: buildReviewPrompt(data), model, lean: true, env: deps.getEnv(), agyEnv, timeoutMs: JOB_TIMEOUT_MS });
       const review = res && res.ok ? validateReview(res.answer, data) : null;
       const failure = review ? null : (res && res.ok ? 'bad-json' : reasonOf(res && res.reason) || 'generic');
       const costUsd = res && typeof res.costUsd === 'number' ? res.costUsd : null;

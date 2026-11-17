@@ -42,6 +42,9 @@ const KILL_GRACE_MS = 5000;
 const CLOSE_GRACE_MS = 2000;
 const MAX_KNOWN = 50;
 const MAX_PREVIEW_LINES = 40;
+// Never agy (Antigravity): a live session needs claude's stream-json input and
+// output and its --permission-prompt-tool approval protocol; agy has neither,
+// so a phone chat on it could not be steered or approved.
 const MODELS = { sonnet: 'sonnet', opus: 'opus' };
 const MODES = ['default', 'acceptEdits', 'plan'];
 const DECISIONS = ['allow', 'deny', 'always'];
@@ -180,7 +183,8 @@ function sameCard(shown, card) {
  */
 function sessionOptions(p) {
   const model = p.model === undefined || p.model === null ? 'sonnet' : p.model;
-  if (!Object.hasOwn(MODELS, model)) return { error: 'refused: model' };
+  // A string first: Object.hasOwn would coerce ['sonnet'] to 'sonnet' and let the array through.
+  if (typeof model !== 'string' || !Object.hasOwn(MODELS, model)) return { error: 'refused: model' };
   const mode = p.mode === undefined || p.mode === null ? 'default' : p.mode;
   if (!MODES.includes(mode)) return { error: 'refused: mode' };
   const t = p.approvalTimeout === undefined || p.approvalTimeout === null ? 0 : p.approvalTimeout;
