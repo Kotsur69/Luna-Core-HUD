@@ -185,6 +185,25 @@ test('a step logged again under the same step_index counts once and shifts no re
   assert.equal(state.contextChars, steps[0].chars + steps[1].chars + steps[3].chars);
 });
 
+test('a planner step logged first without its tool calls opens them when logged again', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const text = [
+    JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 1, status: 'RUNNING', content: 'Looking.' }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE', step_index: 1, status: 'DONE', content: 'Looking.',
+      tool_calls: [{ name: 'view_file', args: { AbsolutePath: 'C:/repo/a.js' } }],
+    }),
+    JSON.stringify({ type: 'GENERIC', step_index: 2, status: 'DONE', content: 'abc' }),
+  ].join('\n');
+  const steps = parseSteps(text).steps;
+  const events = state.apply(steps);
+  assert.deepEqual(events.map((e) => `${e.phase}:${e.tile}`), ['start:Read', 'end:Read']);
+  // The second version replaces the first in the window, it does not add to it.
+  assert.equal(state.contextChars, steps[1].chars + steps[2].chars);
+  // A third copy opens nothing again.
+  assert.deepEqual(state.apply([steps[1]]), []);
+});
+
 test('event ids never collide, even across conversations restarted from step 0', () => {
   const state = new AgyTranscriptState({ cwd: CWD });
   const first = state.apply(parseSteps(FIXTURE).steps);
@@ -501,21 +520,39 @@ test('watcher: a conversation in another folder only is not taken, and that is l
   watcher.stop();
 });
 
-test('watcher: a summaries database that cannot be read now is retried, not bypassed', () => {
+test('watcher: a summaries database agy holds locked is retried, not bypassed', () => {
   const tabDir = makeTabDir();
+  const root = makeAppData({ [ID_A]: tabDir });
+  const { DatabaseSync } = require('node:sqlite');
+  const agy = new DatabaseSync(path.join(root, 'conversation_summaries.db'));
+  agy.exec('BEGIN EXCLUSIVE');
+  agy.exec(`insert into conversation_summaries values ('${ID_B}', '[]')`);
+  try {
+    assert.equal(readConversationWorkspaces(root).retry, true);
+    const { watcher, out } = makeWatcher(root, tabDir);
+    const file = writeTranscript(root, ID_A, FIXTURE);
+    watcher.safeTick();
+    assert.equal(watcher.pinned, null, 'no folder check, no pick');
+    assert.equal(out.logs.length, 1);
+    assert.match(out.logs[0], /busy \(database is locked\); trying again/);
+    agy.exec('COMMIT');
+    watcher.safeTick();
+    assert.equal(watcher.pinned.full, file);
+    watcher.stop();
+  } finally {
+    agy.close();
+  }
+});
+
+test('watcher: a broken summaries database is not retried forever: it matches by time', () => {
   const root = makeAppData(null);
-  const dbFile = path.join(root, 'conversation_summaries.db');
-  fs.writeFileSync(dbFile, 'not a database yet');
-  const { watcher, out } = makeWatcher(root, tabDir);
+  fs.writeFileSync(path.join(root, 'conversation_summaries.db'), 'this is not sqlite');
+  const { watcher, out } = makeWatcher(root, CWD);
   const file = writeTranscript(root, ID_A, FIXTURE);
   watcher.safeTick();
-  assert.equal(watcher.pinned, null, 'no folder check, no pick');
-  assert.equal(out.logs.length, 1);
-  assert.match(out.logs[0], /unreadable.*trying again/);
-  fs.rmSync(dbFile);
-  writeSummaries(root, { [ID_A]: tabDir });
-  watcher.safeTick();
   assert.equal(watcher.pinned.full, file);
+  assert.equal(out.logs.length, 1);
+  assert.match(out.logs[0], /unreadable \(file is not a database\); matching agy conversations to this tab by time only/);
   watcher.stop();
 });
 
@@ -585,6 +622,48 @@ test('watcher: a line longer than a read is skipped whole and logged, the next o
   watcher.stop();
 });
 
+test('watcher: a skipped long line ends the open batch instead of shifting its results', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const { watcher, out } = makeWatcher(root, CWD, { chunkBytes: 256 });
+  const read = (file) => ({ name: 'view_file', args: { AbsolutePath: `C:/repo/${file}` } });
+  writeTranscript(root, ID_A, [
+    JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [read('a.js'), read('b.js')] }),
+    JSON.stringify({ type: 'GENERIC', status: 'DONE', content: 'y'.repeat(1000) }), // a's result, too long
+    JSON.stringify({ type: 'GENERIC', status: 'DONE', content: 'bb' }), // b's result, must not end a
+    '',
+  ].join('\n'));
+  drain(watcher);
+  assert.deepEqual(out.tools.map((e) => `${e.phase}:${path.basename(e.file)}`), ['start:a.js', 'start:b.js', 'end:a.js', 'end:b.js']);
+  assert.ok(out.tools.filter((e) => e.phase === 'end').every((e) => e.contextChars === 0), 'no result is pinned on the wrong call');
+  watcher.stop();
+});
+
+test('watcher: a listener that throws does not make the next tick fold the same lines again', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  let calls = 0;
+  const { watcher, out } = makeWatcher(root, CWD, {
+    onTools: (events) => {
+      calls++;
+      if (calls === 1) throw new Error('renderer gone');
+      out.tools.push(...events);
+    },
+  });
+  // Without step_index nothing dedupes a second fold, so one would show.
+  const unindexed = FIXTURE.replace(/"step_index":\d+,/g, '');
+  const file = writeTranscript(root, ID_A, unindexed);
+  watcher.safeTick();
+  watcher.safeTick();
+  const once = new AgyTranscriptState({ cwd: CWD });
+  once.apply(parseSteps(unindexed).steps);
+  assert.equal(watcher.state.contextChars, once.contextChars, 'counted once');
+  assert.deepEqual(out.tools, [], 'nothing replayed');
+  assert.match(out.logs.join('\n'), /tick failed: renderer gone/);
+  fs.appendFileSync(file, `${JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 9, tool_calls: [{ name: 'view_file', args: {} }] })}\n`);
+  watcher.safeTick();
+  assert.deepEqual(out.tools.map((e) => e.phase), ['start']);
+  watcher.stop();
+});
+
 test('watcher: chunked reads never split a multibyte character, and CRLF lines read the same', () => {
   const root = makeAppData({ [ID_A]: CWD });
   const contents = ['żółć'.repeat(60), '\u{1F600}\u{1F680}'.repeat(40), '中文'.repeat(70)];
@@ -619,6 +698,25 @@ test('watcher: a file that got shorter is read again as history', () => {
   fs.appendFileSync(file, `${JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 2, tool_calls: [{ name: 'view_file', args: {} }] })}\n`);
   watcher.safeTick();
   assert.deepEqual(out.tools.slice(10).map((e) => e.phase), ['start'], 'the calls history left open stay dark');
+  watcher.stop();
+});
+
+test('watcher: calls still lit when the file gets shorter end there, with fresh ids after', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const lines = FIXTURE.trim().split('\n');
+  const { watcher, out } = makeWatcher(root, CWD);
+  const file = writeTranscript(root, ID_A, `${lines.slice(0, 2).join('\n')}\n`);
+  watcher.safeTick();
+  assert.deepEqual(out.tools.map((e) => e.phase), ['start', 'start']);
+  fs.writeFileSync(file, `${lines[0]}\n`);
+  watcher.safeTick();
+  assert.deepEqual(out.tools.map((e) => e.phase), ['start', 'start', 'end', 'end']);
+  assert.deepEqual(out.tools.slice(2).map((e) => e.id), out.tools.slice(0, 2).map((e) => e.id));
+  fs.appendFileSync(file, `${lines[1]}\n`);
+  watcher.safeTick();
+  const startIds = out.tools.filter((e) => e.phase === 'start').map((e) => e.id);
+  assert.equal(startIds.length, 4);
+  assert.equal(new Set(startIds).size, 4, 'no id is reused');
   watcher.stop();
 });
 
@@ -689,9 +787,11 @@ test('readConversationWorkspaces reports an unreadable database instead of throw
   fs.writeFileSync(path.join(root, 'conversation_summaries.db'), 'this is not sqlite');
   const ws = readConversationWorkspaces(root);
   assert.equal(ws.ok, false);
-  assert.equal(ws.absent, false, 'there but unreadable is not the same as missing');
-  assert.match(ws.reason, /conversation_summaries\.db unreadable/);
-  assert.equal(readConversationWorkspaces(makeAppData(null)).absent, true);
+  assert.equal(ws.retry, false, 'a broken file does not mend itself');
+  assert.match(ws.reason, /conversation_summaries\.db unreadable \(file is not a database\)/);
+  const missing = readConversationWorkspaces(makeAppData(null));
+  assert.deepEqual([missing.ok, missing.retry], [false, false]);
+  assert.match(missing.reason, /not found/);
 });
 
 // ---- the renderer labels the estimate --------------------------------------------

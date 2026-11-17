@@ -18,9 +18,10 @@
 // The pick is permanent. Known limit: a new conversation started inside the
 // same agy process (its /clear) is not followed.
 //
-// Without the database (agy never wrote one, or this Node has no node:sqlite)
-// the folder cannot be checked and the pick goes by time and claims alone. A
-// database that is there but busy or broken is retried next tick instead.
+// Without a readable database (agy never wrote one, this Node has no
+// node:sqlite, or the file is broken) the folder cannot be checked and the
+// pick goes by time and claims alone. A database agy holds locked right now
+// is read again next tick instead.
 //
 // Nothing here writes to agy's files, and a symlinked transcript is ignored.
 // Every read is validated; whatever cannot be read is logged with its reason
@@ -47,6 +48,8 @@ const DEFAULT_INTERVAL_MS = 1500;
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 /** How long a read waits for agy's lock on the summaries database (blocks the main process). */
 const DB_BUSY_TIMEOUT_MS = 100;
+/** SQLite result codes that pass on their own: SQLITE_BUSY, SQLITE_LOCKED (low byte of an extended code). */
+const TRANSIENT_SQLITE_CODES = new Set([5, 6]);
 const NEWLINE = 0x0a;
 
 /** Conversations claimed by live agy watchers, one owner each (cf. claimedTranscripts). */
@@ -112,19 +115,20 @@ function listAgyTranscripts(appDataDir, onSkip) {
 
 /**
  * conversation id -> workspace folders, read from agy's summaries database.
- * `absent` says the folder check is impossible (no database, or no
- * node:sqlite) rather than failing for now (busy, locked, corrupt).
+ * `retry` says the failure passes on its own (agy holds the database
+ * locked); anything else - no database, no node:sqlite, a broken file or a
+ * schema this code does not know - will not.
  * @returns {{ok:true, byId:Map<string,string[]>, skipped:number}
- *   | {ok:false, absent:boolean, reason:string}}
+ *   | {ok:false, retry:boolean, reason:string}}
  */
 function readConversationWorkspaces(appDataDir) {
   const file = path.join(appDataDir, SUMMARIES_DB);
-  if (!fs.existsSync(file)) return { ok: false, absent: true, reason: `${SUMMARIES_DB} not found` };
+  if (!fs.existsSync(file)) return { ok: false, retry: false, reason: `${SUMMARIES_DB} not found` };
   let DatabaseSync;
   try {
     ({ DatabaseSync } = require('node:sqlite'));
   } catch (err) {
-    return { ok: false, absent: true, reason: `node:sqlite unavailable (${errText(err)})` };
+    return { ok: false, retry: false, reason: `node:sqlite unavailable (${errText(err)})` };
   }
   let db = null;
   try {
@@ -133,7 +137,9 @@ function readConversationWorkspaces(appDataDir) {
     const { byId, skipped } = workspacesFromRows(rows);
     return { ok: true, byId, skipped };
   } catch (err) {
-    return { ok: false, absent: false, reason: `${SUMMARIES_DB} unreadable (${errText(err)})` };
+    const retry = Number.isInteger(err && err.errcode) && TRANSIENT_SQLITE_CODES.has(err.errcode & 0xff);
+    const why = (err && err.message) || errText(err);
+    return { ok: false, retry, reason: `${SUMMARIES_DB} ${retry ? 'busy' : 'unreadable'} (${why})` };
   } finally {
     if (db) db.close();
   }
@@ -282,15 +288,15 @@ class AgyTranscriptWatcher {
   inThisFolder(pool) {
     if (pool.length === 0 || !this.cwd) return pool;
     const ws = readConversationWorkspaces(this.appDataDir);
-    if (!ws.ok && ws.absent) {
-      // The folder cannot be checked at all; time and claims still keep two
-      // tabs apart unless both start a conversation at once.
-      this.warnOnce('workspaces-absent', `${ws.reason}; matching agy conversations to this tab by time only`);
-      return pool;
+    if (!ws.ok && ws.retry) {
+      this.warnOnce('workspaces-busy', `${ws.reason}; trying again`);
+      return [];
     }
     if (!ws.ok) {
-      this.warnOnce('workspaces-unreadable', `${ws.reason}; trying again`);
-      return [];
+      // The folder cannot be checked; time and claims still keep two tabs
+      // apart unless both start a conversation at once.
+      this.warnOnce('workspaces-unchecked', `${ws.reason}; matching agy conversations to this tab by time only`);
+      return pool;
     }
     if (ws.skipped > 0) {
       this.warnOnce('workspaces-skipped', `${SUMMARIES_DB}: ignored ${ws.skipped} row(s) that did not validate`);
@@ -340,11 +346,34 @@ class AgyTranscriptWatcher {
   /** The file shrank (rewritten or replaced): count again from the start. */
   restart(file, size) {
     this.warnOnce('restart', `${file} got shorter; reading it again from the start`);
+    // Calls lit live end here (history lit none), or they would stay lit.
+    const ends = this.state.endOpen(Date.now());
+    const live = this.historyUntil === 0;
+    const next = new AgyTranscriptState({ cwd: this.cwd });
+    next.callSeq = this.state.callSeq; // new ids never repeat old ones
+    next.model = this.state.model;
+    this.state = next;
     this.offset = 0;
     // Its content is not news: what is there now counts as history.
     this.historyUntil = size;
     this.skipping = false;
-    this.state = new AgyTranscriptState({ cwd: this.cwd });
+    if (live) this.emitTools(ends);
+  }
+
+  /**
+   * Enters a line longer than a read, dropped up to its end. Which step it
+   * held is unknown, so the open batch ends here: a result on that line
+   * would otherwise shift every later result onto the wrong call.
+   */
+  skipLongLine(file) {
+    this.skipping = true;
+    this.warnOnce('long-line', `skipping a line of ${file} longer than ${this.chunkBytes} bytes; tool calls open at that point end without a result`);
+    const ends = this.state.endOpen(Date.now());
+    if (this.historyUntil === 0) this.emitTools(ends);
+  }
+
+  emitTools(events) {
+    if (events.length > 0 && this.onTools) this.onTools(events);
   }
 
   /**
@@ -372,25 +401,29 @@ class AgyTranscriptWatcher {
     }
     const lastNl = buf.lastIndexOf(NEWLINE);
     if (lastNl < start) {
-      if (start === 0 && buf.length >= this.chunkBytes) {
-        // No line end within a whole chunk: not a step anyone can use.
-        this.skipping = true;
+      // A whole chunk with no line end, and the file goes on past it: the
+      // line is longer than a read, not a step anyone can use.
+      if (start === 0 && buf.length >= this.chunkBytes && this.offset + buf.length < size) {
         this.offset += buf.length;
-        this.warnOnce('long-line', `skipping a line of ${file} longer than ${this.chunkBytes} bytes`);
+        this.skipLongLine(file);
         return 'more';
       }
       this.offset += start;
       return this.offset + (buf.length - start) >= size ? 'partial' : 'more';
     }
-    this.foldLines(file, buf, start, lastNl + 1);
+    const events = this.foldLines(file, buf, start, lastNl + 1);
+    // The place moves on before anyone hears of it: a listener that throws
+    // must not make the next tick fold the same lines again.
     this.offset += lastNl + 1;
+    this.emitTools(events);
     return this.offset >= size ? 'eof' : 'more';
   }
 
   /**
-   * Folds the complete lines buf[start, end). Lines that were in the file
-   * when it was pinned are history: they count toward the context window but
-   * light no tool, and what they left open is dropped where history ends.
+   * Folds the complete lines buf[start, end) and returns their live tool
+   * events. Lines that were in the file when it was pinned are history: they
+   * count toward the context window but light no tool, and what they left
+   * open is dropped where history ends.
    */
   foldLines(file, buf, start, end) {
     let liveFrom = start;
@@ -402,14 +435,12 @@ class AgyTranscriptWatcher {
         this.applyLines(file, buf.toString('utf8', start, lastHistoryNl + 1));
         liveFrom = lastHistoryNl + 1;
       }
-      if (this.offset + end < this.historyUntil) return;
+      if (this.offset + end < this.historyUntil) return [];
       // A call the past left open (a killed session) must not light anything now.
       this.state.forgetPending();
       this.historyUntil = 0;
     }
-    if (liveFrom >= end) return;
-    const events = this.applyLines(file, buf.toString('utf8', liveFrom, end));
-    if (events.length > 0 && this.onTools) this.onTools(events);
+    return liveFrom < end ? this.applyLines(file, buf.toString('utf8', liveFrom, end)) : [];
   }
 
   /** Parses whole lines, logs the ones it cannot use, returns the tool events. */

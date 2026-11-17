@@ -315,6 +315,8 @@ class AgyTranscriptState {
     this.unresolved = 0;
     /** Highest step_index seen: a line repeating one is an update, not a new step. */
     this.lastIndex = -1;
+    /** {type, chars, opened} of the step with that index, for its updates; null when unknown. */
+    this.last = null;
     /** Event ids are ours, so they never collide (agy's own are not logged). */
     this.callSeq = 0;
   }
@@ -328,12 +330,13 @@ class AgyTranscriptState {
   apply(steps) {
     const events = [];
     for (const step of Array.isArray(steps) ? steps : []) {
-      if (step.index !== null) {
-        // A step logged again (its status moved on) would count twice and
-        // shift every later result onto the wrong call.
-        if (step.index <= this.lastIndex) continue;
-        this.lastIndex = step.index;
+      if (step.index !== null && step.index <= this.lastIndex) {
+        // A step logged again (its status moved on) must not count twice
+        // or shift every later result onto the wrong call.
+        if (step.index === this.lastIndex) this.update(step, events);
+        continue;
       }
+      if (step.index !== null) this.lastIndex = step.index;
       // A checkpoint is agy compacting the conversation: its summary replaces
       // everything before it in the window.
       this.contextChars = step.type === 'CHECKPOINT' ? step.chars : this.contextChars + step.chars;
@@ -343,8 +346,28 @@ class AgyTranscriptState {
         const call = this.pending.shift();
         if (call.tile) events.push(endEvent(call, step));
       }
+      this.last = step.index === null ? null
+        : { type: step.type, chars: step.chars, opened: step.type === 'PLANNER_RESPONSE' && step.toolCalls.length > 0 };
     }
     return events;
+  }
+
+  /**
+   * The newest step, logged again. Only what its first version could not do
+   * is applied: its size replaces the old one, and a planner step that first
+   * came without its tool calls opens them now. A result is never applied
+   * twice - it would end a second call.
+   */
+  update(step, events) {
+    const last = this.last;
+    if (!last || last.type !== step.type) return;
+    this.contextChars = step.type === 'CHECKPOINT' ? step.chars : this.contextChars - last.chars + step.chars;
+    last.chars = step.chars;
+    if (step.type === 'USER_INPUT') this.model = modelFromUserInput(step.content) || this.model;
+    if (step.type === 'PLANNER_RESPONSE' && !last.opened && step.toolCalls.length > 0) {
+      this.openBatch(step, events);
+      last.opened = true;
+    }
   }
 
   /** A planner step: the previous batch is over, this one's calls start. */
@@ -374,8 +397,18 @@ class AgyTranscriptState {
    * lit, and the renderer only ever wants balanced pairs.
    */
   closePending(at) {
+    const events = this.endOpen(at);
+    this.unresolved += events.length;
+    return events;
+  }
+
+  /**
+   * Ends every call still waiting, as changing nothing. For a reader that
+   * loses its place (a skipped line, a rewritten file): what it lit must go
+   * dark, or the tile and the tab's git activity stay on for good.
+   */
+  endOpen(at) {
     const open = this.pending.filter((call) => call.tile);
-    this.unresolved += open.length;
     this.pending = [];
     return open.map((call) => ({
       phase: 'end', id: call.id, tile: call.tile, at, file: call.file, added: 0, removed: 0, contextChars: 0, contextTokens: 0,
