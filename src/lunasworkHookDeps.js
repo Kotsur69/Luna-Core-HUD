@@ -31,12 +31,15 @@ const { tagName } = require('./lunasworkCheckpoint');
 const { createGraphRefresher, CODEMAPS_DIR } = require('./lunasworkGraph');
 const { i18nCards } = require('./lunasworkI18n');
 const { runLighthouse } = require('./lunasworkLighthouse');
-const { reviewsDue, runReviews } = require('./lunasworkReviews');
+const { REVIEW_ROLE, reviewsDue, runReviews } = require('./lunasworkReviews');
 const { runSecondOpinion } = require('./lunasworkSecondOpinion');
 const { runGateSkills } = require('./lunasworkSkills');
 const { execClaude } = require('./lunasworkCritic');
+const { AGY_MODEL } = require('./claudeModels');
 
 const GIT_TIMEOUT_MS = 30 * 1000;
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const MAX_GATE_LOG_COMMITS = 200;
 const FALLBACK_LOG_COMMITS = 40;
 const MAX_DIFF_BYTES = 4 * 1024 * 1024;
@@ -124,16 +127,32 @@ function designPack(repoPath) {
 }
 
 /**
+ * The reviews' model pick: the reviewer role only when it is set to agy.
+ * Every Claude choice keeps the reviews on DEFAULT_MODELS.reviewer, exactly
+ * as before the agy option (runReviews' own default).
+ * @param {unknown} models the run's models per role
+ * @returns {((role:string)=>{model:string}|null)|null}
+ */
+function reviewPickFor(models) {
+  return isObj(models) && models[REVIEW_ROLE] === AGY_MODEL ? () => ({ model: AGY_MODEL }) : null;
+}
+
+/**
  * @param {{env:()=>object, settings?:()=>object, log?:(line:string)=>void,
- *   meter?:(role:string, runClaude:Function)=>Function}} ctx
+ *   meter?:(role:string, runClaude:Function)=>Function, runClaude?:Function, agyEnv?:()=>object|null}} ctx
  *   meter: wraps a runClaude to book its tokens (LW 2.17a, lunasworkUsage.createUsageMeter().runner)
+ *   runClaude: the role calls' runner (default lunasworkCritic.execClaude); the wiring's runs a
+ *     `--model agy` call on agy (src/agyexec.js)
+ *   agyEnv: the agy profile's env, for the second opinion's agy CLI
  * @returns {{refreshGraph:Function, i18n:Function, lighthouse:Function, reviews:Function, skills:Function, secondOpinion:Function}}
  */
 function createHookDeps(ctx) {
   const settings = typeof ctx.settings === 'function' ? ctx.settings : () => settingsStore.readSettings();
   const log = typeof ctx.log === 'function' ? (message) => ctx.log(`[lunaswork] ${message}`) : () => {};
   const graph = createGraphRefresher({ env: ctx.env, log: ctx.log });
-  const metered = (role) => (typeof ctx.meter === 'function' ? { runClaude: ctx.meter(role, execClaude) } : {});
+  const runClaude = typeof ctx.runClaude === 'function' ? ctx.runClaude : execClaude;
+  const metered = (role) => (typeof ctx.meter === 'function' ? { runClaude: ctx.meter(role, runClaude) } : { runClaude });
+  const agyEnvNow = () => (typeof ctx.agyEnv === 'function' ? ctx.agyEnv() || null : null);
 
   return {
     refreshGraph: (opts) => graph.refreshGraph(opts),
@@ -150,14 +169,16 @@ function createHookDeps(ctx) {
       });
       return { ...res, budgets: settingsStore.lighthouseBudgetsFor(settings(), projectId) };
     },
-    reviews: async ({ iteration, isGate, runId, repoPath }) => {
+    reviews: async ({ iteration, isGate, runId, repoPath, models }) => {
       // No review due: no diff to read.
       const diff = reviewsDue(iteration, isGate).length ? await iterationDiff(repoPath, runId, iteration) : '';
-      return runReviews({ iteration, isGate, runId, repoPath, diff, env: ctx.env(), log, ...metered('reviewer') });
+      const pickModel = reviewPickFor(models);
+      return runReviews({ iteration, isGate, runId, repoPath, diff, env: ctx.env(), log, ...metered('reviewer'), ...(pickModel ? { pickModel } : {}) });
     },
     // LW 2.16: project skills at a passed gate, from the git log since the previous gate.
+    // runClaude: the reviewer role set to agy proposes and reviews on agy.
     skills: async ({ isGate, repoPath, runId, iteration, milestone, models, sinceIteration }) => runGateSkills({
-      isGate, repoDir: repoPath, runId, iteration, milestone, models, env: ctx.env(), log,
+      isGate, repoDir: repoPath, runId, iteration, milestone, models, env: ctx.env(), log, runClaude,
       gitLog: await gateLog(repoPath, runId, sinceIteration),
     }),
     secondOpinion: async ({ isGate, repoPath, runId, iteration, report, allPassed }) => {
@@ -168,6 +189,8 @@ function createHookDeps(ctx) {
         order,
         cwd: repoPath,
         env: ctx.env(),
+        // The agy CLI in the order runs in the agy profile's env (none: agy is skipped).
+        agyEnv: agyEnvNow(),
         allPassed,
         log,
         inputs: { playtestReport: report, designPack: designPack(repoPath), gateDiff: await iterationDiff(repoPath, runId, iteration) },

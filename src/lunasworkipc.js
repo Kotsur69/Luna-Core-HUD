@@ -2,7 +2,7 @@
 // LunaCore - Luna's Work IPC (main process, docs/tbc_docs/LUNAS_WORK_PLAN.md slice 1.2c)
 // ----------------------------------------------------------------------------
 // lunaswork:getSettings    {projectId} -> view
-// lunaswork:saveSettings   {projectId, models?, projectModels?, freeFallback?, profile?,
+// lunaswork:saveSettings   {projectId, models?, projectModels?, freeFallback?, agyFallback?, profile?,
 //                           designVariants?, mockupFirst?} -> view
 //                          | {ok:false, reason:'bad-profile', field, detail}
 // lunaswork:scaffoldPack   {projectId} -> {ok, created, skipped, failed, pack}
@@ -46,7 +46,7 @@
 // lunaswork:event          main -> renderer push, {type, status}, on every
 //                          controller event (phase, wait, resume, stopping, wheel)
 //
-// view = {ok, projectId, roles, choices, models, projectModels, freeFallback, profile,
+// view = {ok, projectId, roles, choices, models, projectModels, freeFallback, agyFallback, profile,
 //         designVariants, mockupFirst}  (the LW 2.25 toggles are per project)
 // models = LunaCore's default per role; projectModels = this project's override.
 // Every status that leaves main goes through lunasworkStatus.publicStatus.
@@ -244,6 +244,7 @@ function registerLunasworkIpc(deps) {
       models: settings.models,
       projectModels: settingsStore.normalizeModelOverride((settings.projects[keyFor(projectId)] || {}).models),
       freeFallback: settings.freeFallback,
+      agyFallback: settings.agyFallback,
       profile: settingsStore.profileFor(settings, projectId),
       ...settingsStore.togglesFor(settings, projectId),
     };
@@ -284,6 +285,11 @@ function registerLunasworkIpc(deps) {
     if (req.freeFallback !== undefined) {
       if (typeof req.freeFallback !== 'boolean') return { ok: false, reason: 'bad-value' };
       next = { ...next, freeFallback: req.freeFallback };
+    }
+    // Antigravity (agy) on a Claude usage limit: a boolean only, like freeFallback.
+    if (req.agyFallback !== undefined) {
+      if (typeof req.agyFallback !== 'boolean') return { ok: false, reason: 'bad-value' };
+      next = { ...next, agyFallback: req.agyFallback };
     }
     // LW 2.25a / 2.25b: per-project toggles, booleans only.
     for (const toggle of settingsStore.TOGGLES) {

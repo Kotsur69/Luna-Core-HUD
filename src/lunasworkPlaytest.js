@@ -79,6 +79,15 @@ const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
 const designMatch = require('./lunasworkDesignMatch');
 const variants = require('./lunasworkVariants');
+const { AGY_MODEL, argsUseAgy, execAgy } = require('./agyexec');
+
+/**
+ * What a Playtester on agy loses (the run log's model reason): the adapter's
+ * MCP tools (unless agy's own MCP config has them) and the read sandbox that
+ * keeps it out of the code and earlier scores - cwd is the evidence folder,
+ * but agy may still read any absolute path.
+ */
+const AGY_PLAYTEST_CAVEAT = 'on agy: no adapter MCP tools and no read sandbox (it may read the code)';
 
 const MODES = ['explore', 'shipConfirm', 'navigation'];
 // LW 2.25b: where the clickable prototype opens, relative to the app url.
@@ -312,7 +321,9 @@ const isInside = (root, file) => {
  */
 function playtestModel(mode, models) {
   if (mode === 'shipConfirm') return { model: SHIP_CONFIRM_MODEL, reason: 'SHIP confirmation pass' };
-  return pickModel('playtester', models, { shipConfirm: false }) || { model: FALLBACK_MODEL, reason: 'default' };
+  const pick = pickModel('playtester', models, { shipConfirm: false }) || { model: FALLBACK_MODEL, reason: 'default' };
+  // On agy the Claude tool lists are dropped (src/agyexec.js): say so in the run log.
+  return pick.model === AGY_MODEL ? { ...pick, reason: `${pick.reason}; ${AGY_PLAYTEST_CAVEAT}` } : pick;
 }
 
 // ---- prompt -------------------------------------------------------------------------
@@ -965,8 +976,14 @@ function passPlan(opts) {
  * One headless call. Resolves {stdout} or {error, detail}; never rejects.
  * The timeout kills the whole tree, not just `claude`: on Windows execFile's
  * own timeout would leave npx, the Playwright MCP server and Chromium running.
+ *
+ * A Playtester set to 'agy' (`--model agy`) runs on the Antigravity CLI in
+ * `agyEnv` (src/agyexec.js), never on claude. agy takes no --mcp-config, so
+ * it gets the adapter's tools only if agy's own MCP config has them; its
+ * report goes through validateReport like any other.
  */
-function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl }) {
+function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl, agyEnv = null }) {
+  if (argsUseAgy(args)) return execAgy({ args, prompt, cwd, env: agyEnv, timeoutMs, execImpl });
   return new Promise((resolve) => {
     let timedOut = false;
     let timer = null;
@@ -1014,7 +1031,7 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl 
  * @param {{projectDir:string, adapter:{evidenceDir:string, tools:Function, iteration?:number,
  *   ensureBrowsers?:Function}, url:string, mode?:'explore'|'shipConfirm'|'navigation', checks?:object[],
  *   variants?:object[],
- *   iteration?:number, isGate?:boolean, models?:object, env?:object,
+ *   iteration?:number, isGate?:boolean, models?:object, env?:object, agyEnv?:object|null,
  *   execImpl?:Function, timeoutMs?:number, budgetUsd?:number,
  *   threshold?:number, now?:()=>number, killTreeImpl?:(pid:number)=>void}} opts
  * @returns {Promise<{ok:boolean, mode:string, model:string|null, modelReason:string|null,
@@ -1023,6 +1040,8 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl 
  */
 async function runPlaytest(opts) {
   const { projectDir, adapter, url, mode = 'explore', models, env = process.env } = opts;
+  // The agy profile's env, for a Playtester set to agy (null = refused with noAgyProfile).
+  const agyEnv = opts.agyEnv && typeof opts.agyEnv === 'object' ? opts.agyEnv : null;
   const now = opts.now || Date.now;
   const started = now();
   const pick = MODES.includes(mode) ? playtestModel(mode, models) : null;
@@ -1082,6 +1101,7 @@ async function runPlaytest(opts) {
       }),
       cwd: evidenceDir, // never the repo: the Playtester must not see the code
       env,
+      agyEnv,
       execImpl,
       timeoutMs: opts.timeoutMs || PLAYTEST_TIMEOUT_MS,
       killTreeImpl: killImpl,
@@ -1108,7 +1128,7 @@ async function runPlaytest(opts) {
         evidenceDir,
         baselinesDir: baselinesDirFor(evidenceDir),
         model: pick.model,
-        runJudge: (judge) => callClaude({ ...judge, env, execImpl, killTreeImpl: killImpl }),
+        runJudge: (judge) => callClaude({ ...judge, env, agyEnv, execImpl, killTreeImpl: killImpl }),
       })
       : { designMatch: [], warnings: [], costUsd: null };
     const report = {

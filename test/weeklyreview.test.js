@@ -229,6 +229,92 @@ test('life:week-email is rate-limited and life:week-model takes known models onl
   assert.equal(view.mailOn, true);
 });
 
+// ---- Antigravity (agy): one lean call, in the agy profile env -----------------------
+
+const AGY_ENV = { PATH: '/agy/bin', LUNA_MARK: 'agy-profile' };
+
+/** A weekly review over a fresh store with `model` picked, the given run and agy env. */
+function agySetup({ model = 'agy', run, agyEnv = AGY_ENV } = {}) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-weekly-agy-')), 'mission-weekly.local.json');
+  const store = createWeeklyStore({ file });
+  store.setModel(model);
+  const asked = [];
+  const review = createWeeklyReview({
+    collect: async (week) => ({ ...DATA, week }),
+    run,
+    getEnv: () => ({ LUNA_MARK: 'claude' }),
+    getAgyEnv: () => {
+      asked.push(true);
+      return agyEnv;
+    },
+    store,
+    now: () => new Date(2026, 9, 25, 20, 30).getTime(),
+  });
+  return { store, review, asked };
+}
+
+test('weekly review on agy: one lean call with the agy env; the model is kept on the entry', async () => {
+  const runs = [];
+  const h = agySetup({
+    run: async (job) => {
+      runs.push(job);
+      return { ok: true, answer: GOOD, costUsd: null };
+    },
+  });
+  const res = await h.review.generate('2026-W43');
+  assert.equal(res.ok, true);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].model, 'agy');
+  assert.equal(runs[0].lean, true);
+  assert.equal(runs[0].agyEnv, AGY_ENV);
+  assert.equal(res.entry.model, 'agy');
+  assert.equal(res.entry.costUsd, null);
+  assert.equal(res.entry.review.headline, 'A fun-heavy week.');
+  assert.equal(h.store.load().model, 'agy');
+});
+
+test('weekly review on agy without a profile: refused by the runner, saved as a failure, never run on claude', async () => {
+  const { runJob } = require('../src/missionrunner.js');
+  const spawned = [];
+  const exec = (...args) => {
+    spawned.push(args);
+    return null;
+  };
+  const h = agySetup({ agyEnv: null, run: (job) => runJob({ ...job, exec }) });
+  const res = await h.review.generate('2026-W43');
+  assert.equal(res.ok, true);
+  assert.equal(res.entry.review, null);
+  assert.equal(res.entry.failure, 'no-agy-profile');
+  assert.equal(spawned.length, 0);
+});
+
+test('weekly review on a Claude model never asks for the agy env', async () => {
+  const runs = [];
+  const h = agySetup({
+    model: 'sonnet',
+    run: async (job) => {
+      runs.push(job);
+      return { ok: true, answer: GOOD, costUsd: 0.01 };
+    },
+  });
+  await h.review.generate('2026-W43');
+  assert.equal(runs[0].model, 'sonnet');
+  assert.equal(runs[0].agyEnv, null);
+  assert.equal(h.asked.length, 0);
+});
+
+test('life:week-model offers and takes agy; junk spellings are refused', async () => {
+  const h = setup();
+  const call = ipc(h);
+  const view = await call('life:week', {});
+  assert.deepEqual(view.models, ['haiku', 'sonnet', 'opus', 'agy']);
+  for (const junk of ['AGY', 'agy ', '__proto__', ['agy'], null]) {
+    assert.deepEqual(await call('life:week-model', { model: junk }), { ok: false, reason: 'bad-value' }, String(junk));
+  }
+  assert.equal((await call('life:week-model', { model: 'agy' })).model, 'agy');
+  assert.equal(h.store.load().model, 'agy');
+});
+
 test('every saved review also hands its standalone HTML page to writeHtml', async () => {
   const pages = [];
   const h = setup({ writeHtml: (week, html) => pages.push({ week, html }) });

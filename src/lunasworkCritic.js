@@ -64,6 +64,7 @@ const {
 const { formatLogEntry, writePack } = require('./lunasworkCriticPack');
 const { designMatchCards } = require('./lunasworkDesignMatch');
 const { ledgerCards } = require('./lunasworkLicenses');
+const { argsUseAgy, execAgy } = require('./agyexec');
 
 const CRITIC_EFFORT = 'high';
 const CRITIC_BUDGET_USD = 3;
@@ -556,8 +557,16 @@ function applyCards(store, cards, tag, opts = {}) {
  * Default runner: one `claude` call via execFile. Resolves {stdout} or
  * {error, detail}; never rejects. No MCP servers here, so execFile's own
  * timeout kill is enough (unlike the Playtester's browser tree).
+ *
+ * A role set to 'agy' builds `--model agy`: that call runs on the Antigravity
+ * CLI (src/agyexec.js) in `agyEnv`, the agy profile's env, and never on
+ * claude. No agyEnv = {error:'noAgyProfile'}. The answer comes back as
+ * Claude's JSON envelope, so callers parse it unchanged.
+ * @param {{args:string[], prompt:string, cwd:string, env:object, timeoutMs:number,
+ *   execImpl?:Function, agyEnv?:object|null}} call
  */
-function execClaude({ args, prompt, cwd, env, timeoutMs, execImpl = execFile }) {
+function execClaude({ args, prompt, cwd, env, timeoutMs, execImpl = execFile, agyEnv = null }) {
+  if (argsUseAgy(args)) return execAgy({ args, prompt, cwd, env: agyEnv, timeoutMs, execImpl });
   return new Promise((resolve) => {
     let child;
     try {

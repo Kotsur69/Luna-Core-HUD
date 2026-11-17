@@ -16,7 +16,9 @@
 //
 // Each is ONE `claude -p` call. The only tools it may use are Gmail's
 // search_threads and get_thread (read-only; missionrunner.js denies every
-// other connector tool by name). The answer is validated against the inputs:
+// other connector tool by name). That connector is Claude's, so the brief's
+// model is one of MISSION_MODELS (the Claude models) - never agy. The
+// answer is validated against the inputs:
 // event keys and to-dos must be ones that were sent, mail rows need a
 // well-formed thread id, every string is capped. No usable answer -> the
 // entry keeps brief: null and the card shows the inputs as they are.

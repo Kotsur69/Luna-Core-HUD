@@ -2,8 +2,9 @@
 // LunaCore - Luna's Work second opinion at milestone gates
 // (docs/tbc_docs/LUNAS_WORK_PLAN.md, B8, slice 2.20)
 // ----------------------------------------------------------------------------
-// At a milestone gate only, another vendor's agent CLI (Codex or Gemini,
-// whichever is first installed AND logged in, in a configurable order) reads
+// At a milestone gate only, another vendor's agent CLI (Codex, Gemini or
+// Antigravity, whichever is first installed AND logged in, in a configurable
+// order; Antigravity only when Mati lists it - it is not in DEFAULT_ORDER) reads
 // the same inputs as the Critic - playtest report, design pack, gate diff -
 // read-only, and answers in the Critic's JSON shape (CRITIC_SCHEMA).
 //
@@ -17,16 +18,23 @@
 // Login detection mirrors src/providerusage.js (fetchCodex / fetchGemini):
 //   codex   $CODEX_HOME or ~/.codex/auth.json with tokens.access_token or OPENAI_API_KEY
 //   gemini  GEMINI_API_KEY / GOOGLE_API_KEY, or ~/.gemini/oauth_creds.json with a token
+//   agy     no verified credential file: on PATH counts as logged in, and it
+//           runs only with the agy profile's env (option agyEnv, src/agyprofile.js
+//           agyEnv). Without that env agy is unavailable - skipped with a note,
+//           the order moves on - and it never runs in the Claude env (env).
 // The command names match the native provider templates (config/providers.json).
 //
 // Read-only is enforced by each CLI, not here: codex runs in its read-only
 // sandbox (it may still READ the whole disk); gemini relies on headless
-// 'default' approval refusing every tool that needs approval. Either way the
+// 'default' approval refusing every tool that needs approval; agy runs
+// `--print` without `--mode accept-edits`, so an edit needs an approval nobody
+// gives (agy has no tool allow-list, it may still READ). Either way the
 // prompt (playtest report, design pack, gate diff) goes to that vendor, so the
 // controller only calls this when Mati opted in to a second opinion.
 //
 // Never throws, never rejects (a throwing injected detect / runCli / log /
-// now included). Not installed / not logged in -> { skipped:true, note }.
+// now included). Not installed / not logged in / no agy profile ->
+// { skipped:true, note }.
 //
 // Exports
 //   DEFAULT_ORDER          string[]  ['codex', 'gemini']
@@ -36,8 +44,9 @@
 //   detectCli(cli:string, deps?:{env?, homedir?:()=>string, platform?:string,
 //       exists?:(p)=>boolean, readFile?:(p)=>string}) -> {installed:boolean, loggedIn:boolean}
 //       Default detector; every file-system access goes through deps.
-//   pickCli(order:string[], detect:(cli)=>{installed,loggedIn}|Promise<...>)
-//       -> Promise<{cli:string|null, tried:{cli, installed, loggedIn}[]}>
+//   pickCli(order:string[], detect:(cli)=>{installed,loggedIn,unavailable?}|Promise<...>)
+//       -> Promise<{cli:string|null, tried:{cli, installed, loggedIn, unavailable?}[]}>
+//       unavailable: a detector's reason the CLI cannot run at all (agy without its profile)
 //   buildSecondOpinionPrompt(inputs:{playtestReport?, designPack?, gateDiff?}) -> string
 //   parseCliOutput(stdout:string) -> {ok:true, raw:object} | {ok:false, error:string}
 //   textSimilarity(a:string, b:string) -> number  (0..1, word-set Jaccard)
@@ -49,8 +58,11 @@
 //   execCli({command, args, prompt, cwd, env, timeoutMs, execImpl?, platform?,
 //       resolve?:(command)=>string|null}) -> Promise<{stdout}|{error, detail?}>
 //       On Windows the command is resolved to its absolute PATH entry first.
-//   runSecondOpinion({isGate, inputs, order?, detect?, runCli?, cwd?, env?, allPassed?,
+//   runSecondOpinion({isGate, inputs, order?, detect?, runCli?, cwd?, env?, agyEnv?, allPassed?,
 //       ideasAllowed?, log?, now?, timeoutMs?}) -> Promise<
+//     agyEnv: the agy profile's env (object) or null/absent = no agy profile;
+//         the env agy is detected and run in. env is for codex / gemini only.
+//     notes on a run also name every CLI passed over as unavailable.
 //       {skipped:true, note:string} |
 //       {skipped:false, ok:boolean, cli:string, verdict:'continue'|'ship'|null, cards:object[],
 //        warnings:object[], notes:string[], durationMs:number}>
@@ -69,6 +81,8 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { CRITIC_SCHEMA, validateCritique } = require('./lunasworkCritic');
 const { cleanTags } = require('./todorows');
+const { AGY_MODEL } = require('./claudeModels');
+const { AGY_BIN, agyPrintArgs } = require('./orchestraAgy');
 
 const DEFAULT_ORDER = ['codex', 'gemini'];
 // Prompt on stdin; every arg is a fixed token (safe for the Windows shell shim).
@@ -77,7 +91,10 @@ const SECOND_OPINION_CLIS = Object.freeze({
   codex: cliSpec('codex', ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--color', 'never', '-']),
   // Non-interactive with piped stdin; 'default' approval denies every tool that needs approval (writes, shell).
   gemini: cliSpec('gemini', ['--approval-mode', 'default', '--output-format', 'json']),
+  // One headless prompt from stdin, never `--mode accept-edits`: a read-only job.
+  [AGY_MODEL]: cliSpec(AGY_BIN, agyPrintArgs({ edits: false })),
 });
+const AGY_NO_PROFILE = 'no Antigravity (agy) profile';
 const SAFE_ARG_RE = /^[A-Za-z0-9._:=-]+$/;
 // A resolved path goes inside double quotes, where only these stay special to cmd.exe.
 const UNSAFE_QUOTED_RE = /["%!\r\n]/;
@@ -185,7 +202,14 @@ function geminiLoggedIn(d) {
   return !!creds && (!!creds.access_token || !!creds.refresh_token);
 }
 
-const LOGIN_CHECKS = { codex: codexLoggedIn, gemini: geminiLoggedIn };
+// agy keeps no credential file LunaCore has verified, so on PATH counts as
+// logged in here. What actually gates it is the agy profile: runSecondOpinion
+// runs agy only with that profile's env (`agyEnv`), the one Mati's agy tabs
+// log in with. A logged-out agy then fails the call, and a failed second
+// opinion never blocks a gate (gateVerdict).
+const agyLoggedIn = () => true;
+
+const LOGIN_CHECKS = { codex: codexLoggedIn, gemini: geminiLoggedIn, [AGY_MODEL]: agyLoggedIn };
 
 /**
  * Default detector: installed = on PATH, logged in = a cached login or an API key.
@@ -218,7 +242,9 @@ async function pickCli(order, detect) {
     }
     const installed = isObj(state) && state.installed === true;
     const loggedIn = installed && state.loggedIn === true;
-    tried.push({ cli, installed, loggedIn });
+    // A detector may say why a CLI cannot run at all (agy without its profile).
+    const unavailable = isObj(state) && typeof state.unavailable === 'string' && state.unavailable ? state.unavailable : null;
+    tried.push(unavailable ? { cli, installed, loggedIn, unavailable } : { cli, installed, loggedIn });
     if (loggedIn) return { cli, tried };
   }
   return { cli: null, tried };
@@ -415,8 +441,22 @@ function execCli({ command, args, prompt, cwd, env, timeoutMs, execImpl = execFi
 
 function skippedNote(tried) {
   if (!tried.length) return 'second opinion skipped: no known CLI in the order';
-  const parts = tried.map((t) => `${t.cli} ${t.installed ? 'not logged in' : 'not installed'}`);
-  return `second opinion skipped: ${parts.join(', ')}`;
+  return `second opinion skipped: ${tried.map(triedText).join(', ')}`;
+}
+
+const triedText = (t) => `${t.cli} ${t.unavailable || (t.installed ? 'not logged in' : 'not installed')}`;
+
+/**
+ * The detector runSecondOpinion uses: agy without its profile's env is
+ * unavailable whatever the detector says (it would otherwise run in a Claude
+ * env), and agy is looked up on the PATH of its own env.
+ */
+function gatedDetect(o, agyEnv) {
+  const detect = typeof o.detect === 'function' ? o.detect : (name) => detectCli(name, { env: name === AGY_MODEL ? agyEnv : o.env });
+  return (name) => {
+    if (name === AGY_MODEL && !agyEnv) return { installed: false, loggedIn: false, unavailable: AGY_NO_PROFILE };
+    return detect(name);
+  };
 }
 
 /**
@@ -430,17 +470,22 @@ async function runSecondOpinion(opts) {
   if (o.isGate !== true) return { skipped: true, note: 'second opinion skipped: not a milestone gate' };
   const started = now();
   let cli = null;
+  // A CLI passed over because it cannot run at all is said, even when a later one runs.
+  let passedOver = [];
   const failed = (reason, detail) => {
     log(`${cli} second opinion failed: ${reason}`, detail);
     const why = detail ? `${reason} (${clip(detail, MAX_NOTE_CHARS)})` : reason;
     return {
       skipped: false, ok: false, cli, verdict: null, cards: [], warnings: [],
-      notes: [`${cli || 'second opinion'} second opinion failed: ${why}`], durationMs: now() - started,
+      notes: [...passedOver, `${cli || 'second opinion'} second opinion failed: ${why}`], durationMs: now() - started,
     };
   };
   try {
-    const detect = typeof o.detect === 'function' ? o.detect : (name) => detectCli(name, { env: o.env });
-    const pick = await pickCli(o.order, detect);
+    // agy runs only in its own profile's env, never in the Claude env (o.env).
+    const agyEnv = isObj(o.agyEnv) ? o.agyEnv : null;
+    const pick = await pickCli(o.order, gatedDetect(o, agyEnv));
+    passedOver = pick.tried.filter((t) => t.unavailable).map((t) => `second opinion: ${triedText(t)}, skipped`);
+    for (const n of passedOver) log(n);
     if (!pick.cli) return { skipped: true, note: skippedNote(pick.tried) };
     cli = pick.cli;
     const spec = SECOND_OPINION_CLIS[cli];
@@ -451,7 +496,7 @@ async function runSecondOpinion(opts) {
       args: [...spec.args],
       prompt: buildSecondOpinionPrompt(o.inputs),
       cwd: o.cwd,
-      env: o.env,
+      env: cli === AGY_MODEL ? agyEnv : o.env,
       timeoutMs: o.timeoutMs || SECOND_OPINION_TIMEOUT_MS,
     });
     if (!isObj(call) || call.error) return failed((isObj(call) && call.error) || 'failed', isObj(call) ? call.detail : undefined);
@@ -461,7 +506,7 @@ async function runSecondOpinion(opts) {
     if (critique.errors.length) return failed(critique.errors[0].code);
     return {
       skipped: false, ok: true, cli, verdict: critique.verdict, cards: critique.cards,
-      warnings: critique.warnings, notes: [], durationMs: now() - started,
+      warnings: critique.warnings, notes: passedOver, durationMs: now() - started,
     };
   } catch (err) {
     return failed('crashed', err && err.message);

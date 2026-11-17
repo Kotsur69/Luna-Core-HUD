@@ -57,7 +57,8 @@ test('agy is a worker-model choice, never a Claude model', () => {
 });
 
 test("Luna's Work role models: fable is a valid choice, the defaults did not move", () => {
-  assert.deepEqual(rules.MODEL_CHOICES, ['opus', 'sonnet', 'haiku', 'fable', 'auto']);
+  // 'agy' (the Antigravity CLI) joined the list later; test/lunaswork-rules.test.js covers it.
+  assert.deepEqual(rules.MODEL_CHOICES, ['opus', 'sonnet', 'haiku', 'fable', 'agy', 'auto']);
   assert.deepEqual(rules.DEFAULT_MODELS, {
     director: 'opus',
     builder: 'opus',

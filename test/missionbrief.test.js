@@ -169,6 +169,14 @@ test('unusable output keeps the inputs; history caps at 14 daily', async () => {
   assert.equal(Object.keys(h.store.load().daily).length, MAX_DAILY);
 });
 
+test('the brief store keeps Claude models only: agy is refused, a stored agy reads as haiku', () => {
+  const h = setup();
+  assert.throws(() => h.store.setModel('agy'), /bad value/);
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-brief-agy-')), 'mission-brief.local.json');
+  fs.writeFileSync(file, JSON.stringify({ v: 1, model: 'agy' }));
+  assert.equal(createBriefStore({ file }).load().model, 'haiku');
+});
+
 test('rememberNews keeps the last briefing for the next brief', () => {
   const h = setup();
   h.brief.rememberNews(['one', 'two']);
@@ -197,6 +205,9 @@ test('mission:brief* IPC: kinds and models from fixed lists, exists until confir
   assert.equal((await call('mission:brief-run', { kind: 'daily' })).reason, 'exists');
   assert.equal((await call('mission:brief-run', { kind: 'daily', overwrite: true })).ok, true);
   assert.deepEqual(await call('mission:brief-model', { model: 'gpt-5' }), { ok: false, reason: 'bad-input' });
+  // The brief needs Claude's Gmail connector: agy is neither offered nor accepted.
+  assert.deepEqual(await call('mission:brief-model', { model: 'agy' }), { ok: false, reason: 'bad-input' });
+  assert.equal((await call('mission:brief', {})).models.includes('agy'), false);
   assert.equal((await call('mission:brief-model', { model: 'opus' })).model, 'opus');
   assert.equal((await call('mission:brief', { daily: 'not-a-key' })).daily.keys.length, 1);
 });

@@ -49,7 +49,7 @@
 //   deps.i18n({repoPath, runId, iteration}) -> i18nCards() result
 //   deps.lighthouse({projectId, repoPath, runId, iteration, url, evidenceDir})
 //       -> Promise<{results, notes, budgets?}|null>   (null: nothing to measure)
-//   deps.reviews({iteration, isGate, runId, repoPath}) -> Promise<runReviews() result>
+//   deps.reviews({iteration, isGate, runId, repoPath, models}) -> Promise<runReviews() result>
 //   deps.secondOpinion({isGate, repoPath, runId, iteration, report, allPassed})
 //       -> Promise<runSecondOpinion() result|null>    (null: off, no CLI order set)
 //   deps.skills({isGate, repoPath, runId, iteration, milestone, models, sinceIteration})
@@ -241,7 +241,8 @@ function createLoopHooks(ctx) {
 
   async function reviews(isGate) {
     if (typeof deps.reviews !== 'function') return;
-    const res = await guarded('reviews', () => deps.reviews({ ...base(), isGate }));
+    // models: the reviewer role set to agy runs the reviews on agy (lunasworkHookDeps).
+    const res = await guarded('reviews', () => deps.reviews({ ...base(), isGate, models: run().models }));
     if (res === FAILED || !isObj(res)) return;
     for (const n of notesOf(res)) note(n);
     fileNew('reviews', res.cards);

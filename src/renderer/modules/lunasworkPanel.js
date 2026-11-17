@@ -30,7 +30,8 @@ import { sfx } from './sound.js';
 import { onLangChange } from './bus.js';
 import { sparkPoints } from './spark.js';
 
-const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+// 'agy' is the Antigravity CLI, not a Claude model (src/claudeModels.js AGY_MODEL).
+const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', agy: 'Antigravity (agy)' };
 const TICK_MS = 1000;
 const FLASH_MS = 2000;
 const SPARK_W = 80;
@@ -325,6 +326,7 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     }
     if (s.active && s.wheel === 'handed' && s.handedAt) ui.details.append(row(t('lw.run.handedSince'), clock(s.handedAt), 'is-warn'));
     if (s.freeUntil) ui.details.append(row(t('lw.run.free'), t('lw.run.freeUntil', { time: clock(s.freeUntil) }), 'is-warn'));
+    if (s.agyUntil) ui.details.append(row(t('lw.run.agy'), t('lw.run.agyUntil', { time: clock(s.agyUntil) }), 'is-warn'));
     const models = Object.entries(s.models || {}).map(([role, m]) => `${t(`lw.role.${role}`)}: ${modelLabel(m)}`);
     if (models.length) ui.details.append(row(t('lw.run.models'), models.join(' · ')));
     ui.details.append(row(t('lw.run.verdict'), s.verdict ? t(`lw.verdict.${s.verdict}`) : t('lw.run.noVerdict')));

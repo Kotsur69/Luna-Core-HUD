@@ -97,6 +97,8 @@ function publicStatus(raw, isKnownProject) {
     waitReason: text(raw.waitReason),
     stepFailures: stepFailuresOf(raw),
     freeUntil: time(raw.freeUntil),
+    // On the Antigravity CLI until then (agyFallback).
+    agyUntil: time(raw.agyUntil),
     endedAt: time(raw.endedAt),
     scores: cleanScores(raw.scores),
     hasEvidence: typeof raw.evidenceDir === 'string' && raw.evidenceDir.length > 0,

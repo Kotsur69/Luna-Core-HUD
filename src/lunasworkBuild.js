@@ -11,6 +11,10 @@
 //   finishRun({planId, integration})       after a restart mid-build: merge
 //                                          what the restored plan pushed
 //
+// An agy build (opts.agy: the Builder role is 'agy', or the agy fallback is
+// on during a Claude usage limit) passes planner 'agy' and Workers 'agy' to
+// makePlan / launch, in the agy profile's env (deps.agyEnv).
+//
 // While a Luna's Work build is going, main.js routes three God Mode deps
 // through here, and ONLY then (idle = God Mode's own values, untouched):
 //
@@ -48,7 +52,7 @@ const { MAX_PROMPT_CHARS } = require('./orchestraPlan');
 // Between a package prompt and its tool kit note.
 const KIT_NOTE_GAP = '\n\n';
 
-const { MODEL_RANK, isClaudeModel, strongerModel } = require('./claudeModels');
+const { MODEL_RANK, AGY_MODEL, isClaudeModel, strongerModel } = require('./claudeModels');
 
 // God Mode workers run on these (orchestraPlan.js PACKAGE_MODELS).
 const WORKER_MODELS = ['sonnet', 'opus', 'fable'];
@@ -102,7 +106,7 @@ function planCard(card) {
  * the run by the planId in their payload.
  * @param {{orchestra:{makePlan:Function, launch:Function, cancelPlanWait:(projectId:string)=>unknown,
  *   view?:(projectId:string)=>object|null, planWait?:(projectId:string)=>object|null, finishRun?:Function},
- *   profileId:()=>string|null, env:()=>object, freeEnv?:()=>object|null,
+ *   profileId:()=>string|null, env:()=>object, freeEnv?:()=>object|null, agyEnv?:()=>object|null,
  *   log?:(line:string)=>void, isUnityProject?:(repoPath:string)=>boolean,
  *   configureUnityMerge?:(repoPath:string)=>Promise<object>,
  *   toolsFor?:(req:{projectId:string, repoPath:string, role:string, capped:string[]})=>object|null}} deps
@@ -184,14 +188,16 @@ function createGodModeBuilder(deps) {
    * One build: plan the cards, launch in merge mode, wait for the run to settle.
    * After a restart (resumePlanId = the plan this build made before) a
    * restored plan with pushed work is finished and merged instead.
-   * @param {{projectId:string, repoPath:string, cards:object[], checkCommand:string, free?:boolean,
+   * agy: plan and work on the Antigravity CLI (planner and Workers 'agy', the
+   * agy profile's env); refused with 'noAgyProfile' when there is no agy profile.
+   * @param {{projectId:string, repoPath:string, cards:object[], checkCommand:string, free?:boolean, agy?:boolean,
    *   resumePlanId?:string|null, ownPlanIds?:string[], onPlan?:(planId:string)=>void, plannerModel?:string,
    *   cappedTools?:string[]|(()=>string[])}} opts cappedTools: paid tools past the run's spend cap
    *   (a function is read again for every worker tab)
    *   ownPlanIds: plans this run made (replaceable); onPlan: the plan id, once made;
    *   plannerModel: God Mode's planner model (default: the strongest model of the cards)
    * @returns {Promise<object>} the onRunSettled result {planId, killed, integration, plan} plus ok,
-   *   or {ok:false, error} - 'limit' (with resumeAt), 'godModeBusy', or God Mode's own error
+   *   or {ok:false, error} - 'limit' (with resumeAt), 'godModeBusy', 'noAgyProfile', or God Mode's own error
    */
   async function build(opts) {
     if (active) return { ok: false, error: 'godModeBusy' };
@@ -220,16 +226,23 @@ function createGodModeBuilder(deps) {
       const interrupted = interruptedPlan(opts);
       if (interrupted) return await finishInterrupted(interrupted);
       if (foreignPlanOpen(opts)) return { ok: false, error: 'godModeBusy' };
+      // An agy build (Builder set to agy, or the agy fallback during a Claude
+      // limit) plans and works on the Antigravity CLI, in the agy profile's env.
+      // No agy profile: refused, never built on Claude instead.
+      const agy = opts.agy === true;
+      const agyEnv = agy && typeof deps.agyEnv === 'function' ? deps.agyEnv() : null;
+      if (agy && !agyEnv) return { ok: false, error: 'noAgyProfile' };
       const unity = isUnityProject(opts.repoPath);
       if (unity) await prepareUnity(opts.repoPath);
-      // A free build plans on the free providers: the Claude alias means nothing there.
-      const plannerModel = opts.free ? null : (isClaudeModel(opts.plannerModel) ? opts.plannerModel : plannerModelFor(cards));
+      // A free or agy build does not plan on Claude: the Claude alias means nothing there.
+      const plannerModel = opts.free || agy ? null : (isClaudeModel(opts.plannerModel) ? opts.plannerModel : plannerModelFor(cards));
       const made = await deps.orchestra.makePlan({
         projectId: opts.projectId,
         repoPath: opts.repoPath,
         profileId: deps.profileId(),
         // A free build (Claude is limited) plans on the free providers too.
-        env: (opts.free && typeof deps.freeEnv === 'function' && deps.freeEnv()) || deps.env(),
+        env: agyEnv || (opts.free && typeof deps.freeEnv === 'function' && deps.freeEnv()) || deps.env(),
+        ...(agy ? { planner: AGY_MODEL, workers: AGY_MODEL } : {}),
         cards: cards.map(planCard),
         onRunSettled: (result) => settle(result),
         // God Mode allow-lists it again (orchestraPlan.plannerModelOf).
@@ -241,7 +254,13 @@ function createGodModeBuilder(deps) {
       active.planId = made.plan.id;
       if (typeof opts.onPlan === 'function') opts.onPlan(made.plan.id);
       if (Array.isArray(made.plan.errors) && made.plan.errors.length) return { ok: false, error: 'planErrors' };
-      const launched = await deps.orchestra.launch({ planId: made.plan.id, integration: 'merge', ...(opts.free ? { free: true } : {}) });
+      const launched = await deps.orchestra.launch({
+        planId: made.plan.id,
+        integration: 'merge',
+        ...(opts.free && !agy ? { free: true } : {}),
+        // Approve fixes the agy profile for the run (orchestraAgy.approveAgyProfile).
+        ...(agy ? { workers: AGY_MODEL } : {}),
+      });
       if (!isObj(launched) || !launched.ok) return { ok: false, error: (isObj(launched) && launched.error) || 'failed' };
       const result = await settled;
       const r = isObj(result) ? result : {};

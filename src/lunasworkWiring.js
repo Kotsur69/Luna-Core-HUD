@@ -86,6 +86,7 @@ const { createHookDeps } = require('./lunasworkHookDeps');
 const { createShipDocsDeps } = require('./lunasworkShipDocs');
 const { createUsageMeter, addUsage, emptyUsage, godModeUsage } = require('./lunasworkUsage');
 const { execClaude } = require('./lunasworkCritic');
+const { argsUseAgy } = require('./agyexec');
 const { runCriticPick } = require('./lunasworkVariants');
 const { shipEstimate, etaLine } = require('./lunasworkEta');
 const { buildSnapshot, createSnapshotThrottle, MAX_SHOTS } = require('./lunasworksnapshot');
@@ -223,6 +224,7 @@ ${msg.text}` }),
  *   builder: {build:Function},
  *   godModeCheckCommand: ()=>string,
  *   env: ()=>object, freeEnv: ()=>object|null,
+ *   agyEnv?: ()=>object|null (the agy profile's env: roles set to agy, the agy fallback),
  *   usageLimits: ()=>object[],
  *   accountFailover?: (resetsAt:number|null)=>boolean,
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
@@ -295,10 +297,21 @@ function createLunasWorkRuntime(ctx) {
   // LW 2.17a: the run's token accounting; the controller drains it at every phase change.
   const meter = createUsageMeter();
 
+  /** The agy profile's env (src/agyprofile.js), or null when there is none. */
+  const agyEnvNow = () => (typeof ctx.agyEnv === 'function' ? ctx.agyEnv() || null : null);
+  /**
+   * execClaude for every role call: a `--model agy` call (the role set to agy,
+   * or the agy fallback) gets the agy profile's env and runs on agy
+   * (src/agyexec.js); every other call is the plain `claude -p` as before.
+   */
+  const runHeadless = (call) => execClaude(argsUseAgy(call && call.args) ? { ...call, agyEnv: agyEnvNow() } : call);
+
   /** The Playtester call booked on `m`; free providers only when asked for (freeFallback). */
   const playtestOn = (m) => ({ free, ...opts }) => runPlaytest({
     ...opts,
     env: (free && ctx.freeEnv()) || ctx.env(),
+    // A Playtester set to agy runs in the agy profile's env.
+    agyEnv: agyEnvNow(),
     execImpl: m.exec('playtester', execFile),
   });
 
@@ -348,17 +361,17 @@ function createLunasWorkRuntime(ctx) {
     godModeCheckCommand: ctx.godModeCheckCommand,
     confirmStart: ctx.confirmStart,
     todoStore,
-    director: (opts) => runDirector({ ...opts, env: ctx.env(), runClaude: meter.runner('director', execClaude) }),
+    director: (opts) => runDirector({ ...opts, env: ctx.env(), runClaude: meter.runner('director', runHeadless) }),
     build,
     createAdapter: (name, opts) => createAdapter(name, opts),
     // Free providers for the Playtester while Claude is limited (freeFallback).
     playtest: playtestOn(meter),
     shipGate: ({ repoPath, scores }) => gateStatus({ shipCriteria: pack.readPackFile(repoPath, 'SHIP_CRITERIA.md') || '', scores }),
-    critic: (opts) => runCritic({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', execClaude) }),
+    critic: (opts) => runCritic({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', runHeadless) }),
     // Idea #14: "like X" references in the pack researched into design/references/.
-    research: (opts) => runResearch({ ...opts, env: ctx.env(), log: ctx.log }),
+    research: (opts) => runResearch({ ...opts, env: ctx.env(), log: ctx.log, runClaude: runHeadless }),
     // LW 3.37: the Critic's art-direction check of new game assets (design/ASSETS.md).
-    styleCheck: (opts) => runStyleCheck({ ...opts, env: ctx.env() }),
+    styleCheck: (opts) => runStyleCheck({ ...opts, env: ctx.env(), runClaude: runHeadless }),
     // Asset cards on a Unity run name the asset pipeline's art root (per-PC setting).
     assetArtRoot: () => settingsStore.assetToolsFor(settingsStore.readSettings()).artRoot,
     gitLog,
@@ -373,6 +386,8 @@ function createLunasWorkRuntime(ctx) {
     ...(ctx.mailReplies ? { mailReplies: ctx.mailReplies } : {}),
     limitResumeAt,
     accountFailover: ctx.accountFailover,
+    // The agy fallback only takes over when an agy profile exists.
+    agyReady: () => agyEnvNow() !== null,
     awake: createAwake(ctx.powerSaveBlocker),
     // Every decision-queue answer, one line in the project's design/DECISIONS.md.
     recordDecision: ({ repoPath, line }) => {
@@ -382,7 +397,7 @@ function createLunasWorkRuntime(ctx) {
       return res.ok;
     },
     // LW 2.25a: nobody picked a design variant by the deadline - the Critic does.
-    pickVariant: (opts) => runCriticPick({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', execClaude) }),
+    pickVariant: (opts) => runCriticPick({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', runHeadless) }),
     // LW 2.25b: Mati's prototype comments, appended to DESIGN.md (never a rewrite).
     appendDesign: ({ repoPath, text }) => {
       const op = pack.appendDesign(text);
@@ -402,7 +417,15 @@ function createLunasWorkRuntime(ctx) {
       },
     },
     // Loop hooks (src/lunasworkLoopHooks.js): none of them can stop the run.
-    ...createHookDeps({ env: ctx.env, settings: () => settingsStore.readSettings(), log: ctx.log, meter: meter.runner }),
+    ...createHookDeps({
+      env: ctx.env,
+      settings: () => settingsStore.readSettings(),
+      log: ctx.log,
+      meter: meter.runner,
+      // Reviews and project skills on agy when the reviewer role is agy; the second opinion's agy CLI.
+      runClaude: runHeadless,
+      agyEnv: agyEnvNow,
+    }),
     // LW 2.22a: SHIP is final only after the docs iteration (README, user guide, release).
     shipDocs: createShipDocsDeps({ env: ctx.env }),
     usageMeter: meter,

@@ -175,6 +175,18 @@ function jobEnv() {
   return parts.some((p) => p.toLowerCase() === binDir.toLowerCase()) ? env : { ...env, [key]: binDir + sep + (env[key] || '') };
 }
 
+/**
+ * The agy profile's env for a host job on model 'agy' (src/agyprofile.js),
+ * read from the profiles file when the job runs; null = no agy profile.
+ */
+function agyJobEnv() {
+  const { loadProfiles, getProfile } = require('./profiles');
+  const { agyProfileId, agyEnv } = require('./agyprofile');
+  const profiles = loadProfiles();
+  const id = agyProfileId(profiles);
+  return id ? agyEnv(getProfile(profiles, id)) : null;
+}
+
 /** The real dependencies of src/hostactions.js in this process. */
 function actionDeps({ cloud, repos, puts, configSync, after }) {
   const { app } = require('electron');
@@ -190,6 +202,7 @@ function actionDeps({ cloud, repos, puts, configSync, after }) {
     runJob,
     model: () => readUiPrefs().missionModel,
     env: jobEnv,
+    agyEnv: agyJobEnv,
     lang: () => readUiPrefs().lang,
     snapshots: () => cloud.snapshots,
     repoDirs: () => loadRepoList().repos,
