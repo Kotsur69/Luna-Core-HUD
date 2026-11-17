@@ -52,8 +52,8 @@ test('schema without hybrid: model is opus / sonnet only', () => {
   assert.ok(!JSON.stringify(plan.PLAN_SCHEMA).includes('"free"'));
 });
 
-test('schema with hybrid: model gains "free", the rest is the same schema', () => {
-  assert.deepEqual(modelEnum(plan.planSchemaFor(true)), ['sonnet', 'opus', 'free']);
+test('schema with hybrid: model gains "free" and "agy", the rest is the same schema', () => {
+  assert.deepEqual(modelEnum(plan.planSchemaFor(true)), ['sonnet', 'opus', 'free', 'agy']);
   const strip = (schema) => JSON.parse(JSON.stringify(schema), (k, v) => (k === 'model' ? null : v));
   assert.deepEqual(strip(plan.HYBRID_PLAN_SCHEMA), strip(plan.PLAN_SCHEMA));
   // The shared Claude schema object is never mutated by building the hybrid one.
@@ -109,7 +109,7 @@ test('Claude-only run is byte-for-byte the pre-F6 planner call', async () => {
 
 test('runPlanner hybrid: free in the schema and the prompt rule on stdin', async () => {
   const call = await planOnce({ hybrid: true });
-  assert.deepEqual(modelEnum(JSON.parse(schemaArg(call.args))), ['sonnet', 'opus', 'free']);
+  assert.deepEqual(modelEnum(JSON.parse(schemaArg(call.args))), ['sonnet', 'opus', 'free', 'agy']);
   assert.match(call.stdin, /"model": "free" is also allowed/);
 });
 
@@ -227,7 +227,7 @@ function planCtx() {
   };
 }
 
-test('runPlan: only "hybrid" reaches makePlan; Claude only passes no key', async () => {
+test('runPlan: only "hybrid" and "agy" reach makePlan; Claude only passes no key; junk is refused', async () => {
   const session = { projectId: 'p', profileId: 'default' };
   const target = { projectId: 'p', repoPath: 'C:/repo' };
   const { seen, ctx } = planCtx();
@@ -235,10 +235,34 @@ test('runPlan: only "hybrid" reaches makePlan; Claude only passes no key', async
   await runPlan(ctx, session, target, { picked: [1], workers: 'claude' });
   await runPlan(ctx, session, target, { picked: [1], workers: 'hybrid' });
   await runPlan(ctx, session, target, { picked: [1], workers: 'hybrid', planner: 'free' });
-  await runPlan(ctx, session, target, { picked: [1], workers: { evil: true } });
+  await runPlan(ctx, session, target, { picked: [1], workers: 'agy' });
   assert.ok(!('workers' in seen[0]));
   assert.ok(!('workers' in seen[1]));
   assert.equal(seen[2].workers, 'hybrid');
   assert.ok(!('workers' in seen[3]), 'a free planner plans free-only');
-  assert.ok(!('workers' in seen[4]));
+  assert.equal(seen[4].workers, 'agy');
+  // An off-list value is refused, never coerced to Claude only.
+  assert.deepEqual(await runPlan(ctx, session, target, { picked: [1], workers: { evil: true } }), { ok: false, error: 'badWorkers' });
+  assert.deepEqual(await runPlan(ctx, session, target, { picked: [1], workers: 'gemini' }), { ok: false, error: 'badWorkers' });
+  assert.equal(seen.length, 5);
+});
+
+test('runPlan: the agy planner plans on the agy profile env; none configured is a clear refusal; junk planners are refused', async () => {
+  const session = { projectId: 'p', profileId: 'default' };
+  const target = { projectId: 'p', repoPath: 'C:/repo' };
+  const { seen, ctx } = planCtx();
+  const agyEnv = { AGY: '1' };
+  const withAgy = { ...ctx, agyPlannerEnv: () => agyEnv };
+  await runPlan(withAgy, session, target, { picked: [1], planner: 'agy', model: 'sonnet' });
+  assert.equal(seen[0].planner, 'agy');
+  assert.equal(seen[0].env, agyEnv);
+  assert.ok(!('plannerModel' in seen[0]), 'a Claude model alias never reaches the agy planner');
+  assert.deepEqual(await runPlan({ ...ctx, agyPlannerEnv: () => null }, session, target, { picked: [1], planner: 'agy' }), {
+    ok: false,
+    error: 'noAgyProfile',
+  });
+  assert.deepEqual(await runPlan(ctx, session, target, { picked: [1], planner: 'agy' }), { ok: false, error: 'noAgyProfile' });
+  assert.deepEqual(await runPlan(ctx, session, target, { picked: [1], planner: 'gpt' }), { ok: false, error: 'badPlanner' });
+  assert.deepEqual(await runPlan(ctx, session, target, { picked: [1], planner: 42 }), { ok: false, error: 'badPlanner' });
+  assert.equal(seen.length, 1);
 });

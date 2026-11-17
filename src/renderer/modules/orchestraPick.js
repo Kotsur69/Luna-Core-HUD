@@ -30,13 +30,14 @@ let plannerEffort = DEFAULT_PLANNER_EFFORT;
 /** The Claude planner's --model chosen next to it (ui pref orchestraPlannerModel). */
 let plannerModel = DEFAULT_PLANNER_MODEL;
 /** D1 "Planner: Claude / Free" for a Build run; Claude unless Mati picks Free. */
-const BUILD_PLANNERS = ['claude', 'free'];
+// Mirrors src/orchestraAgy.js PLANNERS; 'agy' plans on the Antigravity profile.
+const BUILD_PLANNERS = ['claude', 'agy', 'free'];
 let buildPlanner = 'claude';
 /**
  * F6 "Workers" (ui pref orchestraWorkers): Claude only / Plan with free models
  * in mind / Free only. Mirrors src/orchestraWorkers.js WORKERS.
  */
-const WORKERS = ['claude', 'hybrid', 'free'];
+const WORKERS = ['claude', 'agy', 'hybrid', 'free'];
 let workers = 'claude';
 /** "Sessions may file new to-dos" (ui pref orchestraFollowups): off unless ticked; the last choice is kept. */
 let followups = false;

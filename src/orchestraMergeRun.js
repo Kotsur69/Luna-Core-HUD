@@ -15,6 +15,8 @@
 
 'use strict';
 
+const { runUsesAgy } = require('./orchestraAgy');
+
 const MAX_IDS = 50;
 const ID_RE = /^[a-z0-9-]{1,64}$/;
 
@@ -58,6 +60,8 @@ function createMergeRunDeps(deps) {
       { ...args, repoPath: run.repoPath, packages },
       {
         ...extra,
+        // An agy run resolves its merge conflicts on agy (src/orchestraAgy.js).
+        ...(runUsesAgy(run) ? { cli: 'agy' } : {}),
         fixup: (fx) => {
           fixups = { ...fixups, n: fixups.n + 1 };
           // Recorded as the merge fix-up by the follow-up channel (orchestraFixup.js).

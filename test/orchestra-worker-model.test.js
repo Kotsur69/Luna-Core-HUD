@@ -80,14 +80,52 @@ test('Approve with workerModel "plan": each package on its planner pick', async 
   assert.deepEqual(models(log), ['sonnet', 'opus']);
 });
 
-test('Approve with workerModel "agy": the run freezes it and the pref is saved', async () => {
-  const { orch, log } = setup();
+test('Approve with workerModel "agy": the run freezes it, the pref is saved, tabs open on the agy profile', async () => {
+  const { orch, log } = setup({ extraDeps: { agyProfileId: () => 'agy-profile' } });
   const { plan } = await orch.makePlan(ctx);
   const res = await orch.launch(approve(plan, { workerModel: 'agy' }));
   assert.equal(res.ok, true);
   assert.equal(res.plan.workerModel, 'agy');
   assert.deepEqual(models(log), ['agy', 'agy']);
   assert.deepEqual(log.saved, ['agy']);
+  assert.deepEqual(log.sessions.map((s) => s.profileId), ['agy-profile', 'agy-profile']);
+});
+
+test('Approve with workerModel "agy" and no agy profile: a clear refusal, nothing launched or saved', async () => {
+  const { orch, log } = setup({ extraDeps: { agyProfileId: () => null } });
+  const { plan } = await orch.makePlan(ctx);
+  const res = await orch.launch(approve(plan, { workerModel: 'agy' }));
+  assert.deepEqual(res, { ok: false, error: 'noAgyProfile' });
+  assert.equal(log.sessions.length, 0);
+  assert.deepEqual(log.saved, []);
+});
+
+test('Approve with workers "agy": every tab on the agy profile; workers "claude" stays on the tab profile', async () => {
+  const agy = setup({ extraDeps: { agyProfileId: () => 'agy-profile' } });
+  const { plan } = await agy.orch.makePlan(ctx);
+  const res = await agy.orch.launch(approve(plan, { workers: 'agy' }));
+  assert.equal(res.ok, true);
+  assert.deepEqual(agy.log.sessions.map((s) => s.profileId), ['agy-profile', 'agy-profile']);
+  const claude = setup({ extraDeps: { agyProfileId: () => 'agy-profile' } });
+  const second = await claude.orch.makePlan(ctx);
+  assert.equal((await claude.orch.launch(approve(second.plan, { workers: 'claude' }))).ok, true);
+  assert.deepEqual(claude.log.sessions.map((s) => s.profileId), ['claude-cloud', 'claude-cloud']);
+});
+
+for (const bad of ['agyy', 'AGY', 'gemini', 42, { w: 'agy' }]) {
+  test(`Approve with an off-list workers value (${JSON.stringify(bad)}) is refused, never coerced to Claude`, async () => {
+    const { orch, log } = setup({ extraDeps: { agyProfileId: () => 'agy-profile' } });
+    const { plan } = await orch.makePlan(ctx);
+    assert.deepEqual(await orch.launch(approve(plan, { workers: bad })), { ok: false, error: 'badWorkers' });
+    assert.equal(log.sessions.length, 0);
+  });
+}
+
+test('Approve with workers "agy" and no agy profile: refused with noAgyProfile', async () => {
+  const { orch, log } = setup();
+  const { plan } = await orch.makePlan(ctx);
+  assert.deepEqual(await orch.launch(approve(plan, { workers: 'agy' })), { ok: false, error: 'noAgyProfile' });
+  assert.equal(log.sessions.length, 0);
 });
 
 for (const bad of ['gpt-5', 'OPUS', 'AGY', 'antigravity', '', 42, { model: 'opus' }, ['sonnet'], true]) {

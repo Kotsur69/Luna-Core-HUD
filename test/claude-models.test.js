@@ -92,11 +92,12 @@ test("a Luna's Work card keeps builder model fable, and its package runs on it",
 test('God Mode: the planner is offered sonnet / opus only, but a fable package validates', () => {
   // Automatic assignment is unchanged: schema enum and prompt do not mention fable.
   assert.deepEqual(plan.PLAN_SCHEMA.properties.packages.items.properties.model.enum, ['sonnet', 'opus']);
-  assert.deepEqual(plan.HYBRID_PLAN_SCHEMA.properties.packages.items.properties.model.enum, ['sonnet', 'opus', 'free']);
+  // A hybrid planner may also hand a package to the Antigravity CLI (src/orchestraAgy.js).
+  assert.deepEqual(plan.HYBRID_PLAN_SCHEMA.properties.packages.items.properties.model.enum, ['sonnet', 'opus', 'free', 'agy']);
   assert.equal(/fable/i.test(plan.buildPlannerPrompt([{ at: 1, text: 'x' }])), false);
   assert.equal(/fable/i.test(plan.buildPlannerPrompt([{ at: 1, text: 'x' }], { hybrid: true })), false);
 
-  assert.deepEqual(plan.PACKAGE_MODELS, ['sonnet', 'opus', 'fable']);
+  assert.deepEqual(plan.PACKAGE_MODELS, ['sonnet', 'opus', 'fable', 'agy']);
   const pkg = (model) => ({ id: 'a', title: 'A', todoAts: [1], prompt: 'do', files: [], dependsOn: [], verify: '', model });
   const checked = (model, opts) => plan.validatePlan({ packages: [pkg(model)], notes: '' }, [{ at: 1, text: 'x' }], opts).packages[0].model;
   assert.equal(checked('fable'), 'fable');

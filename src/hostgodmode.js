@@ -13,8 +13,9 @@
 //                    at once; planReady / planFailed go out as a push and the
 //                    plan lands in the `godmode` snapshot (plans()).
 //   godmode.launch   {projectId, planId, ids?, integration?, free?, releaseAfter?,
-//                    workerModel?} controller.launch(). workerModel is one of
-//                    the ui pref's allow-list (opus/sonnet/fable/plan). For a merge the signed command IS
+//                    workerModel?, workers?} controller.launch(). workerModel is one of
+//                    the ui pref's allow-list (opus/sonnet/fable/agy/plan), workers one
+//                    of claude/agy/hybrid/free (orchestraWorkers.js). For a merge the signed command IS
 //                    the confirmation: {mergeConfirmed: true} is passed on this
 //                    path only, never from a payload.
 //   godmode.kill     {projectId}  stop the run (always allowed, like the HUD)
@@ -37,6 +38,7 @@
 const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
 const { INTEGRATION_MODES } = require('./orchestraSupervisor');
 const { normalizeWorkerModel } = require('./orchestraWorkerModel');
+const { normalizeWorkers } = require('./orchestraWorkers');
 
 const KINDS = ['godmode.plan', 'godmode.launch', 'godmode.kill', 'godmode.retry', 'godmode.finish', 'godmode.discard'];
 const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
@@ -226,6 +228,13 @@ function createHostGodmode(deps) {
       const model = normalizeWorkerModel(payload.workerModel);
       if (!model) return { error: 'badWorkerModel' };
       out.workerModel = model;
+    }
+    // Workers (claude / agy / hybrid / free): the shared allow-list, checked here
+    // in main - an unknown value is refused, never coerced to Claude.
+    if (payload.workers !== undefined && payload.workers !== null) {
+      const workers = normalizeWorkers(payload.workers);
+      if (!workers) return { error: 'badWorkers' };
+      out.workers = workers;
     }
     for (const flag of ['free', 'releaseAfter']) {
       if (payload[flag] === undefined) continue;
