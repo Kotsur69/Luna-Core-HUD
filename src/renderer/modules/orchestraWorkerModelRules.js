@@ -10,7 +10,7 @@
 
 'use strict';
 
-import { WORKER_MODELS, MODEL_NAMES, DEFAULT_WORKER_MODEL, AGY_MODEL, isWorkerModel, isAgyModel } from '../../workerModels.js';
+import { WORKER_MODELS, MODEL_NAMES, DEFAULT_WORKER_MODEL, AGY_MODEL, isWorkerModel, isAgyModel, agyModelIdOf, agyModelLabel } from '../../workerModels.js';
 
 /** The shared list (src/workerModels.js). Main allow-lists the choice again. */
 export { WORKER_MODELS, DEFAULT_WORKER_MODEL };
@@ -56,14 +56,66 @@ export function badgeModelOf(pkg, workerModel, workers) {
   const override = pkg && typeof pkg.modelOverride === 'string' && pkg.modelOverride;
   if (workers === 'hybrid' && pkg && pkg.model === 'free' && !override) return 'free';
   // Antigravity (src/orchestraAgy.js packageRunsAgy): an agy run, or a hybrid agy pick not handed over.
-  if (workers === 'agy') return AGY_MODEL;
-  if (workers === 'hybrid' && pkg && isAgyModel(pkg.model) && !override) return AGY_MODEL;
+  if (workers === 'agy') return agyChoiceOf(pkg, workerModel);
+  if (workers === 'hybrid' && pkg && isAgyModel(pkg.model) && !override) return pkg.model;
   return packageModelOf(pkg, workerModel);
 }
 
-/** 'Opus' / 'Sonnet' / ... for a known model, the raw id otherwise. */
+/**
+ * Which agy choice a package of an agy run uses ('agy' or 'agy:<id>'):
+ * mirrors src/orchestraAgy.js packageAgyModel - an agy override, the
+ * package's own agy pick, the run's agy model, else plain 'agy'.
+ */
+function agyChoiceOf(pkg, workerModel) {
+  const p = pkg && typeof pkg === 'object' ? pkg : {};
+  const override = typeof p.modelOverride === 'string' && p.modelOverride ? p.modelOverride : null;
+  if (override) return isAgyModel(override) ? override : AGY_MODEL;
+  if (isAgyModel(p.model)) return p.model;
+  return isAgyModel(workerModel) ? workerModel : AGY_MODEL;
+}
+
+/**
+ * 'Opus' / 'Sonnet' / ... for a known model, 'Antigravity - <id>' for an agy
+ * variant (the caller swaps in the live name when it has one), the raw id
+ * otherwise.
+ */
 export function modelName(model) {
-  return Object.prototype.hasOwnProperty.call(MODEL_NAMES, model) ? MODEL_NAMES[model] : String(model || '');
+  if (Object.prototype.hasOwnProperty.call(MODEL_NAMES, model)) return MODEL_NAMES[model];
+  return agyModelLabel(model) || String(model || '');
+}
+
+/**
+ * The ids a worker-model select offers: the shared list with the live agy
+ * variants right after plain 'agy', plus the current choice when it is a
+ * variant the live list does not hold (a saved pick stays visible and
+ * selected; main checks it again at Approve).
+ * @param {string[]} variants 'agy:<id>' ids from main's `agy models` list
+ * @param {string|null} [current]
+ * @returns {string[]}
+ */
+export function workerModelChoices(variants, current = null) {
+  const live = (Array.isArray(variants) ? variants : []).filter((v) => agyModelIdOf(v) !== null);
+  if (agyModelIdOf(current) !== null && !live.includes(current)) live.push(current);
+  const out = [];
+  for (const id of WORKER_MODELS) {
+    out.push(id);
+    if (id === AGY_MODEL) out.push(...new Set(live));
+  }
+  return out;
+}
+
+/**
+ * The card's model text for an agy worker: the badge's name, plus the model
+ * the tab's transcript reported when the choice was plain 'agy'.
+ * @param {string} badge what badgeModelOf returned
+ * @param {string} name its display name
+ * @param {unknown} ranOn the package view's agyModel (main: src/orchestra.js)
+ * @returns {string}
+ */
+export function agyBadgeText(badge, name, ranOn) {
+  // Only plain 'agy' leaves the model to agy; a variant already names it.
+  if (badge !== AGY_MODEL || typeof ranOn !== 'string' || !ranOn.trim()) return name;
+  return `${name} - ${ranOn.trim().slice(0, 80)}`;
 }
 
 /**

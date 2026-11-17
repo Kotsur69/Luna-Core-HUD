@@ -4,7 +4,8 @@
 // Luna's Work's role runners (Director, Critic, Playtester, Researcher, ...)
 // build a `claude -p --output-format json --json-schema <S> --model <m>` argv
 // and parse Claude's JSON envelope. When a role is set to 'agy' the argv says
-// `--model agy`: execAgy() runs that call as one headless `agy --print`
+// `--model agy` (or `--model agy:<id>`, one model of `agy models`):
+// execAgy() runs that call as one headless `agy --print`
 // (src/orchestraAgy.js runAgyPrint, prompt on stdin) and hands back agy's
 // answer as the same envelope, so every runner's parser reads it unchanged.
 //
@@ -15,7 +16,8 @@
 // What carries over from the Claude argv: the JSON schema (into the prompt,
 // agy has no --json-schema) and whether the call may edit files (--tools
 // naming Write / Edit, or an accept-edits / bypass permission mode ->
-// `--mode accept-edits`). Everything else is Claude-only and dropped: the
+// `--mode accept-edits`), and an 'agy:<id>' model (-> agy's `--model <id>`).
+// Everything else is Claude-only and dropped: the
 // tool allow / deny lists, --mcp-config (agy reads MCP servers only from its
 // own config file, src/launch.js header), --agent, --effort, the dollar cap.
 // So a read-only role on agy is read-only because agy's --print mode is not
@@ -29,6 +31,8 @@
 
 const { runAgyPrint, agyJsonPrompt, extractJsonObject } = require('./orchestraAgy');
 const { AGY_MODEL } = require('./claudeModels');
+const { isAgyModel, agyModelIdOf } = require('./workerModels');
+const { sharedAgyModels } = require('./agymodels');
 
 /** Claude tools that write files: a call allowed any of them may edit on agy too. */
 const EDIT_TOOLS = Object.freeze(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
@@ -44,12 +48,15 @@ function argValue(args, flag) {
 }
 
 /**
- * True when a `claude -p` argv asks for the Antigravity CLI.
+ * True when a `claude -p` argv asks for the Antigravity CLI: `--model agy`
+ * or `--model agy:<id>`. That `--model` is LunaCore's internal marker in a
+ * Claude-style argv, never passed on: agy gets its own `--model <id>` (the
+ * bare id) from execAgy.
  * @param {unknown} args
  * @returns {boolean}
  */
 function argsUseAgy(args) {
-  return argValue(args, '--model') === AGY_MODEL;
+  return isAgyModel(argValue(args, '--model'));
 }
 
 /** --json-schema's schema, or null when the argv has none (or it is not a JSON object). */
@@ -99,20 +106,32 @@ function agyEnvelope(text, { structured = true } = {}) {
 /**
  * One `claude -p` call run as `agy --print`. Same contract as
  * lunasworkCritic.execClaude: resolves {stdout} (Claude's envelope) or
- * {error, detail?} - 'noAgyProfile', 'noAgy', 'timeout', 'limit' or 'failed'.
- * Never rejects.
- * @param {{args:string[], prompt:string, cwd:string, env:object|null, timeoutMs:number, execImpl?:Function}} call
- *   env: the agy profile's env; null = no agy profile
+ * {error, detail?} - 'noAgyProfile', 'badAgyModel', 'noAgy', 'timeout',
+ * 'limit' or 'failed'. Never rejects.
+ *
+ * `--model agy:<id>` runs agy with `--model <id>`, once the id is found in
+ * the live `agy models` list (src/agymodels.js, read once if it never was);
+ * an id it does not hold is refused ('badAgyModel') and never reaches argv.
+ * @param {{args:string[], prompt:string, cwd:string, env:object|null, timeoutMs:number, execImpl?:Function,
+ *   agyModels?:{ensure:Function, isKnownId:Function}}} call
+ *   env: the agy profile's env; null = no agy profile; agyModels: the model cache (default: the shared one)
  * @returns {Promise<{stdout:string}|{error:string, detail?:string}>}
  */
-async function execAgy({ args, prompt, cwd, env, timeoutMs, execImpl }) {
+async function execAgy({ args, prompt, cwd, env, timeoutMs, execImpl, agyModels }) {
   if (!env || typeof env !== 'object') return { error: 'noAgyProfile', detail: NO_PROFILE_DETAIL };
+  const model = agyModelIdOf(argValue(args, '--model'));
+  if (model) {
+    const cache = agyModels || sharedAgyModels();
+    await cache.ensure();
+    if (!cache.isKnownId(model)) return { error: 'badAgyModel', detail: `agy model "${model}" is not in the \`agy models\` list` };
+  }
   const schema = schemaOf(args);
   const res = await runAgyPrint({
     cwd,
     env,
     timeout: timeoutMs,
     edits: wantsEdits(args),
+    model,
     prompt: schema ? agyJsonPrompt(prompt, schema) : String(prompt || ''),
     ...(typeof execImpl === 'function' ? { execImpl } : {}),
   });

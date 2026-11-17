@@ -25,6 +25,7 @@ const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
 const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
 const { CLAUDE_MODELS } = require('./claudeModels');
+const { isAgyModel } = require('./workerModels');
 const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
 const { normalizeSleeps } = require('./orchestraSleep');
@@ -639,6 +640,9 @@ function allowSuggestions(log) {
 const MAX_PACKAGE_PROMPT_CHARS = 32000;
 
 const str = (v, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : '');
+// A stored package / run model: a Claude alias or 'agy:<id>' (src/workerModels.js
+// MAX_AGY_MODEL_ID_CHARS = 80). Long enough never to cut an id into another one.
+const MAX_MODEL_CHARS = 96;
 const strOrNull = (v, max = 4000) => (typeof v === 'string' && v ? v.slice(0, max) : null);
 const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
 
@@ -749,7 +753,7 @@ function normalizePackage(raw) {
     dependsOn: strList(raw.dependsOn),
     // One line only: it runs through a shell (orchestraFinish.runVerify).
     verify: /[\r\n]/.test(str(raw.verify, 500)) ? '' : str(raw.verify, 500),
-    model: strOrNull(raw.model, 32),
+    model: strOrNull(raw.model, MAX_MODEL_CHARS),
     effort: normalizeEffort(raw.effort),
     todoAts: Array.isArray(raw.todoAts) ? raw.todoAts.filter(Number.isFinite) : [],
     state: STATES.has(raw.state) ? raw.state : 'pending',
@@ -779,7 +783,8 @@ function normalizePackage(raw) {
     stallHistory: normalizeStallHistory(raw.stallHistory),
     escalated: raw.escalated === true,
     // 'opus' = escalated; 'sonnet' = a hybrid free package handed to Claude (F6c).
-    modelOverride: raw.modelOverride === 'opus' || raw.modelOverride === 'sonnet' ? raw.modelOverride : null,
+    // Claude escalation / hand-over, or an agy choice ('agy' / 'agy:<id>', src/orchestraAgy.js).
+    modelOverride: raw.modelOverride === 'opus' || raw.modelOverride === 'sonnet' || isAgyModel(raw.modelOverride) ? raw.modelOverride : null,
     effortOverride: normalizeEffort(raw.effortOverride),
     touched: strList(raw.touched).filter(isRelPath).slice(0, MAX_TOUCHED),
     prUrl: typeof raw.prUrl === 'string' && PR_URL_RE.test(raw.prUrl) ? raw.prUrl : null,
@@ -997,7 +1002,7 @@ function normalizeStoredPlan(raw) {
     // The planner's model when Mati picked another than opus; opus carries no key.
     ...(CLAUDE_MODELS.includes(raw.plannerModel) && raw.plannerModel !== 'opus' ? { plannerModel: raw.plannerModel } : {}),
     dirty: Number.isFinite(raw.dirty) ? raw.dirty : null,
-    workerModel: strOrNull(raw.workerModel, 32),
+    workerModel: strOrNull(raw.workerModel, MAX_MODEL_CHARS),
     // 'plan' or one of the four levels; anything else re-freezes from Settings.
     workerEffort: raw.workerEffort === 'plan' ? 'plan' : normalizeEffort(raw.workerEffort),
     permissionMode: strOrNull(raw.permissionMode, 32),

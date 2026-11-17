@@ -19,12 +19,13 @@ import { h } from '../dom.js';
 import { t, tf } from '../i18n.js';
 import { godmodePlansFrom } from '../snapmodel.js';
 import { hostForMachine } from '../godmodestart.js';
-import { INTEGRATION_MODES, WORKER_MODELS, WORKER_MODEL_NAMES, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
+import { agyModelLabel } from '../../../src/workerModels.js';
+import { INTEGRATION_MODES, WORKER_MODEL_NAMES, workerModelOptions, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
 import { confirmSheet } from './sheet.js';
 
 const INTEGRATION_KEY = { pr: 'gmIntegrationPr', merge: 'gmIntegrationMerge', branches: 'gmIntegrationBranches' };
 /** Product name (src/workerModels.js); the nameless 'plan' = each package on the planner's pick. */
-const workerModelName = (m) => (Object.hasOwn(WORKER_MODEL_NAMES, m) ? WORKER_MODEL_NAMES[m] : m === 'plan' ? t('gmWorkerModelPlan') : m);
+const workerModelName = (m) => (Object.hasOwn(WORKER_MODEL_NAMES, m) ? WORKER_MODEL_NAMES[m] : m === 'plan' ? t('gmWorkerModelPlan') : agyModelLabel(m) || m);
 
 const planKey = (plan) => `${plan.machine.toLowerCase()}|${plan.projectId}`;
 /** A DOM id from free text. */
@@ -114,7 +115,7 @@ export function createPlanCards(deps, runnerFor, repaint) {
     sel.addEventListener('change', () => update(plan, (d) => ({ ...d, integration: sel.value })));
     const free = h('input', { type: 'checkbox', role: 'switch', id: `${base}-free`, checked: draft.free, disabled: busy });
     free.addEventListener('change', () => update(plan, (d) => ({ ...d, free: free.checked })));
-    const model = h('select', { class: 'field', id: `${base}-model`, disabled: busy }, WORKER_MODELS.map((m) => h('option', { value: m, selected: m === draft.workerModel }, workerModelName(m))));
+    const model = h('select', { class: 'field', id: `${base}-model`, disabled: busy }, workerModelOptions(draft.workerModel).map((m) => h('option', { value: m, selected: m === draft.workerModel }, workerModelName(m))));
     model.addEventListener('change', () => update(plan, (d) => ({ ...d, workerModel: model.value })));
     const release = h('input', { type: 'checkbox', id: `${base}-release`, checked: draft.releaseAfter, disabled: busy });
     release.addEventListener('change', () => update(plan, (d) => ({ ...d, releaseAfter: release.checked })));

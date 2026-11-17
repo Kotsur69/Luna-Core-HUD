@@ -100,6 +100,106 @@ test('Approve with workerModel "agy" and no agy profile: a clear refusal, nothin
   assert.deepEqual(log.saved, []);
 });
 
+// ---- agy:<id> variants: checked against the live `agy models` list -------------
+
+const ARGON = 'agy:gemini-4-argon-medium';
+
+/** A fake src/agymodels.js cache holding `ids`. */
+function fakeAgyModels(ids) {
+  const seen = { ensured: 0 };
+  return {
+    seen,
+    ensure: async () => {
+      seen.ensured += 1;
+      return ids.map((id) => ({ id, name: id }));
+    },
+    isKnownId: (id) => ids.includes(id),
+    resolveModelId: (model) => {
+      const id = typeof model === 'string' && model.startsWith('agy:') ? model.slice(4) : null;
+      return id && ids.includes(id) ? id : null;
+    },
+  };
+}
+
+test('Approve with an agy:<id> worker model on the live list: frozen, saved, every tab on agy with that model', async () => {
+  const agyModels = fakeAgyModels(['gemini-4-argon-medium']);
+  const { orch, log } = setup({ extraDeps: { agyProfileId: () => 'agy-profile', agyModels } });
+  const { plan } = await orch.makePlan(ctx);
+  const res = await orch.launch(approve(plan, { workerModel: ARGON }));
+  assert.equal(res.ok, true);
+  assert.equal(res.plan.workerModel, ARGON);
+  assert.deepEqual(models(log), [ARGON, ARGON]);
+  assert.deepEqual(log.saved, [ARGON]);
+  assert.deepEqual(log.sessions.map((s) => s.profileId), ['agy-profile', 'agy-profile']);
+  assert.ok(agyModels.seen.ensured >= 1, 'the list was read before the check');
+});
+
+test('Approve with an agy:<id> the live list does not hold: badAgyModel, nothing launched or saved', async () => {
+  for (const agyModels of [fakeAgyModels(['gemini-3.8-flash-low']), fakeAgyModels([]), undefined]) {
+    const { orch, log } = setup({ extraDeps: { agyProfileId: () => 'agy-profile', ...(agyModels ? { agyModels } : {}) } });
+    const { plan } = await orch.makePlan(ctx);
+    const res = await orch.launch(approve(plan, { workerModel: ARGON }));
+    assert.deepEqual(res, { ok: false, error: 'badAgyModel' });
+    assert.equal(log.sessions.length, 0);
+    assert.deepEqual(log.saved, []);
+  }
+});
+
+test('Approve: a malformed agy variant is ignored like any unknown model (the pref decides)', async () => {
+  const { orch, log } = setup({ extraDeps: { agyProfileId: () => 'agy-profile', agyModels: fakeAgyModels([]) } });
+  const { plan } = await orch.makePlan(ctx);
+  const res = await orch.launch(approve(plan, { workerModel: 'agy:--print' }));
+  assert.equal(res.ok, true);
+  assert.deepEqual(models(log), ['opus', 'opus']);
+  assert.deepEqual(log.saved, []);
+});
+
+test('hybrid per-package agy:<id> and a per-package agy override reach the worker task', async () => {
+  const agyModels = fakeAgyModels(['gemini-3.8-flash-low']);
+  const packages = [
+    { ...PACKAGES[0], model: 'agy:gemini-3.8-flash-low' },
+    { ...PACKAGES[1], model: 'opus' },
+  ];
+  const { orch, log } = setup({ packages, extraDeps: { agyProfileId: () => 'agy-profile', agyModels } });
+  const { plan } = await orch.makePlan({ ...ctx, workers: 'hybrid' });
+  const res = await orch.launch(approve(plan, { workers: 'hybrid', workerModel: 'opus' }));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(models(log), ['agy:gemini-3.8-flash-low', 'opus']);
+  assert.deepEqual(log.sessions.map((s) => s.profileId), ['agy-profile', 'claude-cloud']);
+});
+
+test('hybrid: a planner agy:<id> pick the live list does not hold runs on plain agy instead of blocking Approve', async () => {
+  const agyModels = fakeAgyModels(['gemini-4-argon-medium']);
+  const packages = [
+    { ...PACKAGES[0], model: 'agy:gemini-made-up' },
+    { ...PACKAGES[1], model: 'opus' },
+  ];
+  const { orch, log } = setup({ packages, extraDeps: { agyProfileId: () => 'agy-profile', agyModels } });
+  const { plan } = await orch.makePlan({ ...ctx, workers: 'hybrid' });
+  const res = await orch.launch(approve(plan, { workers: 'hybrid', workerModel: 'opus' }));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(models(log), ['agy', 'opus']);
+  assert.deepEqual(log.sessions.map((s) => s.profileId), ['agy-profile', 'claude-cloud']);
+});
+
+test('view: an agy package card names the model it runs on (the variant, else the transcript reading)', async () => {
+  const agyModels = fakeAgyModels(['gemini-4-argon-medium']);
+  const variant = setup({ extraDeps: { agyProfileId: () => 'agy-profile', agyModels, sessionAgyModel: () => 'Gemini 9 (should not win)' } });
+  const { plan: p1 } = await variant.orch.makePlan(ctx);
+  const r1 = await variant.orch.launch(approve(p1, { workerModel: ARGON }));
+  assert.deepEqual(r1.plan.packages.map((p) => p.agyModel), ['gemini-4-argon-medium', 'gemini-4-argon-medium']);
+
+  const plain = setup({ extraDeps: { agyProfileId: () => 'agy-profile', sessionAgyModel: (id) => `Gemini 4 Argon (${id})` } });
+  const { plan: p2 } = await plain.orch.makePlan(ctx);
+  const r2 = await plain.orch.launch(approve(p2, { workerModel: 'agy' }));
+  assert.deepEqual(r2.plan.packages.map((p) => p.agyModel), ['Gemini 4 Argon (s1)', 'Gemini 4 Argon (s2)']);
+
+  const claude = setup();
+  const { plan: p3 } = await claude.orch.makePlan(ctx);
+  const r3 = await claude.orch.launch(approve(p3, { workerModel: 'opus' }));
+  assert.deepEqual(r3.plan.packages.map((p) => p.agyModel), [null, null]);
+});
+
 test('Approve with workers "agy": every tab on the agy profile; workers "claude" stays on the tab profile', async () => {
   const agy = setup({ extraDeps: { agyProfileId: () => 'agy-profile' } });
   const { plan } = await agy.orch.makePlan(ctx);
@@ -291,6 +391,50 @@ test('modelName: product names, raw id otherwise', () => {
   assert.equal(rules.modelName('auto:easy'), 'auto:easy');
   assert.equal(rules.modelName('constructor'), 'constructor');
   assert.equal(rules.modelName(null), '');
+  assert.equal(rules.modelName(ARGON), 'Antigravity - gemini-4-argon-medium');
+});
+
+test('badgeModelOf: an agy run names its variant; a hybrid agy:<id> pick names its own', () => {
+  assert.equal(rules.badgeModelOf({ model: 'sonnet' }, ARGON, 'agy'), ARGON);
+  assert.equal(rules.badgeModelOf({ model: 'sonnet' }, 'opus', 'agy'), 'agy');
+  assert.equal(rules.badgeModelOf({ model: 'agy:gemini-3.8-flash-low' }, 'opus', 'hybrid'), 'agy:gemini-3.8-flash-low');
+  assert.equal(rules.badgeModelOf({ model: 'agy:gemini-3.8-flash-low', modelOverride: 'sonnet' }, 'opus', 'hybrid'), 'sonnet');
+  assert.equal(rules.badgeModelOf({ model: 'opus' }, ARGON, 'claude'), ARGON);
+  assert.equal(rules.badgeModelOf({ modelOverride: ARGON }, 'opus', 'claude'), ARGON);
+});
+
+test('workerModelChoices: live variants follow plain agy; a saved variant stays offered', () => {
+  const live = ['agy:gemini-3.8-flash-low', ARGON, 'agy:--bad', 'opus'];
+  assert.deepEqual(rules.workerModelChoices(live, 'opus'), ['opus', 'sonnet', 'fable', 'agy', 'agy:gemini-3.8-flash-low', ARGON, 'plan']);
+  assert.deepEqual(rules.workerModelChoices([], ARGON), ['opus', 'sonnet', 'fable', 'agy', ARGON, 'plan']);
+  assert.deepEqual(rules.workerModelChoices(null, null), [...ORCHESTRA_WORKER_MODELS]);
+  assert.deepEqual(phone.workerModelOptions(ARGON), ['opus', 'sonnet', 'fable', 'agy', ARGON, 'plan']);
+  assert.deepEqual(phone.workerModelOptions('opus'), [...ORCHESTRA_WORKER_MODELS]);
+});
+
+test('agyBadgeText: plain agy adds what the transcript reported; anything else is unchanged', () => {
+  assert.equal(rules.agyBadgeText('agy', 'Antigravity', 'gemini-4-argon-medium'), 'Antigravity - gemini-4-argon-medium');
+  assert.equal(rules.agyBadgeText('agy', 'Antigravity', ''), 'Antigravity');
+  assert.equal(rules.agyBadgeText('agy', 'Antigravity', null), 'Antigravity');
+  assert.equal(rules.agyBadgeText(ARGON, 'Antigravity - Gemini 4 Argon (Medium)', 'other'), 'Antigravity - Gemini 4 Argon (Medium)');
+  assert.equal(rules.agyBadgeText('opus', 'Opus', 'x'), 'Opus');
+});
+
+test('agy:<id> worker models load everywhere (main, renderer, phone, snapshot); junk does not', () => {
+  assert.equal(main.normalizeWorkerModel(ARGON), ARGON);
+  assert.equal(rules.normalizeWorkerModel(ARGON), ARGON);
+  assert.equal(phone.planDraft({ planId: 'p', packages: [], workerModel: ARGON }).workerModel, ARGON);
+  for (const bad of ['agy:', 'agy:--print', 'agy:a b', `agy:${'a'.repeat(81)}`, 'AGY:x']) {
+    assert.equal(main.normalizeWorkerModel(bad), null, bad);
+    assert.equal(rules.normalizeWorkerModel(bad), null, bad);
+  }
+});
+
+test('the badAgyModel refusal has pl and en text', () => {
+  const hud = fs.readFileSync(path.join(ROOT, 'src/renderer/i18n.js'), 'utf8');
+  const enAt = hud.indexOf('\n  en: {');
+  assert.ok(hud.slice(0, enAt).includes("'orch.fail.badAgyModel':"));
+  assert.ok(hud.slice(enAt).includes("'orch.fail.badAgyModel':"));
 });
 
 // ---- allow-lists in line ------------------------------------------------------

@@ -6,7 +6,12 @@
 //   PLANNERS / AGY             the shared allow-list of planner names
 //   packageRunsAgy(plan, pkg)  does this package's worker tab run on the agy
 //                              profile (workers 'agy', worker model 'agy', a
-//                              hybrid package the planner marked 'agy')
+//                              hybrid package the planner marked 'agy';
+//                              every test is isAgyModel, so 'agy:<id>'
+//                              variants count too)
+//   packageAgyModel(plan, pkg) which agy choice it runs: 'agy' or 'agy:<id>'
+//   runAgyVariants(plan, ...)  the 'agy:<id>' variants a run needs (Approve
+//                              checks them against the live list)
 //   runUsesAgy(plan)           do the run's helper jobs (diff review, conflict
 //                              resolution, self-check, post-merge worker) run
 //                              on agy instead of claude
@@ -30,6 +35,7 @@
 const { execFile } = require('child_process');
 const { storedWorkers } = require('./orchestraWorkers');
 const { AGY_MODEL } = require('./claudeModels');
+const { isAgyModel, isAgyModelId } = require('./workerModels');
 
 /** The agy name, as a planner, a Workers choice and a package / worker model. */
 const AGY = AGY_MODEL;
@@ -70,9 +76,31 @@ function packageRunsAgy(plan, pkg) {
   if (workers === AGY) return true;
   if (workers === 'free') return false;
   const p = isObj(pkg) ? pkg : {};
-  if (typeof p.modelOverride === 'string' && p.modelOverride) return p.modelOverride === AGY;
-  if (workers === 'hybrid' && p.model === AGY) return true;
-  return plan.workerModel === AGY;
+  if (typeof p.modelOverride === 'string' && p.modelOverride) return isAgyModel(p.modelOverride);
+  if (workers === 'hybrid' && isAgyModel(p.model)) return true;
+  return isAgyModel(plan.workerModel);
+}
+
+/**
+ * Which agy choice a package that runs on agy (packageRunsAgy) uses: 'agy'
+ * (agy's own default model) or an 'agy:<id>' variant. Most specific first:
+ * a hand-over / escalation override, then the package's own agy pick (only
+ * in a hybrid or agy-workers run, as in packageRunsAgy: a Claude-only run
+ * never lets a package pick its agy model), then the run's worker model.
+ * Only the shape is checked here; main checks the id against the live
+ * `agy models` list (src/agymodels.js) before it reaches an argv.
+ * @param {object|null} plan
+ * @param {object|null} pkg
+ * @returns {string}
+ */
+function packageAgyModel(plan, pkg) {
+  const p = isObj(pkg) ? pkg : {};
+  const override = typeof p.modelOverride === 'string' && p.modelOverride ? p.modelOverride : null;
+  if (override) return isAgyModel(override) ? override : AGY;
+  const workers = isObj(plan) ? storedWorkers(plan) : null;
+  if ((workers === 'hybrid' || workers === AGY) && isAgyModel(p.model)) return p.model;
+  const run = isObj(plan) ? plan.workerModel : null;
+  return isAgyModel(run) ? run : AGY;
 }
 
 /**
@@ -83,8 +111,11 @@ function packageRunsAgy(plan, pkg) {
  */
 function runUsesAgy(plan) {
   if (!isObj(plan) || plan.freeMode === true) return false;
-  return storedWorkers(plan) === AGY || plan.buildPlanner === AGY || plan.workerModel === AGY;
+  return storedWorkers(plan) === AGY || plan.buildPlanner === AGY || isAgyModel(plan.workerModel);
 }
+
+/** The packages of a plan (objects only). */
+const packagesOf = (plan) => (isObj(plan) && Array.isArray(plan.packages) ? plan.packages.filter(isObj) : []);
 
 /**
  * Approve: the agy profile the run needs, fixed for the run. Nothing on agy
@@ -94,24 +125,47 @@ function runUsesAgy(plan) {
  * @returns {{ok:true, profileId:string|null}|{ok:false, error:'noAgyProfile'}}
  */
 function approveAgyProfile(plan, { workers, workerModel = null, agyProfileId }) {
-  const packages = isObj(plan) && Array.isArray(plan.packages) ? plan.packages : [];
+  const packages = packagesOf(plan);
   const needs =
     workers === AGY ||
-    (workers !== 'free' && workerModel === AGY) ||
-    (workers === 'hybrid' && packages.some((p) => isObj(p) && p.model === AGY && !p.modelOverride)) ||
-    (workers !== 'free' && packages.some((p) => isObj(p) && p.modelOverride === AGY));
+    (workers !== 'free' && isAgyModel(workerModel)) ||
+    (workers === 'hybrid' && packages.some((p) => isAgyModel(p.model) && !p.modelOverride)) ||
+    (workers !== 'free' && packages.some((p) => isAgyModel(p.modelOverride)));
   if (!needs) return { ok: true, profileId: null };
   const id = typeof agyProfileId === 'string' && agyProfileId ? agyProfileId : null;
   return id ? { ok: true, profileId: id } : { ok: false, error: 'noAgyProfile' };
 }
 
 /**
- * argv of one headless agy call (never a shell string).
- * @param {{edits?:boolean}} [opts] edits: auto-accept file edits (resolver, fix-up, worker jobs)
+ * Approve: every 'agy:<id>' variant the run would hand agy, deduplicated, so
+ * main can check each against the live `agy models` list before the run
+ * starts. Plain 'agy' needs no check and is left out.
+ * @param {{packages?:object[]}} plan
+ * @param {{workers:string, workerModel?:string|null}} input
  * @returns {string[]}
  */
-function agyPrintArgs({ edits = false } = {}) {
-  return [...AGY_PRINT_ARGS, ...(edits ? AGY_EDIT_ARGS : [])];
+function runAgyVariants(plan, { workers, workerModel = null }) {
+  if (workers === 'free') return [];
+  // The plan as the run will hold it: Approve's Workers and worker model.
+  const asRun = { ...(isObj(plan) ? plan : {}), workerModel, workers };
+  const out = new Set();
+  for (const p of packagesOf(plan)) {
+    if (!packageRunsAgy(asRun, p)) continue;
+    const choice = packageAgyModel(asRun, p);
+    if (choice !== AGY) out.add(choice);
+  }
+  return [...out];
+}
+
+/**
+ * argv of one headless agy call (never a shell string).
+ * @param {{edits?:boolean, model?:string|null}} [opts]
+ *   edits: auto-accept file edits (resolver, fix-up, worker jobs);
+ *   model: an agy model id (`agy models`), already checked against the live list
+ * @returns {string[]}
+ */
+function agyPrintArgs({ edits = false, model = null } = {}) {
+  return [...AGY_PRINT_ARGS, ...(edits ? AGY_EDIT_ARGS : []), ...(isAgyModelId(model) ? ['--model', model] : [])];
 }
 
 /**
@@ -165,14 +219,15 @@ function parseAgyJson(stdout) {
 /**
  * One headless `agy --print` in `cwd`, prompt on stdin. Always resolves.
  * @param {{cwd:string, env:object, prompt:string, timeout:number, edits?:boolean,
- *   execImpl?:Function, maxBuffer?:number}} args
+ *   model?:string|null, execImpl?:Function, maxBuffer?:number}} args
+ *   model: an agy model id the caller checked against the live list (src/agymodels.js)
  * @returns {Promise<{ok:true, stdout:string}|{ok:false, error:'noAgy'|'timeout'|'limit'|'failed', detail?:string}>}
  */
-function runAgyPrint({ cwd, env, prompt, timeout, edits = false, execImpl = execFile, maxBuffer = DEFAULT_MAX_BUFFER }) {
+function runAgyPrint({ cwd, env, prompt, timeout, edits = false, model = null, execImpl = execFile, maxBuffer = DEFAULT_MAX_BUFFER }) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = execImpl(AGY_BIN, agyPrintArgs({ edits }), { cwd, env, timeout, maxBuffer, windowsHide: true }, (error, stdout, stderr) => {
+      child = execImpl(AGY_BIN, agyPrintArgs({ edits, model }), { cwd, env, timeout, maxBuffer, windowsHide: true }, (error, stdout, stderr) => {
         if (error && error.code === 'ENOENT') return resolve({ ok: false, error: 'noAgy', detail: 'agy not found' });
         if (error && error.killed) return resolve({ ok: false, error: 'timeout' });
         if (error) {
@@ -199,8 +254,10 @@ module.exports = {
   PLANNERS,
   normalizePlanner,
   packageRunsAgy,
+  packageAgyModel,
   runUsesAgy,
   approveAgyProfile,
+  runAgyVariants,
   agyPrintArgs,
   agyJsonPrompt,
   extractJsonObject,

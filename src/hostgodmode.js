@@ -14,7 +14,8 @@
 //                    plan lands in the `godmode` snapshot (plans()).
 //   godmode.launch   {projectId, planId, ids?, integration?, free?, releaseAfter?,
 //                    workerModel?, workers?} controller.launch(). workerModel is one of
-//                    the ui pref's allow-list (opus/sonnet/fable/agy/plan), workers one
+//                    the ui pref's allow-list (opus/sonnet/fable/agy/plan) or a
+//                    well-formed agy:<id> (Approve checks it against `agy models`), workers one
 //                    of claude/agy/hybrid/free (orchestraWorkers.js). For a merge the signed command IS
 //                    the confirmation: {mergeConfirmed: true} is passed on this
 //                    path only, never from a payload.

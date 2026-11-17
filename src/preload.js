@@ -1004,6 +1004,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   getUiPrefs: () => ipcRenderer.invoke('ui:get'),
   /** Writes partial preferences { theme?, lang? }; returns the new state. */
   setUiPrefs: (partial) => ipcRenderer.invoke('ui:set', partial),
+  /** Reads `agy models` again in main: { choices: [{id: 'agy' | 'agy:<id>', name}] }. No payload. */
+  agyModels: () => ipcRenderer.invoke('agy:models'),
   /**
    * Opens the native terminal background image picker; reads the file IN MAIN
    * (the renderer has no fs access) and returns { dataUrl } (CSP: only

@@ -24,7 +24,7 @@ const { isUsageLimitText } = require('./orchestraPlanWait');
 const { checkCwd } = require('./projects');
 const { EFFORTS, normalizeEffort } = require('./efforts');
 const { CLAUDE_MODELS } = require('./claudeModels');
-const { CARD_MODELS } = require('./workerModels');
+const { CARD_MODELS, agyModelIdOf } = require('./workerModels');
 const { usageFromEnvelope } = require('./orchestraUsage');
 const { FREE_PLANNER_MODEL, planContextLines } = require('./orchestraPlanBuild');
 // A/B builds (opt-in): the planner may give a package two variants.
@@ -438,7 +438,8 @@ function validatePlan(raw, openTodos, { hybrid = false, abBuild = false } = {}) 
         .slice(0, MAX_FILES),
       dependsOn: (Array.isArray(p.dependsOn) ? p.dependsOn : []).map(slugId).filter(Boolean),
       verify: clean(p.verify, MAX_VERIFY_CHARS),
-      model: models.includes(p.model) ? p.model : null,
+      // An 'agy:<id>' variant (a manual or Luna's Work pick) survives like 'agy' does.
+      model: models.includes(p.model) || agyModelIdOf(p.model) ? p.model : null,
       effort: normalizeEffort(p.effort),
     });
   }

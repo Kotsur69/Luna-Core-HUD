@@ -15,7 +15,8 @@
 import { sfx } from './sound.js';
 import { t } from './util.js';
 import { mountRunEmailToggle } from './mailsettings.js';
-import { WORKER_MODEL_LIST, DEFAULT_WORKER_MODEL, isWorkerModel } from '../../workerModels.js';
+import { WORKER_MODEL_LIST, DEFAULT_WORKER_MODEL, AGY_MODEL, isWorkerModel, agyModelIdOf, agyModelLabel } from '../../workerModels.js';
+import { agyChoiceName, agyVariantIds, refreshAgyModels } from './agyModelChoices.js';
 
 /** i18n key of the 'plan' choice's label (the other choices are product names). */
 const PLAN_LABEL_KEY = 'orchset.model.plan';
@@ -66,9 +67,20 @@ function mountEvolutionToggles(root, prefs) {
 /**
  * Fills the worker-model select from the shared list (src/workerModels.js).
  * The 'plan' option keeps a data-i18n key so a language switch relabels it.
+ * The live agy variants (`agy models`, src/renderer/modules/agyModelChoices.js)
+ * follow plain 'agy'; `current`, when it is a variant no longer listed, too.
  * @param {HTMLSelectElement} select
+ * @param {string|null} [current]
  */
-function fillWorkerModelOptions(select) {
+function fillWorkerModelOptions(select, current = null) {
+  const variants = agyVariantIds();
+  if (agyModelIdOf(current) && !variants.includes(current)) variants.push(current);
+  const variantOption = (id) => {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = agyChoiceName(id) || agyModelLabel(id);
+    return opt;
+  };
   select.replaceChildren(
     ...WORKER_MODEL_LIST.map((m) => {
       const opt = document.createElement('option');
@@ -79,8 +91,8 @@ function fillWorkerModelOptions(select) {
         opt.dataset.i18n = PLAN_LABEL_KEY;
         opt.textContent = t(PLAN_LABEL_KEY);
       }
-      return opt;
-    }),
+      return m.id === AGY_MODEL ? [opt, ...variants.map(variantOption)] : [opt];
+    }).flat(),
   );
 }
 
@@ -91,11 +103,29 @@ function fillWorkerModelOptions(select) {
 export function mountOrchestraSettings(root, prefs) {
   const model = root.querySelector('#orchestra-worker-model');
   const perm = root.querySelector('#orchestra-permission-mode');
+  const savedModel = isWorkerModel(prefs.orchestraWorkerModel) ? prefs.orchestraWorkerModel : DEFAULT_WORKER_MODEL;
   // The options first: the select is empty in index.html.
-  if (model) fillWorkerModelOptions(model);
+  if (model) fillWorkerModelOptions(model, savedModel);
   if (!model || !perm) return;
 
-  model.value = isWorkerModel(prefs.orchestraWorkerModel) ? prefs.orchestraWorkerModel : DEFAULT_WORKER_MODEL;
+  model.value = savedModel;
+  // The picker opens: main reads `agy models` again; a changed list is offered.
+  let reading = false;
+  model.addEventListener('focus', () => {
+    if (reading) return;
+    reading = true;
+    const before = agyVariantIds().join('\n');
+    refreshAgyModels()
+      .then((ids) => {
+        if (ids.join('\n') === before) return;
+        const keep = isWorkerModel(model.value) ? model.value : savedModel;
+        fillWorkerModelOptions(model, keep);
+        model.value = keep;
+      })
+      .finally(() => {
+        reading = false;
+      });
+  });
   perm.value = PERMISSION_MODES.includes(prefs.orchestraPermissionMode) ? prefs.orchestraPermissionMode : 'bypassPermissions';
 
   // "Email me when a run finishes" (src/godmodemail.js): ON by default once
