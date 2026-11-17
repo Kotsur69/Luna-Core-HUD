@@ -183,7 +183,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
     // F6 "Workers": runPlan accepts one of three names only; anything else is Claude only.
     // model: the planner's model; runPlan allow-lists it (anything else = opus).
     // followups: the boolean true only; anything else (a string, 1, an object) is off.
-    return runPlan(ctx, session, target, { picked, effort, planner: planner === 'free' ? 'free' : 'claude', workers, model, followups: followups === true });
+    return runPlan(ctx, session, target, { picked, effort, planner, workers, model, followups: followups === true });
   });
 
   // Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js): the request
@@ -195,8 +195,14 @@ function registerOrchestraIpc(ipcMain, ctx) {
     if (!req.ok) return req;
     const target = planRunTarget(ctx, req);
     if (!target.ok) return target;
-    const env = req.planner === 'free' ? (ctx.planRunEnv ? ctx.planRunEnv() : null) : ctx.toolEnv();
-    if (!env) return refuse('noPlanProfile');
+    // free = the freellm-auto profile, agy = the Antigravity profile, claude = the cloud default.
+    const env =
+      req.planner === 'free'
+        ? ctx.planRunEnv ? ctx.planRunEnv() : null
+        : req.planner === 'agy'
+          ? ctx.agyPlannerEnv ? ctx.agyPlannerEnv() : null
+          : ctx.toolEnv();
+    if (!env) return refuse(req.planner === 'agy' ? 'noAgyProfile' : 'noPlanProfile');
     const res = await registry.ensure(target.projectId).makePlanRun({
       projectId: target.projectId,
       repoPath: target.repoPath,

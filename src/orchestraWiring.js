@@ -719,6 +719,10 @@ function powerDeps(projectId, ctx, shared, self) {
     freshEnv: () => ctx.toolEnv(),
     // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
     freeProfileId: () => ctx.freeProfileId(),
+    // Antigravity (agy) runs: the agy profile worker tabs open on, and its env
+    // for the run's headless helper jobs (src/orchestraAgy.js).
+    agyProfileId: () => (ctx.agyProfileId ? ctx.agyProfileId() : null),
+    agyEnv: () => (ctx.agyEnv ? ctx.agyEnv() : null),
     // Hybrid runs (F6): the shipped protected paths plus the repo's own
     // .lunacore/hybrid-protected.json; a broken file never throws.
     hybridProtected: (repoPath) => loadProtected({ repoPath }),

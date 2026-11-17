@@ -4033,6 +4033,8 @@ function registerIpc() {
     },
     // D1: the free BUILD planner runs on the coding profile (freellm-chain).
     freePlannerEnv: () => lunasworkFreeEnv(),
+    // The agy planner (build and Plan only) runs on the Antigravity profile.
+    agyPlannerEnv: () => lunasworkAgyEnv(),
     // F4a "Approve plan" (src/orchestraPlanApprove.js): merge + to-do import.
     approvePlan: planApprover,
   });

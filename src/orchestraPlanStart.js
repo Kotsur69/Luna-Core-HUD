@@ -22,6 +22,7 @@
 
 const { plannerEffortOf, plannerModelOf, PLANNER_MODEL } = require('./orchestraPlan');
 const { normalizeWorkers } = require('./orchestraWorkers');
+const { normalizePlanner } = require('./orchestraAgy');
 
 const keyOf = (projectId) => (typeof projectId === 'string' ? projectId : null);
 
@@ -71,12 +72,39 @@ function planTarget(ctx, session) {
  *   model: the Claude planner's model, allow-listed here (orchestraPlan.js PLANNER_MODELS);
  *   followups: "Sessions may file new to-dos" (orchestraFollowups.js), on for the boolean true only
  */
+/**
+ * The planner and workers a request names, checked against the shared
+ * allow-lists. Nothing named = the defaults (an older renderer or phone);
+ * an unknown name is refused, never coerced to Claude.
+ * @param {unknown} planner
+ * @param {unknown} workers
+ * @returns {{ok:true, planner:string, workers:string|null}|{ok:false, error:'badPlanner'|'badWorkers'}}
+ */
+function planChoice(planner, workers) {
+  const named = (v) => v !== undefined && v !== null;
+  const p = named(planner) ? normalizePlanner(planner) : 'claude';
+  if (!p) return { ok: false, error: 'badPlanner' };
+  const w = named(workers) ? normalizeWorkers(workers) : null;
+  if (named(workers) && !w) return { ok: false, error: 'badWorkers' };
+  return { ok: true, planner: p, workers: w };
+}
+
+/** The env a planner runs in: free = the coding profile, agy = the agy profile. */
+function plannerEnv(ctx, planner) {
+  if (planner === 'free') return ctx.freePlannerEnv ? ctx.freePlannerEnv() : null;
+  if (planner === 'agy') return ctx.agyPlannerEnv ? ctx.agyPlannerEnv() : null;
+  return ctx.toolEnv();
+}
+
 async function runPlan(ctx, session, target, { picked, effort, planner, workers, model, followups }) {
-  // D1 "Planner: Claude / Free": exactly 'free' picks the free planner on the
-  // coding profile's env; anything else is today's Claude planner.
-  const free = planner === 'free';
-  const env = free ? (ctx.freePlannerEnv ? ctx.freePlannerEnv() : null) : ctx.toolEnv();
-  if (!env) return { ok: false, error: 'noFreeProfile' };
+  // D1 "Planner": 'free' plans on the coding profile's env, 'agy' on the
+  // Antigravity profile's; nothing named is today's Claude planner.
+  const choice = planChoice(planner, workers);
+  if (!choice.ok) return choice;
+  const free = choice.planner === 'free';
+  const agy = choice.planner === 'agy';
+  const env = plannerEnv(ctx, choice.planner);
+  if (!env) return { ok: false, error: agy ? 'noAgyProfile' : 'noFreeProfile' };
   // One of the allow-listed aliases only; anything else plans on the default.
   const plannerModel = plannerModelOf(model);
   const res = await ctx.registry.ensure(target.projectId).makePlan({
@@ -87,13 +115,14 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
     todoAts: picked,
     // One of the four levels only; anything else plans at the default high.
     plannerEffort: plannerEffortOf(effort),
-    ...(free ? { planner: 'free' } : {}),
+    ...(free || agy ? { planner: choice.planner } : {}),
     // The default model passes no key (the makePlan call as before); the free
-    // planner has its own model.
-    ...(!free && plannerModel !== PLANNER_MODEL ? { plannerModel } : {}),
-    // F6 "Workers": only "Plan with free models in mind" changes planning; a
-    // Claude-only request passes no key (the makePlan call as before).
-    ...(!free && normalizeWorkers(workers) === 'hybrid' ? { workers: 'hybrid' } : {}),
+    // and agy planners have their own model.
+    ...(!free && !agy && plannerModel !== PLANNER_MODEL ? { plannerModel } : {}),
+    // F6 "Workers": "Plan with free models in mind" changes planning and
+    // "Antigravity (agy)" is kept on the plan; a Claude-only request passes no
+    // key (the makePlan call as before).
+    ...(!free && (choice.workers === 'hybrid' || choice.workers === 'agy') ? { workers: choice.workers } : {}),
     // Off by default and then no key at all (the makePlan call as before); the plan keeps it.
     ...(followups === true ? { followups: true } : {}),
   });
@@ -101,4 +130,4 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
   return res;
 }
 
-module.exports = { todoSelection, planTarget, runPlan };
+module.exports = { todoSelection, planTarget, planChoice, runPlan };

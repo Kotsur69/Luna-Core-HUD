@@ -30,7 +30,8 @@ const { gitDirExists } = require('./orchestraDiagnose');
 const core = require('./orchestraPlanRun');
 const { planAllowedTools } = require('./orchestraPlanRunLaunch');
 
-const PLANNERS = Object.freeze(['claude', 'free']);
+// The shared planner allow-list (claude / agy / free).
+const { PLANNERS } = require('./orchestraAgy');
 /** The request Mati types; the same cap the briefs put on the goal text. */
 const MAX_REQUEST_CHARS = core.MAX_GOAL_CHARS;
 const MIN_REQUEST_CHARS = 3;

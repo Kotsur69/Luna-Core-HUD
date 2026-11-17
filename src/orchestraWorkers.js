@@ -15,7 +15,8 @@
 
 'use strict';
 
-const WORKERS = Object.freeze(['claude', 'hybrid', 'free']);
+// 'agy' = every package on the Antigravity CLI (src/orchestraAgy.js).
+const WORKERS = Object.freeze(['claude', 'agy', 'hybrid', 'free']);
 const DEFAULT_WORKERS = 'claude';
 // Until free workers run hybrid packages, a "free" package runs on Claude
 // Sonnet: an upgrade, never a downgrade (Mati's rule).

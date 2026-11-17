@@ -76,6 +76,8 @@ const workerModelRules = require('./orchestraWorkerModel');
 const hybridGuard = require('./orchestraHybridGuard');
 // Hybrid runs, execution side (F6c/F6d) and the opt-in free-branch review (F5).
 const hybridRules = require('./orchestraHybrid');
+// Antigravity (agy) runs: which packages and helper jobs go to agy.
+const agyRules = require('./orchestraAgy');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -98,8 +100,8 @@ function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, ex
     env,
     openTodos,
     effort,
-    ...(model && model !== PLANNER_MODEL && planner !== 'free' ? { model } : {}),
-    ...(planner === 'free' ? { planner: 'free' } : {}),
+    ...(model && model !== PLANNER_MODEL && planner === 'claude' ? { model } : {}),
+    ...(planner === 'free' || planner === 'agy' ? { planner } : {}),
     ...(planDocs && planDocs.length ? { planDocs } : {}),
     ...(extraPrompt ? { extraPrompt } : {}),
     ...(hybrid === true ? { hybrid: true } : {}),
@@ -1197,8 +1199,8 @@ function createOrchestra(deps) {
         deps.dirtyCount(ctx.repoPath),
         deps.baseBranchOf ? deps.baseBranchOf(ctx.repoPath) : null,
       ]);
-      // Only the Claude planner waits for its window; a free one just fails.
-      if (!res.ok && planner === 'free') return res;
+      // Only the Claude planner waits for its window; a free or agy one just fails.
+      if (!res.ok && planner !== 'claude') return res;
       if (!res.ok) {
         const limits = deps.usageLimits ? deps.usageLimits() : [];
         const decision = planWaitDecision({ res, limits, now: now() });
@@ -1233,7 +1235,8 @@ function createOrchestra(deps) {
         // Only a plan made on another model than the default carries the key.
         ...(plannerModel !== PLANNER_MODEL && planner !== 'free' ? { plannerModel } : {}),
         // A free planner makes a free-only run (D1) that may auto-split (Q8).
-        ...(planner === 'free' ? { buildPlanner: 'free' } : {}),
+        // An agy planner is kept too: the run's helper jobs then run on agy (orchestraAgy.js).
+        ...(planner !== 'claude' ? { buildPlanner: planner } : {}),
         // F6 "Workers"; a Claude-only plan carries no key (as before the selector).
         ...(workers !== 'claude' ? { workers } : {}),
         dirty,
@@ -1517,8 +1520,9 @@ function createOrchestra(deps) {
       : withKit(pkg, { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] });
     return deps.createSession({
       ...resume,
-      // A hybrid free package runs on the coding profile (never auto:easy).
-      profileId: hybridRun.profileFor(pkg, plan.profileId),
+      // An agy package runs on the agy profile fixed at Approve (orchestraAgy.js);
+      // a hybrid free package runs on the coding profile (never auto:easy).
+      profileId: agyRules.packageRunsAgy(plan, pkg) && plan.agyProfileId ? plan.agyProfileId : hybridRun.profileFor(pkg, plan.profileId),
       projectId: plan.projectId,
       cwd,
       branch,
@@ -2071,6 +2075,17 @@ function createOrchestra(deps) {
       if (!coding.ok) return { ok: false, error: coding.error };
       if (coding.profileId) plan.hybridProfileId = coding.profileId;
       else delete plan.hybridProfileId;
+      // Antigravity (agy): the agy profile its packages run on, fixed for the
+      // run - refused with a clear reason when none is configured.
+      const agy = agyRules.approveAgyProfile(plan, {
+        workers,
+        // The model the run will freeze: Approve's pick, else the plan's, else Settings (Ctrl+L).
+        workerModel: workerModelRules.normalizeWorkerModel(o.workerModel) || plan.workerModel || workerSettings().model || null,
+        agyProfileId: deps.agyProfileId ? deps.agyProfileId() : null,
+      });
+      if (!agy.ok) return { ok: false, error: agy.error };
+      if (agy.profileId) plan.agyProfileId = agy.profileId;
+      else delete plan.agyProfileId;
     }
     const wantsFree = workers === 'free';
     if (wantsFree && !plan.started && !plan.freeMode && !plan.planRun) {

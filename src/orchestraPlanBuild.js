@@ -26,7 +26,8 @@ const { parseFileList, checkTaskSizing, MAX_TASK_FILES, MAX_TASK_AREAS, MAX_TOUC
 const { planPath } = require('./orchestraPlanRun');
 const { planSlugOf } = require('./planTodoImport');
 
-const PLANNERS = Object.freeze(['claude', 'free']);
+// The shared planner allow-list: claude / agy / free (src/orchestraAgy.js).
+const PLANNERS = Object.freeze(['claude', 'agy', 'free']);
 /** The free planner's model: the coding chain only (never auto:easy). */
 const FREE_PLANNER_MODEL = 'auto:coding';
 /** Plans read into one planner prompt at most. */
@@ -40,8 +41,8 @@ const SIZING_WARNING = 'sizing';
 
 const oneLine = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 
-/** 'free' or 'claude' (anything else is the default Claude planner). */
-const plannerOf = (raw) => (raw === 'free' ? 'free' : 'claude');
+/** 'free', 'agy' or 'claude' (callers refuse unknown names before this; anything else is Claude). */
+const plannerOf = (raw) => (raw === 'free' || raw === 'agy' ? raw : 'claude');
 
 /**
  * The plans a set of to-dos was imported from, in first-seen order.
