@@ -317,7 +317,7 @@ const {
 } = require('./worktrees');
 // God Mode v2 (DONE_ORCHESTRATOR_PLAN.md slices 3-5): headless planner, plan board,
 // supervisor + per-worker finish (verify, push, tick to-dos), integrator.
-const { createOrchestra, BRIEF_DIR } = require('./orchestra');
+const { createOrchestra } = require('./orchestra');
 const orchestraStore = require('./orchestraStore');
 const { createOrchestraRegistry } = require('./orchestraRegistry');
 const { makeOrchestraDeps, sharedPowerDeps, legacyRunProject, approvalRuleFor, godModeFacade, makeBatteryGuard } = require('./orchestraWiring');
@@ -1359,9 +1359,9 @@ function lunasworkAssetsFor(sessionId, session) {
   });
 }
 
-// God Mode v2 run controller. Briefs live in <userDir>/tasks (gitignored in a
-// dev clone): outside the worktree, so a worker's `git add -A` never commits
-// one, and a folder of their own, so the tab's --add-dir grants nothing else.
+// God Mode v2 run controller. Briefs live in <worker cwd>/.luna-brief/, git-
+// excluded (src/workerBrief.js): inside the folder the tab already trusts, so
+// no --add-dir and no Claude Code "new directory" trust prompt.
 // How often the supervisor checks workers against their working-time cap.
 const ORCHESTRA_TICK_MS = 60 * 1000;
 const RUN_REPORT_DIR = 'runs';
@@ -3494,7 +3494,6 @@ function registerIpc() {
     ipcMain,
     projects: () => projects,
     createSession,
-    briefDir: () => path.join(userDir(), BRIEF_DIR),
     controller: lunaswork,
     queue: lunasworkQueue,
     queueChanged: () => lunasworkPublish && lunasworkPublish(),

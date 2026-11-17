@@ -127,7 +127,8 @@ function setup({ packages, settings = {}, review = null } = {}) {
   };
   const view = (id) => orch.view().packages.find((p) => p.id === id);
   const briefOf = (sessionIndex) => log.briefs.get(log.sessions[sessionIndex].task.briefPath);
-  const briefFor = (branch) => log.briefs.get(path.join('/cfg/tasks', `${path.basename(rootOf(branch))}.md`));
+  // Briefs live in <worktree cwd>/.luna-brief/ (src/workerBrief.js).
+  const briefFor = (branch) => log.briefs.get(path.join(rootOf(branch), '.luna-brief', `${path.basename(rootOf(branch))}.md`));
   const events = (kind) => log.events.filter(([k]) => k === kind);
   return { orch, log, ctx, advance, flush, alive, view, briefOf, briefFor, events };
 }

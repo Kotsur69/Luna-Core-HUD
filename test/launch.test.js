@@ -160,12 +160,12 @@ test('isAgyCommand knows agy, agy.exe and agy.cmd, with a path and in any case',
 test('withTaskBrief hands an agy worker its brief through --prompt-interactive', () => {
   assert.equal(
     launch.withTaskBrief('agy', { briefPath: BRIEF }),
-    `agy --prompt-interactive ${BRIEF_MSG} --add-dir 'C:\\cfg\\tasks'`,
+    `agy --prompt-interactive ${BRIEF_MSG}`,
   );
   // The prompt goes right after the binary; the profile's own args follow.
   assert.equal(
     launch.withTaskBrief('C:\\bin\\agy.exe --model gemini-3.8-flash-high', { briefPath: BRIEF }),
-    `C:\\bin\\agy.exe --prompt-interactive ${BRIEF_MSG} --model gemini-3.8-flash-high --add-dir 'C:\\cfg\\tasks'`,
+    `C:\\bin\\agy.exe --prompt-interactive ${BRIEF_MSG} --model gemini-3.8-flash-high`,
   );
 });
 
@@ -183,7 +183,7 @@ test('withTaskBrief maps worker permission modes to agy syntax unless the profil
   for (const disallowedTools of [['Bash(git push:*)'], ['not a rule!'], ['Edit(src/secrets/*)', 'Write']]) {
     for (const mode of ['bypassPermissions', 'acceptEdits']) {
       const denied = launch.withTaskBrief('agy', task(mode, { disallowedTools }));
-      assert.equal(denied, `agy --prompt-interactive ${BRIEF_MSG} --add-dir 'C:\\cfg\\tasks'`, `${mode} ${disallowedTools}`);
+      assert.equal(denied, `agy --prompt-interactive ${BRIEF_MSG}`, `${mode} ${disallowedTools}`);
     }
   }
 });
@@ -193,7 +193,7 @@ test('agy launch helpers refuse control characters that the PTY would read as ke
   // A first message with one falls back to the brief message.
   assert.equal(
     launch.withTaskBrief('agy', { briefPath: BRIEF }, 'go\u001bon'),
-    `agy --prompt-interactive ${BRIEF_MSG} --add-dir 'C:\\cfg\\tasks'`,
+    `agy --prompt-interactive ${BRIEF_MSG}`,
   );
   assert.equal(launch.withMemoryCard('agy', 'C:\\cfg\\card\u0008.md'), 'agy');
   assert.equal(
@@ -228,9 +228,9 @@ test('withTaskBrief refuses an agy command that brings its own prompt, a lockdow
 test('withTaskBrief for claude is unchanged, and never passes --model agy', () => {
   assert.equal(
     launch.withTaskBrief('claude --verbose', { briefPath: BRIEF, model: 'opus', effort: 'high', permissionMode: 'acceptEdits' }),
-    `claude ${BRIEF_MSG} --verbose --add-dir 'C:\\cfg\\tasks' --model opus --effort high --permission-mode acceptEdits`,
+    `claude ${BRIEF_MSG} --verbose --model opus --effort high --permission-mode acceptEdits`,
   );
-  assert.equal(launch.withTaskBrief('claude', { briefPath: BRIEF, model: 'agy' }), `claude ${BRIEF_MSG} --add-dir 'C:\\cfg\\tasks'`);
+  assert.equal(launch.withTaskBrief('claude', { briefPath: BRIEF, model: 'agy' }), `claude ${BRIEF_MSG}`);
   assert.equal(launch.withTaskBrief('codex', { briefPath: BRIEF }), null);
 });
 
@@ -259,7 +259,7 @@ test('withAccountResume resumes an agy conversation with a neutral message, keep
   assert.doesNotMatch(launch.AGY_RESUME_MESSAGE, /Claude|['`]/);
   assert.equal(
     launch.withAccountResume('agy', RESUME_ID, { briefPath: BRIEF, permissionMode: 'acceptEdits' }, 'Go on.'),
-    `agy --prompt-interactive 'Go on.' --add-dir 'C:\\cfg\\tasks' --mode accept-edits --conversation=${RESUME_ID}`,
+    `agy --prompt-interactive 'Go on.' --mode accept-edits --conversation=${RESUME_ID}`,
   );
   // An unsafe message falls back to the neutral one.
   assert.match(launch.withAccountResume('agy', RESUME_ID, null, "it's"), new RegExp(launch.AGY_RESUME_MESSAGE));

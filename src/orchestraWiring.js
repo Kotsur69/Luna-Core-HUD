@@ -56,6 +56,7 @@ const planRunStart = require('./orchestraPlanRunStart');
 const planRunView = require('./orchestraPlanRunView');
 const planLaunch = require('./orchestraPlanRunLaunch');
 const { followupDeps } = require('./orchestraFollowupsLaunch');
+const workerBrief = require('./workerBrief');
 const { runToastBody } = require('./orchestraFollowupsReport');
 const { validateRunSlug, planPath: planDocPath } = require('./orchestraPlanRun');
 const { sizePackages } = require('./orchestraPlanBuild');
@@ -219,18 +220,11 @@ function sessionDeps(ctx) {
     // run has tabs, plus the LM Studio watchdog for local-model workers. The
     // tab closing ends it (overnight.forgetSession in the close path).
     createSession: guardedSessionFactory(ctx.createSession, ctx.overnight),
-    briefDir: () => path.join(ctx.userDir(), BRIEF_DIR),
     // A worker brief's "## Project memory" section (src/memoryinject.js), or null.
     projectMemory: (repoPath, pkg) => (typeof ctx.projectMemory === 'function' ? ctx.projectMemory(repoPath, pkg) : null),
-    writeBrief: (file, text) => {
-      try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    // Briefs live inside the worker's cwd and are git-excluded (src/workerBrief.js).
+    writeBrief: (file, text) => workerBrief.writeWorkerBrief(file, text),
+    removeBrief: (file) => workerBrief.removeWorkerBrief(file),
     // Each package worktree gets its own dependencies (one install at a
     // time across every run), checked before a worker starts or a verify runs.
     installDeps: (root, opts) => orchestraDeps.installWorktreeDeps(root, { fresh: !!(opts && opts.fresh) }),

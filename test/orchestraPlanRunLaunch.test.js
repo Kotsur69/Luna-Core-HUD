@@ -62,7 +62,7 @@ test('plan worker command: brief launch + dontAsk + allow + deny, byte for byte'
   const task = lock.planWorkerTask({ briefPath: BRIEF, runSlug: 'auth-redesign' });
   assert.equal(
     lock.workerLaunchCommand('claude', task),
-    `claude ${BRIEF_MSG} --add-dir '/runs/p1/briefs' --restricted --strict-mcp-config ` +
+    `claude ${BRIEF_MSG} --restricted --strict-mcp-config ` +
       "--tools 'Read,Glob,Grep,WebSearch,WebFetch,Edit,Write' --permission-mode dontAsk --allowedTools " +
       "'Read' 'Glob' 'Grep' 'WebSearch' 'WebFetch' 'mcp__playwright__browser_navigate' " +
       "'mcp__playwright__browser_snapshot' 'mcp__playwright__browser_evaluate' " +
@@ -112,7 +112,9 @@ test('main.js never starts a plan worker tab with the bare profile command', () 
 test('plan worker command keeps harmless profile flags and adds no model flag', () => {
   const task = lock.planWorkerTask({ briefPath: BRIEF, runSlug: 'r1' });
   const cmd = lock.workerLaunchCommand('claude --verbose', task);
-  assert.ok(cmd.startsWith(`claude ${BRIEF_MSG} --verbose --add-dir`));
+  // No --add-dir: the brief sits inside the worker's cwd (src/workerBrief.js).
+  assert.ok(cmd.startsWith(`claude ${BRIEF_MSG} --verbose --restricted`));
+  assert.doesNotMatch(cmd, /--add-dir/);
   assert.doesNotMatch(cmd, /--model|--effort|acceptEdits|bypassPermissions/);
 });
 
@@ -161,13 +163,13 @@ test('the refusal command starts nothing and has no nested quote', () => {
 test('build and Claude worker launch args are byte-for-byte unchanged', () => {
   const build = { briefPath: BRIEF, model: 'sonnet', effort: 'high', permissionMode: 'acceptEdits', allowedTools: ['Bash(npm test)'] };
   const expected =
-    `claude ${BRIEF_MSG} --add-dir '/runs/p1/briefs' --model sonnet --effort high ` +
+    `claude ${BRIEF_MSG} --model sonnet --effort high ` +
     "--permission-mode acceptEdits --allowedTools 'Bash(npm test)'";
   assert.equal(withTaskBrief('claude', build), expected);
   assert.equal(lock.workerLaunchCommand('claude', build), expected);
 
   const plain = { briefPath: BRIEF, model: null, effort: null, permissionMode: null };
-  assert.equal(withTaskBrief('claude', plain), `claude ${BRIEF_MSG} --add-dir '/runs/p1/briefs'`);
+  assert.equal(withTaskBrief('claude', plain), `claude ${BRIEF_MSG}`);
   assert.equal(lock.workerLaunchCommand('claude', plain), withTaskBrief('claude', plain));
 
   // Free God Mode build workers (luna-free/) take the same path.

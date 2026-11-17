@@ -16,7 +16,8 @@
 //                fill forms or move files: a deny rule beats any allow rule
 //   isolation    --restricted: no user / project / local settings files (no
 //                repo hooks, no stray allow rules, no plugins' hooks), file
-//                tools confined to the worktree + the brief dir, no code-
+//                tools confined to the worktree (the brief sits inside it,
+//                <cwd>/.luna-brief/ - no --add-dir), no code-
 //                running tools; --tools names the only built-ins there are;
 //                --strict-mcp-config + a Playwright-only --mcp-config file,
 //                so no other MCP server (user's or repo's .mcp.json) loads.
