@@ -28,6 +28,7 @@ const fs = require('fs');
 const paths = require('./paths');
 const { EFFORTS, isEffort } = require('./efforts');
 const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
+const { WORKER_MODELS } = require('./workerModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
 const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
 
@@ -106,8 +107,9 @@ const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
 // 'plan' = the planner's per-package pick. Fable is a manual choice only: the
 // planner itself still assigns sonnet / opus (orchestraPlan.js MODELS).
 // 'agy' = every worker on the Antigravity CLI (src/claudeModels.js AGY_MODEL),
-// also a manual choice; never passed to `claude --model`.
-const ORCHESTRA_WORKER_MODELS = ['opus', 'sonnet', 'fable', AGY_MODEL, 'plan'];
+// also a manual choice; never passed to `claude --model`. The list itself
+// lives in src/workerModels.js.
+const ORCHESTRA_WORKER_MODELS = WORKER_MODELS;
 const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // Worker --effort: 'plan' = the planner's per-package pick (medium if none);
 // the others force one level. Never 'low' (src/efforts.js).

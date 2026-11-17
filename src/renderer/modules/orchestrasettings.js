@@ -15,8 +15,10 @@
 import { sfx } from './sound.js';
 import { t } from './util.js';
 import { mountRunEmailToggle } from './mailsettings.js';
+import { WORKER_MODEL_LIST, DEFAULT_WORKER_MODEL, isWorkerModel } from '../../workerModels.js';
 
-const MODELS = ['opus', 'sonnet', 'fable', 'agy', 'plan'];
+/** i18n key of the 'plan' choice's label (the other choices are product names). */
+const PLAN_LABEL_KEY = 'orchset.model.plan';
 const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // 'plan' + src/efforts.js EFFORTS (the renderer cannot require main-side modules).
@@ -62,15 +64,38 @@ function mountEvolutionToggles(root, prefs) {
 }
 
 /**
+ * Fills the worker-model select from the shared list (src/workerModels.js).
+ * The 'plan' option keeps a data-i18n key so a language switch relabels it.
+ * @param {HTMLSelectElement} select
+ */
+function fillWorkerModelOptions(select) {
+  select.replaceChildren(
+    ...WORKER_MODEL_LIST.map((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      if (m.name) {
+        opt.textContent = m.name;
+      } else {
+        opt.dataset.i18n = PLAN_LABEL_KEY;
+        opt.textContent = t(PLAN_LABEL_KEY);
+      }
+      return opt;
+    }),
+  );
+}
+
+/**
  * @param {HTMLElement} root the Settings overlay
  * @param {{orchestraWorkerModel?:string, orchestraPermissionMode?:string}} prefs
  */
 export function mountOrchestraSettings(root, prefs) {
   const model = root.querySelector('#orchestra-worker-model');
   const perm = root.querySelector('#orchestra-permission-mode');
+  // The options first: the select is empty in index.html.
+  if (model) fillWorkerModelOptions(model);
   if (!model || !perm) return;
 
-  model.value = MODELS.includes(prefs.orchestraWorkerModel) ? prefs.orchestraWorkerModel : 'opus';
+  model.value = isWorkerModel(prefs.orchestraWorkerModel) ? prefs.orchestraWorkerModel : DEFAULT_WORKER_MODEL;
   perm.value = PERMISSION_MODES.includes(prefs.orchestraPermissionMode) ? prefs.orchestraPermissionMode : 'bypassPermissions';
 
   // "Email me when a run finishes" (src/godmodemail.js): ON by default once
@@ -80,7 +105,7 @@ export function mountOrchestraSettings(root, prefs) {
   mountEvolutionToggles(root, prefs);
 
   model.addEventListener('change', () => {
-    if (!MODELS.includes(model.value)) return;
+    if (!isWorkerModel(model.value)) return;
     sfx.modeToggle();
     window.lunacore.setUiPrefs({ orchestraWorkerModel: model.value });
   });

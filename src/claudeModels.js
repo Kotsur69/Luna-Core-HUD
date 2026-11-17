@@ -1,5 +1,5 @@
 // ============================================================================
-// LunaCore - the Claude CLI model aliases Mati can pick (pure, no requires)
+// LunaCore - the Claude CLI model aliases Mati can pick (pure)
 // ----------------------------------------------------------------------------
 // One list for every "which Claude model" choice that ends up as the value of
 // a `claude --model <alias>` flag: God Mode's planner / worker / card model
@@ -12,8 +12,9 @@
 //   MODEL_LABELS    alias -> the name shown in the UI
 //
 // The renderer cannot require main-side modules: its copies
-// (src/renderer/modules/orchestraPick.js, orchestrasettings.js, the Luna's
-// Work panels) are kept in line by hand and by test/claude-models.test.js.
+// (src/renderer/modules/orchestraPick.js, the Luna's Work panels) are kept in
+// line by hand and by test/claude-models.test.js. The God Mode worker-model
+// list and every product name live in src/workerModels.js, which both sides load.
 // ============================================================================
 
 'use strict';
@@ -22,13 +23,14 @@ const CLAUDE_MODELS = Object.freeze(['haiku', 'sonnet', 'opus', 'fable']);
 
 const MODEL_RANK = Object.freeze(Object.fromEntries(CLAUDE_MODELS.map((m, i) => [m, i])));
 
-const MODEL_LABELS = Object.freeze({ haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' });
-
 // Not a Claude model: the Antigravity CLI (`agy`, src/launch.js isAgyCommand)
 // as a worker choice. It belongs in lists of where a worker RUNS (God Mode's
 // worker model, a task card's model) and never in CLAUDE_MODELS, so no
-// `claude --model` flag ever carries it.
-const AGY_MODEL = 'agy';
+// `claude --model` flag ever carries it. Defined in src/workerModels.js, which
+// also holds every product name.
+const { AGY_MODEL, MODEL_NAMES } = require('./workerModels');
+
+const MODEL_LABELS = Object.freeze(Object.fromEntries(CLAUDE_MODELS.map((m) => [m, MODEL_NAMES[m]])));
 
 /** Every model a worker-model choice list may hold: the Claude aliases plus agy. */
 const WORKER_MODEL_CHOICES = Object.freeze([...CLAUDE_MODELS, AGY_MODEL]);
