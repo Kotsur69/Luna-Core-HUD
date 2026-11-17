@@ -10,10 +10,7 @@
 //     modelLabel}, plus `estimated: true` - see agyContextMetrics().
 // src/agywatcher.js finds and tails the file; everything here is pure.
 //
-// Where agy keeps it (agy.exe 1.5.9, checked on 2026-11-17 against the strings
-// and the docs built into agy.exe, and the swarm_board sidecar agy ships in
-// ~/.gemini/antigravity-cli/builtin/plugins/swarm/sidecars/swarm_board/main.mjs,
-// which parses these very files):
+// Where agy keeps it (agy.exe 1.5.9, 2026-11-17):
 //   <appData>/brain/<conversation-id>/.system_generated/logs/transcript.jsonl
 //   <appData>/brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl
 //   <appData>/conversation_summaries.db   SQLite, one row per conversation
@@ -27,12 +24,16 @@
 // `type` USER_INPUT is a prompt, PLANNER_RESPONSE the model's reply and its
 // tool calls, GENERIC a tool result. Results follow their planner step in call
 // order. String args are often JSON-quoted ("\"C:/x\""). There are NO token
-// counts and no model name in it, hence the estimate.
+// counts, hence the estimate. The model is named only in the text of a user
+// step, when the model setting changes (modelFromUserInput()).
 //
-// NOT verified against a live session: no agy conversation on this machine
-// had a single step, and `agy --help` hangs (see src/launch.js). The field
-// names above are agy's own documentation; the file-tool names and argument
-// keys come from the tool examples and allow-lists inside agy.exe.
+// What was checked live (a real agy run on 2026-11-17, refused by Google's
+// quota before the model answered): both file paths, the line format of a
+// USER_INPUT step, the model line, and the summaries row with the run's cwd.
+// What was NOT seen live: a tool call or a tool result. Their shape comes from
+// agy's own documentation in agy.exe and the swarm_board sidecar agy ships
+// (~/.gemini/antigravity-cli/builtin/plugins/swarm/sidecars/swarm_board/main.mjs),
+// which parses these very files.
 // ============================================================================
 
 'use strict';
@@ -45,10 +46,10 @@ const { countLines, countStringDiff, estimateTokens } = require('./filestat');
 const { pathKey } = require('./gitattribution');
 
 /**
- * Context window assumed for an agy tab. agy names no model per conversation
- * and its default models are Gemini ones, documented at 1,048,576 tokens. The
- * round million matches models.js' tiers (and the badge's "1M"); the 5 %
- * difference is far inside the error of the estimate itself.
+ * Context window assumed for an agy tab. agy states no window, and its models
+ * are Gemini ones, documented at 1,048,576 tokens. The round million matches
+ * models.js' tiers (and the badge's "1M"); the 5 % difference is far inside
+ * the error of the estimate itself.
  */
 const AGY_CONTEXT_LIMIT = 1000000;
 
@@ -56,8 +57,15 @@ const AGY_CONTEXT_LIMIT = 1000000;
 const MAX_PATH_CHARS = 4096;
 /** Tool names longer than this are garbage, not a tool. */
 const MAX_TOOL_NAME_CHARS = 200;
+/** Tool events one step may produce; a hostile line cannot flood the IPC. */
+const MAX_EVENTS_PER_STEP = 128;
+/** A model name longer than this is not one. */
+const MAX_MODEL_CHARS = 80;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** "The user changed setting `Model Selection` from None to Gemini 4 Argon (Medium)." */
+const MODEL_SETTING_RE = /setting `Model Selection` from [^\n]*? to ([^\n]+?)\.(?:\s|$)/;
 
 /**
  * agy tool name -> Skill Tracker tile. The tile names are the Claude path's
@@ -91,6 +99,14 @@ const FILE_TILES = new Set(['Read', 'Edit', 'Write']);
 const PATH_ARG_KEYS = Object.freeze(['AbsolutePath', 'TargetFile', 'FilePath', 'Path', 'File']);
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * A network or device path: \\host\share, //host/share, \\?\..., \\.\...
+ * Never accepted - the HUD stats every path it shows, and on Windows a stat
+ * of \\host\share opens an SMB connection that sends NTLM credentials. The
+ * paths here are written by a model, so a prompt injection could aim one.
+ */
+const isNetworkPath = (p) => /^[\\/]{2}/.test(p);
 
 /**
  * agy JSON-quotes string arguments ("\"C:/x\""). Returns the plain string;
@@ -127,29 +143,32 @@ function structuredArg(value) {
 }
 
 /**
- * An agy path argument as an absolute, normalized path - the form git's
- * rows and the Claude path's file_path take, so one file is one row.
+ * An agy path argument as an absolute, normalized, LOCAL path - the form
+ * git's rows and the Claude path's file_path take, so one file is one row.
  * @param {unknown} raw
- * @param {string} cwd the tab's folder, for a relative path
- * @returns {string} '' when it is not a usable path
+ * @param {string} cwd the tab's folder, for a relative path ('' = reject relative)
+ * @returns {string} '' when it is not a usable local path
  */
 function normalizeAgyPath(raw, cwd) {
   const value = unquoteArg(raw);
   if (typeof value !== 'string') return '';
   let p = value.trim();
-  if (!p || p.length > MAX_PATH_CHARS || p.includes('\0')) return '';
+  if (!p || p.length > MAX_PATH_CHARS || p.includes('\0') || isNetworkPath(p)) return '';
   if (/^file:\/\//i.test(p)) {
     try {
       p = fileURLToPath(p);
     } catch {
-      return ''; // a file URL for another host or a bad one: no file identity
+      return ''; // not a valid local file URL: no file identity
     }
+    // Checked again after decoding: %00 and file://host/... only appear now.
+    if (p.includes('\0') || isNetworkPath(p)) return '';
   }
   if (!path.isAbsolute(p)) {
     if (!cwd) return '';
     p = path.resolve(cwd, p);
   }
-  return path.normalize(p);
+  p = path.normalize(p);
+  return isNetworkPath(p) ? '' : p;
 }
 
 /** The file a call works on, or ''. */
@@ -204,17 +223,28 @@ function toolCallsOf(raw) {
     const name = tc.name.trim();
     if (!name || name.length > MAX_TOOL_NAME_CHARS) continue;
     const args = isObj(tc.args) ? tc.args : structuredArg(tc.args);
-    calls.push({
-      id: typeof tc.id === 'string' && tc.id ? tc.id : '',
-      name,
-      args: isObj(args) ? args : {},
-    });
+    calls.push({ name, args: isObj(args) ? args : {} });
   }
   return calls;
 }
 
 /**
- * Parses one transcript line.
+ * The model a user step names, from the line agy adds when the model setting
+ * changes (seen live: "...from None to Gemini 4 Argon (Medium)."), or ''.
+ * @param {string} content
+ * @returns {string}
+ */
+function modelFromUserInput(content) {
+  const m = MODEL_SETTING_RE.exec(String(content || ''));
+  if (!m) return '';
+  // eslint-disable-next-line no-control-regex
+  const name = m[1].replace(/[\u0000-\u001f\u007f`]/g, '').trim();
+  return name && name.length <= MAX_MODEL_CHARS ? name : '';
+}
+
+/**
+ * Parses one transcript line. A reason never quotes the line: transcripts
+ * hold the user's prompts, and reasons end up in the log.
  * @param {string} line
  * @returns {{step: object|null, reason: string|null}}
  */
@@ -222,13 +252,12 @@ function parseStepLine(line) {
   let obj;
   try {
     obj = JSON.parse(line);
-  } catch (err) {
-    return { step: null, reason: `invalid JSON (${err.message})` };
+  } catch {
+    return { step: null, reason: 'invalid JSON' };
   }
   if (!isObj(obj)) return { step: null, reason: 'not a JSON object' };
   if (typeof obj.type !== 'string' || !obj.type) return { step: null, reason: 'step has no type' };
   const content = typeof obj.content === 'string' ? obj.content : '';
-  const toolCalls = toolCallsOf(obj.tool_calls);
   return {
     step: {
       index: Number.isInteger(obj.step_index) ? obj.step_index : null,
@@ -237,7 +266,7 @@ function parseStepLine(line) {
       status: typeof obj.status === 'string' ? obj.status : '',
       at: typeof obj.created_at === 'string' ? Date.parse(obj.created_at) || null : null,
       content,
-      toolCalls,
+      toolCalls: toolCallsOf(obj.tool_calls),
       // What this step put into the context window. Thinking is left out: the
       // model's reasoning is not sent back to it on the next call.
       chars: content.length + (Array.isArray(obj.tool_calls) ? JSON.stringify(obj.tool_calls).length : 0),
@@ -268,7 +297,7 @@ function parseSteps(text) {
 
 /**
  * The running state of one agy conversation: tool calls waiting for their
- * result, and the characters currently in the context window. It spans
+ * result, the characters in the context window and the model. It spans
  * fragments on purpose - a call routinely lands in one read and its result in
  * the next (the same reason observer.js keeps `openTools` across ticks).
  */
@@ -280,6 +309,14 @@ class AgyTranscriptState {
     this.pending = [];
     /** Characters in the context window since the conversation (or its last checkpoint) began. */
     this.contextChars = 0;
+    /** The model agy last said it switched to; '' until it says. */
+    this.model = '';
+    /** Tiled calls that ended with no result step - a sign the format differs. */
+    this.unresolved = 0;
+    /** Highest step_index seen: a line repeating one is an update, not a new step. */
+    this.lastIndex = -1;
+    /** Event ids are ours, so they never collide (agy's own are not logged). */
+    this.callSeq = 0;
   }
 
   /**
@@ -291,21 +328,44 @@ class AgyTranscriptState {
   apply(steps) {
     const events = [];
     for (const step of Array.isArray(steps) ? steps : []) {
+      if (step.index !== null) {
+        // A step logged again (its status moved on) would count twice and
+        // shift every later result onto the wrong call.
+        if (step.index <= this.lastIndex) continue;
+        this.lastIndex = step.index;
+      }
       // A checkpoint is agy compacting the conversation: its summary replaces
       // everything before it in the window.
       this.contextChars = step.type === 'CHECKPOINT' ? step.chars : this.contextChars + step.chars;
-      if (step.type === 'PLANNER_RESPONSE') {
-        events.push(...this.closePending(step.at));
-        this.pending = step.toolCalls.map((call, i) => this.openCall(call, step, i));
-        for (const call of this.pending) {
-          if (call.tile) events.push({ phase: 'start', id: call.id, tile: call.tile, at: step.at, file: call.file });
-        }
-      } else if (step.type === 'GENERIC' && this.pending.length > 0) {
+      if (step.type === 'USER_INPUT') this.model = modelFromUserInput(step.content) || this.model;
+      if (step.type === 'PLANNER_RESPONSE') this.openBatch(step, events);
+      else if (step.type === 'GENERIC' && this.pending.length > 0) {
         const call = this.pending.shift();
         if (call.tile) events.push(endEvent(call, step));
       }
     }
     return events;
+  }
+
+  /** A planner step: the previous batch is over, this one's calls start. */
+  openBatch(step, events) {
+    events.push(...this.closePending(step.at));
+    let tiled = 0;
+    this.pending = step.toolCalls.map((call) => {
+      // Every call keeps its place in the result order, even past the cap.
+      const tile = TOOL_TO_TILE.get(call.name) || null;
+      const shown = tile && tiled < MAX_EVENTS_PER_STEP;
+      if (shown) tiled++;
+      return {
+        id: `agy:${++this.callSeq}`,
+        tile: shown ? tile : null,
+        file: shown && FILE_TILES.has(tile) ? filePathOf(call.args, this.cwd) : '',
+        stat: shown ? editStatOf(tile, call.args) : { added: 0, removed: 0 },
+      };
+    });
+    for (const call of this.pending) {
+      if (call.tile) events.push({ phase: 'start', id: call.id, tile: call.tile, at: step.at, file: call.file });
+    }
   }
 
   /**
@@ -314,27 +374,17 @@ class AgyTranscriptState {
    * lit, and the renderer only ever wants balanced pairs.
    */
   closePending(at) {
-    const events = this.pending
-      .filter((call) => call.tile)
-      .map((call) => ({ phase: 'end', id: call.id, tile: call.tile, at, file: call.file, added: 0, removed: 0, contextChars: 0, contextTokens: 0 }));
+    const open = this.pending.filter((call) => call.tile);
+    this.unresolved += open.length;
     this.pending = [];
-    return events;
+    return open.map((call) => ({
+      phase: 'end', id: call.id, tile: call.tile, at, file: call.file, added: 0, removed: 0, contextChars: 0, contextTokens: 0,
+    }));
   }
 
   /** Drops calls left open by history (a resumed conversation's past). */
   forgetPending() {
     this.pending = [];
-  }
-
-  openCall(call, step, i) {
-    const tile = TOOL_TO_TILE.get(call.name) || null;
-    return {
-      // agy's own id when it logs one, else one that is unique per conversation.
-      id: call.id || `agy:${step.index ?? 'x'}:${i}`,
-      tile,
-      file: tile && FILE_TILES.has(tile) ? filePathOf(call.args, this.cwd) : '',
-      stat: tile ? editStatOf(tile, call.args) : { added: 0, removed: 0 },
-    };
   }
 }
 
@@ -364,17 +414,18 @@ function endEvent(call, result) {
  * it reads low. `estimated: true` makes the renderer label it as approximate,
  * and keeps it from driving auto-compact.
  * @param {number} contextChars
- * @param {{file?: string|null, elapsedMs?: number}} [extra]
+ * @param {{file?: string|null, elapsedMs?: number, model?: string}} [extra]
  */
-function agyContextMetrics(contextChars, { file = null, elapsedMs = 0 } = {}) {
+function agyContextMetrics(contextChars, { file = null, elapsedMs = 0, model = '' } = {}) {
   const tokens = estimateTokens(Math.max(0, Number(contextChars) || 0));
   const limit = AGY_CONTEXT_LIMIT;
+  const name = typeof model === 'string' && model ? model : AGY_MODEL;
   return {
     tokens,
     limit,
     percent: Math.min(1, Math.max(0, tokens / limit)),
-    model: AGY_MODEL,
-    modelLabel: AGY_MODEL,
+    model: name,
+    modelLabel: name,
     estimated: true,
     file,
     elapsedMs,
@@ -383,29 +434,52 @@ function agyContextMetrics(contextChars, { file = null, elapsedMs = 0 } = {}) {
 
 /**
  * conversation id -> the workspace folders (pathKey form) it runs in, from
- * conversation_summaries rows. Rows that do not validate are left out.
+ * conversation_summaries rows.
  * @param {unknown[]} rows {conversation_id, workspace_uris} rows
- * @returns {Map<string, string[]>}
+ * @returns {{byId: Map<string, string[]>, skipped: number}} skipped = rows that did not validate
  */
 function workspacesFromRows(rows) {
   const byId = new Map();
+  let skipped = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
-    if (!isObj(row) || typeof row.conversation_id !== 'string' || !UUID_RE.test(row.conversation_id)) continue;
+    if (!isObj(row) || typeof row.conversation_id !== 'string' || !UUID_RE.test(row.conversation_id)) {
+      skipped++;
+      continue;
+    }
     let uris;
     try {
       uris = JSON.parse(String(row.workspace_uris || '[]'));
     } catch {
-      continue; // a row agy wrote half-way: it is read again on the next tick
+      uris = null;
     }
-    if (!Array.isArray(uris)) continue;
+    if (!Array.isArray(uris)) {
+      skipped++;
+      continue;
+    }
     const folders = [];
     for (const uri of uris) {
-      const folder = typeof uri === 'string' && /^file:\/\//i.test(uri) ? normalizeAgyPath(uri, '') : '';
+      // A file URL as agy writes it, or an absolute local path.
+      const folder = normalizeAgyPath(uri, '');
       if (folder) folders.push(pathKey(folder));
     }
     byId.set(row.conversation_id.toLowerCase(), folders);
   }
-  return byId;
+  return { byId, skipped };
+}
+
+/**
+ * How a conversation's workspaces relate to a tab's folder: 'exact' (agy
+ * runs in that very folder), 'contains' (the tab's folder lies inside one,
+ * should agy widen its workspace to a repo root), or null.
+ * @param {string[]|undefined} folders pathKey form
+ * @param {string} cwd
+ * @returns {'exact'|'contains'|null}
+ */
+function workspaceMatch(folders, cwd) {
+  if (!Array.isArray(folders) || !cwd) return null;
+  const key = pathKey(cwd);
+  if (folders.includes(key)) return 'exact';
+  return folders.some((f) => key.startsWith(f.endsWith(path.sep) ? f : f + path.sep)) ? 'contains' : null;
 }
 
 /**
@@ -437,15 +511,18 @@ function conversationIdFromCommand(command) {
 module.exports = {
   AGY_CONTEXT_LIMIT,
   AGY_TOOL_TILES,
+  MAX_EVENTS_PER_STEP,
   UUID_RE,
   unquoteArg,
   normalizeAgyPath,
   editStatOf,
+  modelFromUserInput,
   parseStepLine,
   parseSteps,
   AgyTranscriptState,
   agyContextMetrics,
   workspacesFromRows,
+  workspaceMatch,
   transcriptKindFor,
   conversationIdFromCommand,
 };

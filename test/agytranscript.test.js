@@ -1,11 +1,14 @@
 // Tests for the Antigravity (agy) transcript adapter (src/agytranscript.js)
 // and its watcher (src/agywatcher.js).
 //
-// FIXTURE IS ASSUMED, NOT CAPTURED: test/fixtures/agy-transcript.assumed.jsonl
-// follows the step format agy documents inside agy.exe 1.5.9 (step_index,
-// type, status, created_at, content, tool_calls [{name, args}] with
-// JSON-quoted string args, GENERIC results in call order), but no agy
-// conversation on the machine it was written on had any steps to copy.
+// TWO FIXTURES, ONE ASSUMED AND ONE CAPTURED:
+// * test/fixtures/agy-transcript.assumed.jsonl follows the step format agy
+//   documents inside agy.exe 1.5.9 (step_index, type, status, created_at,
+//   content, tool_calls [{name, args}] with JSON-quoted string args, GENERIC
+//   results in call order). Its tool calls and results were NOT seen live.
+// * test/fixtures/agy-transcript.captured-user-input.jsonl is a real line
+//   agy 1.5.9 wrote on 2026-11-17 (a run Google's quota refused before the
+//   model answered, so it holds the user step only).
 
 'use strict';
 
@@ -19,18 +22,23 @@ const { pathToFileURL } = require('url');
 const {
   AGY_CONTEXT_LIMIT,
   AGY_TOOL_TILES,
+  MAX_EVENTS_PER_STEP,
   unquoteArg,
   normalizeAgyPath,
   editStatOf,
+  modelFromUserInput,
   parseSteps,
   AgyTranscriptState,
   agyContextMetrics,
   workspacesFromRows,
+  workspaceMatch,
 } = require('../src/agytranscript');
 const { AgyTranscriptWatcher, readConversationWorkspaces } = require('../src/agywatcher');
 const { TOOL_TILES, usageToMetrics } = require('../src/observer');
 
 const FIXTURE = fs.readFileSync(path.join(__dirname, 'fixtures', 'agy-transcript.assumed.jsonl'), 'utf8');
+const CAPTURED = fs.readFileSync(path.join(__dirname, 'fixtures', 'agy-transcript.captured-user-input.jsonl'), 'utf8');
+const CAPTURED_MODEL = 'Gemini 4 Argon (Medium)';
 const CWD = process.platform === 'win32' ? 'C:\\repo' : '/repo';
 /** The fixture's agy paths (C:/repo/...) the way the adapter reports them on this platform. */
 const fixturePath = (p) => normalizeAgyPath(p, CWD);
@@ -46,6 +54,25 @@ test('parseSteps reads every step of the fixture and skips nothing', () => {
   ]);
   assert.equal(steps[1].toolCalls.length, 2);
   assert.equal(steps[1].at, Date.parse('2026-11-17T08:00:05Z'));
+});
+
+test('the line a real agy run wrote parses, and names the model', () => {
+  const { steps, skipped } = parseSteps(CAPTURED);
+  assert.deepEqual(skipped, []);
+  assert.equal(steps.length, 1);
+  assert.deepEqual([steps[0].index, steps[0].type, steps[0].status], [0, 'USER_INPUT', 'DONE']);
+  assert.equal(steps[0].at, Date.parse('2026-11-17T09:17:27Z'));
+  const state = new AgyTranscriptState({ cwd: CWD });
+  assert.deepEqual(state.apply(steps), []);
+  assert.equal(state.model, CAPTURED_MODEL);
+  assert.equal(state.contextChars, steps[0].content.length);
+});
+
+test('modelFromUserInput takes the model only from agy\'s settings line', () => {
+  assert.equal(modelFromUserInput('The user changed setting `Model Selection` from A to B 2.'), 'B 2');
+  assert.equal(modelFromUserInput('please use model X.'), '');
+  assert.equal(modelFromUserInput('setting `Model Selection` from A to ' + 'x'.repeat(200) + '.'), '');
+  assert.equal(modelFromUserInput(undefined), '');
 });
 
 test('parseSteps accepts the full enum name of a step type', () => {
@@ -67,6 +94,15 @@ test('normalizeAgyPath gives absolute paths and rejects junk', () => {
   assert.equal(normalizeAgyPath('a\0b', CWD), '');
   assert.equal(normalizeAgyPath('x'.repeat(5000), CWD), '');
   assert.equal(normalizeAgyPath(null, CWD), '');
+});
+
+test('normalizeAgyPath never yields a network path (a stat of one would leak NTLM credentials)', () => {
+  assert.equal(normalizeAgyPath('\\\\evil\\share\\x.js', CWD), '');
+  assert.equal(normalizeAgyPath('"//evil/share/x.js"', CWD), '');
+  assert.equal(normalizeAgyPath('\\\\?\\C:\\repo\\x.js', CWD), '');
+  assert.equal(normalizeAgyPath('file://evil/share/x.js', CWD), '');
+  // Decoding can produce a NUL the raw string did not have.
+  assert.equal(normalizeAgyPath(`${pathToFileURL(path.join(CWD, 'a')).href}%00b`, CWD), '');
 });
 
 test('editStatOf counts replace chunks exactly, in both chunk forms', () => {
@@ -130,6 +166,43 @@ test('a new planner step ends the calls that never got a result', () => {
   const events = state.apply(parseSteps(text).steps);
   assert.deepEqual(events.map((e) => e.phase), ['start', 'end']);
   assert.equal(events[1].contextChars, 0);
+  assert.equal(state.unresolved, 1);
+});
+
+test('a step logged again under the same step_index counts once and shifts no result', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const read = (file) => ({ name: 'view_file', args: { AbsolutePath: `C:/repo/${file}` } });
+  const text = [
+    JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [read('a.js'), read('b.js')] }),
+    JSON.stringify({ type: 'GENERIC', step_index: 2, status: 'RUNNING', content: 'aaa' }),
+    JSON.stringify({ type: 'GENERIC', step_index: 2, status: 'DONE', content: 'aaa' }),
+    JSON.stringify({ type: 'GENERIC', step_index: 3, status: 'DONE', content: 'bb' }),
+  ].join('\n');
+  const steps = parseSteps(text).steps;
+  const events = state.apply(steps);
+  const ends = events.filter((e) => e.phase === 'end');
+  assert.deepEqual(ends.map((e) => [path.basename(e.file), e.contextChars]), [['a.js', 3], ['b.js', 2]]);
+  assert.equal(state.contextChars, steps[0].chars + steps[1].chars + steps[3].chars);
+});
+
+test('event ids never collide, even across conversations restarted from step 0', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const first = state.apply(parseSteps(FIXTURE).steps);
+  state.lastIndex = -1; // as after a restart of the same state
+  const second = state.apply(parseSteps(FIXTURE).steps);
+  const starts = [...first, ...second].filter((e) => e.phase === 'start').map((e) => e.id);
+  assert.equal(new Set(starts).size, starts.length);
+});
+
+test('one step lights at most MAX_EVENTS_PER_STEP tools, and the results still pair up', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const calls = Array.from({ length: MAX_EVENTS_PER_STEP + 50 }, (_, i) => ({ name: 'view_file', args: { AbsolutePath: `C:/repo/f${i}.js` } }));
+  const lines = [JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: calls })];
+  for (let i = 0; i < calls.length; i++) lines.push(JSON.stringify({ type: 'GENERIC', status: 'DONE', content: 'x' }));
+  const events = state.apply(parseSteps(lines.join('\n')).steps);
+  assert.equal(events.filter((e) => e.phase === 'start').length, MAX_EVENTS_PER_STEP);
+  assert.equal(events.filter((e) => e.phase === 'end').length, MAX_EVENTS_PER_STEP);
+  assert.equal(state.pending.length, 0);
 });
 
 test('tools without a tile (MCP, browser) still take their place in the result order', () => {
@@ -158,6 +231,7 @@ test('agyContextMetrics has usageToMetrics\' shape plus the estimated flag', () 
   assert.equal(m.tokens, 10000);
   assert.equal(m.percent, 0.01);
   assert.equal(m.model, 'agy');
+  assert.equal(agyContextMetrics(1, { model: CAPTURED_MODEL }).modelLabel, CAPTURED_MODEL);
   assert.equal(agyContextMetrics(1e12).percent, 1);
   assert.equal(agyContextMetrics(-5).tokens, 0);
   assert.equal(agyContextMetrics('junk').tokens, 0);
@@ -187,7 +261,8 @@ test('malformed lines give no steps and a reason each, never a throw', () => {
   const { steps, skipped } = parseSteps(text);
   assert.deepEqual(steps, []);
   assert.equal(skipped.length, 4);
-  assert.match(skipped[0].reason, /invalid JSON/);
+  // A reason never quotes the line: transcripts hold the user's prompts.
+  assert.equal(skipped[0].reason, 'invalid JSON');
   assert.equal(skipped[1].reason, 'not a JSON object');
   assert.equal(skipped[3].reason, 'step has no type');
   assert.deepEqual(parseSteps(undefined), { steps: [], skipped: [] });
@@ -208,15 +283,29 @@ test('garbage tool calls are dropped, the step survives', () => {
 test('workspacesFromRows keeps valid rows only', () => {
   const id = '0b6cd2b4-0b4a-4e4f-9d5b-6d0f1a2b3c4d';
   const uri = pathToFileURL(CWD).href;
-  const byId = workspacesFromRows([
-    { conversation_id: id.toUpperCase(), workspace_uris: JSON.stringify([uri, 'https://x', 7]) },
+  const { byId, skipped } = workspacesFromRows([
+    { conversation_id: id.toUpperCase(), workspace_uris: JSON.stringify([uri, 'https://x', 7, '\\\\evil\\share', CWD]) },
     { conversation_id: 'nope', workspace_uris: '[]' },
     { conversation_id: '1b6cd2b4-0b4a-4e4f-9d5b-6d0f1a2b3c4d', workspace_uris: '{broken' },
     null,
   ]);
   assert.deepEqual([...byId.keys()], [id]);
-  assert.equal(byId.get(id).length, 1);
-  assert.deepEqual(workspacesFromRows('junk'), new Map());
+  // The file URL and the plain absolute path; no URL, number or network share.
+  assert.equal(byId.get(id).length, 2);
+  assert.equal(skipped, 3);
+  assert.deepEqual(workspacesFromRows('junk'), { byId: new Map(), skipped: 0 });
+});
+
+test('workspaceMatch tells an exact folder from a containing one', () => {
+  const { byId } = workspacesFromRows([
+    { conversation_id: '0b6cd2b4-0b4a-4e4f-9d5b-6d0f1a2b3c4d', workspace_uris: JSON.stringify([pathToFileURL(CWD).href]) },
+  ]);
+  const folders = [...byId.values()][0];
+  assert.equal(workspaceMatch(folders, CWD), 'exact');
+  assert.equal(workspaceMatch(folders, path.join(CWD, 'sub')), 'contains');
+  assert.equal(workspaceMatch(folders, `${CWD}-other`), null, 'a sibling with a common prefix is not inside');
+  assert.equal(workspaceMatch(undefined, CWD), null);
+  assert.equal(workspaceMatch(folders, ''), null);
 });
 
 // ---- the watcher, against a temporary agy app data folder ---------------------------------
@@ -229,19 +318,34 @@ test.after(async () => {
 const ID_A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
 const ID_B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
 
+/** Writes agy's summaries database into `root`: rows {id: folder}. */
+function writeSummaries(root, workspaces) {
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(path.join(root, 'conversation_summaries.db'));
+  db.exec('create table conversation_summaries (conversation_id text primary key, workspace_uris text not null)');
+  const insert = db.prepare('insert into conversation_summaries values (?, ?)');
+  for (const [id, folder] of Object.entries(workspaces)) insert.run(id, JSON.stringify([pathToFileURL(folder).href]));
+  db.close();
+}
+
 /** A fake <appData>: summaries rows {id: folder}, transcripts written by the test. */
 function makeAppData(workspaces) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lunacore-agy-'));
   tmpRoots.push(root);
-  if (workspaces) {
-    const { DatabaseSync } = require('node:sqlite');
-    const db = new DatabaseSync(path.join(root, 'conversation_summaries.db'));
-    db.exec('create table conversation_summaries (conversation_id text primary key, workspace_uris text not null)');
-    const insert = db.prepare('insert into conversation_summaries values (?, ?)');
-    for (const [id, folder] of Object.entries(workspaces)) insert.run(id, JSON.stringify([pathToFileURL(folder).href]));
-    db.close();
-  }
+  if (workspaces) writeSummaries(root, workspaces);
   return root;
+}
+
+/** A temporary folder standing in for a tab's cwd. */
+function makeTabDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lunacore-agy-tab-'));
+  tmpRoots.push(dir);
+  return dir;
+}
+
+/** Ticks until the watcher has read everything there is (chunked reads take several). */
+function drain(watcher, ticks = 50) {
+  for (let i = 0; i < ticks; i++) watcher.safeTick();
 }
 
 function writeTranscript(root, id, text, name = 'transcript.jsonl') {
@@ -267,8 +371,7 @@ function makeWatcher(root, cwd, extra = {}) {
 }
 
 test('watcher: picks the new conversation in its own folder and emits events + estimated metrics', () => {
-  const tabDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lunacore-agy-tab-'));
-  tmpRoots.push(tabDir);
+  const tabDir = makeTabDir();
   const root = makeAppData({ [ID_A]: tabDir, [ID_B]: path.join(tabDir, 'elsewhere') });
   const { watcher, out } = makeWatcher(root, tabDir);
   watcher.safeTick();
@@ -277,7 +380,7 @@ test('watcher: picks the new conversation in its own folder and emits events + e
   writeTranscript(root, ID_B, FIXTURE); // another folder's conversation
   const mine = writeTranscript(root, ID_A, FIXTURE);
   watcher.safeTick();
-  assert.equal(watcher.pinned, mine);
+  assert.equal(watcher.pinned.full, mine);
   assert.equal(out.tools.length, 10);
   assert.equal(out.metrics.length, 1);
   assert.equal(out.metrics[0].estimated, true);
@@ -295,8 +398,7 @@ test('watcher: picks the new conversation in its own folder and emits events + e
 });
 
 test('watcher: two tabs on one folder never share a conversation', () => {
-  const tabDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lunacore-agy-tab-'));
-  tmpRoots.push(tabDir);
+  const tabDir = makeTabDir();
   const root = makeAppData({ [ID_A]: tabDir, [ID_B]: tabDir });
   const one = makeWatcher(root, tabDir);
   const two = makeWatcher(root, tabDir);
@@ -308,9 +410,113 @@ test('watcher: two tabs on one folder never share a conversation', () => {
   writeTranscript(root, ID_B, FIXTURE);
   two.watcher.safeTick();
   assert.ok(two.watcher.pinned);
-  assert.notEqual(two.watcher.pinned, one.watcher.pinned);
+  assert.notEqual(two.watcher.pinned.full, one.watcher.pinned.full);
   one.watcher.stop();
   two.watcher.stop();
+});
+
+test('watcher: a claim is per conversation, not per file name', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData({ [ID_A]: tabDir });
+  const one = makeWatcher(root, tabDir);
+  const two = makeWatcher(root, tabDir);
+  writeTranscript(root, ID_A, FIXTURE, 'transcript.jsonl');
+  one.watcher.safeTick();
+  assert.ok(one.watcher.pinned);
+  // agy adds the full transcript later: still the conversation tab one shows.
+  writeTranscript(root, ID_A, FIXTURE, 'transcript_full.jsonl');
+  two.watcher.safeTick();
+  assert.equal(two.watcher.pinned, null);
+  one.watcher.stop();
+  two.watcher.stop();
+});
+
+test('watcher: stop() releases the conversation for another tab', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData({ [ID_A]: tabDir });
+  const one = makeWatcher(root, tabDir);
+  const two = makeWatcher(root, tabDir);
+  const file = writeTranscript(root, ID_A, FIXTURE);
+  one.watcher.safeTick();
+  two.watcher.safeTick();
+  assert.equal(two.watcher.pinned, null);
+  one.watcher.stop();
+  two.watcher.safeTick();
+  assert.equal(two.watcher.pinned.full, file);
+  two.watcher.stop();
+});
+
+test('watcher: a resume id another tab already shows is not read twice', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  writeTranscript(root, ID_A, FIXTURE);
+  const one = makeWatcher(root, CWD, { conversationId: ID_A });
+  const two = makeWatcher(root, CWD, { conversationId: ID_A });
+  one.watcher.safeTick();
+  two.watcher.safeTick();
+  two.watcher.safeTick();
+  assert.ok(one.watcher.pinned);
+  assert.equal(two.watcher.pinned, null);
+  assert.equal(two.out.logs.length, 1);
+  assert.match(two.out.logs[0], /already shown by another tab/);
+  one.watcher.stop();
+  two.watcher.stop();
+});
+
+test('watcher: an exact folder match beats a newer conversation in a parent folder', () => {
+  const tabDir = makeTabDir();
+  const sub = path.join(tabDir, 'sub');
+  const root = makeAppData({ [ID_A]: tabDir, [ID_B]: sub });
+  const { watcher } = makeWatcher(root, sub);
+  const parentFile = writeTranscript(root, ID_A, FIXTURE);
+  const exactFile = writeTranscript(root, ID_B, FIXTURE);
+  const now = Date.now() / 1000;
+  fs.utimesSync(exactFile, now - 60, now - 60);
+  fs.utimesSync(parentFile, now, now);
+  watcher.safeTick();
+  assert.equal(watcher.pinned.full, exactFile);
+  watcher.stop();
+});
+
+test('watcher: with no exact match, a conversation whose workspace contains the tab\'s folder is used', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData({ [ID_A]: tabDir });
+  const { watcher, out } = makeWatcher(root, path.join(tabDir, 'packages', 'app'));
+  const file = writeTranscript(root, ID_A, FIXTURE);
+  watcher.safeTick();
+  assert.equal(watcher.pinned.full, file);
+  assert.deepEqual(out.logs, []);
+  watcher.stop();
+});
+
+test('watcher: a conversation in another folder only is not taken, and that is logged once', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData({ [ID_A]: path.join(tabDir, 'other') });
+  const { watcher, out } = makeWatcher(root, tabDir);
+  writeTranscript(root, ID_A, FIXTURE);
+  watcher.safeTick();
+  watcher.safeTick();
+  assert.equal(watcher.pinned, null);
+  assert.equal(out.logs.length, 1);
+  assert.match(out.logs[0], /none recorded for/);
+  watcher.stop();
+});
+
+test('watcher: a summaries database that cannot be read now is retried, not bypassed', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  const dbFile = path.join(root, 'conversation_summaries.db');
+  fs.writeFileSync(dbFile, 'not a database yet');
+  const { watcher, out } = makeWatcher(root, tabDir);
+  const file = writeTranscript(root, ID_A, FIXTURE);
+  watcher.safeTick();
+  assert.equal(watcher.pinned, null, 'no folder check, no pick');
+  assert.equal(out.logs.length, 1);
+  assert.match(out.logs[0], /unreadable.*trying again/);
+  fs.rmSync(dbFile);
+  writeSummaries(root, { [ID_A]: tabDir });
+  watcher.safeTick();
+  assert.equal(watcher.pinned.full, file);
+  watcher.stop();
 });
 
 test('watcher: a resumed conversation replays no history, only what comes after', () => {
@@ -318,13 +524,132 @@ test('watcher: a resumed conversation replays no history, only what comes after'
   const file = writeTranscript(root, ID_A, FIXTURE, 'transcript_full.jsonl');
   const { watcher, out } = makeWatcher(root, CWD, { conversationId: ID_A.toUpperCase() });
   watcher.safeTick();
-  assert.equal(watcher.pinned, file);
+  assert.equal(watcher.pinned.full, file);
   assert.equal(out.tools.length, 0, 'history is not live activity');
   assert.equal(out.metrics.length, 1, 'but its context still counts');
   assert.ok(out.metrics[0].tokens > 0);
   fs.appendFileSync(file, `${JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 9, tool_calls: [{ name: 'view_file', args: { AbsolutePath: 'C:/repo/z.js' } }] })}\n`);
   watcher.safeTick();
   assert.deepEqual(out.tools.map((e) => e.phase), ['start']);
+  watcher.stop();
+});
+
+test('watcher: history ends exactly where the file ended when it was pinned', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const lines = FIXTURE.trim().split('\n');
+  // History stops after a planner step whose calls never got a result.
+  const file = writeTranscript(root, ID_A, `${lines.slice(0, 2).join('\n')}\n`);
+  const { watcher, out } = makeWatcher(root, CWD, { conversationId: ID_A });
+  watcher.pin({ id: ID_A, full: file }, true);
+  // More lines land before the first read: they are live, history is not.
+  fs.appendFileSync(file, `${lines.slice(4, 8).join('\n')}\n`);
+  watcher.safeTick();
+  assert.deepEqual(
+    out.tools.map((e) => `${e.phase}:${e.tile}`),
+    ['start:Edit', 'start:Write', 'start:Shell', 'end:Edit', 'end:Write', 'end:Shell'],
+  );
+  watcher.stop();
+});
+
+test('watcher: a line still being written is read once it is complete', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const lines = FIXTURE.trim().split('\n');
+  const half = Math.floor(lines[1].length / 2);
+  const { watcher, out } = makeWatcher(root, CWD);
+  const file = writeTranscript(root, ID_A, `${lines[0]}\n${lines[1].slice(0, half)}`);
+  watcher.safeTick();
+  assert.deepEqual(out.tools, []);
+  assert.equal(out.metrics.length, 1);
+  watcher.safeTick();
+  assert.equal(out.metrics.length, 1, 'an unchanged file is not read again');
+  fs.appendFileSync(file, `${lines[1].slice(half)}\n`);
+  watcher.safeTick();
+  assert.deepEqual(out.tools.map((e) => `${e.phase}:${e.tile}`), ['start:Read', 'start:Grep']);
+  assert.deepEqual(out.logs, []);
+  watcher.stop();
+});
+
+test('watcher: a line longer than a read is skipped whole and logged, the next ones still count', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const { watcher, out } = makeWatcher(root, CWD, { chunkBytes: 128 });
+  writeTranscript(root, ID_A, [
+    JSON.stringify({ type: 'USER_INPUT', content: 'x'.repeat(400) }),
+    JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'view_file', args: {} }] }),
+    JSON.stringify({ type: 'GENERIC', status: 'DONE', content: 'abc' }),
+    '',
+  ].join('\n'));
+  drain(watcher);
+  assert.deepEqual(out.tools.map((e) => `${e.phase}:${e.tile}`), ['start:Read', 'end:Read']);
+  assert.equal(out.logs.length, 1);
+  assert.match(out.logs[0], /longer than 128 bytes/);
+  watcher.stop();
+});
+
+test('watcher: chunked reads never split a multibyte character, and CRLF lines read the same', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const contents = ['żółć'.repeat(60), '\u{1F600}\u{1F680}'.repeat(40), '中文'.repeat(70)];
+  const text = contents.map((content) => JSON.stringify({ type: 'USER_INPUT', content })).join('\r\n') + '\r\n';
+  const crlf = text + FIXTURE.replace(/\n/g, '\r\n');
+  // Big enough for every line, small enough that most reads end inside one,
+  // and odd, so a read often ends inside a 2- or 4-byte character.
+  const longest = Math.max(...crlf.split('\n').map((line) => Buffer.byteLength(line)));
+  const { watcher, out } = makeWatcher(root, CWD, { chunkBytes: longest + 7 });
+  writeTranscript(root, ID_A, crlf);
+  drain(watcher, 200);
+  const whole = new AgyTranscriptState({ cwd: CWD });
+  whole.apply(parseSteps(text + FIXTURE).steps);
+  assert.equal(watcher.state.contextChars, whole.contextChars);
+  assert.equal(out.tools.length, 10);
+  assert.deepEqual(out.logs, []);
+  watcher.stop();
+});
+
+test('watcher: a file that got shorter is read again as history', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const lines = FIXTURE.trim().split('\n');
+  const { watcher, out } = makeWatcher(root, CWD);
+  const file = writeTranscript(root, ID_A, FIXTURE);
+  watcher.safeTick();
+  assert.equal(out.tools.length, 10);
+  fs.writeFileSync(file, `${lines.slice(0, 2).join('\n')}\n`);
+  watcher.safeTick();
+  assert.equal(out.tools.length, 10, 'the rewritten content is not replayed');
+  assert.ok(out.metrics.at(-1).tokens < out.metrics[0].tokens);
+  assert.match(out.logs.join('\n'), /got shorter/);
+  fs.appendFileSync(file, `${JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 2, tool_calls: [{ name: 'view_file', args: {} }] })}\n`);
+  watcher.safeTick();
+  assert.deepEqual(out.tools.slice(10).map((e) => e.phase), ['start'], 'the calls history left open stay dark');
+  watcher.stop();
+});
+
+test('watcher: metrics carry the model the real agy line names', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const { watcher, out } = makeWatcher(root, CWD);
+  writeTranscript(root, ID_A, CAPTURED);
+  watcher.safeTick();
+  assert.equal(out.metrics.length, 1);
+  assert.equal(out.metrics[0].model, CAPTURED_MODEL);
+  assert.equal(out.metrics[0].estimated, true);
+  assert.deepEqual(out.logs, []);
+  watcher.stop();
+});
+
+test('watcher: a symlinked transcript is ignored', (t) => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const target = path.join(root, 'elsewhere.jsonl');
+  fs.writeFileSync(target, FIXTURE);
+  const dir = path.join(root, 'brain', ID_A, '.system_generated', 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.symlinkSync(target, path.join(dir, 'transcript.jsonl'), 'file');
+  } catch (err) {
+    t.skip(`cannot create a symlink here (${err.code})`);
+    return;
+  }
+  const { watcher, out } = makeWatcher(root, CWD, { conversationId: ID_A });
+  watcher.safeTick();
+  assert.equal(watcher.pinned, null);
+  assert.deepEqual([out.metrics, out.tools], [[], []]);
   watcher.stop();
 });
 
@@ -346,7 +671,7 @@ test('watcher: without agy\'s summaries database it says so and matches by time'
   const { watcher, out } = makeWatcher(root, CWD);
   const file = writeTranscript(root, ID_A, FIXTURE);
   watcher.safeTick();
-  assert.equal(watcher.pinned, file);
+  assert.equal(watcher.pinned.full, file);
   assert.equal(out.logs.length, 1);
   assert.match(out.logs[0], /conversation_summaries\.db not found; matching agy conversations to this tab by time only/);
   watcher.stop();
@@ -364,7 +689,9 @@ test('readConversationWorkspaces reports an unreadable database instead of throw
   fs.writeFileSync(path.join(root, 'conversation_summaries.db'), 'this is not sqlite');
   const ws = readConversationWorkspaces(root);
   assert.equal(ws.ok, false);
+  assert.equal(ws.absent, false, 'there but unreadable is not the same as missing');
   assert.match(ws.reason, /conversation_summaries\.db unreadable/);
+  assert.equal(readConversationWorkspaces(makeAppData(null)).absent, true);
 });
 
 // ---- the renderer labels the estimate --------------------------------------------

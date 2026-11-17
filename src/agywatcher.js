@@ -9,16 +9,22 @@
 // session id, plus a workspace check agy makes possible:
 //   1. a resumed id from the start command (`--conversation=<id>`) is read
 //      directly - nothing to guess;
-//   2. otherwise a transcript created after the tab started (a new
-//      conversation), else one that existed and grew since (`--continue`),
+//   2. otherwise a conversation created after the tab started (a new one),
+//      else one that existed and grew since (`--continue`);
 //   3. only if agy's conversation_summaries.db says it runs in THIS tab's
-//      folder - agy's brain/ folder is shared by every workspace,
+//      folder (or, failing an exact match, in a folder containing it) - agy's
+//      brain/ folder is shared by every workspace;
 //   4. never one another agy tab has already claimed; newest wins.
 // The pick is permanent. Known limit: a new conversation started inside the
 // same agy process (its /clear) is not followed.
 //
-// Nothing here writes to agy's files. Every read is validated; whatever cannot
-// be read is logged with its reason and skipped, never thrown.
+// Without the database (agy never wrote one, or this Node has no node:sqlite)
+// the folder cannot be checked and the pick goes by time and claims alone. A
+// database that is there but busy or broken is retried next tick instead.
+//
+// Nothing here writes to agy's files, and a symlinked transcript is ignored.
+// Every read is validated; whatever cannot be read is logged with its reason
+// and skipped, never thrown.
 // ============================================================================
 
 'use strict';
@@ -27,7 +33,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { pathKey } = require('./gitattribution');
-const { UUID_RE, parseSteps, AgyTranscriptState, agyContextMetrics, workspacesFromRows } = require('./agytranscript');
+const {
+  UUID_RE, parseSteps, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch,
+} = require('./agytranscript');
 
 /** agy CLI's app data folder (the IDE and Antigravity 2.0 use sibling folders). */
 const AGY_APP_DATA_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
@@ -36,29 +44,34 @@ const SUMMARIES_DB = 'conversation_summaries.db';
 const TRANSCRIPT_FILES = Object.freeze(['transcript_full.jsonl', 'transcript.jsonl']);
 const DEFAULT_INTERVAL_MS = 1500;
 /** At most this much is read per tick; a long history is caught up over several. */
-const MAX_CHUNK_BYTES = 32 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+/** How long a read waits for agy's lock on the summaries database (blocks the main process). */
+const DB_BUSY_TIMEOUT_MS = 100;
+const NEWLINE = 0x0a;
 
-/** Transcripts claimed by live agy watchers: one owner per file (cf. claimedTranscripts). */
-const claimedAgyTranscripts = new Set();
+/** Conversations claimed by live agy watchers, one owner each (cf. claimedTranscripts). */
+const claimedAgyConversations = new Set();
 
 const defaultLog = (msg) => console.warn(`[agy-transcript] ${msg}`);
 const errText = (err) => (err && (err.code || err.message)) || String(err);
 
 /** The logs folder of one conversation. */
-function logsDirOf(appDataDir, id) {
-  return path.join(appDataDir, 'brain', id, '.system_generated', 'logs');
+function logsDirOf(appDataDir, dirName) {
+  return path.join(appDataDir, 'brain', dirName, '.system_generated', 'logs');
 }
 
 /**
  * The transcript of one conversation: {id, full, mtimeMs}, or null when it
  * has none yet (a conversation writes its file with its first step).
+ * @param {string} dirName the folder name as it is on disk; `id` is its lowercase form
  */
-function transcriptOf(appDataDir, id) {
+function transcriptOf(appDataDir, dirName) {
   for (const name of TRANSCRIPT_FILES) {
-    const full = path.join(logsDirOf(appDataDir, id), name);
+    const full = path.join(logsDirOf(appDataDir, dirName), name);
     try {
-      const st = fs.statSync(full);
-      if (st.isFile()) return { id, full, mtimeMs: st.mtimeMs };
+      // lstat: a symlink is not followed, it could point anywhere on the disk.
+      const st = fs.lstatSync(full);
+      if (st.isFile()) return { id: dirName.toLowerCase(), full, mtimeMs: st.mtimeMs };
     } catch (err) {
       if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err;
     }
@@ -68,10 +81,13 @@ function transcriptOf(appDataDir, id) {
 
 /**
  * Every conversation transcript under <appData>/brain. A missing brain folder
- * (agy never ran) is an empty list; any other failure throws to the caller.
+ * (agy never ran) is an empty list. A conversation that cannot be read goes
+ * to `onSkip` and is left out; without `onSkip` that failure throws.
+ * @param {string} appDataDir
+ * @param {(dirName: string, err: Error) => void} [onSkip]
  * @returns {{id:string, full:string, mtimeMs:number}[]}
  */
-function listAgyTranscripts(appDataDir) {
+function listAgyTranscripts(appDataDir, onSkip) {
   let entries;
   try {
     entries = fs.readdirSync(path.join(appDataDir, 'brain'), { withFileTypes: true });
@@ -81,40 +97,55 @@ function listAgyTranscripts(appDataDir) {
   }
   const out = [];
   for (const entry of entries) {
+    // A Dirent does not follow links: a symlinked conversation folder is skipped.
     if (!entry.isDirectory() || !UUID_RE.test(entry.name)) continue;
-    const found = transcriptOf(appDataDir, entry.name.toLowerCase());
-    if (found) out.push(found);
+    try {
+      const found = transcriptOf(appDataDir, entry.name);
+      if (found) out.push(found);
+    } catch (err) {
+      if (!onSkip) throw err;
+      onSkip(entry.name, err);
+    }
   }
   return out;
 }
 
 /**
  * conversation id -> workspace folders, read from agy's summaries database.
- * @returns {{ok:true, byId:Map<string,string[]>}|{ok:false, reason:string}}
+ * `absent` says the folder check is impossible (no database, or no
+ * node:sqlite) rather than failing for now (busy, locked, corrupt).
+ * @returns {{ok:true, byId:Map<string,string[]>, skipped:number}
+ *   | {ok:false, absent:boolean, reason:string}}
  */
 function readConversationWorkspaces(appDataDir) {
   const file = path.join(appDataDir, SUMMARIES_DB);
-  if (!fs.existsSync(file)) return { ok: false, reason: `${SUMMARIES_DB} not found` };
+  if (!fs.existsSync(file)) return { ok: false, absent: true, reason: `${SUMMARIES_DB} not found` };
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = require('node:sqlite'));
+  } catch (err) {
+    return { ok: false, absent: true, reason: `node:sqlite unavailable (${errText(err)})` };
+  }
   let db = null;
   try {
-    const { DatabaseSync } = require('node:sqlite');
-    db = new DatabaseSync(file, { readOnly: true });
+    db = new DatabaseSync(file, { readOnly: true, timeout: DB_BUSY_TIMEOUT_MS });
     const rows = db.prepare('select conversation_id, workspace_uris from conversation_summaries').all();
-    return { ok: true, byId: workspacesFromRows(rows) };
+    const { byId, skipped } = workspacesFromRows(rows);
+    return { ok: true, byId, skipped };
   } catch (err) {
-    return { ok: false, reason: `${SUMMARIES_DB} unreadable (${errText(err)})` };
+    return { ok: false, absent: false, reason: `${SUMMARIES_DB} unreadable (${errText(err)})` };
   } finally {
     if (db) db.close();
   }
 }
 
-/** Reads `length` bytes at `offset` as UTF-8. */
+/** Reads up to `length` bytes at `offset`; the Buffer holds what was actually read. */
 function readRange(file, offset, length) {
   const fd = fs.openSync(file, 'r');
   try {
     const buf = Buffer.alloc(length);
     const read = fs.readSync(fd, buf, 0, length, offset);
-    return buf.toString('utf8', 0, read);
+    return read === length ? buf : buf.subarray(0, read);
   } finally {
     fs.closeSync(fd);
   }
@@ -124,7 +155,8 @@ class AgyTranscriptWatcher {
   /**
    * @param {(metrics: object) => void} onMetrics context metrics (estimated)
    * @param {{cwd?: string, conversationId?: string|null, onTools?: Function,
-   *   intervalMs?: number, appDataDir?: string, log?: (msg: string) => void}} [opts]
+   *   intervalMs?: number, appDataDir?: string, log?: (msg: string) => void,
+   *   chunkBytes?: number}} [opts] chunkBytes: read size per tick (tests)
    */
   constructor(onMetrics, opts = {}) {
     this.onMetrics = typeof onMetrics === 'function' ? onMetrics : () => {};
@@ -134,16 +166,20 @@ class AgyTranscriptWatcher {
     this.conversationId = UUID_RE.test(id) ? id : null;
     this.appDataDir = opts.appDataDir || AGY_APP_DATA_DIR;
     this.intervalMs = opts.intervalMs || DEFAULT_INTERVAL_MS;
+    this.chunkBytes = Number.isInteger(opts.chunkBytes) && opts.chunkBytes > 0 ? opts.chunkBytes : MAX_CHUNK_BYTES;
     this.log = typeof opts.log === 'function' ? opts.log : defaultLog;
     this.logged = new Set();
     this.timer = null;
     this.startedAt = 0;
-    /** transcript path -> mtime when the tab started: someone else's, unless it grows. */
+    /** conversation id -> transcript mtime when the tab started: someone else's, unless it grows. */
     this.baseline = new Map();
+    /** {key, full} of the conversation this tab reads, once picked. */
     this.pinned = null;
     this.offset = 0;
-    /** Bytes of the pinned file that were already there: history, not live activity. */
+    /** Bytes of the pinned file that were already there: history, not live activity. 0 = none (left). */
     this.historyUntil = 0;
+    /** Inside a line longer than chunkBytes, which is dropped up to its end. */
+    this.skipping = false;
     this.lastSize = -1;
     this.lastMtime = 0;
     /** Whether a reading of the pinned file went out yet (an empty conversation still shows 0 %). */
@@ -158,6 +194,11 @@ class AgyTranscriptWatcher {
     this.log(msg);
   }
 
+  /** The claim key of a conversation: the same id under another appData is another conversation. */
+  keyOf(id) {
+    return pathKey(path.join(this.appDataDir, 'brain', id));
+  }
+
   start() {
     if (this.timer) return;
     this.snapshotBaseline();
@@ -168,7 +209,7 @@ class AgyTranscriptWatcher {
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    if (this.pinned) claimedAgyTranscripts.delete(this.pinned);
+    if (this.pinned) claimedAgyConversations.delete(this.pinned.key);
     this.pinned = null;
   }
 
@@ -176,10 +217,17 @@ class AgyTranscriptWatcher {
     this.startedAt = Date.now();
     this.baseline = new Map();
     try {
-      for (const t of listAgyTranscripts(this.appDataDir)) this.baseline.set(t.full, t.mtimeMs);
+      for (const t of this.list()) this.baseline.set(t.id, t.mtimeMs);
     } catch (err) {
       this.warnOnce('baseline', `cannot list agy conversations in ${this.appDataDir}: ${errText(err)}`);
     }
+  }
+
+  /** Every transcript; one that cannot be read is logged once and left out. */
+  list() {
+    return listAgyTranscripts(this.appDataDir, (dirName, err) => {
+      this.warnOnce(`list:${dirName}`, `cannot read agy conversation ${dirName}: ${errText(err)}`);
+    });
   }
 
   /** One tick, and nothing it throws escapes into the main process. */
@@ -191,48 +239,70 @@ class AgyTranscriptWatcher {
     }
   }
 
-  /** Pins `full` for good. `resumed`: what it already holds is history. */
-  pin(full, resumed) {
-    this.pinned = full;
-    claimedAgyTranscripts.add(full);
-    let size = 0;
+  /**
+   * Pins a transcript for good. `resumed`: what it already holds is history.
+   * @returns {string|null} its path, or null when it cannot be read yet
+   */
+  pin(transcript, resumed) {
+    let size;
     try {
-      size = fs.statSync(full).size;
+      size = fs.lstatSync(transcript.full).size;
     } catch (err) {
-      this.warnOnce('pin-stat', `cannot stat ${full}: ${errText(err)}`);
+      this.warnOnce(`pin:${errText(err)}`, `cannot stat ${transcript.full}: ${errText(err)}; trying again`);
+      return null;
     }
+    const key = this.keyOf(transcript.id);
+    claimedAgyConversations.add(key);
+    this.pinned = { key, full: transcript.full };
     this.historyUntil = resumed ? size : 0;
-    return full;
+    return transcript.full;
   }
 
   pickFile() {
-    if (this.pinned) return this.pinned;
+    if (this.pinned) return this.pinned.full;
     if (this.conversationId) {
+      if (claimedAgyConversations.has(this.keyOf(this.conversationId))) {
+        this.warnOnce('id-claimed', `agy conversation ${this.conversationId} is already shown by another tab; not reading it here`);
+        return null;
+      }
       const found = transcriptOf(this.appDataDir, this.conversationId);
-      return found ? this.pin(found.full, true) : null;
+      return found ? this.pin(found, true) : null;
     }
-    const free = listAgyTranscripts(this.appDataDir).filter((t) => !claimedAgyTranscripts.has(t.full));
-    const fresh = free.filter((t) => !this.baseline.has(t.full));
-    const resumed = free.filter((t) => this.baseline.has(t.full) && t.mtimeMs > this.baseline.get(t.full));
-    const pool = this.inThisFolder(fresh.length > 0 ? fresh : resumed);
+    const free = this.list().filter((t) => !claimedAgyConversations.has(this.keyOf(t.id)));
+    const fresh = free.filter((t) => !this.baseline.has(t.id));
+    const resumed = free.filter((t) => this.baseline.has(t.id) && t.mtimeMs > this.baseline.get(t.id));
+    const pool = this.inThisFolder([...fresh, ...resumed]);
     if (pool.length === 0) return null;
-    pool.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    return this.pin(pool[0].full, this.baseline.has(pool[0].full));
+    // A new conversation beats a resumed one; newest first within each.
+    pool.sort((a, b) => (this.baseline.has(a.id) - this.baseline.has(b.id)) || (b.mtimeMs - a.mtimeMs));
+    return this.pin(pool[0], this.baseline.has(pool[0].id));
   }
 
   /** Keeps the conversations agy records as running in this tab's folder. */
   inThisFolder(pool) {
     if (pool.length === 0 || !this.cwd) return pool;
     const ws = readConversationWorkspaces(this.appDataDir);
-    if (!ws.ok) {
-      // Without the database the folder cannot be checked; time and claims
-      // still keep two tabs apart unless both start a conversation at once.
-      this.warnOnce('workspaces', `${ws.reason}; matching agy conversations to this tab by time only`);
+    if (!ws.ok && ws.absent) {
+      // The folder cannot be checked at all; time and claims still keep two
+      // tabs apart unless both start a conversation at once.
+      this.warnOnce('workspaces-absent', `${ws.reason}; matching agy conversations to this tab by time only`);
       return pool;
     }
-    const folder = pathKey(this.cwd);
+    if (!ws.ok) {
+      this.warnOnce('workspaces-unreadable', `${ws.reason}; trying again`);
+      return [];
+    }
+    if (ws.skipped > 0) {
+      this.warnOnce('workspaces-skipped', `${SUMMARIES_DB}: ignored ${ws.skipped} row(s) that did not validate`);
+    }
+    const matchOf = (t) => workspaceMatch(ws.byId.get(t.id), this.cwd);
+    const exact = pool.filter((t) => matchOf(t) === 'exact');
+    if (exact.length > 0) return exact;
+    const containing = pool.filter((t) => matchOf(t) === 'contains');
+    if (containing.length > 0) return containing;
     // A conversation with no row yet is skipped now and picked up next tick.
-    return pool.filter((t) => (ws.byId.get(t.id) || []).includes(folder));
+    this.warnOnce('no-match', `${pool.length} active agy conversation(s), none recorded for ${this.cwd} yet; checking again`);
+    return [];
   }
 
   tick() {
@@ -240,63 +310,115 @@ class AgyTranscriptWatcher {
     if (!file) return;
     let st;
     try {
-      st = fs.statSync(file);
+      st = fs.lstatSync(file);
     } catch (err) {
       this.warnOnce(`stat:${errText(err)}`, `cannot stat ${file}: ${errText(err)}`);
       return;
     }
+    if (!st.isFile()) {
+      this.warnOnce('not-file', `${file} is no longer a regular file; not reading it`);
+      return;
+    }
     if (st.size === this.lastSize && st.mtimeMs === this.lastMtime) return;
     const before = this.offset;
-    const caughtUp = this.accumulate(file, st.size);
-    // Only a complete read moves the marker, so a failed or partial read is retried.
-    if (caughtUp) {
+    // Unless there is more to read right away, wait for the file to change.
+    if (this.accumulate(file, st.size) !== 'more') {
       this.lastSize = st.size;
       this.lastMtime = st.mtimeMs;
+    }
+    if (this.state.unresolved > 0) {
+      this.warnOnce('unresolved', `an agy tool call in ${file} got no result step (cancelled, or a transcript format LunaCore does not know)`);
     }
     // A line still being written changes nothing: no repeat of the same reading.
     if (this.emitted && this.offset === before) return;
     this.emitted = true;
-    this.onMetrics(agyContextMetrics(this.state.contextChars, { file, elapsedMs: Date.now() - this.startedAt }));
+    this.onMetrics(agyContextMetrics(this.state.contextChars, {
+      file, elapsedMs: Date.now() - this.startedAt, model: this.state.model,
+    }));
+  }
+
+  /** The file shrank (rewritten or replaced): count again from the start. */
+  restart(file, size) {
+    this.warnOnce('restart', `${file} got shorter; reading it again from the start`);
+    this.offset = 0;
+    // Its content is not news: what is there now counts as history.
+    this.historyUntil = size;
+    this.skipping = false;
+    this.state = new AgyTranscriptState({ cwd: this.cwd });
   }
 
   /**
-   * Reads what was appended since the last tick (complete lines only) and
-   * folds it into the state.
-   * @returns {boolean} true when the read reached the end of the file
+   * Reads what was appended since the last tick, at most chunkBytes, and
+   * folds its complete lines into the state. Offsets are bytes; a read only
+   * ever ends at a newline byte, so no UTF-8 character is cut in two.
+   * @returns {'eof'|'more'|'partial'} 'more': read again now; 'partial': a
+   *   line is still being written, wait for the file to grow
    */
   accumulate(file, size) {
-    if (size < this.offset) {
-      // Truncated or replaced: count again from the start.
-      this.offset = 0;
+    if (size < this.offset) this.restart(file, size);
+    const want = Math.min(size - this.offset, this.chunkBytes);
+    if (want <= 0) return 'eof';
+    const buf = readRange(file, this.offset, want);
+    if (buf.length === 0) return 'eof';
+    let start = 0;
+    if (this.skipping) {
+      const nl = buf.indexOf(NEWLINE);
+      if (nl < 0) {
+        this.offset += buf.length;
+        return this.offset >= size ? 'partial' : 'more';
+      }
+      start = nl + 1;
+      this.skipping = false;
+    }
+    const lastNl = buf.lastIndexOf(NEWLINE);
+    if (lastNl < start) {
+      if (start === 0 && buf.length >= this.chunkBytes) {
+        // No line end within a whole chunk: not a step anyone can use.
+        this.skipping = true;
+        this.offset += buf.length;
+        this.warnOnce('long-line', `skipping a line of ${file} longer than ${this.chunkBytes} bytes`);
+        return 'more';
+      }
+      this.offset += start;
+      return this.offset + (buf.length - start) >= size ? 'partial' : 'more';
+    }
+    this.foldLines(file, buf, start, lastNl + 1);
+    this.offset += lastNl + 1;
+    return this.offset >= size ? 'eof' : 'more';
+  }
+
+  /**
+   * Folds the complete lines buf[start, end). Lines that were in the file
+   * when it was pinned are history: they count toward the context window but
+   * light no tool, and what they left open is dropped where history ends.
+   */
+  foldLines(file, buf, start, end) {
+    let liveFrom = start;
+    if (this.historyUntil > 0) {
+      // The newline closing the last line that ends within history.
+      const boundary = this.historyUntil - this.offset;
+      const lastHistoryNl = boundary > start ? buf.lastIndexOf(NEWLINE, Math.min(boundary, end) - 1) : -1;
+      if (lastHistoryNl >= start) {
+        this.applyLines(file, buf.toString('utf8', start, lastHistoryNl + 1));
+        liveFrom = lastHistoryNl + 1;
+      }
+      if (this.offset + end < this.historyUntil) return;
+      // A call the past left open (a killed session) must not light anything now.
+      this.state.forgetPending();
       this.historyUntil = 0;
-      this.state = new AgyTranscriptState({ cwd: this.cwd });
     }
-    const length = Math.min(size - this.offset, MAX_CHUNK_BYTES);
-    if (length <= 0) return true;
-    const inHistory = this.offset < this.historyUntil;
-    const text = readRange(file, this.offset, length);
-    const lastNewline = text.lastIndexOf('\n');
-    if (lastNewline < 0) {
-      if (length < MAX_CHUNK_BYTES) return false; // a line still being written
-      this.log(`skipped ${length} bytes of ${file}: no line end within ${MAX_CHUNK_BYTES} bytes`);
-      this.offset += length;
-      return false;
-    }
-    const complete = text.slice(0, lastNewline);
-    this.offset += Buffer.byteLength(complete, 'utf8') + 1;
-    const { steps, skipped } = parseSteps(complete);
+    if (liveFrom >= end) return;
+    const events = this.applyLines(file, buf.toString('utf8', liveFrom, end));
+    if (events.length > 0 && this.onTools) this.onTools(events);
+  }
+
+  /** Parses whole lines, logs the ones it cannot use, returns the tool events. */
+  applyLines(file, text) {
+    const { steps, skipped } = parseSteps(text);
     if (skipped.length > 0) {
       this.log(`skipped ${skipped.length} unreadable line(s) of ${file}; first: ${skipped[0].reason}`);
     }
-    const events = this.state.apply(steps);
-    if (inHistory) {
-      // A resumed conversation's past is not live activity, and a call it
-      // left open (a killed session) must not light anything now.
-      if (this.offset >= this.historyUntil) this.state.forgetPending();
-    } else if (events.length > 0 && this.onTools) {
-      this.onTools(events);
-    }
-    return this.offset >= size;
+    return this.state.apply(steps);
   }
 }
 
