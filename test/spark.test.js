@@ -96,3 +96,15 @@ test('a sample from pushSample yields a computable ETA (regression 55ac9e5)', ()
   assert.notEqual(min, null, 'an ETA computed from a real sample must not be unknown');
   assert.ok(min > 0, 'at 6% context the 85% threshold is still ahead');
 });
+
+// ---- an estimated reading (agy tab) -------------------------------------------
+
+test('pushSample remembers whether a reading was an estimate', () => {
+  const buf = pushSample([], { ...M(1000, 0.001, 1000000), estimated: true });
+  assert.equal(buf[0].estimated, true);
+  // The no-change path refreshes it too.
+  pushSample(buf, M(1000, 0.001, 1000000));
+  assert.equal(buf.length, 1);
+  assert.equal(buf[0].estimated, false);
+  assert.equal(pushSample([], M(5, 0, 100))[0].estimated, false);
+});

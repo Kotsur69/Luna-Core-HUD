@@ -974,3 +974,36 @@ test('12am and 12pm parse as midnight and noon', () => {
   assert.equal(parseResetAt('resets 12pm', MORNING), new Date(2026, 9, 5, 12, 0).getTime());
   assert.equal(parseResetAt('resets 12am', MORNING), new Date(2026, 9, 6, 0, 0).getTime());
 });
+
+// ---- transcript dispatch: Claude tabs keep their reader, agy tabs get agy's --------
+
+const { transcriptKindFor, conversationIdFromCommand } = require('../src/agytranscript');
+
+test('transcriptKindFor keeps the Claude rule exactly: a claude command or a bare shell', () => {
+  for (const cmd of ['claude', 'claude --model opus', 'C:\\Users\\me\\.local\\bin\\claude.exe -c', '', null, undefined]) {
+    assert.equal(transcriptKindFor(cmd), 'claude', String(cmd));
+  }
+});
+
+test('transcriptKindFor sends an agy tab to the agy reader, in every spelling', () => {
+  for (const cmd of ['agy', 'agy --continue', 'AGY.EXE -i "hi"', 'C:\\Users\\me\\AppData\\Local\\agy\\bin\\agy.exe', '"agy.cmd" --mode accept-edits']) {
+    assert.equal(transcriptKindFor(cmd), 'agy', cmd);
+  }
+});
+
+test('transcriptKindFor gives other agent CLIs no reader at all', () => {
+  for (const cmd of ['codex', 'gemini --yolo', 'pwsh', 'agyx', 'claude-code']) {
+    assert.equal(transcriptKindFor(cmd), null, cmd);
+  }
+});
+
+test('conversationIdFromCommand reads an agy resume id in both flag forms', () => {
+  const id = '38b6ac70-2dba-438b-afaf-8354bb8230db';
+  assert.equal(conversationIdFromCommand(`agy --conversation=${id}`), id);
+  assert.equal(conversationIdFromCommand(`agy --conversation ${id.toUpperCase()} -i "go"`), id);
+  assert.equal(conversationIdFromCommand(`agy --conversation="${id}"`), id);
+  assert.equal(conversationIdFromCommand('agy --continue'), null);
+  assert.equal(conversationIdFromCommand('agy --conversation=not-a-uuid'), null);
+  assert.equal(conversationIdFromCommand(`agy --conversationx=${id}`), null);
+  assert.equal(conversationIdFromCommand(undefined), null);
+});

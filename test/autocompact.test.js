@@ -156,3 +156,20 @@ test('normalizeMode: passes the three known modes, else falls back to context', 
     assert.equal(normalizeMode(bad), 'context');
   }
 });
+
+// ---- autoCompactReading: an estimate never drives an injection --------------------
+
+const { autoCompactReading } = require('../src/renderer/modules/autocompact.js');
+
+test('autoCompactReading passes an exact reading, clamped', () => {
+  assert.equal(autoCompactReading({ percent: 0.9 }), 0.9);
+  assert.equal(autoCompactReading({ percent: 1.4 }), 1);
+  assert.equal(autoCompactReading({ percent: -1 }), 0);
+  assert.equal(autoCompactReading({ percent: 0.9, estimated: false }), 0.9);
+});
+
+test('autoCompactReading ignores an estimated reading (agy tab) and junk', () => {
+  assert.equal(autoCompactReading({ percent: 0.99, estimated: true }), null);
+  assert.equal(autoCompactReading({}), null);
+  assert.equal(autoCompactReading(null), null);
+});
