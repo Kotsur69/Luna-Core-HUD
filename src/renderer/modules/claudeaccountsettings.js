@@ -8,6 +8,8 @@
 // Per account: "Connect usage" / "Use main login" / "Reconnect" for the
 // usage-only login that feeds the gauge (src/claudeaccountusage.js) - only
 // the account id crosses; an email and a status come back.
+// Per account: optional reserve caps "max 5h %" / "max weekly %"
+// (src/accountreserve.js) - main validates them as integers 1-100 or empty.
 // DOM/IPC only - the selection logic is unit-tested in src/claudeaccounts.js.
 // ============================================================================
 
@@ -25,10 +27,17 @@ let editingId = null; // the account whose name is being edited inline, if any
 // accounts-changed event rebuild the list, which would wipe a half-typed name.
 let editDraft = '';
 let editJustOpened = false; // select the text on open only, not on every rebuild
+// Half-typed reserve caps, `${id}:${field}` -> text. Same reason as editDraft:
+// a list rebuild must not wipe them. Cleared once the account's caps save.
+const reserveDrafts = new Map();
+
+/** Reserve fields per account: [field, label key]. */
+const RESERVE_INPUTS = [['fiveHour', 'accounts.reserve.fiveHour'], ['weekly', 'accounts.reserve.weekly']];
 
 const clock = (ms) => new Date(ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
 function statusText(a) {
+  if (a.limitedUntil && a.reserveHit) return t('accounts.reserveHit', { at: clock(a.limitedUntil) });
   if (a.limitedUntil) return t('accounts.limitedUntil', { at: clock(a.limitedUntil) });
   return t(a.active ? 'accounts.active' : 'accounts.ready');
 }
@@ -127,6 +136,64 @@ async function saveRename(id, value) {
   await refresh();
 }
 
+/** The text a reserve input shows: the draft, else the stored cap, else empty. */
+function reserveValue(a, field) {
+  const key = `${a.id}:${field}`;
+  if (reserveDrafts.has(key)) return reserveDrafts.get(key);
+  const cap = a.reserve && a.reserve[field];
+  return Number.isInteger(cap) ? String(cap) : '';
+}
+
+/** Saves both caps of one account; main validates them (1-100 or empty). */
+async function saveReserve(a) {
+  if (typeof window.lunacore.setClaudeAccountReserve !== 'function') return;
+  const fiveHour = reserveValue(a, 'fiveHour').trim();
+  const weekly = reserveValue(a, 'weekly').trim();
+  let res = null;
+  try {
+    res = await window.lunacore.setClaudeAccountReserve(a.id, fiveHour, weekly);
+  } catch {
+    res = null;
+  }
+  if (res && res.ok) {
+    for (const [field] of RESERVE_INPUTS) reserveDrafts.delete(`${a.id}:${field}`);
+    note = { key: 'accounts.reserve.saved', fail: false };
+  } else {
+    // The drafts stay, so the bad value is still there to correct.
+    note = { key: res && res.error === 'badReserve' ? 'accounts.reserve.err' : 'accounts.saveFailed', fail: true };
+  }
+  await refresh();
+}
+
+/** The two optional caps ("max 5h %", "max weekly %") of one account. */
+function reserveInputs(a) {
+  if (typeof window.lunacore.setClaudeAccountReserve !== 'function') return [];
+  const wrap = document.createElement('span');
+  wrap.className = 'claude-account-reserve';
+  wrap.title = t('accounts.reserve.hint');
+  for (const [field, labelKey] of RESERVE_INPUTS) {
+    const label = document.createElement('label');
+    label.className = 'hint';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.max = '100';
+    input.step = '1';
+    input.inputMode = 'numeric';
+    input.className = 'profile-select claude-account-reserve__input';
+    input.value = reserveValue(a, field);
+    input.addEventListener('input', () => reserveDrafts.set(`${a.id}:${field}`, input.value));
+    // 'change' fires on Enter and on blur - one save per edit, not per key.
+    input.addEventListener('change', () => {
+      reserveDrafts.set(`${a.id}:${field}`, input.value);
+      saveReserve(a);
+    });
+    label.append(`${t(labelKey)} `, input);
+    wrap.append(label);
+  }
+  return [wrap];
+}
+
 /** The inline editor that replaces a row's name while editing. */
 function renameEditor(a) {
   const input = document.createElement('input');
@@ -188,8 +255,10 @@ function renderRow(a, index) {
     usage.textContent = usageText(a.usage);
     li.append(usage);
   }
+  li.append(...reserveInputs(a));
   if (index > 0) li.append(button('accounts.moveUp', () => act(window.lunacore.moveClaudeAccountUp, a.id), 'accounts.moveUpHint'));
-  if (a.limitedUntil) li.append(button('accounts.clearLimit', () => act(window.lunacore.clearClaudeAccountLimit, a.id)));
+  // A reached reserve ends with the window's reset or a higher cap, not here.
+  if (a.limitedUntil && !a.reserveHit) li.append(button('accounts.clearLimit', () => act(window.lunacore.clearClaudeAccountLimit, a.id)));
   li.append(...usageButtons(a));
   if (typeof window.lunacore.renameClaudeAccount === 'function') {
     li.append(button('accounts.edit', () => {

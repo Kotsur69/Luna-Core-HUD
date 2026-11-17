@@ -125,6 +125,24 @@ test('one entry per account with labels, the active marker and an unconnected on
   assert.deepEqual(w.calls.sleep, [2000]);
 });
 
+test('entries carry only the reserve caps; readings() hands the reserve check the last limits', async () => {
+  const tOnet = fakeToken('onet');
+  const w = world({
+    targets: [
+      { id: 'onet', label: 'Onet', active: true, usageDir: dirOf('onet'), reserve: { fiveHour: 50, weekly: 700, x: 1 } },
+      { id: 'spare', label: 'Spare', active: false, usageDir: null },
+    ],
+    files: { [credPath(dirOf('onet'))]: credFile(tOnet) },
+    answers: { [tOnet]: { status: 200, body: usageBody(60, 20) } },
+  });
+  assert.equal(w.usage.readings().size, 0, 'nothing read yet: no data, no cap check');
+  const entries = await w.usage.read();
+  assert.deepEqual(entries.map((e) => e.reserve), [{ fiveHour: 50, weekly: null }, { fiveHour: null, weekly: null }]);
+  const readings = w.usage.readings();
+  assert.deepEqual([...readings.keys()], ['onet']);
+  assert.deepEqual(readings.get('onet').map((l) => [l.window, l.percentUsed]), [['5h', 60], ['weekly', 20]]);
+});
+
 test('401/403 marks only that account reconnect; the others keep updating', async () => {
   const tA = fakeToken('a');
   const tB = fakeToken('b');
@@ -491,7 +509,9 @@ test('store: setUsage persists the dir, refuses one outside home, and list() nev
     assert.deepEqual(store.setUsage(id, dirOf(id), 'o@onet.pl'), { ok: true });
     // A second instance reads it back from disk (host mode / restart).
     const again = createClaudeAccounts({ file: () => file, safeStorage: fakeStorage, homeDir: () => HOME });
-    assert.deepEqual(again.usageTargets(), [{ id, label: 'Onet', active: true, usageDir: dirOf(id), usageEmail: 'o@onet.pl' }]);
+    assert.deepEqual(again.usageTargets(), [{
+      id, label: 'Onet', active: true, usageDir: dirOf(id), usageEmail: 'o@onet.pl', reserve: { fiveHour: null, weekly: null },
+    }]);
     const listed = JSON.stringify(again.list());
     assert.ok(!listed.includes('usageDir') && !listed.includes(setupToken('o')));
     assert.deepEqual(again.setUsage(id, null), { ok: true });

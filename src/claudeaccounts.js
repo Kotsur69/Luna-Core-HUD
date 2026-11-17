@@ -36,6 +36,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { cleanReserve } = require('./accountreserve');
 
 const VERSION = 1;
 /** Env keys that mean "this launch already picked its backend / credentials". */
@@ -188,9 +189,14 @@ function pruneLimits(limits, accounts, now) {
   return out;
 }
 
-/** One stored account with only its validated fields (usage fields optional). */
+/**
+ * One stored account with only its validated fields (usage fields and the
+ * reserve caps optional; an old record without them loads as "no cap").
+ */
 function cleanAccount(a, home) {
-  const out = { id: a.id, label: cleanLabel(a.label) || a.id, token: a.token };
+  const reserve = cleanReserve(a.reserve);
+  const base = { id: a.id, label: cleanLabel(a.label) || a.id, token: a.token };
+  const out = reserve ? { ...base, reserve } : base;
   if (!isUsageDirFor(a.usageDir, home, a.id)) return out;
   const email = cleanEmail(a.usageEmail);
   return email ? { ...out, usageDir: a.usageDir, usageEmail: email } : { ...out, usageDir: a.usageDir };
@@ -237,6 +243,8 @@ function mergeLimits(limits, extra) {
  *   extraLimits: cooldowns remembered outside this store (the God Mode
  *     registry, multi God Mode A3) - merged into every pick, never written
  *   onLimitCleared: Mati ended a cooldown by hand - the registry forgets it too
+ *   reserveLimits: (accounts, now) -> cooldowns of accounts at their reserve
+ *     cap (src/accountreserve.js) - merged into every pick, never written
  */
 function createClaudeAccounts(deps) {
   const now = deps.now || Date.now;
@@ -255,6 +263,28 @@ function createClaudeAccounts(deps) {
    * fail because God Mode's memory could not be read.
    */
   function effectiveLimits(limits = state.limits) {
+    return mergeLimits(withExtra(limits), reserveCooldowns());
+  }
+
+  // The last reserve-check failure logged (once per error, as above).
+  let reserveError = null;
+
+  /** Cooldowns of accounts at their reserve cap; {} when the check fails. */
+  function reserveCooldowns() {
+    if (!deps.reserveLimits) return {};
+    try {
+      const out = deps.reserveLimits(state.accounts, now());
+      reserveError = null;
+      return out && typeof out === 'object' ? out : {};
+    } catch (err) {
+      const message = (err && err.message) || 'error';
+      if (message !== reserveError) log(`claude accounts: reserve check failed (${message})`);
+      reserveError = message;
+      return {};
+    }
+  }
+
+  function withExtra(limits) {
     if (!deps.extraLimits) return limits;
     try {
       const merged = mergeLimits(limits, deps.extraLimits());
@@ -377,7 +407,8 @@ function createClaudeAccounts(deps) {
   function list() {
     refresh();
     const t = now();
-    const limits = effectiveLimits();
+    const reserved = reserveCooldowns();
+    const limits = mergeLimits(withExtra(state.limits), reserved);
     const current = pickActive(state.accounts, limits, t);
     return {
       encryption: Boolean(storage()),
@@ -386,9 +417,18 @@ function createClaudeAccounts(deps) {
         label: a.label,
         active: Boolean(current && current.id === a.id),
         limitedUntil: Number.isFinite(limits[a.id]) && limits[a.id] > t ? limits[a.id] : null,
+        // The cap, not a longer real limit, holds it back: clearing the limit can't help.
+        reserveHit: reserved[a.id] > t && reserved[a.id] >= limits[a.id],
+        reserve: reserveView(a),
       })),
     };
   }
+
+  /** An account's caps as the renderer sees them (null = no cap). */
+  const reserveView = (a) => ({
+    fiveHour: (a.reserve && a.reserve.fiveHour) || null,
+    weekly: (a.reserve && a.reserve.weekly) || null,
+  });
 
   /** @returns {{ok:true,id:string}|{ok:false,error:string}} */
   function add(label, tokenText) {
@@ -434,6 +474,40 @@ function createClaudeAccounts(deps) {
     if (i === 0) return { ok: true };
     const accounts = [...state.accounts];
     [accounts[i - 1], accounts[i]] = [accounts[i], accounts[i - 1]];
+    return save({ accounts, limits: state.limits });
+  }
+
+  /**
+   * Makes `id` the account new work runs on: it moves to the top of the
+   * order, and the first free account in the order is the active one
+   * (pickActive). A cooling-down or capped account still moves up and takes
+   * over once it is free again. Running tabs stay where they are.
+   * @returns {{ok:true}|{ok:false,error:'notFound'|string}}
+   */
+  function moveToTop(id) {
+    refresh();
+    const account = state.accounts.find((a) => a.id === id);
+    if (!account) return { ok: false, error: 'notFound' };
+    if (state.accounts[0].id === id) return { ok: true };
+    const accounts = [account, ...state.accounts.filter((a) => a.id !== id)];
+    return save({ accounts, limits: state.limits });
+  }
+
+  /**
+   * Stores account `id`'s reserve caps (src/accountreserve.js). `reserve` must
+   * already be validated (validateReserve); it is cleaned once more here. An
+   * empty reserve removes the field.
+   * @returns {{ok:true}|{ok:false,error:'notFound'|string}}
+   */
+  function setReserve(id, reserve) {
+    refresh();
+    if (!state.accounts.some((a) => a.id === id)) return { ok: false, error: 'notFound' };
+    const clean = cleanReserve(reserve);
+    const accounts = state.accounts.map((a) => {
+      if (a.id !== id) return a;
+      const { reserve: _old, ...rest } = a;
+      return clean ? { ...rest, reserve: clean } : rest;
+    });
     return save({ accounts, limits: state.limits });
   }
 
@@ -503,17 +577,21 @@ function createClaudeAccounts(deps) {
   /**
    * Main-process only (the usage reader): every account with its usage login
    * dir. Never carries a token; never sent to the renderer as is.
-   * @returns {{id:string,label:string,active:boolean,usageDir:string|null,usageEmail:string|null}[]}
+   * `active` is the same pick list() and new work use (cooldowns, God Mode's
+   * and reached reserve caps included), so the usage panel's dot agrees.
+   * @returns {{id:string,label:string,active:boolean,usageDir:string|null,usageEmail:string|null,
+   *   reserve:{fiveHour:number|null, weekly:number|null}}[]}
    */
   function usageTargets() {
     refresh();
-    const current = pickActive(state.accounts, state.limits, now());
+    const current = pickActive(state.accounts, effectiveLimits(), now());
     return state.accounts.map((a) => ({
       id: a.id,
       label: a.label,
       active: Boolean(current && current.id === a.id),
       usageDir: a.usageDir || null,
       usageEmail: a.usageEmail || null,
+      reserve: reserveView(a),
     }));
   }
 
@@ -537,8 +615,8 @@ function createClaudeAccounts(deps) {
   }
 
   return {
-    list, add, rename, remove, moveUp, clearLimit, active, freeAccount, markLimited, failoverActive, authLayer,
-    usageTargets, setUsage,
+    list, add, rename, remove, moveUp, moveToTop, setReserve, clearLimit, active, freeAccount, markLimited,
+    failoverActive, authLayer, usageTargets, setUsage,
   };
 }
 

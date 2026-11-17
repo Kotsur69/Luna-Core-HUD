@@ -146,7 +146,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   openFreeLlmDashboard: () => ipcRenderer.send('freellm:open-dashboard'),
 
   // --- Claude account failover (src/claudeaccountsipc.js) ---
-  /** { encryption, accounts:[{id,label,active,limitedUntil,usage}] } - never a token. */
+  /** { encryption, accounts:[{id,label,active,limitedUntil,reserveHit,reserve,usage}] } - never a token. */
   listClaudeAccounts: () => ipcRenderer.invoke('claudeAccounts:list'),
   /**
    * Usage-only login for one account (`claude auth login` in main, browser
@@ -162,6 +162,11 @@ contextBridge.exposeInMainWorld('lunacore', {
   removeClaudeAccount: (id) => ipcRenderer.invoke('claudeAccounts:remove', id),
   moveClaudeAccountUp: (id) => ipcRenderer.invoke('claudeAccounts:move-up', id),
   clearClaudeAccountLimit: (id) => ipcRenderer.invoke('claudeAccounts:clear-limit', id),
+  /** Usage panel click: new work runs on this account. Only the id crosses; main checks it. */
+  makeClaudeAccountActive: (id) => ipcRenderer.invoke('claudeAccounts:make-active', id),
+  /** Reserve caps: each an integer 1-100 or empty (no cap); main validates. */
+  setClaudeAccountReserve: (id, fiveHour, weekly) =>
+    ipcRenderer.invoke('claudeAccounts:set-reserve', { id, fiveHour, weekly }),
   /** Opens a tab running `claude setup-token` - no arguments cross the bridge. */
   openClaudeTokenTab: () => ipcRenderer.send('claudeAccounts:open-token-tab'),
   onClaudeAccountsChanged: (cb) => {
