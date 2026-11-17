@@ -22,7 +22,7 @@ const {
   noNodeModulesText,
   WORKER_NPM_COMMAND,
 } = require('../src/orchestraDeps.js');
-const { createOrchestra, briefText } = require('../src/orchestra.js');
+const { createOrchestra, briefText, withStallNote } = require('../src/orchestra.js');
 const { ensureInstall } = require('../src/orchestraIntegrate.js');
 
 const REPO_ROOT = path.join(__dirname, '..');
@@ -238,6 +238,32 @@ test('the worker brief says dependencies are installed and forbids linking or re
   assert.match(text, /Dependencies are already installed in this worktree/);
   assert.match(text, /Do not link node_modules to another checkout/);
   assert.match(text, /do not reinstall/);
+});
+
+test('the worker brief says to commit early and to run the final npm test in the foreground', () => {
+  const text = briefText(pkg('a', [1]), 'luna/a-1');
+  assert.match(text, /Commit early: as soon as the brief's must-haves pass their targeted tests, commit them/);
+  assert.match(text, /commit again after each further slice/);
+  assert.match(text, /final `npm test` in the FOREGROUND with a long tool timeout \(about 600000 ms\)/);
+  assert.match(text, /Never end your turn while a test run is still going/);
+  assert.match(text, /do not end it before the commit and the LUNA_DONE/);
+  assert.doesNotMatch(text, /RESUMING/);
+  assert.doesNotMatch(text, /run the test files the earlier session touched/, 'a first start has no resume rule');
+});
+
+test('a resume brief runs the touched tests, then the full suite, then commits first', () => {
+  const text = briefText(pkg('a', [1]), 'luna/a-1', { resume: true });
+  assert.match(text, /RESUMING/);
+  assert.match(text, /Before anything else: run the test files the earlier session touched, then the full suite, then commit/);
+  assert.match(text, /Commit early/, 'the package rules stay in a resume brief');
+});
+
+test('a noMarker restart brief checks the saved test log and a drafted commit first', () => {
+  const base = briefText(pkg('a', [1]), 'luna/a-1', { resume: true });
+  const noMarker = withStallNote(base, 'noMarker', null);
+  assert.match(noMarker, /saved test log finished green/);
+  assert.match(noMarker, /drafted commit message is waiting/);
+  assert.doesNotMatch(withStallNote(base, 'blocked', 'x'), /saved test log/, 'only a noMarker restart gets the note');
 });
 
 // ---- the controller -----------------------------------------------------------------
