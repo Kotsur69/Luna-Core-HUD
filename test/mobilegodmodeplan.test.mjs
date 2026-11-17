@@ -98,7 +98,9 @@ test('launchPayload: releaseAfter only with a merge; merge needs a confirmation'
 });
 
 test('worker model: opens on the snapshot model, kept per draft, sent only for Claude workers', () => {
-  assert.deepEqual(WORKER_MODELS, ['opus', 'sonnet', 'fable', 'plan']);
+  // 'agy' = every worker on the Antigravity CLI (src/uiprefs.js ORCHESTRA_WORKER_MODELS).
+  assert.deepEqual(WORKER_MODELS, ['opus', 'sonnet', 'fable', 'agy', 'plan']);
+  assert.equal(planDraft({ ...readyPlan, workerModel: 'agy' }, null).workerModel, 'agy');
   const fresh = planDraft({ ...readyPlan, workerModel: 'plan' }, null);
   assert.equal(fresh.workerModel, 'plan');
   // An unknown or missing snapshot value starts on the PC default.
