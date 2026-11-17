@@ -296,7 +296,11 @@ test('kill switch: Esc to every worker, no new launches, retry picks a package b
   const res = await s.orch.retry({ planId: s.planId, id: 'a' });
   assert.equal(res.ok, true);
   assert.deepEqual(s.state(), ['launched', 'pending']);
-  assert.equal(s.log.sessions.length, 1, 'tab still open -> nudged, not relaunched');
+  // The open tab lost its intake token when it settled: a new tab, same worktree.
+  assert.equal(s.log.sessions.length, 2, 'tab still open -> reopened in a new tab');
+  assert.equal(s.orch.view().packages[0].sessionId, 's2');
+  assert.equal(s.log.sessions[1].cwd, s.log.sessions[0].cwd);
+  assert.deepEqual(s.log.writes, [['s1', '\x1b']], 'no nudge typed into the old tab');
   assert.equal((await s.orch.retry({ planId: s.planId, id: 'b' })).error, 'notRetryable');
 });
 
@@ -375,7 +379,9 @@ test('retry of an approval stall types nothing into the prompt; retry is refused
   s.orch.onApproval('s1');
   assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).ok, true);
   assert.deepEqual(s.log.writes, []);
-  s.orch.onApproval('s1');
+  // The Retry moved a to a new tab (s3).
+  assert.equal(s.orch.view().packages[0].sessionId, 's3');
+  s.orch.onApproval('s3');
   s.orch.onUsageLimit('s2', null);
   assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).error, 'paused');
 });
@@ -670,13 +676,13 @@ test('a stall forgets the tab\'s open background processes', async () => {
   // b keeps the run from settling, so the Retry below is not refused as busy.
   const s = await started({ packages: [pkg('a', [1]), pkg('b', [2])] });
   s.orch.onTurnEnd('s1', [bgStart('t1'), turn('tests running in the background')].join('\n'));
-  // An approval stall keeps the same tab open; a Retry picks it up there.
+  // An approval stall keeps the same tab open; a Retry reopens the package in a new tab.
   s.orch.onApproval('s1');
   assert.equal(s.orch.view().packages[0].state, 'stalled');
   assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).ok, true);
-  assert.deepEqual([s.orch.view().packages[0].state, s.orch.view().packages[0].sessionId], ['launched', 's1']);
+  assert.deepEqual([s.orch.view().packages[0].state, s.orch.view().packages[0].sessionId], ['launched', 's3']);
   const before = nudgesSent(s);
-  s.orch.onTurnEnd('s1', turn('working'));
+  s.orch.onTurnEnd('s3', turn('working'));
   s.advance(10_000);
   assert.equal(nudgesSent(s), before + 1, 'nudged after the short delay, no stale wait');
 });

@@ -3119,9 +3119,10 @@ function createOrchestra(deps) {
   }
 
   /**
-   * Picks a stalled / closed / killed / failed package back up: nudges its
-   * open tab, or opens a new tab in its existing worktree, or (never got a
-   * worktree) queues it for a fresh launch.
+   * Picks a stalled / closed / killed / failed package back up: opens a new
+   * tab in its existing worktree (closing a still-open one, whose intake
+   * token was revoked when it settled), or (never got a worktree) nudges a
+   * still-open tab or queues it for a fresh launch.
    * @param {unknown} payload {planId, id}
    */
   async function retry(payload) {
@@ -3138,9 +3139,14 @@ function createOrchestra(deps) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.pausedUntil) return { ok: false, error: 'paused' };
     if (plan.hold) return { ok: false, error: plan.hold.reason };
-    // Nudging a live tab is no new worker; anything else would launch one.
+    // A settled package's tab lost its scoped intake token (commit ->
+    // revokeFollowups) and a running claude cannot pick up a new one, so a
+    // still-open tab is replaced by a new one in the same worktree (a fresh
+    // token, like an automatic restart). Nudging is left for a live tab whose
+    // package has no worktree on record, which reopenInWorktree cannot use.
     const liveTab = !!(pkg.sessionId && sessionAlive(pkg.sessionId));
-    if (!liveTab && batteryHeld()) return { ok: false, error: 'batteryLow' };
+    const nudgeOnly = liveTab && !(pkg.root && pkg.branch);
+    if (!nudgeOnly && batteryHeld()) return { ok: false, error: 'batteryLow' };
     // A self-heal still under way is replaced by this Retry.
     healer.cancel(pkg.id);
 
@@ -3148,11 +3154,23 @@ function createOrchestra(deps) {
     if (abAction && abAction.keep) {
       // Parked again with its verified build; the pump decides the group once its twin is done.
       patch(pkg.id, { state: 'finishing', error: null, detail: null });
-    } else if (liveTab) {
+    } else if (nudgeOnly) {
       patch(pkg.id, { ...freshRun(), state: 'launched', ...spentAbBuild(pkg) });
       // A tab stalled on a permission prompt: Mati answers it there. Pasting
       // a nudge + Enter now would land IN the prompt and answer it blindly.
       if (pkg.error !== 'needsApproval') writePty(pkg.sessionId, sup.nudgeText(pkg.id), { paste: true });
+    } else if (liveTab) {
+      // The worker ran in this worktree until now, so its node_modules is as
+      // it was: no install (one would also race the old tab's processes).
+      // reopenInWorktree closes the old tab once the new one is open; a
+      // failure leaves the old tab and the stall untouched.
+      const current = findPkg(pkg.id);
+      const reopened = reopenInWorktree(current, resumeBrief(current));
+      if (!reopened.ok) {
+        if (reopened.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
+        commit();
+        return { ok: false, error: reopened.error };
+      }
     } else if (pkg.root && pkg.branch) {
       // A new worker in the old worktree: install what is missing first
       // (an earlier install failed, or an older build never installed).
