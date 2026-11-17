@@ -2063,6 +2063,10 @@ function createOrchestra(deps) {
 
     // "Workers" (F6; "Free only" = orchestraFree.js): chosen at Approve, fixed
     // for the run. A free-planned run is always a free run (D1: "Free only").
+    // A named Workers value must be on the allow-list: refused, never coerced to Claude.
+    if (!plan.started && o.workers !== undefined && o.workers !== null && !workersRules.normalizeWorkers(o.workers)) {
+      return { ok: false, error: 'badWorkers' };
+    }
     const workers = plan.started ? workersRules.storedWorkers(plan) : workersRules.approveWorkers(plan, o);
     // A/B variants (orchestraVariants.js) are built and judged on Claude only:
     // a plan that has them is refused as a free run (replan without A/B for that).

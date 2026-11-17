@@ -203,6 +203,19 @@ test('createMergeRunDeps: an agy run asks the integration for the agy resolver; 
   assert.deepEqual(seen, ['agy', undefined]);
 });
 
+test('runTopicSplit agy: Plan only splits on agy with the topics schema in the prompt', async () => {
+  const { runTopicSplit } = require('../src/orchestraPlanRunStart.js');
+  const split = fakeExec({ stdout: '```json\n{"topics":[{"id":"a"}]}\n```' });
+  const res = await runTopicSplit({ cwd: __dirname, env: { G: '1' }, request: 'Plan the login', planner: 'agy', execImpl: split.exec });
+  assert.deepEqual(res, { ok: true, raw: { topics: [{ id: 'a' }] }, costUsd: null });
+  assert.equal(split.calls[0].file, 'agy');
+  assert.deepEqual(split.calls[0].args, ['--print']);
+  assert.match(split.calls[0].stdin, /exactly ONE JSON object/);
+  const claude = fakeExec({ stdout: JSON.stringify({ structured_output: { topics: [] } }) });
+  await runTopicSplit({ cwd: __dirname, env: {}, request: 'x', planner: 'claude', execImpl: claude.exec });
+  assert.equal(claude.calls[0].file, 'claude');
+});
+
 test('validatePlan: "agy" is a valid package model (hybrid pick and manual card pick)', () => {
   const raw = { packages: [{ ...PLAN_JSON.packages[0], model: 'agy' }] };
   assert.equal(plan.validatePlan(raw, TODOS).packages[0].model, 'agy');

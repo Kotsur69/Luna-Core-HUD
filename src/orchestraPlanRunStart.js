@@ -31,7 +31,7 @@ const core = require('./orchestraPlanRun');
 const { planAllowedTools } = require('./orchestraPlanRunLaunch');
 
 // The shared planner allow-list (claude / agy / free).
-const { PLANNERS } = require('./orchestraAgy');
+const { PLANNERS, runAgyPrint, agyJsonPrompt, parseAgyJson } = require('./orchestraAgy');
 /** The request Mati types; the same cap the briefs put on the goal text. */
 const MAX_REQUEST_CHARS = core.MAX_GOAL_CHARS;
 const MIN_REQUEST_CHARS = 3;
@@ -182,6 +182,13 @@ const clean = (s, max) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, m
 function runTopicSplit({ cwd, env, request, planner, execImpl = execFile, timeoutMs, isDirImpl = undefined }) {
   if (!checkCwd(cwd, isDirImpl).ok) return Promise.resolve({ ok: false, error: 'noRepo', detail: String(cwd || '') });
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : SPLIT_TIMEOUT_MS;
+  // The agy planner splits on agy: the topics schema goes into the prompt and
+  // the answer is parsed from agy's text for the same validateTopics().
+  if (planner === 'agy') {
+    return runAgyPrint({ cwd, env, timeout, execImpl, maxBuffer: 5 * 1024 * 1024, prompt: agyJsonPrompt(buildTopicSplitPrompt(request), core.TOPICS_SCHEMA) }).then(
+      (res) => (res.ok ? parseAgyJson(res.stdout) : res),
+    );
+  }
   return new Promise((resolve) => {
     let child;
     try {

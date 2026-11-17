@@ -112,6 +112,15 @@ test('Approve with workers "agy": every tab on the agy profile; workers "claude"
   assert.deepEqual(claude.log.sessions.map((s) => s.profileId), ['claude-cloud', 'claude-cloud']);
 });
 
+for (const bad of ['agyy', 'AGY', 'gemini', 42, { w: 'agy' }]) {
+  test(`Approve with an off-list workers value (${JSON.stringify(bad)}) is refused, never coerced to Claude`, async () => {
+    const { orch, log } = setup({ extraDeps: { agyProfileId: () => 'agy-profile' } });
+    const { plan } = await orch.makePlan(ctx);
+    assert.deepEqual(await orch.launch(approve(plan, { workers: bad })), { ok: false, error: 'badWorkers' });
+    assert.equal(log.sessions.length, 0);
+  });
+}
+
 test('Approve with workers "agy" and no agy profile: refused with noAgyProfile', async () => {
   const { orch, log } = setup();
   const { plan } = await orch.makePlan(ctx);
