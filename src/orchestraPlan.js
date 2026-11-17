@@ -28,6 +28,8 @@ const { usageFromEnvelope } = require('./orchestraUsage');
 const { FREE_PLANNER_MODEL, planContextLines } = require('./orchestraPlanBuild');
 // A/B builds (opt-in): the planner may give a package two variants.
 const { withVariantsSchema, validateVariants, AB_PLANNER_RULES } = require('./orchestraVariants');
+// The agy planner: a headless `agy --print` with the JSON contract in the prompt.
+const { runAgyPrint, agyJsonPrompt, parseAgyJson } = require('./orchestraAgy');
 
 const PLANNER_MODEL = 'opus';
 // The Claude CLI model aliases Mati may pick for the planner in the to-do
@@ -75,7 +77,8 @@ const MODELS = ['sonnet', 'opus'];
 // (schema enum + prompt, both pinned by test/orchestraPlan.test.js): 'fable'
 // is a manual choice - Luna's Work sets it on a package from its builder model
 // (lunasworkBuild.wrapPlanner) - and must survive validatePlan().
-const PACKAGE_MODELS = [...MODELS, 'fable'];
+// 'agy' (the Antigravity CLI) is a manual card pick, and a hybrid planner's pick.
+const PACKAGE_MODELS = [...MODELS, 'fable', 'agy'];
 
 /** JSON schema handed to `--json-schema`. Mirrors validatePlan() below. */
 const PLAN_SCHEMA = {
@@ -110,7 +113,8 @@ const PLAN_SCHEMA = {
 
 // Hybrid runs (FREE_GODMODE_V2_PLAN.md F6): "Plan with free models in mind"
 // adds "free" to the per-package model. A Claude-only run never sees it.
-const HYBRID_MODELS = [...MODELS, 'free'];
+// 'agy' runs a package on the Antigravity CLI (src/orchestraAgy.js).
+const HYBRID_MODELS = [...MODELS, 'free', 'agy'];
 const HYBRID_PLAN_SCHEMA = (() => {
   const items = PLAN_SCHEMA.properties.packages.items;
   return {
@@ -138,6 +142,7 @@ function planSchemaFor(hybrid, abBuild = false) {
 const HYBRID_MODEL_RULES = [
   '- "model": "free" is also allowed in this run. Free models are much weaker than Claude: use "free" ONLY for small, mechanical, low-risk changes - styling, layout, copy, i18n strings, a config value - in 1-2 files, with no logic, state, IPC, security, data or build changes. When in doubt: "sonnet".',
   '- A "free" package must list its files and have a "verify" command. Never mark a package "free" when it touches an entry point, preload, IPC handlers, auth / keys / secrets, migrations, package.json / lockfiles, build config, CI or test infrastructure.',
+  '- "model": "agy" is also allowed: the package runs on the Antigravity CLI (Gemini). Use it for self-contained work of routine difficulty; when in doubt: "sonnet".',
 ];
 
 /** Trimmed, capped string ('' when unusable). */
@@ -556,6 +561,7 @@ function runPlanner({
   // folder, not a missing `claude`.
   if (!checkCwd(cwd, isDirImpl).ok) return Promise.resolve({ ok: false, error: 'noRepo', detail: String(cwd || '') });
   const started = Date.now();
+  if (planner === 'agy') return runAgyPlanner({ cwd, env, timeout, execImpl, started, prompt: buildPlannerPrompt(openTodos, { planDocs, extraPrompt, ...extraOpts }), extraOpts });
   return new Promise((resolve) => {
     const child = execImpl(
       'claude',
@@ -585,6 +591,20 @@ function runPlanner({
       child.stdin.end(buildPlannerPrompt(openTodos, { planDocs, extraPrompt, ...extraOpts }));
     }
   });
+}
+
+/**
+ * runPlanner() on the Antigravity CLI: agy has no --json-schema, so the same
+ * JSON contract (the run's schema) goes into the prompt and the answer is
+ * parsed from agy's text. validatePlan() checks it like any Claude answer.
+ * No dollar cap and no effort flag: agy has neither.
+ */
+async function runAgyPlanner({ cwd, env, timeout, execImpl, started, prompt, extraOpts }) {
+  const schema = planSchemaFor(extraOpts.hybrid === true, extraOpts.abBuild === true);
+  const res = await runAgyPrint({ cwd, env, timeout, execImpl, prompt: agyJsonPrompt(prompt, schema) });
+  if (!res.ok) return res;
+  const parsed = parseAgyJson(res.stdout);
+  return parsed.ok ? { ...parsed, durationMs: Date.now() - started } : parsed;
 }
 
 module.exports = {

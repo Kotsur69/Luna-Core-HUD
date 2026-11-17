@@ -326,7 +326,14 @@ function integrationDeps(ctx) {
       return orchestraIntegrate.integrateMerge(args, {
         addWorktree: wt.addWorktree,
         removeWorktree: wt.removeWorktree,
-        resolve: scope ? (r) => orchestraIntegrate.runResolver({ ...r, env: ctx.toolEnv() }, scope.execFile) : resolve,
+        // extra.cli 'agy' (orchestraMergeRun.js): an agy run resolves on the agy profile's env.
+        resolve: (r) => {
+          const agy = extra && extra.cli === 'agy';
+          const env = agy ? (ctx.agyEnv ? ctx.agyEnv() : null) : ctx.toolEnv();
+          if (agy && !env) return Promise.resolve({ ok: false, detail: 'no Antigravity (agy) profile' });
+          const args = { ...r, env, ...(agy ? { cli: 'agy' } : {}) };
+          return scope ? orchestraIntegrate.runResolver(args, scope.execFile) : orchestraIntegrate.runResolver(args);
+        },
         // The integration worktree's install queues behind the package installs;
         // verifyImpl comes from integrateMerge, so a scoped pass stays killable.
         installImpl: (root, verifyImpl) => orchestraDeps.runQueued(() => orchestraIntegrate.ensureInstall(root, verifyImpl)),
@@ -719,6 +726,10 @@ function powerDeps(projectId, ctx, shared, self) {
     freshEnv: () => ctx.toolEnv(),
     // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
     freeProfileId: () => ctx.freeProfileId(),
+    // Antigravity (agy) runs: the agy profile worker tabs open on, and its env
+    // for the run's headless helper jobs (src/orchestraAgy.js).
+    agyProfileId: () => (ctx.agyProfileId ? ctx.agyProfileId() : null),
+    agyEnv: () => (ctx.agyEnv ? ctx.agyEnv() : null),
     // Hybrid runs (F6): the shipped protected paths plus the repo's own
     // .lunacore/hybrid-protected.json; a broken file never throws.
     hybridProtected: (repoPath) => loadProtected({ repoPath }),

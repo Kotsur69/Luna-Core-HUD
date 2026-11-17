@@ -55,6 +55,9 @@ export function badgeModelOf(pkg, workerModel, workers) {
   if (workers === 'free') return null;
   const override = pkg && typeof pkg.modelOverride === 'string' && pkg.modelOverride;
   if (workers === 'hybrid' && pkg && pkg.model === 'free' && !override) return 'free';
+  // Antigravity (src/orchestraAgy.js packageRunsAgy): an agy run, or a hybrid agy pick not handed over.
+  if (workers === 'agy') return 'agy';
+  if (workers === 'hybrid' && pkg && pkg.model === 'agy' && !override) return 'agy';
   return packageModelOf(pkg, workerModel);
 }
 
