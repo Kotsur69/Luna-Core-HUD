@@ -517,3 +517,40 @@ test('readUiPrefs always hands back a valid effectsStrength', () => {
   const { effectsStrength } = readUiPrefs();
   assert.ok(Number.isInteger(effectsStrength) && effectsStrength >= 0 && effectsStrength <= 100);
 });
+
+// --- usageVisibility (Settings -> Usage limits shown) ------------------------------
+
+const { cleanUsageVisibility, USAGE_VISIBILITY_DEFAULTS } = require('../src/usagevisibility.js');
+
+test('cleanUsageVisibility: missing or garbage -> Claude tab Claude only, agy tab Google only', () => {
+  const defaults = { claudeTab: { claude: true, google: false }, agyTab: { claude: false, google: true } };
+  for (const raw of [undefined, null, 'all', 42, [], { claudeTab: 'x', agyTab: [true] }]) {
+    assert.deepEqual(cleanUsageVisibility(raw), defaults, JSON.stringify(raw));
+  }
+  assert.deepEqual(cleanUsageVisibility(USAGE_VISIBILITY_DEFAULTS), defaults);
+});
+
+test('cleanUsageVisibility keeps valid choices for each tab kind independently', () => {
+  assert.deepEqual(
+    cleanUsageVisibility({ claudeTab: { claude: true, google: true }, agyTab: { claude: true, google: true } }),
+    { claudeTab: { claude: true, google: true }, agyTab: { claude: true, google: true } },
+  );
+  assert.deepEqual(
+    cleanUsageVisibility({ claudeTab: { claude: false, google: true } }),
+    { claudeTab: { claude: false, google: true }, agyTab: { claude: false, google: true } },
+  );
+});
+
+test('cleanUsageVisibility repairs non-booleans per field and an all-off tab to its default', () => {
+  const out = cleanUsageVisibility({
+    claudeTab: { claude: 'yes', google: true, extra: 1 },
+    agyTab: { claude: false, google: false },
+    other: { claude: true },
+  });
+  assert.deepEqual(out, { claudeTab: { claude: true, google: true }, agyTab: { claude: false, google: true } });
+});
+
+test('readUiPrefs always hands back a valid usageVisibility', () => {
+  const { usageVisibility } = readUiPrefs();
+  assert.deepEqual(usageVisibility, cleanUsageVisibility(usageVisibility));
+});

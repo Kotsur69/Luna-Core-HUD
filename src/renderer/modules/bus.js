@@ -112,6 +112,22 @@ export function emitActiveProfile(profileId) {
   activeProfile.emit(profileId);
 }
 
+// ---- Which usage limits are shown per tab kind ---------------------------------
+//
+// Replayed: Settings (usagevisibilitysettings.js) emits the stored choice at
+// startup and on every change; the usage widget may mount after either.
+
+const usageVisibility = channel({ replay: true });
+
+/** The stored usageVisibility (uiprefs): cb(value) -> disposer */
+export function onUsageVisibility(cb) {
+  return usageVisibility.on(cb);
+}
+
+export function emitUsageVisibility(value) {
+  usageVisibility.emit(value);
+}
+
 // ---- Language switch --------------------------------------------------------
 
 const langChange = channel();

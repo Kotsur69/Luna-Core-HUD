@@ -2193,6 +2193,20 @@
               <p id="claude-accounts-status" class="hint" role="status" hidden></p>
             </div>
             <div class="termcustom__group">
+              <!-- Usage limits shown per tab kind (uiprefs usageVisibility):
+                   modules/usagevisibilitysettings.js fills both selects. -->
+              <h3 id="usage-visibility-section" class="termcustom__section" data-i18n="usage.visibility.title">Widoczne limity uzycia</h3>
+              <p class="termcustom__hint" data-i18n="usage.visibility.hint">Ktore limity pokazuje kafelek uzycia: konta Claude, konto Google z Antigravity, albo wszystkie - osobno dla kart Claude i kart Antigravity.</p>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="usage.visibility.claudeTab">Na karcie Claude</span>
+                <select id="usage-vis-claude" class="profile-select"></select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="usage.visibility.agyTab">Na karcie Antigravity</span>
+                <select id="usage-vis-agy" class="profile-select"></select>
+              </label>
+            </div>
+            <div class="termcustom__group">
               <!-- Luna sync skill picker (docs/done_docs/DONE_FREE_PROVIDERS_SYNC_PLAN.md S3): which
                    PLUGIN skills a Codex/Gemini tab with "Use my Luna setup" also
                    gets - personal ~/.claude/skills always go along. Built in JS by

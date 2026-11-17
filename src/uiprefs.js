@@ -29,6 +29,7 @@ const paths = require('./paths');
 const { EFFORTS, isEffort } = require('./efforts');
 const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
+const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
 
 // Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
 // still the repo's config/, and in a packaged build is %APPDATA%/LunaCore/config
@@ -366,6 +367,10 @@ const DEFAULTS = {
   hubAutoOpen: 'needed',
   hubToasts: true,
   hubSources: {},
+  // Settings -> Usage limits shown: per tab kind (Claude tab / agy tab),
+  // whether the usage tile lists the Claude accounts and/or the Google
+  // account agy runs on (src/usagevisibility.js).
+  usageVisibility: cleanUsageVisibility(USAGE_VISIBILITY_DEFAULTS),
 };
 
 const HUB_WIDTH_MIN = 320;
@@ -804,12 +809,13 @@ function readUiPrefs() {
       // Missing key => toasts on (they still need notificationsEnabled).
       hubToasts: obj.hubToasts !== false,
       hubSources: cleanHubSources(obj.hubSources),
+      usageVisibility: cleanUsageVisibility(obj.usageVisibility),
       ...clampAutoCompactPrefs(obj),
       ...clampTermPrefs(obj),
       ...clampModifierPrefs(obj),
     };
   } catch {
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, usageVisibility: cleanUsageVisibility(null) };
   }
 }
 
@@ -977,6 +983,8 @@ function writeUiPrefs(partial) {
     if (partial && typeof partial.hubToasts === 'boolean') next.hubToasts = partial.hubToasts;
     // Sent WHOLE, like collapsed / layoutSizes: turning a group back on must be expressible.
     if (partial && partial.hubSources && typeof partial.hubSources === 'object') next.hubSources = cleanHubSources(partial.hubSources);
+    // Sent whole (both tab kinds); a garbage value repairs to the defaults.
+    if (partial && 'usageVisibility' in partial) next.usageVisibility = cleanUsageVisibility(partial.usageVisibility);
     // Only the term* keys actually present in `partial` should move; anything
     // omitted keeps its current (already-validated) value from `next` rather
     // than reverting to DEFAULTS - clampTermPrefs still re-validates the
