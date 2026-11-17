@@ -31,16 +31,19 @@
 // runs on, name, bar, percent, reset), plus one muted line per account that
 // needs attention. See visibleAccounts() / groupUsageRows() / usageGrid().
 //
-// ONE PROVIDER AT A TIME: the tile shows only the limits of the profile the
-// active terminal tab runs - Claude's rows on a Claude tab, that provider's
-// block on a Codex / GLM / ... tab, never both. See selectVisibleUsage().
+// PER TAB KIND: a Codex / GLM / ... tab shows only that provider's block
+// (selectVisibleUsage()). A Claude tab and an Antigravity (agy) tab show the
+// Claude accounts and/or the Google account agy runs on, as chosen in
+// Settings -> Usage limits shown (uiprefs usageVisibility; defaults: Claude
+// tab = Claude only, agy tab = Google only). See usagevisibility.js.
 // ============================================================================
 
 'use strict';
 
 import { t, loc } from './util.js';
-import { onLangChange, onUsageUpdate, onActiveProfile } from './bus.js';
+import { onLangChange, onUsageUpdate, onActiveProfile, onUsageVisibility } from './bus.js';
 import { defineWidget } from './registry.js';
+import { usageTabKind, googleUsageEntry, visibleUsageSources } from './usagevisibility.js';
 
 /** How often the "resets in ..." labels are recomputed (locally, no request). */
 const COUNTDOWN_MS = 30000;
@@ -61,6 +64,8 @@ let activeProfileId = null;
 // `others`, only the watcher's payload carries it; a payload without the
 // field keeps the last list.
 let lastAccounts = [];
+// The stored usageVisibility (Settings, bus replay); null = the defaults.
+let usageVisibility = null;
 
 /**
  * The accounts the tile draws: all of them once at least one has a usage
@@ -391,33 +396,58 @@ function usageGrid(sources, withAccount) {
   return grid;
 }
 
-/** One non-Claude provider: a heading, then its rows or "not available". */
+/** The message key a provider block shows instead of bars. */
+function providerMessageKey(entry) {
+  if (entry.status === 'unconfigured') return 'usage.other.unconfigured';
+  if (entry.status === 'error') return 'usage.unavailable';
+  return entry.providerId === 'antigravity' ? 'usage.google.unavailable' : 'usage.other.notAvailable';
+}
+
+/**
+ * One non-Claude provider: a heading, then its rows or "not available". The
+ * heading is the signed-in account (the agy Google email) when the entry has
+ * one, with the profile name as its tooltip.
+ */
 function usageProviderBlock(entry) {
   const block = document.createElement('div');
   block.className = 'usage-provider';
   const title = document.createElement('div');
   title.className = 'usage-provider__title';
-  title.textContent = loc(entry.displayName) || entry.profileId || '';
+  const name = loc(entry.displayName) || entry.profileId || '';
+  title.textContent = typeof entry.account === 'string' && entry.account ? entry.account : name;
+  title.title = name;
   block.appendChild(title);
   const limits = entry.status === 'ok' ? (entry.limits || []).filter(isDrawable) : [];
   if (limits.length > 0) {
     block.appendChild(usageGrid([{ account: null, limits }], false));
+    // A last good reading kept while agy's login is expired (src/agyusage.js).
+    if (entry.detail === 'stale') {
+      const when = fmtAgo(entry.updatedAt);
+      const msg = usageMessage('usage.google.stale', { when: when || '?' });
+      if (entry.errorMessage) msg.title = entry.errorMessage;
+      block.appendChild(msg);
+    }
   } else {
-    const key = entry.status === 'unconfigured' ? 'usage.other.unconfigured'
-      : entry.status === 'error' ? 'usage.unavailable'
-        : 'usage.other.notAvailable';
-    const msg = usageMessage(key);
+    const msg = usageMessage(providerMessageKey(entry));
     if (entry.errorMessage) msg.title = entry.errorMessage;
     block.appendChild(msg);
   }
   return block;
 }
 
-function usageMessage(key) {
+function usageMessage(key, params) {
   const p = document.createElement('p');
   p.className = 'hint';
-  p.textContent = t(key);
+  p.textContent = t(key, params);
   return p;
+}
+
+/** What the active tab shows: the sources (visibleUsageSources) and the entries behind them. */
+function currentView() {
+  const google = googleUsageEntry(lastOthers);
+  const show = visibleUsageSources(usageTabKind(lastOthers, activeProfileId), usageVisibility, Boolean(google));
+  const provider = show.provider ? selectVisibleUsage(lastOthers, activeProfileId).entry : null;
+  return { show, google, provider };
 }
 
 /**
@@ -427,25 +457,41 @@ function usageMessage(key) {
  */
 function renderFreshness() {
   if (!els || !els.refresh) return;
-  const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
+  const { show, google, provider } = currentView();
   const accountTimes = visibleAccounts(lastAccounts).map((a) => a.updatedAt).filter((v) => typeof v === 'number');
   const newestAccount = accountTimes.length > 0 ? { updatedAt: Math.max(...accountTimes) } : null;
-  const source = entry || newestAccount || lastGoodUsage;
+  const claudeSource = show.claude ? newestAccount || lastGoodUsage : null;
+  const googleSource = show.google ? google : null;
+  // Both shown: the older reading, so a stale Google one is not hidden behind Claude's.
+  const both = claudeSource && googleSource && typeof claudeSource.updatedAt === 'number' && typeof googleSource.updatedAt === 'number';
+  const source = provider || (both
+    ? (claudeSource.updatedAt <= googleSource.updatedAt ? claudeSource : googleSource)
+    : claudeSource || googleSource);
   const when = source ? fmtAgo(source.updatedAt) : null;
   const base = t('usage.refresh.title');
   els.refresh.title = when ? `${base} · ${t('usage.updatedAgo', { when })}` : base;
 }
 
-/** Renders the tile from the current state: the active tab's provider only. */
+/**
+ * Renders the tile from the current state: another provider's tab shows its
+ * block alone; a Claude or agy tab shows Claude's rows and/or the Google block,
+ * per the stored usageVisibility.
+ */
 function renderUsage() {
   if (!els) return; // not mounted - state is kept, the DOM is not ours
   const usageBody = els.body;
   usageBody.innerHTML = '';
-  const { entry } = selectVisibleUsage(lastOthers, activeProfileId);
-  const accounts = visibleAccounts(lastAccounts);
-  if (entry) usageBody.appendChild(usageProviderBlock(entry));
-  else if (accounts.length > 0) usageBody.appendChild(usageGrid(accounts.map((a) => ({ account: a, limits: a.limits })), true));
-  else renderClaudeRows(usageBody);
+  const { show, google, provider } = currentView();
+  if (provider) {
+    usageBody.appendChild(usageProviderBlock(provider));
+  } else {
+    if (show.claude) {
+      const accounts = visibleAccounts(lastAccounts);
+      if (accounts.length > 0) usageBody.appendChild(usageGrid(accounts.map((a) => ({ account: a, limits: a.limits })), true));
+      else renderClaudeRows(usageBody);
+    }
+    if (show.google && google) usageBody.appendChild(usageProviderBlock(google));
+  }
   renderFreshness();
 }
 
@@ -513,6 +559,12 @@ defineWidget({
       renderUsage();
     });
 
+    // Replays the stored choice; a change in Settings repaints at once.
+    const offVisibility = onUsageVisibility((value) => {
+      usageVisibility = value || null;
+      renderUsage();
+    });
+
     els.refresh.addEventListener('click', async () => {
       const btn = els.refresh;
       btn.classList.add('is-spinning');
@@ -550,6 +602,7 @@ defineWidget({
       offUsage();
       offLang();
       offProfile();
+      offVisibility();
       clearInterval(countdown);
       clearInterval(freshness);
       els = null;

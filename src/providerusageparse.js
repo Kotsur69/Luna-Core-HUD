@@ -15,6 +15,8 @@
 //   Moonshot   /v1/users/me/balance (pay-as-you-go balance, no window)
 //   Gemini     Code Assist v1internal:retrieveUserQuota (per-model daily
 //              buckets, Google-account login only)
+//   Antigravity Code Assist v1internal:retrieveUserQuotaSummary (per model
+//              group: a 5 h and a weekly bucket, Google-account login)
 //   OpenRouter /api/v1/key (credit limit and usage of the key)
 //
 // A field a provider omits stays out; nothing is guessed. resetsAt is only
@@ -282,6 +284,62 @@ function parseGeminiQuota(json) {
   return limits.length > 0 ? limits : null;
 }
 
+// --- Antigravity (Google account) ---------------------------------------------------
+
+/** Bucket windows the panel already knows; anything else stays 'custom'. */
+const AGY_WINDOWS = new Set(['5h', 'daily', 'weekly', 'monthly']);
+/** Longest group / bucket name taken from the response (untrusted text). */
+const AGY_MAX_LABEL = 60;
+
+const agyText = (v) => (typeof v === 'string' ? v.trim().slice(0, AGY_MAX_LABEL) : '');
+
+/** English fallback label of a known window (the renderer localizes it). */
+function agyWindowLabel(window) {
+  if (window === '5h') return labelForMinutes(5 * MINUTES_PER_HOUR);
+  if (window === 'daily') return labelForMinutes(MINUTES_PER_DAY);
+  if (window === 'weekly') return labelForMinutes(MINUTES_PER_WEEK);
+  return labelForMinutes(30 * MINUTES_PER_DAY);
+}
+
+/**
+ * Code Assist v1internal:retrieveUserQuotaSummary (what `agy` itself reads) ->
+ * one row per bucket, or null. Shape, as answered live on 2026-11-17:
+ *   {groups: [{displayName, buckets: [{bucketId, window: '5h'|'weekly',
+ *     remainingFraction: 0..1, resetTime: ISO, displayName}]}]}
+ * With one group the rows keep the generic window labels, so they localize
+ * and line up with Claude's; with several, the group name prefixes each row
+ * so two groups' weekly rows stay apart.
+ */
+function parseAgyQuotaSummary(json) {
+  const groups = json && Array.isArray(json.groups) ? json.groups.filter((g) => g && typeof g === 'object') : null;
+  if (!groups) return null;
+  const named = groups.length > 1;
+  const limits = [];
+  for (const group of groups) {
+    const buckets = Array.isArray(group.buckets) ? group.buckets : [];
+    for (const b of buckets) {
+      if (!b || typeof b !== 'object') continue;
+      // proto3 JSON omits a zero double: a bucket that names its window or
+      // reset but has no remainingFraction is spent, not unknown.
+      const omittedZero = b.remainingFraction === undefined && (typeof b.window === 'string' || typeof b.resetTime === 'string');
+      const fraction = omittedZero ? 0 : num(b.remainingFraction);
+      if (fraction === null) continue;
+      const known = AGY_WINDOWS.has(b.window);
+      const window = known ? b.window : 'custom';
+      const base = known ? agyWindowLabel(window) : agyText(b.displayName) || agyText(b.bucketId) || 'Limit';
+      const groupName = agyText(group.displayName);
+      limits.push(pctLimit({
+        window,
+        label: named && groupName ? `${groupName} · ${base}` : base,
+        percentUsed: clampPct((1 - fraction) * 100),
+        resetsAt: toIso(b.resetTime),
+        unit: 'credits',
+      }));
+    }
+  }
+  return limits.length > 0 ? limits : null;
+}
+
 // --- OpenRouter -------------------------------------------------------------------
 
 /** The OpenRouter /key payload -> credit row (percentage when capped) or null. */
@@ -319,5 +377,6 @@ module.exports = {
   parseKimiCodeUsages,
   parseMoonshotBalance,
   parseGeminiQuota,
+  parseAgyQuotaSummary,
   parseOpenRouterKey,
 };

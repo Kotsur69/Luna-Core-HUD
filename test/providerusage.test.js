@@ -189,6 +189,8 @@ test('usageSourceForProfile recognizes templates and hand-made base URLs', () =>
     [{ id: 'or', templateId: 'openrouter', env: {} }, 'openrouter'],
     [{ id: 'fl', templateId: 'freellm-claude', env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:31415' } }, 'other'],
     [{ id: 'ccr', templateId: 'codex', env: { ANTHROPIC_BASE_URL: 'http://localhost:3456' } }, 'other'],
+    [{ id: 'agy', templateId: 'antigravity', command: 'agy', env: {} }, 'antigravity'],
+    [{ id: 'agy-hand', command: 'C:\\Tools\\agy.exe --mode accept-edits', env: {} }, 'antigravity'],
   ];
   for (const [profile, want] of cases) assert.equal(usageSourceForProfile(profile), want, profile.id);
 });
@@ -357,4 +359,191 @@ test('fetchOtherProvidersUsage returns one entry per listed profile in order', a
     { id: 'cx', templateId: 'codex-cli', command: 'codex', env: {} },
   ], deps);
   assert.deepEqual(out.map((u) => [u.profileId, u.status]), [['or', 'unconfigured'], ['cx', 'unsupported']]);
+});
+
+// --- Antigravity (agy Google account) ---------------------------------------------
+
+const agyTests = require('../src/agyusage');
+
+// Assembled at runtime so no token-shaped literal sits in the source.
+const FAKE_TOKEN = ['tok', 'x'.repeat(24)].join('-');
+const AGY_PROFILE = { id: 'agy', templateId: 'antigravity', command: 'agy', label: 'Antigravity', env: {} };
+const AGY_SUMMARY = {
+  groups: [{
+    displayName: 'Claude and GPT models',
+    buckets: [
+      { bucketId: '3p-weekly', window: 'weekly', resetTime: '2026-10-25T08:00:00Z', remainingFraction: 0.47 },
+      { bucketId: '3p-5h', window: '5h', resetTime: '2026-10-20T15:00:00Z', remainingFraction: 1 },
+    ],
+  }],
+};
+const agyCred = (over = {}) => JSON.stringify({
+  token: { access_token: FAKE_TOKEN, token_type: 'Bearer', expiry: new Date(NOW + 3600000).toISOString(), ...over },
+  auth_method: 'consumer',
+  id_token_email: 'mati@example.com',
+});
+const agyDeps = (base, { cred = agyCred(), memory = new Map() } = {}) => ({
+  ...base,
+  platform: 'win32',
+  arch: 'x64',
+  agyMemory: memory,
+  readAgyCredential: async () => (cred === null ? { ok: false, reason: 'No agy login in Windows Credential Manager' } : { ok: true, text: cred }),
+});
+const AGY_KEY = `${agyTests.AGY_QUOTA_HOST}${agyTests.AGY_QUOTA_PATH}`;
+
+test('parseAgyQuotaSummary: one group keeps the generic window labels', () => {
+  const limits = parse.parseAgyQuotaSummary(AGY_SUMMARY);
+  assert.deepEqual(limits.map((l) => [l.window, l.label, l.percentUsed, l.resetsAt]), [
+    ['weekly', 'Weekly limit', 53, '2026-10-25T08:00:00.000Z'],
+    ['5h', '5-hour window', 0, '2026-10-20T15:00:00.000Z'],
+  ]);
+});
+
+test('parseAgyQuotaSummary: several groups prefix the group name; garbage is skipped', () => {
+  const two = parse.parseAgyQuotaSummary({
+    groups: [
+      { displayName: 'Gemini', buckets: [{ window: 'weekly', remainingFraction: '0.9' }] },
+      { displayName: 'Claude', buckets: [{ window: 'odd', displayName: 'Burst', remainingFraction: 0.5 }, null, { window: '5h', remainingFraction: 'abc' }] },
+      'junk',
+    ],
+  });
+  assert.deepEqual(two.map((l) => [l.window, l.label, l.percentUsed]), [
+    ['weekly', 'Gemini · Weekly limit', 10],
+    ['custom', 'Claude · Burst', 50],
+  ]);
+  assert.equal(parse.parseAgyQuotaSummary({ groups: [] }), null);
+  assert.equal(parse.parseAgyQuotaSummary(null), null);
+  assert.equal(parse.parseAgyQuotaSummary({ groups: 'x' }), null);
+});
+
+test('parseAgyCredential: token, expiry and email are validated', () => {
+  const ok = agyTests.parseAgyCredential(agyCred(), NOW);
+  assert.deepEqual(ok, { ok: true, accessToken: FAKE_TOKEN, email: 'mati@example.com' });
+  const expired = agyTests.parseAgyCredential(agyCred({ expiry: new Date(NOW - 1).toISOString() }), NOW);
+  assert.equal(expired.ok, false);
+  assert.equal(expired.expired, true);
+  assert.equal(expired.email, 'mati@example.com');
+  assert.equal(agyTests.parseAgyCredential('not json', NOW).ok, false);
+  assert.equal(agyTests.parseAgyCredential(JSON.stringify({ token: { access_token: 'a b' } }), NOW).ok, false);
+  assert.equal(agyTests.parseAgyCredential(JSON.stringify([1]), NOW).ok, false);
+  const noEmail = agyTests.parseAgyCredential(JSON.stringify({ token: { access_token: FAKE_TOKEN }, id_token_email: 'nope' }), NOW);
+  assert.equal(noEmail.email, null);
+});
+
+test('agyUserAgent uses agy\'s own form', () => {
+  assert.equal(agyTests.agyUserAgent('win32', 'x64'), 'antigravity/1.5.9 windows/amd64');
+  assert.equal(agyTests.agyUserAgent('darwin', 'arm64'), 'antigravity/1.5.9 darwin/arm64');
+});
+
+test('Antigravity: success reads the quota summary with the agy User-Agent', async () => {
+  const { deps, calls } = fakeDeps({ responses: { [AGY_KEY]: { status: 200, body: JSON.stringify(AGY_SUMMARY) } } });
+  const usage = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps));
+  assert.equal(usage.status, 'ok');
+  assert.equal(usage.providerId, 'antigravity');
+  assert.equal(usage.account, 'mati@example.com');
+  assert.equal(usage.limits.length, 2);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].headers.Authorization, `Bearer ${FAKE_TOKEN}`);
+  assert.equal(calls[0].headers['User-Agent'], 'antigravity/1.5.9 windows/amd64');
+});
+
+test('Antigravity: unauthorized is not available with a reason, and the token is not in it', async () => {
+  const { deps } = fakeDeps({ responses: { [AGY_KEY]: { status: 401, body: '{"error":{}}' } } });
+  const usage = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps));
+  assert.equal(usage.status, 'unsupported');
+  assert.match(usage.errorMessage, /HTTP 401/);
+  assert.ok(!JSON.stringify(usage).includes(FAKE_TOKEN));
+});
+
+test('Antigravity: a timeout (status 0) is an error with a reason, not a throw', async () => {
+  const { deps } = fakeDeps({ responses: { [AGY_KEY]: { status: 0, body: '' } } });
+  const usage = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps));
+  assert.equal(usage.status, 'error');
+  assert.match(usage.errorMessage, /timeout/);
+});
+
+test('Antigravity: no login and an unparseable body are not available, not errors', async () => {
+  const { deps, calls } = fakeDeps({ responses: { [AGY_KEY]: { status: 200, body: '<html>' } } });
+  const missing = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps, { cred: null }));
+  assert.equal(missing.status, 'unsupported');
+  assert.match(missing.errorMessage, /Credential Manager/);
+  assert.equal(calls.length, 0);
+  const junk = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps));
+  assert.equal(junk.status, 'error');
+  assert.match(junk.errorMessage, /not JSON/);
+});
+
+test('Antigravity: a rejected token or a failed request keeps the last good reading as stale', async () => {
+  const memory = new Map();
+  const ok = fakeDeps({ responses: { [AGY_KEY]: { status: 200, body: JSON.stringify(AGY_SUMMARY) } } });
+  await fetchProviderUsage(AGY_PROFILE, agyDeps(ok.deps, { memory }));
+  for (const status of [401, 503, 0]) {
+    const { deps } = fakeDeps({ responses: { [AGY_KEY]: { status, body: '' } } });
+    const usage = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps, { memory }));
+    assert.equal(usage.status, 'ok', `HTTP ${status}`);
+    assert.equal(usage.detail, 'stale', `HTTP ${status}`);
+    assert.equal(usage.limits.length, 2);
+  }
+});
+
+test('parseAgyQuotaSummary: a bucket whose zero remainingFraction was omitted reads 100% used', () => {
+  const limits = parse.parseAgyQuotaSummary({ groups: [{ buckets: [{ window: '5h', resetTime: '2026-10-20T15:00:00Z' }, { bucketId: 'x' }] }] });
+  assert.deepEqual(limits.map((l) => [l.window, l.percentUsed]), [['5h', 100]]);
+});
+
+test('parseAgyCredential treats a token in its last minute as expired', () => {
+  const near = agyTests.parseAgyCredential(agyCred({ expiry: new Date(NOW + 30000).toISOString() }), NOW);
+  assert.equal(near.expired, true);
+});
+
+test('Antigravity: an expired login shows the last good reading as stale, aged past its resets', async () => {
+  const memory = new Map();
+  const { deps, calls } = fakeDeps({ responses: { [AGY_KEY]: { status: 200, body: JSON.stringify(AGY_SUMMARY) } } });
+  await fetchProviderUsage(AGY_PROFILE, agyDeps(deps, { memory }));
+  const later = { ...deps, now: () => Date.parse('2026-10-20T16:00:00Z') };
+  const expiredCred = agyCred({ expiry: new Date(NOW).toISOString() });
+  const stale = await fetchProviderUsage(AGY_PROFILE, agyDeps(later, { cred: expiredCred, memory }));
+  assert.equal(stale.status, 'ok');
+  assert.equal(stale.detail, 'stale');
+  assert.equal(stale.updatedAt, NOW, 'updatedAt is when the reading was taken');
+  assert.match(stale.errorMessage, /expired/);
+  const five = stale.limits.find((l) => l.window === '5h');
+  assert.equal(five.resetsAt, null, 'a passed reset reads as refilled');
+  assert.equal(stale.limits.find((l) => l.window === 'weekly').percentUsed, 53);
+  assert.equal(calls.length, 1, 'no request with an expired token');
+  const fresh = await fetchProviderUsage(AGY_PROFILE, agyDeps(later, { cred: expiredCred, memory: new Map() }));
+  assert.equal(fresh.status, 'unsupported');
+});
+
+test('readAgyKeyring decodes the Windows blob and reports a missing entry', async () => {
+  const blob = Buffer.from(agyCred(), 'utf8').toString('base64');
+  const hit = await agyTests.readAgyKeyring({ platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, run: async (cmd, args) => {
+    assert.equal(cmd, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'absolute path, never a PATH lookup');
+    assert.ok(args.includes('-EncodedCommand'));
+    return { ok: true, stdout: `${blob}\r\n` };
+  } });
+  assert.equal(hit.ok, true);
+  assert.equal(JSON.parse(hit.text).id_token_email, 'mati@example.com');
+  const miss = await agyTests.readAgyKeyring({ platform: 'win32', run: async () => ({ ok: true, stdout: '' }) });
+  assert.equal(miss.ok, false);
+  const failed = await agyTests.readAgyKeyring({ platform: 'win32', run: async () => ({ ok: false, reason: 'powershell.exe timed out' }) });
+  assert.deepEqual(failed, { ok: false, reason: 'powershell.exe timed out' });
+  const mac = await agyTests.readAgyKeyring({ platform: 'darwin', run: async (cmd) => {
+    assert.equal(cmd, '/usr/bin/security');
+    return { ok: true, stdout: `go-keyring-base64:${blob}` };
+  } });
+  assert.equal(mac.ok, true);
+});
+
+test('fetchOtherProvidersUsage reads the agy login once and lists every agy profile', async () => {
+  const { deps, calls } = fakeDeps({ responses: { [AGY_KEY]: { status: 200, body: JSON.stringify(AGY_SUMMARY) } } });
+  const out = await fetchOtherProvidersUsage([
+    AGY_PROFILE,
+    { id: 'claude-cloud', command: 'claude', env: {} },
+    { id: 'agy-2', command: 'agy --mode accept-edits', env: {} },
+  ], agyDeps(deps));
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].profileIds, ['agy', 'agy-2']);
+  assert.equal(calls.length, 1);
 });

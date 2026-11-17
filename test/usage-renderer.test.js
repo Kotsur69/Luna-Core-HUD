@@ -149,3 +149,100 @@ test('the Settings anchor the notice arrow opens exists in index.html', () => {
   assert.ok(html.includes('id="claude-accounts-section"'));
   assert.ok(!html.includes('id="usage-updated"'), 'the visible "updated" line is gone');
 });
+
+// --- which sources a tab shows (usagevisibility.js) --------------------------------
+
+const vis = require('../src/renderer/modules/usagevisibility.js');
+const { cleanUsageVisibility } = require('../src/usagevisibility.js');
+
+const GOOGLE = { providerId: 'antigravity', profileId: 'agy', profileIds: ['agy', 'agy-2'], status: 'ok', limits: [] };
+const CODEX = { providerId: 'codex', profileId: 'cx', status: 'ok', limits: [] };
+
+test('usageTabKind: agy profiles (also deduped ones), other providers, Claude for the rest', () => {
+  const others = [CODEX, GOOGLE];
+  assert.equal(vis.usageTabKind(others, 'agy'), 'agy');
+  assert.equal(vis.usageTabKind(others, 'agy-2'), 'agy');
+  assert.equal(vis.usageTabKind(others, 'cx'), 'other');
+  assert.equal(vis.usageTabKind(others, 'claude-cloud'), 'claude');
+  assert.equal(vis.usageTabKind(others, null), 'claude');
+  assert.equal(vis.usageTabKind(undefined, 'agy'), 'claude');
+  assert.equal(vis.usageTabKind([null, 'x', { profileId: 'agy' }], 'agy'), 'claude', 'entries without providerId are ignored');
+});
+
+test('visibleUsageSources covers every tab kind x rule x Google present', () => {
+  const presets = { claude: vis.USAGE_PRESETS.claude, google: vis.USAGE_PRESETS.google, all: vis.USAGE_PRESETS.all };
+  const want = {
+    // [tab][preset][hasGoogle] -> [claude, google]
+    claudeTab: {
+      claude: { true: [true, false], false: [true, false] },
+      google: { true: [false, true], false: [true, false] },
+      all: { true: [true, true], false: [true, false] },
+    },
+    agyTab: {
+      claude: { true: [true, false], false: [true, false] },
+      google: { true: [false, true], false: [true, false] },
+      all: { true: [true, true], false: [true, false] },
+    },
+  };
+  for (const [tabKey, kind] of [['claudeTab', 'claude'], ['agyTab', 'agy']]) {
+    for (const [presetId, rule] of Object.entries(presets)) {
+      for (const hasGoogle of [true, false]) {
+        const prefs = { claudeTab: vis.USAGE_PRESETS.claude, agyTab: vis.USAGE_PRESETS.google, [tabKey]: rule };
+        const got = vis.visibleUsageSources(kind, prefs, hasGoogle);
+        assert.deepEqual([got.claude, got.google, got.provider], [...want[tabKey][presetId][hasGoogle], false],
+          `${kind} tab, ${presetId}, google ${hasGoogle}`);
+      }
+    }
+  }
+});
+
+test('visibleUsageSources: defaults keep a Claude tab as before and show Google only on agy tabs', () => {
+  assert.deepEqual(vis.visibleUsageSources('claude', undefined, true), { claude: true, google: false, provider: false });
+  assert.deepEqual(vis.visibleUsageSources('agy', null, true), { claude: false, google: true, provider: false });
+  assert.deepEqual(vis.visibleUsageSources('agy', 'garbage', true), { claude: false, google: true, provider: false });
+  assert.deepEqual(vis.visibleUsageSources('other', { claudeTab: vis.USAGE_PRESETS.all }, true), { claude: false, google: false, provider: true });
+});
+
+test('presets round-trip, unknown presets are refused', () => {
+  for (const id of Object.keys(vis.USAGE_PRESETS)) assert.equal(vis.presetOfRule(vis.ruleOfPreset(id)), id);
+  assert.equal(vis.ruleOfPreset('none'), null);
+  assert.equal(vis.ruleOfPreset('__proto__'), null);
+  assert.equal(vis.presetOfRule({ claude: false, google: false }), 'claude');
+  assert.equal(vis.presetOfRule(null), 'claude');
+});
+
+test('the renderer normalizer matches main\'s cleanUsageVisibility', () => {
+  const samples = [
+    undefined, null, 'x', [],
+    { claudeTab: { claude: false, google: true } },
+    { agyTab: { claude: true, google: true }, claudeTab: { claude: 1 } },
+    { claudeTab: { claude: false, google: false }, agyTab: { claude: false, google: false } },
+  ];
+  for (const raw of samples) assert.deepEqual(vis.normalizeUsageVisibility(raw), cleanUsageVisibility(raw), JSON.stringify(raw));
+});
+
+test('googleUsageEntry finds the antigravity entry only', () => {
+  assert.equal(vis.googleUsageEntry([CODEX, GOOGLE]), GOOGLE);
+  assert.equal(vis.googleUsageEntry([CODEX]), null);
+  assert.equal(vis.googleUsageEntry('x'), null);
+});
+
+test('usage visibility strings exist in pl and en, and the Settings selects exist', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/i18n.js'), 'utf8');
+  const enAt = src.indexOf('\n  en: {');
+  const pl = src.slice(0, enAt);
+  const en = src.slice(enAt);
+  const keys = [
+    'usage.google.unavailable', 'usage.google.stale', 'usage.visibility.title', 'usage.visibility.hint',
+    'usage.visibility.claudeTab', 'usage.visibility.agyTab',
+    ...Object.keys(vis.USAGE_PRESETS).map((p) => `usage.visibility.preset.${p}`),
+  ];
+  for (const key of keys) {
+    const plLine = pl.split('\n').find((l) => l.includes(`'${key}':`));
+    assert.ok(plLine, `pl is missing ${key}`);
+    assert.ok(en.includes(`'${key}':`), `en is missing ${key}`);
+    assert.ok(!/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/.test(plLine), `pl ${key} has diacritics`);
+  }
+  const html = fs.readFileSync(path.join(ROOT, 'src/renderer/index.html'), 'utf8');
+  for (const id of ['usage-visibility-section', 'usage-vis-claude', 'usage-vis-agy']) assert.ok(html.includes(`id="${id}"`), id);
+});

@@ -13,6 +13,9 @@
 //   gemini-cli         Google login only: Code Assist retrieveUserQuota with
 //                      the CLI's cached access token (never refreshed here)
 //   openrouter         openrouter.ai/api/v1/key (profile key)
+//   antigravity (agy)  the agy Google login in the OS keyring -> Code Assist
+//                      retrieveUserQuotaSummary (src/agyusage.js); one entry
+//                      for all agy profiles, which share that one login
 //
 // Anything else (an API key with no quota endpoint, FreeLLMAPI, CCR routes)
 // comes back as status 'unsupported' = "not available", never as an error.
@@ -27,6 +30,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const parse = require('./providerusageparse');
+const { fetchAgyUsage } = require('./agyusage');
+const { AGY_TEMPLATE_ID } = require('./agyprofile');
+const { isAgyCommand } = require('./launch');
 
 const REQUEST_TIMEOUT_MS = 8000;
 /** How many newest day folders of Codex rollouts are searched. */
@@ -103,12 +109,13 @@ function envKey(profile, keys) {
  * Which quota source a profile uses. Template first, then the base URL, so a
  * hand-made profile pointing at Z.ai is recognized too.
  * @param {object} profile
- * @returns {'claude'|'local'|'none'|'codex'|'zai'|'kimi-code'|'moonshot'|'gemini'|'openrouter'|'other'}
+ * @returns {'claude'|'local'|'none'|'codex'|'zai'|'kimi-code'|'moonshot'|'gemini'|'antigravity'|'openrouter'|'other'}
  */
 function usageSourceForProfile(profile) {
   if (!profile) return 'none';
   if (typeof profile.command === 'string' && profile.command.trim() === '') return 'none';
   const t = String(profile.templateId || '');
+  if (t === AGY_TEMPLATE_ID || isAgyCommand(typeof profile.command === 'string' ? profile.command : '')) return 'antigravity';
   if (t === 'lm-studio' || t === 'ollama') return 'local';
   if (t === 'codex-cli') return 'codex';
   if (t === 'gemini-cli') return 'gemini';
@@ -137,6 +144,8 @@ function result(profile, status, limits = [], errorMessage = null, extra = {}) {
     isFallback: false,
     updatedAt: extra.now || Date.now(),
     ...(extra.detail ? { detail: extra.detail } : {}),
+    // The login the limits belong to (the agy Google account's email).
+    ...(extra.account ? { account: extra.account } : {}),
   };
 }
 
@@ -279,6 +288,11 @@ async function fetchGemini(profile, deps) {
   return notAvailable(profile, `Gemini quota unavailable (HTTP ${res.status})`, now);
 }
 
+/** Antigravity: the Google account agy is signed in with (src/agyusage.js). */
+function fetchAntigravity(profile, deps) {
+  return fetchAgyUsage(deps, (status, limits, reason, extra) => result(profile, status, limits, reason, extra));
+}
+
 const FETCHERS = {
   codex: fetchCodex,
   zai: fetchZai,
@@ -286,6 +300,7 @@ const FETCHERS = {
   moonshot: fetchMoonshot,
   openrouter: fetchOpenRouter,
   gemini: fetchGemini,
+  antigravity: fetchAntigravity,
 };
 
 /**
@@ -316,16 +331,29 @@ function profilesForUsage(profiles) {
     if (!p || !p.id) return false;
     const source = usageSourceForProfile(p);
     if (SKIPPED_SOURCES.has(source)) return false;
-    const key = `${source}|${envKey(p, ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'FREELLM_API_KEY']) || p.id}`;
+    // Every agy profile runs on the one Google login in the keyring.
+    const key = source === 'antigravity'
+      ? source
+      : `${source}|${envKey(p, ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'FREELLM_API_KEY']) || p.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
-/** Usage for every non-Claude configured provider, in profile order. */
+/**
+ * Usage for every non-Claude configured provider, in profile order. The one
+ * antigravity entry also lists every agy profile id (`profileIds`), so the
+ * renderer knows an agy tab as one even when its profile was deduped away.
+ */
 function fetchOtherProvidersUsage(profiles, deps = {}) {
-  return Promise.all(profilesForUsage(profiles).map((p) => fetchProviderUsage(p, deps)));
+  const agyIds = (Array.isArray(profiles) ? profiles : [])
+    .filter((p) => p && p.id && usageSourceForProfile(p) === 'antigravity')
+    .map((p) => p.id);
+  return Promise.all(profilesForUsage(profiles).map(async (p) => {
+    const entry = await fetchProviderUsage(p, deps);
+    return entry.providerId === 'antigravity' ? { ...entry, profileIds: agyIds } : entry;
+  }));
 }
 
 module.exports = {
