@@ -59,7 +59,7 @@ const READ_VERSIONS = new Set([1, 2]);
 const isKnownVersion = (v) => READ_VERSIONS.has(v);
 // src/uiprefs.js ORCHESTRA_WORKER_MODELS (this file also runs on the phone,
 // which cannot require uiprefs; test/orchestra-worker-model.test.js keeps them in line).
-const PLAN_WORKER_MODELS = ['opus', 'sonnet', 'fable', 'plan'];
+const PLAN_WORKER_MODELS = ['opus', 'sonnet', 'fable', 'agy', 'plan'];
 const HUB_MAX_LINES = 10;
 const HUB_MAX_LINE = 200;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;

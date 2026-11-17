@@ -62,6 +62,9 @@ const { resolveLocalLaunch, prepareLocalLaunch, prepareChainLaunch, launchWhenRe
 const { ensureFallbackProxy, stopAllFallbackProxies, onRoute: onFreeRoute } = require('./fallbackproxy');
 const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
+// The Antigravity (agy) profile and env for worker tabs and headless jobs.
+const { agyProfileId, agyEnv } = require('./agyprofile');
+const { createAgyIntake } = require('./agyintake');
 const { pickCodingProfileId } = require('./orchestraHybrid');
 // Free God Mode v2 plan runs: the plan-worker lockdown and its profile.
 const { workerLaunchCommand, lockedRestartCommand, planProfileFrom } = require('./orchestraPlanRunLaunch');
@@ -91,6 +94,7 @@ const {
   withAccountResume,
   findExecutable,
   isClaudeCommand,
+  isAgyCommand,
 } = require('./launch');
 // Claude account failover (src/claudeaccounts.js): several subscriptions, one
 // harness. The active account's token rides in every plain Claude launch.
@@ -618,6 +622,10 @@ function sessionSummary(s) {
     alive: s.alive || s.preparing === true,
     // 'ready' | 'off' | 'none' | null - drives the to-do widget's ✨ button.
     todoTools: s.todoTools || null,
+    // 'agy' for an Antigravity tab (✨ then words its prompt for agy), else null.
+    todoCli: s.todoCli || null,
+    // An agy tab's own intake server entry (src/agyintake.js), named in the ✨ prompt.
+    todoServer: s.todoServer || null,
     // Whether this tab's `claude` started with the memory project card: the
     // work map's Memory station mark. null = not a `claude` tab, or not started yet.
     memoryCard: typeof s.memoryCard === 'boolean' ? s.memoryCard : null,
@@ -1313,6 +1321,8 @@ const intakeServer = new IntakeServer({
     };
   },
 });
+// agy tabs reach the same server through an entry in agy's own MCP config (src/agyintake.js).
+const agyIntake = createAgyIntake({ log: (line) => console.error(line) });
 
 // Luna's Work asset tools (src/lunasworkAssetTools.js): luna_asset_blender /
 // _comfy / _higgsfield / _search / _import. Built per request from the per-PC
@@ -1381,6 +1391,12 @@ function lunasworkFreeEnv() {
   const id = pickFreeProfileId(profiles, loadProviders().providers, loadChains());
   const profile = id ? getProfile(profiles, id) : null;
   return profile ? withClaudeOnPath(buildSessionEnv(process.env, profile.env || {})) : null;
+}
+
+/** Env of the first Antigravity (agy) profile (src/agyprofile.js), or null. */
+function lunasworkAgyEnv() {
+  const id = agyProfileId(profiles);
+  return id ? agyEnv(getProfile(profiles, id)) : null;
 }
 
 // Free God Mode v2 "Approve plan" (src/orchestraPlanApprove.js): the plan's
@@ -1557,6 +1573,9 @@ const orchestraCtx = {
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
+  // Worker tabs on the Antigravity CLI: its profile and env (src/agyprofile.js).
+  agyProfileId: () => agyProfileId(profiles),
+  agyEnv: () => lunasworkAgyEnv(),
   // Hybrid runs (F6c): free packages run on 'FreeLLMAPI - coding', never auto:easy.
   codingProfileId: () => pickCodingProfileId(profiles, loadProviders().providers, loadChains()),
   planRunProfile: () => planProfileFrom(profiles),
@@ -1650,6 +1669,8 @@ const lunaswork = createLunasWorkRuntime({
   godModeCheckCommand: () => readUiPrefs().orchestraCheckCommand,
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),
+  // Headless jobs on the Antigravity CLI (src/agyprofile.js).
+  agyEnv: () => lunasworkAgyEnv(),
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   // Every iteration merges into the base branch: Mati confirms it natively,
@@ -1977,6 +1998,8 @@ function spawnInto(session, profile, launch = null) {
     if (session.proc !== proc) return;
     session.proc = null;
     session.alive = false;
+    // An agy tab's server entry leaves agy's config with the tab's process.
+    agyIntake.unregister(session.id);
     statusBoard.exited(session.id);
     send('pty:exit', { sessionId: session.id, code: exitCode });
     broadcastSessions();
@@ -2133,7 +2156,11 @@ function spawnInto(session, profile, launch = null) {
   // Whether the to-do widget's ✨ can work in this tab - see intakeState().
   // null while a start command is still on its way; a bare shell is 'none'.
   session.todoTools = startCommand ? null : 'none';
+  session.todoCli = null;
+  session.todoServer = null;
   session.memoryCard = null;
+  // A restart (maybe under another profile) drops the previous launch's agy entry.
+  agyIntake.unregister(session.id);
   if (startCommand) {
     const intakeConfig = prepareIntake(session).catch(() => null);
     setTimeout(() => {
@@ -2141,15 +2168,21 @@ function spawnInto(session, profile, launch = null) {
         if (session.proc !== proc) return;
         // withIntakeMcp, plus a God Mode plan worker's per-session config (orchestraFollowupsLaunch.js).
         const launched = withGodModeMcp(startCommand, isOverride ? null : configPath, session.launchTask || null);
-        // Luna Core Memory phase 3: the project card rides in the system prompt.
-        // The memory tools come with the intake server, so the card only names
-        // them when that was attached.
-        const hasTools = intakeState(startCommand, launched) === 'ready';
+        // agy takes no MCP flag: its tab's server goes into agy's own config instead.
+        const agy = !isOverride && isAgyCommand(startCommand);
+        const agyServer = agy ? agyIntake.register(session.id, configPath) : null;
+        // Luna Core Memory phase 3: the project card rides in the system prompt
+        // (agy: in the first prompt). The memory tools come with the intake
+        // server, so the card only names them when that was attached.
+        const hasTools = intakeState(startCommand, launched, Boolean(agyServer)) === 'ready';
         const claude = !isOverride && isClaudeCommand(startCommand);
-        const carded = claude ? withMemoryCard(launched, prepareCard(session, hasTools)) : launched;
+        const carded = claude || agy ? withMemoryCard(launched, prepareCard(session, hasTools)) : launched;
         proc.write(`${carded}\r`);
-        session.todoTools = intakeState(startCommand, launched);
-        session.memoryCard = claude ? logCardStart(session, memoryCardLoaded(launched, carded), hasTools) : null;
+        session.todoTools = intakeState(startCommand, launched, Boolean(agyServer));
+        // An override agy command gets no server, but ✨ still words its state for agy.
+        session.todoCli = isAgyCommand(startCommand) ? 'agy' : null;
+        session.todoServer = agyServer;
+        session.memoryCard = claude || agy ? logCardStart(session, memoryCardLoaded(launched, carded), hasTools) : null;
         broadcastSessions();
       });
     }, 600);
@@ -2349,6 +2382,7 @@ function closeSession(sessionId) {
   if (session.localModelWatcher) session.localModelWatcher.stop();
   intakeServer.revoke(sessionId);
   removeSessionConfig(userDir(), sessionId);
+  agyIntake.unregister(sessionId);
   removeCard(userDir(), sessionId);
   overnight.forgetSession(sessionId);
   orchestraRuns.onSessionClosed(sessionId);
@@ -4539,6 +4573,8 @@ app.on('window-all-closed', () => {
     removeSessionConfig(userDir(), session.id);
     removeCard(userDir(), session.id);
   }
+  // Every agy entry this run wrote leaves agy's config with the app.
+  agyIntake.unregisterAll();
   if (memoryCapture) memoryCapture.stop();
   if (memoryDecay) memoryDecay.stop();
   intakeServer.stop().catch(() => {});

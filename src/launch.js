@@ -18,6 +18,7 @@
 
 const path = require('path');
 const { isEffort } = require('./efforts');
+const { AGY_MODEL } = require('./claudeModels');
 
 // Flags meaning "the session id is already decided" - the CLI resumes an
 // existing conversation, or the profile stated an id itself. Adding a second
@@ -25,11 +26,45 @@ const { isEffort } = require('./efforts');
 const SESSION_ID_DECIDED =
   /(^|\s)(-c|--continue|-r|--resume|--from-pr|--fork-session|--session-id)(\s|$)/;
 
+// ---- Antigravity CLI (`agy`) --------------------------------------------------
+// agy's flags, taken from the strings and changelog built into agy.exe 1.5.9 on
+// 2026-11-16: `agy --help` printed nothing on this machine (it hung, also in a
+// pseudo-console), so none of this comes from a help run.
+//   --prompt-interactive <text>   first prompt; the session stays interactive (-i).
+//                                 agy reads a prompt ONLY from -p/--print,
+//                                 -i/--prompt-interactive or stdin: a positional
+//                                 argument (what `claude` takes) is ignored.
+//   --conversation=<id>           resume a conversation by id (agy prints this form itself)
+//   --continue                    resume the latest conversation
+//   --add-dir <path>              an extra folder the agent may read
+//   --mode accept-edits           auto-accept file edits
+//   --dangerously-skip-permissions
+// Not found, so never injected: a flag that SETS a new session's id (no
+// pinning for agy tabs), and any flag that passes MCP servers (agy reads them
+// only from ~/.gemini/config/mcp_config.json - src/agyintake.js writes there).
+// Claude-only task flags (--model with a Claude alias, --effort, allow / deny
+// tool rules, a tool kit's --mcp-config) have no agy equivalent and are dropped.
+const AGY_PROMPT_FLAG = '--prompt-interactive';
+/** The command already brings its own first prompt (or runs headless). */
+const AGY_PROMPT_DECIDED = /(^|\s)(-i|--prompt-interactive|-p|--print|--prompt)(\s|=|$)/;
+/** The command already resumes a conversation. */
+const AGY_SESSION_DECIDED = /(^|\s)(-c|--continue|--conversation)(\s|=|$)/;
+/** The command already decides how agy asks for permissions. */
+const AGY_PERMISSION_DECIDED = /(^|\s)(--mode|--dangerously-skip-permissions)(\s|=|$)/;
+/** Worker permission modes (WORKER_PERMISSION_MODES) in agy's syntax. */
+const AGY_PERMISSION_FLAGS = Object.freeze({
+  acceptEdits: Object.freeze(['--mode', 'accept-edits']),
+  bypassPermissions: Object.freeze(['--dangerously-skip-permissions']),
+});
+/** First message of an agy tab resumed by LunaCore. No quotes in it. */
+const AGY_RESUME_MESSAGE = 'LunaCore restarted this session. Continue exactly where you left off.';
+
 /**
  * Appends `--session-id <uuid>` to a start command when it is safe to do so.
  *
  * Conservative by design: anything that is not a plain `claude` launch is left
- * alone and keeps the heuristic fallback.
+ * alone and keeps the heuristic fallback. That includes `agy`: it has no flag
+ * that sets a new session's id, so an agy tab is never pinned.
  * @param {string} command full start command, e.g. "claude --model opus"
  * @param {string} uuid session id to pin
  * @returns {string|null} modified command, or null when it must not be pinned
@@ -55,6 +90,10 @@ function withSessionId(command, uuid) {
  * command already running under --strict-mcp-config (a lean local-model tab
  * asked for NO extra MCP servers - honour that). The path is single-quoted for
  * the shell it is typed into, so one containing a quote is refused.
+ *
+ * An `agy` command is returned unchanged as well: agy takes no MCP flag, so
+ * its tab's intake server goes into agy's own config file instead
+ * (src/agyintake.js), and intakeState() is told whether that worked.
  * @param {string} command
  * @param {string|null} configPath
  * @returns {string} the command, with or without the flag
@@ -79,6 +118,11 @@ const CARD_DECIDED = /(^|\s)(--strict-mcp-config|--bare|--(append-)?system-promp
  * rules as withIntakeMcp: other programs and commands matching CARD_DECIDED
  * are left alone, and a path that would break the single-quoted shell
  * argument is refused.
+ *
+ * agy has no system-prompt flag, so an `agy` tab gets the card as its first
+ * prompt instead (agyMemoryCard). Not when the command already brings a first
+ * prompt (a God Mode worker's brief, which carries the project memory itself)
+ * or resumes a conversation that already had its card.
  * @param {string} command
  * @param {string|null} cardPath
  * @returns {string} the command, with or without the flag
@@ -87,8 +131,26 @@ function withMemoryCard(command, cardPath) {
   const cmd = String(command || '').trim();
   // U+2018-U+201B: PowerShell treats the typographic quotes as ' too.
   if (!cmd || typeof cardPath !== 'string' || !cardPath || /['`\r\n‘-‛]/.test(cardPath)) return cmd;
+  if (isAgyCommand(cmd)) return agyMemoryCard(cmd, cardPath);
   if (!isClaudeCommand(cmd) || CARD_DECIDED.test(cmd)) return cmd;
   return `${cmd} --append-system-prompt-file '${cardPath}'`;
+}
+
+/**
+ * withMemoryCard() for an `agy` command: the card is read as the first
+ * prompt, and its folder is added so reading it asks for no permission.
+ * @param {string} cmd trimmed agy command
+ * @param {string} cardPath already checked to fit single quotes
+ * @returns {string}
+ */
+function agyMemoryCard(cmd, cardPath) {
+  if (AGY_PROMPT_DECIDED.test(cmd) || AGY_SESSION_DECIDED.test(cmd) || PATH_CONTROL_RE.test(cardPath)) return cmd;
+  const [bin, ...rest] = cmd.split(/\s+/);
+  const message =
+    `Read the LunaCore project memory card in the file \`${cardPath}\`. ` +
+    'It is background about this project, not a task: change nothing, ' +
+    'answer in one short line that you have read it, then wait for my request.';
+  return [bin, AGY_PROMPT_FLAG, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(cardPath)}'`].join(' ');
 }
 
 /**
@@ -96,11 +158,15 @@ function withMemoryCard(command, cardPath) {
  * widget's "rewrite with Claude" button: 'ready' when withIntakeMcp() really
  * attached the config, 'off' for a `claude` launched without it (tools turned
  * off, no config, or --strict-mcp-config), 'none' when the tab is not Claude.
+ * An `agy` tab's command never changes (its server sits in agy's config file),
+ * so for agy the caller says whether that entry was written.
  * @param {string} command the start command as configured
  * @param {string} launched what withIntakeMcp() turned it into
+ * @param {boolean} [agyRegistered] agy only: src/agyintake.js wrote the tab's server
  * @returns {'ready'|'off'|'none'}
  */
-function intakeState(command, launched) {
+function intakeState(command, launched, agyRegistered = false) {
+  if (isAgyCommand(command)) return agyRegistered === true ? 'ready' : 'off';
   if (!isClaudeCommand(command)) return 'none';
   return launched !== String(command || '').trim() ? 'ready' : 'off';
 }
@@ -117,10 +183,31 @@ function memoryCardLoaded(launched, carded) {
   return typeof carded === 'string' && carded !== withMemoryCard(launched, null);
 }
 
+/**
+ * The program a start command runs: its first word, unquoted, without folder
+ * or Windows launcher extension, lowercased ("C:\x\Claude.EXE --y" -> "claude").
+ * @param {string} command
+ * @returns {string}
+ */
+function commandBinary(command) {
+  const first = String(command || '').trim().split(/\s+/)[0].replace(/^["']|["']$/g, '');
+  return path.basename(first).replace(/\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();
+}
+
 /** True when a start command launches the `claude` CLI itself. */
 function isClaudeCommand(command) {
-  const first = String(command || '').trim().split(/\s+/)[0].replace(/^["']|["']$/g, '');
-  return path.basename(first).replace(/\.(exe|cmd|bat|ps1)$/i, '').toLowerCase() === 'claude';
+  return commandBinary(command) === 'claude';
+}
+
+/**
+ * True when a start command launches the Antigravity CLI: `agy`, `agy.exe`
+ * or `agy.cmd`, with or without a folder, in any letter case - the same rule
+ * as isClaudeCommand().
+ * @param {string} command
+ * @returns {boolean}
+ */
+function isAgyCommand(command) {
+  return commandBinary(command) === 'agy';
 }
 
 // Same quote rule as the brief path: a first message that would break the
@@ -142,6 +229,9 @@ const UNSAFE_QUOTE_RE = /['`\r\n‘-‛]/;
  *
  * `permissionMode` (slice 4, Settings -> God Mode workers) is appended unless
  * the profile already decides it - same rule as `--model`. So is `effort`.
+ *
+ * An `agy` command gets the same first message through --prompt-interactive
+ * (agyTaskBrief); a model of 'agy' never becomes `claude --model agy`.
  * @param {string} command
  * @param {{briefPath:string, model?:string|null, effort?:string|null, permissionMode?:string|null}} task
  * @param {string} [firstMessage] replaces "read your brief" (a resume after an
@@ -155,15 +245,17 @@ function withTaskBrief(command, task, firstMessage) {
   if (task && task.lockdown) return null;
   const briefPath = task && typeof task.briefPath === 'string' ? task.briefPath : '';
   // U+2018-U+201B: PowerShell treats the typographic quotes as ' too.
-  if (!isClaudeCommand(cmd) || !briefPath || /['`\r\n‘-‛]/.test(briefPath)) return null;
+  if (!briefPath || /['`\r\n‘-‛]/.test(briefPath)) return null;
+  if (isAgyCommand(cmd)) {
+    // A first message holding a control character falls back to "read your brief".
+    const first = typeof firstMessage === 'string' && PATH_CONTROL_RE.test(firstMessage) ? undefined : firstMessage;
+    return agyTaskBrief(cmd, task, briefMessage(briefPath, first));
+  }
+  if (!isClaudeCommand(cmd)) return null;
   const [bin, ...rest] = cmd.split(/\s+/);
-  // Backticks around the path: unquoted, the model cut a path at its first
-  // space and asked for the wrong file (verified live).
-  const message = typeof firstMessage === 'string' && firstMessage && !UNSAFE_QUOTE_RE.test(firstMessage)
-    ? firstMessage
-    : `Your task brief is in the file \`${briefPath}\` - read it first, then carry it out.`;
+  const message = briefMessage(briefPath, firstMessage);
   const parts = [bin, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(briefPath)}'`];
-  if (task.model && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
+  if (task.model && task.model !== AGY_MODEL && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
     parts.push('--model', task.model);
   }
   // Only the four God Mode levels are ever appended - never `low`.
@@ -182,6 +274,61 @@ function withTaskBrief(command, task, firstMessage) {
   }
   parts.push(...kitFlags(task));
   return parts.join(' ');
+}
+
+/**
+ * A worker's first message: "read your brief", or `firstMessage` when it fits
+ * the single quotes. Backticks around the path: unquoted, the model cut a path
+ * at its first space and asked for the wrong file (verified live).
+ * @param {string} briefPath
+ * @param {string|undefined} firstMessage
+ * @returns {string}
+ */
+function briefMessage(briefPath, firstMessage) {
+  return typeof firstMessage === 'string' && firstMessage && !UNSAFE_QUOTE_RE.test(firstMessage)
+    ? firstMessage
+    : `Your task brief is in the file \`${briefPath}\` - read it first, then carry it out.`;
+}
+
+/**
+ * withTaskBrief() for an `agy` command: the message goes in through
+ * --prompt-interactive right after the binary, the brief's folder and a tool
+ * kit's art folders through --add-dir, and the worker permission mode in
+ * agy's syntax. Null when the command brings its own first prompt (two
+ * prompts would fight over the session).
+ * @param {string} cmd trimmed agy command
+ * @param {object} task the worker task (briefPath already checked)
+ * @param {string} message the first message, already checked to fit single quotes
+ * @returns {string|null}
+ */
+function agyTaskBrief(cmd, task, message) {
+  if (AGY_PROMPT_DECIDED.test(cmd)) return null;
+  // A control character would be typed into the PTY as a keystroke (Ctrl-C...).
+  if (PATH_CONTROL_RE.test(message) || PATH_CONTROL_RE.test(task.briefPath)) return null;
+  const [bin, ...rest] = cmd.split(/\s+/);
+  const parts = [bin, AGY_PROMPT_FLAG, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(task.briefPath)}'`];
+  parts.push(...agyPermissionFlags(cmd, task));
+  for (const dir of Array.isArray(task.addDirs) ? task.addDirs : []) {
+    const quoted = quotablePath(dir);
+    if (quoted) parts.push('--add-dir', quoted);
+  }
+  return parts.join(' ');
+}
+
+/**
+ * The agy flags of a worker's permission mode, unless the command decides it.
+ * agy cannot take deny rules, so a task that carries any (even ones Claude
+ * would drop as malformed) gets no permission flag at all: agy then asks
+ * before every edit and command instead of auto-accepting a denied one.
+ * @param {string} cmd
+ * @param {object} task
+ * @returns {string[]}
+ */
+function agyPermissionFlags(cmd, task) {
+  if (AGY_PERMISSION_DECIDED.test(cmd)) return [];
+  if (Array.isArray(task.disallowedTools) && task.disallowedTools.length > 0) return [];
+  const mode = task.permissionMode;
+  return WORKER_PERMISSION_MODES.includes(mode) ? [...AGY_PERMISSION_FLAGS[mode]] : [];
 }
 
 // eslint-disable-next-line no-control-regex
@@ -230,6 +377,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 function withAccountResume(command, uuid, task = null, message = null) {
   const cmd = String(command || '').trim();
+  if (isAgyCommand(cmd)) return agyResume(cmd, uuid, task, message);
   if (!isClaudeCommand(cmd) || !UUID_RE.test(String(uuid || '')) || SESSION_ID_DECIDED.test(cmd)) return null;
   // A plan-run worker is never resumed without its lockdown: the caller waits instead.
   if (task && task.lockdown) return null;
@@ -241,15 +389,44 @@ function withAccountResume(command, uuid, task = null, message = null) {
 }
 
 /**
+ * withAccountResume() for an `agy` command: the same conversation through
+ * `--conversation=<id>`, with a neutral first message (agy runs on a Google
+ * account, so the Claude-account message would be wrong). A worker keeps its
+ * agy flags via withTaskBrief, and is not resumed (null) when they cannot be
+ * rebuilt: without them it would stop at every permission prompt.
+ * @param {string} cmd trimmed agy command
+ * @param {string} uuid conversation id (agy's are UUIDs too)
+ * @param {object|null} task
+ * @param {string|null} message
+ * @returns {string|null}
+ */
+function agyResume(cmd, uuid, task, message) {
+  if (!UUID_RE.test(String(uuid || '')) || AGY_SESSION_DECIDED.test(cmd) || AGY_PROMPT_DECIDED.test(cmd)) return null;
+  if (task && task.lockdown) return null;
+  const safe = typeof message === 'string' && message && !UNSAFE_QUOTE_RE.test(message) && !PATH_CONTROL_RE.test(message);
+  const first = safe ? message : AGY_RESUME_MESSAGE;
+  if (task) {
+    const withFlags = withTaskBrief(cmd, task, first);
+    return withFlags ? `${withFlags} --conversation=${uuid}` : null;
+  }
+  const [bin, ...rest] = cmd.split(/\s+/);
+  return [bin, AGY_PROMPT_FLAG, `'${first}'`, ...rest, `--conversation=${uuid}`].join(' ');
+}
+
+/**
  * The start command that reopens conversation `uuid` and sends nothing: the
- * tabs of the last run after a crash (src/tabResume.js). Null when the command
- * is not a plain `claude` launch or already decides its own session.
+ * tabs of the last run after a crash (src/tabResume.js). An `agy` command
+ * resumes with `--conversation=<id>`. Null when the command is neither a
+ * plain `claude` nor a plain `agy` launch, or already decides its own session.
  * @param {string} command the profile's start command
  * @param {string} uuid transcript id to resume
  * @returns {string|null}
  */
 function withPlainResume(command, uuid) {
   const cmd = String(command || '').trim();
+  if (isAgyCommand(cmd)) {
+    return UUID_RE.test(String(uuid || '')) && !AGY_SESSION_DECIDED.test(cmd) ? `${cmd} --conversation=${uuid}` : null;
+  }
   if (!isClaudeCommand(cmd) || !UUID_RE.test(String(uuid || '')) || SESSION_ID_DECIDED.test(cmd)) return null;
   return `${cmd} --resume ${uuid}`;
 }
@@ -320,8 +497,10 @@ module.exports = {
   withTaskBrief,
   withAccountResume,
   ACCOUNT_RESUME_MESSAGE,
+  AGY_RESUME_MESSAGE,
   WORKER_PERMISSION_MODES,
   isClaudeCommand,
+  isAgyCommand,
   SESSION_ID_DECIDED,
   findExecutable,
   WIN_EXTS,

@@ -14,7 +14,7 @@ export const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 /** The mode a new draft starts on: no merge without Mati picking it. */
 export const DEFAULT_INTEGRATION = 'pr';
 /** Every worker model the PC accepts (src/uiprefs.js ORCHESTRA_WORKER_MODELS). */
-export const WORKER_MODELS = ['opus', 'sonnet', 'fable', 'plan'];
+export const WORKER_MODELS = ['opus', 'sonnet', 'fable', 'agy', 'plan'];
 /** The PC's default when the snapshot names none. */
 export const DEFAULT_WORKER_MODEL = 'opus';
 

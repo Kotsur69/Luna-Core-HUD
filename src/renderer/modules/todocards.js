@@ -127,19 +127,59 @@ export function editTodo(list, at, fields) {
   return current.map((item, i) => (i === index ? edited : item));
 }
 
+// An agy tab's intake server entry name (main's src/agyintake.js
+// agyServerName: `lunacore-<sessionId>`). Anything else is not named in a prompt.
+const AGY_SERVER_RE = /^lunacore-[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The interview and save steps for an Antigravity (`agy`) tab: agy has no
+ * AskUserQuestion tool, and every running agy tab's server is visible to
+ * every agy session, so the prompt names this tab's own server.
+ * @param {number} at
+ * @param {string} keepOriginal
+ * @param {string|null} server
+ * @returns {string[]}
+ */
+function agyRefineSteps(at, keepOriginal, server) {
+  const tool = server ? `the luna_todo_update tool of the \`${server}\` MCP server` : 'the luna_todo_update tool';
+  return [
+    '2. Interview me in rounds of up to 4 numbered questions, each with concrete options to pick from, ' +
+      'until nothing about WHAT to build, WHERE, and HOW is ambiguous.',
+    '3. Show me the draft card and wait for my OK.',
+    `4. Save it with ${tool} (at=${at}): text = short imperative title; ` +
+      'details = self-contained what/where/how; acceptance = checkable done-when bullets; ' +
+      `files; verify; size${keepOriginal}.`,
+  ];
+}
+
 /**
  * What the rewrite button sends to the active Claude tab: an instruction to
  * interview the user about this to-do and then rewrite it in place through
  * the intake MCP server's luna_todo_update. A plain note's text is recorded
  * as `original` on the first rewrite; a card that already has one keeps it.
+ * An Antigravity tab (`agent.cli === 'agy'`) gets the same task in words agy
+ * can follow (agyRefineSteps); without `agent` the Claude prompt is unchanged.
  * @param {{text:string, at:number, original?:string}} item
+ * @param {{cli?:string|null, server?:string|null}} [agent] the active tab's CLI
  * @returns {string}
  */
-export function refinePrompt(item) {
+export function refinePrompt(item, agent) {
   const refined = isCard(item);
   const keepOriginal = !refined && !item.original
     ? '; and set `original` to my note exactly as quoted above'
     : '. Leave `original` alone';
+  const agy = Boolean(agent) && agent.cli === 'agy';
+  const server = agy && typeof agent.server === 'string' && AGY_SERVER_RE.test(agent.server) ? agent.server : null;
+  const steps = agy
+    ? agyRefineSteps(item.at, keepOriginal, server)
+    : [
+      '2. Interview me with AskUserQuestion, in rounds of up to 4 questions with concrete options, ' +
+        'until nothing about WHAT to build, WHERE, and HOW is ambiguous.',
+      '3. Show me the draft card and wait for my OK.',
+      `4. Save it with luna_todo_update (at=${item.at}): text = short imperative title; ` +
+        'details = self-contained what/where/how; acceptance = checkable done-when bullets; ' +
+        `files; verify; size${keepOriginal}.`,
+    ];
   return [
     `Rewrite my LunaCore to-do card at=${item.at} into a full, buildable task card. ` +
       (refined
@@ -151,12 +191,7 @@ export function refinePrompt(item) {
       `${cardPrompt(item).replace(/"""/g, '"​""')}\n"""`,
     [
       '1. First read the code this touches, so you only ask what the code cannot answer.',
-      '2. Interview me with AskUserQuestion, in rounds of up to 4 questions with concrete options, ' +
-        'until nothing about WHAT to build, WHERE, and HOW is ambiguous.',
-      '3. Show me the draft card and wait for my OK.',
-      `4. Save it with luna_todo_update (at=${item.at}): text = short imperative title; ` +
-        'details = self-contained what/where/how; acceptance = checkable done-when bullets; ' +
-        `files; verify; size${keepOriginal}.`,
+      ...steps,
       'Do not implement anything - this only rewrites the to-do.',
     ].join('\n'),
   ].join('\n\n');

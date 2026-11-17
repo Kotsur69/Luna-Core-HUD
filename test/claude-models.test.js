@@ -41,6 +41,21 @@ test('claudeModels: four aliases weakest to strongest, each with a label', () =>
   assert.equal(models.strongerModel('gpt-5', undefined), null);
 });
 
+test('agy is a worker-model choice, never a Claude model', () => {
+  assert.equal(models.AGY_MODEL, 'agy');
+  assert.equal(models.CLAUDE_MODELS.includes('agy'), false, 'agy is no `claude --model` alias');
+  assert.equal(models.isClaudeModel('agy'), false);
+  assert.equal(models.MODEL_RANK.agy, undefined);
+  assert.equal(models.strongerModel('agy', 'sonnet'), 'sonnet', 'agy never wins a Claude strength comparison');
+  assert.deepEqual([...models.WORKER_MODEL_CHOICES], ['haiku', 'sonnet', 'opus', 'fable', 'agy']);
+  for (const ok of ['agy', 'opus', 'fable']) assert.equal(models.isWorkerModelChoice(ok), true, ok);
+  for (const bad of ['AGY', 'agy.exe', 'antigravity', 'gemini', 'plan', '', null, undefined, 5, ['agy']]) {
+    assert.equal(models.isWorkerModelChoice(bad), false, String(bad));
+  }
+  // A Claude worker task that names agy gets no `--model agy`.
+  assert.doesNotMatch(withTaskBrief('claude', { briefPath: 'C:/tasks/b.md', model: 'agy' }), /--model/);
+});
+
 test("Luna's Work role models: fable is a valid choice, the defaults did not move", () => {
   assert.deepEqual(rules.MODEL_CHOICES, ['opus', 'sonnet', 'haiku', 'fable', 'auto']);
   assert.deepEqual(rules.DEFAULT_MODELS, {
@@ -93,7 +108,7 @@ test('God Mode: the planner is offered sonnet / opus only, but a fable package v
 });
 
 test('God Mode worker / planner model settings accept fable; defaults did not move', () => {
-  assert.deepEqual(uiprefs.ORCHESTRA_WORKER_MODELS, ['opus', 'sonnet', 'fable', 'plan']);
+  assert.deepEqual(uiprefs.ORCHESTRA_WORKER_MODELS, ['opus', 'sonnet', 'fable', 'agy', 'plan']);
   assert.ok(plan.PLANNER_MODELS.includes('fable'));
   assert.equal(plan.PLANNER_MODEL, 'opus');
   // A worker tab launched on fable gets `--model fable`.

@@ -10,14 +10,14 @@
 'use strict';
 
 /** src/uiprefs.js ORCHESTRA_WORKER_MODELS. Main allow-lists the choice again. */
-export const WORKER_MODELS = ['opus', 'sonnet', 'fable', 'plan'];
+export const WORKER_MODELS = ['opus', 'sonnet', 'fable', 'agy', 'plan'];
 export const DEFAULT_WORKER_MODEL = 'opus';
 /** A 'plan' run package the planner gave no model runs here (main does the same). */
 const PLAN_FALLBACK_MODEL = 'opus';
 /** src/orchestraWorkers.js FREE_PACKAGE_CLAUDE_MODEL: a hybrid "free" package's Claude model. */
 const FREE_PACKAGE_CLAUDE_MODEL = 'sonnet';
-/** Product names of the Claude models a worker can run on. */
-const MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', fable: 'Fable', haiku: 'Haiku' };
+/** Product names of the models a worker can run on (agy = the Antigravity CLI). */
+const MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', fable: 'Fable', haiku: 'Haiku', agy: 'Antigravity' };
 
 /** One of WORKER_MODELS, else null. */
 export function normalizeWorkerModel(value) {
