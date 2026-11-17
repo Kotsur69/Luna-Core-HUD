@@ -1490,7 +1490,18 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .usage-refresh.is-spinning { animation: usage-spin 0.6s linear infinite; }
 @keyframes usage-spin { to { transform: rotate(360deg); } }
 
-.usage { display: flex; flex-direction: column; gap: 10px; }
+/* The tile body is ONE grid with the usage columns (see .usage-grid below):
+   Claude's grid, the Google block and its grid are subgrids of it, so every
+   bar of every block sits in the same column and comes out the same size. */
+.usage {
+  --usage-cols: auto auto minmax(0, max-content) minmax(24px, 1fr) auto auto;
+  display: grid;
+  grid-template-columns: var(--usage-cols);
+  column-gap: var(--space-2);
+  row-gap: var(--space-5);
+  min-width: 0;
+}
+.usage > * { grid-column: 1 / -1; min-width: 0; }
 .usage-row { display: flex; flex-direction: column; gap: 3px; }
 .usage-row__head {
   display: flex;
@@ -1528,15 +1539,19 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .orchestra__wait { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 /* A non-Claude provider's limits - shown alone, for the active tab's profile. */
 .usage-provider {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  display: grid;
+  grid-template-columns: subgrid;
+  row-gap: var(--space-3);
+  min-width: 0;
 }
+.usage-provider > * { grid-column: 1 / -1; min-width: 0; }
 .usage-provider__title { font-size: var(--fs-sm); font-weight: 700; }
 /* Compact usage grid (modules/usage.js usageGrid): one line per window x
    account. Every line is a subgrid of one shared grid, so the bar, percent
    and reset columns line up across all lines. Columns: window | active dot |
-   account | bar | percent | reset; the --solo variant drops dot + account. */
+   account | bar | percent | reset; the --solo variant has no dot + account
+   cells, its window label spans those columns instead. Inside the tile body
+   the grid is itself a subgrid of .usage, so it lines up with other blocks. */
 .usage-grid {
   display: grid;
   grid-template-columns: auto auto minmax(0, max-content) minmax(24px, 1fr) auto auto;
@@ -1548,7 +1563,8 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
   white-space: nowrap;
   min-width: 0;
 }
-.usage-grid--solo { grid-template-columns: auto minmax(24px, 1fr) auto auto; }
+.usage .usage-grid { grid-template-columns: subgrid; }
+.usage-grid--solo .usage-line__win { grid-column: 1 / 4; }
 .usage-line {
   display: grid;
   grid-template-columns: subgrid;
@@ -1571,6 +1587,11 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    says. The window label stays - it heads the whole group, not this account. */
 .usage-line.is-blocked > :not(.usage-line__win) { opacity: 0.4; }
 .usage-line.is-blocked .usage-bar__fill { background: var(--text-dim); }
+/* A spent limit (100%): the same stepped-back look until its own reset. The
+   window label dims too when the line is the only one in its group. */
+.usage-line.is-exhausted > :not(.usage-line__win),
+.usage-line.is-exhausted.is-sole > .usage-line__win { opacity: 0.4; }
+.usage-line.is-exhausted .usage-bar__fill { background: var(--text-dim); }
 /* A value-only limit (balance, credits) fills bar + percent + reset. */
 .usage-line__value { grid-column: span 3; text-align: right; font-weight: 700; }
 /* An account without bars: one muted line where its bar would be. */
