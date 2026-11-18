@@ -21,6 +21,7 @@
 'use strict';
 
 import { t } from './util.js';
+import { onLangChange } from './bus.js';
 import { openLifeTab } from './lifepanel.js';
 import {
   barList,
@@ -41,6 +42,7 @@ import { errorText } from './missionshared.js';
 let view = null;
 let pending = null; // kind waiting for an overwrite confirm
 let running = null;
+let lastErr = '';
 let rootEl = null;
 let shown = 'daily';
 
@@ -196,14 +198,18 @@ async function load(req = {}) {
     // First look: the weekly brief (made on its own) until a daily one exists.
     if (!view && !res.daily.entry) shown = 'weekly';
     view = res;
+    lastErr = '';
+  } else {
+    lastErr = res.reason || 'failed';
   }
-  draw(res.ok ? '' : errText(res.reason));
+  draw(res.ok ? '' : errText(lastErr));
 }
 
 async function run(kind, overwrite) {
   if (running) return;
   running = kind;
   pending = null;
+  lastErr = '';
   shown = kind;
   draw(t('mc.brief.working'));
   const res = await call('missionBriefRun', kind, overwrite);
@@ -215,7 +221,8 @@ async function run(kind, overwrite) {
     pending = kind;
     draw('');
   } else {
-    draw(errText(res.reason));
+    lastErr = res.reason || 'failed';
+    draw(errText(lastErr));
   }
 }
 
@@ -225,6 +232,7 @@ function controls() {
     const tabBtn = btn(t(`mc.brief.${kind}`), () => {
       shown = kind;
       pending = null;
+      lastErr = '';
       draw('');
     }, `mc-btn mission-brief__tab${shown === kind ? ' is-on' : ''}`);
     tabBtn.setAttribute('aria-pressed', String(shown === kind));
@@ -246,6 +254,7 @@ function controls() {
   if (pending === shown) {
     bar.append(btn(t('mc.brief.overwrite'), () => run(shown, true), 'mc-btn mc-danger'), btn(t('mc.brief.cancel'), () => {
       pending = null;
+      lastErr = '';
       draw('');
     }));
   } else {
@@ -286,6 +295,10 @@ function draw(status) {
   else if (view && !running) parts.push(el('p', 'hint', t(shown === 'daily' ? 'mc.brief.noneDaily' : 'mc.brief.noneWeekly')));
   rootEl.replaceChildren(...parts);
 }
+
+onLangChange(() => {
+  draw(running ? t('mc.brief.working') : lastErr ? errText(lastErr) : '');
+});
 
 /** Renders the brief into `root` and reads the newest briefs (no model call). */
 export function showBrief(root) {
