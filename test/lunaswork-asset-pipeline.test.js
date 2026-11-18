@@ -176,6 +176,26 @@ test('a ComfyUI draft without a seed gets a fresh one; a texture also gets a mat
   assert.equal(unity.calls[1].parameters.path, `${ART}/Textures/floor-draft-5.mat`);
 });
 
+test('ComfyUI local audio (WAV) and 3D (GLB) outputs: audio imports to Audio/, GLB gets a Unity prefab', async () => {
+  const dir = tempRepo();
+  const WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(16, 1)]);
+  const GLB = Buffer.concat([Buffer.from('glTF', 'latin1'), Buffer.alloc(16, 2)]);
+  const outs = [WAV, GLB];
+  const comfy = { run: async () => ({ promptId: 'p-multi', images: [{ data: outs.shift() }] }) };
+  const { p, unity } = pipeline(dir, { comfy });
+  const voice = await p.comfyDraft({ name: 'Tokine Bark', kind: 'audio', prompt: 'time stops now', workflow: 'concept.json', seed: 11 });
+  assert.equal(voice.ok, true, JSON.stringify(voice));
+  assert.deepEqual(voice.files, [`${ART}/Audio/tokine-bark-draft-11.wav`]);
+  const mesh = await p.comfyDraft({ name: 'Gear Prop', kind: 'prop', prompt: 'brass clock gear', workflow: 'concept.json', seed: 12 });
+  assert.equal(mesh.ok, true, JSON.stringify(mesh));
+  assert.deepEqual(mesh.files, [`${ART}/Props/gear-prop-draft-12.glb`]);
+  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [
+    ['assets import', `${ART}/Audio/tokine-bark-draft-11.wav`],
+    ['assets import', `${ART}/Props/gear-prop-draft-12.glb`],
+    ['prefab create', `${ART}/Props/gear-prop-draft-12.prefab`],
+  ]);
+});
+
 test('a ComfyUI workflow the seed or prompt cannot reach is run with warnings; the same seed again gets -v2', async () => {
   const dir = tempRepo();
   fs.writeFileSync(path.join(dir, 'art', 'comfyui', 'fixed.json'), JSON.stringify({ 9: { class_type: 'SaveImage', inputs: { filename_prefix: 'x' } } }));

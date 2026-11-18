@@ -22,6 +22,12 @@
 //   freesound   freesound.org/apiv2 /search/text/, /sounds/<id>/ (API key).
 //               The key only grants the HQ OGG preview; the original file
 //               needs an OAuth2 login, so the preview is what is imported
+//   smithsonian api.si.edu/openaccess/api/v1.0 /search, /content/<id>
+//               (api.data.gov key in X-Api-Key header) -> CC0 3D GLB / glTF zip
+//   blenderkit  www.blenderkit.com/api/v1 /search/, /assets/<id>/ (free assets,
+//               optional Bearer token for account-linked downloads) -> GLB / HDR / textures
+//   lotsofsounds api.lotsofsounds.com/api/v1 /sounds (with x-api-key) or
+//               /sounds/sample (no key) -> CC0 WAV / OGG / MP3 sounds
 //
 // Not here, on purpose: Kenney and OpenGameArt publish no official API, and
 // this module never scrapes HTML (NO_API_SOURCES says so to the worker).
@@ -430,11 +436,224 @@ function createFreesound({ fetch: fetchFn, key }) {
   return { id: 'freesound', label, types: ['audio'], needsKey: { search: true, import: true }, search, info, files };
 }
 
+// ---- Smithsonian 3D -------------------------------------------------------------------
+
+const SMITHSONIAN_API = 'https://api.si.edu/openaccess/api/v1.0';
+const SMITHSONIAN_ID_RE = /^[A-Za-z0-9_:-]{1,100}$/;
+
+function smithsonianDownloadOf(dnr) {
+  const media = isObj(dnr.online_media) && Array.isArray(dnr.online_media.media) ? dnr.online_media.media : [];
+  for (const m of media) {
+    const list = isObj(m) && Array.isArray(m.resources) ? m.resources : [];
+    for (const r of list) {
+      if (!isObj(r) || !isHttps(r.url)) continue;
+      const fmt = String(r.format || r.url).toLowerCase();
+      if (fmt.includes('glb') || r.url.toLowerCase().endsWith('.glb')) return { url: r.url, ext: 'glb' };
+      if (fmt.includes('zip') || r.url.toLowerCase().endsWith('.zip')) return { url: r.url, ext: 'zip' };
+    }
+  }
+  return null;
+}
+
+function createSmithsonian({ fetch: fetchFn, key }) {
+  const label = 'Smithsonian 3D';
+  const downloads = new Map();
+  const call = (p) => {
+    if (!key) throw sourceError('noKey', 'no Smithsonian API key stored');
+    return getJson({ fetch: fetchFn, url: `${SMITHSONIAN_API}${p}`, label, headers: { 'X-Api-Key': key }, secrets: [key] });
+  };
+  const itemOf = (raw) => {
+    if (!isObj(raw) || typeof raw.id !== 'string' || !SMITHSONIAN_ID_RE.test(raw.id)) return null;
+    const content = isObj(raw.content) ? raw.content : {};
+    const dnr = isObj(content.descriptiveNonRepeating) ? content.descriptiveNonRepeating : {};
+    const freetext = isObj(content.freetext) ? content.freetext : {};
+    const indexed = isObj(content.indexedStructured) ? content.indexedStructured : {};
+    const usage = isObj(dnr.usage) ? dnr.usage : {};
+    const page = isHttps(dnr.record_link) ? dnr.record_link : `https://www.si.edu/object/${encodeURIComponent(raw.id)}`;
+    const dl = smithsonianDownloadOf(dnr);
+    const item = makeItem('smithsonian', {
+      id: raw.id,
+      name: raw.title || (isObj(dnr.title) ? dnr.title.content : ''),
+      author: raw.unitCode || (isObj(dnr.data_source) ? dnr.data_source.content : 'Smithsonian Institution'),
+      sourceUrl: page,
+      license: usage.access || raw.license || 'CC0',
+      tags: [...(Array.isArray(indexed.object_type) ? indexed.object_type : []), ...(Array.isArray(indexed.topic) ? indexed.topic : [])],
+      description: Array.isArray(freetext.notes) && isObj(freetext.notes[0]) ? freetext.notes[0].content : '',
+      type: 'model',
+    });
+    if (item && dl) downloads.set(raw.id, dl);
+    return item;
+  };
+
+  async function search(query, { limit } = {}) {
+    const q = `${query} AND online_media_type:"3D Models"`;
+    const json = await call(`/search?q=${encodeURIComponent(q)}&rows=${clampLimit(limit)}`);
+    const rows = isObj(json) && isObj(json.response) && Array.isArray(json.response.rows) ? json.response.rows : null;
+    if (!rows) throw sourceError('badReply', `${label} answered without a result list`);
+    return rows.map(itemOf).filter(Boolean).slice(0, clampLimit(limit));
+  }
+
+  async function info(id) {
+    if (!SMITHSONIAN_ID_RE.test(id)) throw sourceError('badId', 'a Smithsonian id is letters, digits, _, : and -');
+    const json = await call(`/content/${encodeURIComponent(id)}`);
+    const raw = isObj(json) && isObj(json.response) ? json.response : json;
+    const item = itemOf(raw);
+    if (!item || item.id !== id) throw sourceError('badReply', `${label} answered an unusable model record`);
+    return item;
+  }
+
+  async function files(item) {
+    const dl = downloads.get(item.id);
+    if (!dl) throw sourceError('noFile', `${label} offers no GLB or glTF zip download for ${item.id}`);
+    const safeId = item.id.replace(/[^A-Za-z0-9_-]/g, '_');
+    if (dl.ext === 'zip') return { files: [], archive: fileEntry(dl.url, `${safeId}.zip`, false) };
+    return { files: [fileEntry(dl.url, `${safeId}.glb`, true)], archive: null };
+  }
+
+  return { id: 'smithsonian', label, types: ['model'], needsKey: { search: true, import: true }, search, info, files };
+}
+
+// ---- BlenderKit -----------------------------------------------------------------------
+
+const BLENDERKIT_API = 'https://www.blenderkit.com/api/v1';
+const BLENDERKIT_ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
+const BLENDERKIT_TYPES = Object.freeze({ model: 'model', texture: 'material', hdri: 'hdr' });
+const BLENDERKIT_TYPE_OF = Object.freeze({ model: 'model', material: 'texture', hdr: 'hdri' });
+const BLENDERKIT_LICENSES = Object.freeze({ cc0: 'CC0', roy_free: 'CC0', cc_by: 'CC-BY 4.0' });
+const BLENDERKIT_EXT_BY_TYPE = Object.freeze({ model: 'glb', texture: 'zip', hdri: 'hdr' });
+
+function blenderKitFileOf(raw, type) {
+  const direct = pick(raw, ['downloadUrl', 'download_url', 'fileUrl', 'file_url']);
+  if (isHttps(direct)) return direct;
+  const list = Array.isArray(raw.files) ? raw.files : [];
+  for (const f of list) {
+    if (!isObj(f)) continue;
+    const u = pick(f, ['downloadUrl', 'download_url', 'fileUrl', 'file_url', 'filePath']);
+    if (isHttps(u)) return u;
+  }
+  return type ? null : null;
+}
+
+function createBlenderKit({ fetch: fetchFn, key }) {
+  const label = 'BlenderKit';
+  const downloads = new Map();
+  const headers = key ? { Authorization: `Bearer ${key}` } : {};
+  const secrets = key ? [key] : [];
+  const call = (p) => getJson({ fetch: fetchFn, url: `${BLENDERKIT_API}${p}`, label, headers, secrets });
+  const itemOf = (raw) => {
+    if (!isObj(raw)) return null;
+    const id = pick(raw, ['assetBaseId', 'asset_base_id', 'id']);
+    if (typeof id !== 'string' || !BLENDERKIT_ID_RE.test(id)) return null;
+    const type = BLENDERKIT_TYPE_OF[raw.assetType || raw.asset_type] || 'model';
+    const author = isObj(raw.author) ? raw.author.fullName || raw.author.firstName || '' : raw.author;
+    const licRaw = String(raw.license || (raw.isFree === true ? 'cc0' : '')).toLowerCase();
+    const item = makeItem('blenderkit', {
+      id,
+      name: raw.displayName || raw.name || id,
+      author,
+      sourceUrl: `https://www.blenderkit.com/asset-gallery-detail/${encodeURIComponent(id)}/`,
+      license: BLENDERKIT_LICENSES[licRaw] || raw.license || '',
+      tags: raw.tags,
+      description: raw.description,
+      type,
+    });
+    const url = blenderKitFileOf(raw, type);
+    if (item && url) downloads.set(id, url);
+    return item;
+  };
+
+  async function search(query, { type, limit } = {}) {
+    const assetType = type && BLENDERKIT_TYPES[type] ? `&asset_type=${BLENDERKIT_TYPES[type]}` : '';
+    const json = await call(`/search/?query=${encodeURIComponent(query)}${assetType}&is_free=True&page_size=${clampLimit(limit)}`);
+    if (!isObj(json) || !Array.isArray(json.results)) throw sourceError('badReply', `${label} answered without a result list`);
+    return json.results.map(itemOf).filter(Boolean).slice(0, clampLimit(limit));
+  }
+
+  async function info(id) {
+    if (!BLENDERKIT_ID_RE.test(id)) throw sourceError('badId', 'a BlenderKit id is 4-64 letters, digits, _ and -');
+    const json = await call(`/search/?query=${encodeURIComponent(`asset_base_id:${id}`)}&is_free=True&page_size=1`);
+    const raw = isObj(json) && Array.isArray(json.results) ? json.results.find((r) => isObj(r) && pick(r, ['assetBaseId', 'asset_base_id', 'id']) === id) : json;
+    const item = itemOf(raw);
+    if (!item || item.id !== id) throw sourceError('badReply', `${label} answered an unusable asset record`);
+    return item;
+  }
+
+  async function files(item) {
+    const url = downloads.get(item.id);
+    if (!url) throw sourceError('noFile', `${label} offers no direct file URL for ${item.id}${key ? '' : ' (store a BlenderKit API key in Settings -> Luna\'s Work -> Asset library keys)'}`);
+    const ext = (url.split('?')[0].match(/\.(glb|fbx|hdr|exr|png|jpg|zip)$/i) || [null, BLENDERKIT_EXT_BY_TYPE[item.type] || 'glb'])[1].toLowerCase();
+    if (ext === 'zip') return { files: [], archive: fileEntry(url, `${item.id}.zip`, false) };
+    return { files: [fileEntry(url, `${item.id}.${ext}`, true)], archive: null };
+  }
+
+  return { id: 'blenderkit', label, types: ['model', 'texture', 'hdri'], needsKey: { search: false, import: false }, search, info, files };
+}
+
+// ---- Lots of Sounds -------------------------------------------------------------------
+
+const LOTSOFSOUNDS_ORIGIN = 'https://api.lotsofsounds.com';
+const LOTSOFSOUNDS_API = `${LOTSOFSOUNDS_ORIGIN}/api/v1`;
+const LOTSOFSOUNDS_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
+
+function createLotsOfSounds({ fetch: fetchFn, key }) {
+  const label = 'Lots of Sounds';
+  const downloads = new Map();
+  const headers = key ? { 'x-api-key': key } : {};
+  const secrets = key ? [key] : [];
+  const basePath = key ? '/sounds' : '/sounds/sample';
+  const call = (p) => getJson({ fetch: fetchFn, url: `${LOTSOFSOUNDS_API}${p}`, label, headers, secrets });
+  const itemOf = (raw) => {
+    if (!isObj(raw)) return null;
+    const id = typeof raw.id === 'number' && Number.isSafeInteger(raw.id) ? String(raw.id) : raw.id;
+    if (typeof id !== 'string' || !LOTSOFSOUNDS_ID_RE.test(id)) return null;
+    const rawUrl = pick(raw, ['download_url', 'audio_url', 'stream_url', 'url']);
+    const dl = typeof rawUrl === 'string' && rawUrl.startsWith('/') ? `${LOTSOFSOUNDS_ORIGIN}${rawUrl}` : rawUrl;
+    const item = makeItem('lotsofsounds', {
+      id,
+      name: raw.name || raw.title || id,
+      author: raw.author || 'Lots of Sounds',
+      sourceUrl: `https://lotsofsounds.com/sounds/${encodeURIComponent(id)}`,
+      // Lots of Sounds catalog is CC0 (lotsofsounds.com).
+      license: raw.license || 'CC0',
+      tags: raw.tags,
+      description: raw.description,
+      type: 'audio',
+    });
+    if (item && isHttps(dl)) downloads.set(id, dl);
+    return item;
+  };
+
+  async function search(query, { limit } = {}) {
+    const json = await call(`${basePath}?q=${encodeURIComponent(query)}&limit=${clampLimit(limit)}`);
+    const list = isObj(json) ? pick(json, ['data', 'results', 'sounds']) : null;
+    if (!Array.isArray(list)) throw sourceError('badReply', `${label} answered without a sound list`);
+    return list.map(itemOf).filter(Boolean).slice(0, clampLimit(limit));
+  }
+
+  async function info(id) {
+    if (!LOTSOFSOUNDS_ID_RE.test(id)) throw sourceError('badId', 'a Lots of Sounds id is letters, digits, _ and -');
+    const json = await call(`${basePath}/${encodeURIComponent(id)}`);
+    const raw = isObj(json) && isObj(json.data) ? json.data : json;
+    const item = itemOf(raw);
+    if (!item || item.id !== id) throw sourceError('badReply', `${label} answered an unusable sound record`);
+    return item;
+  }
+
+  async function files(item) {
+    const url = downloads.get(item.id);
+    if (!url) throw sourceError('noFile', `${label} offers no audio download for ${item.id}`);
+    const ext = (url.split('?')[0].match(/\.(wav|ogg|mp3)$/i) || [null, 'wav'])[1].toLowerCase();
+    return { files: [fileEntry(url, `${item.id}.${ext}`, true)], archive: null };
+  }
+
+  return { id: 'lotsofsounds', label, types: ['audio'], needsKey: { search: false, import: false }, search, info, files };
+}
+
 // ---- the set --------------------------------------------------------------------------
 
-const SOURCE_IDS = Object.freeze(['polyhaven', 'sketchfab', 'polypizza', 'ambientcg', 'freesound']);
-// The libraries whose API needs a key from LunaCore's secret store (src/lunasworkAssetKeys.js).
-const KEYED_SOURCES = Object.freeze(['sketchfab', 'polypizza', 'freesound']);
+const SOURCE_IDS = Object.freeze(['polyhaven', 'sketchfab', 'polypizza', 'ambientcg', 'freesound', 'smithsonian', 'blenderkit', 'lotsofsounds']);
+// The libraries whose API accepts or requires a key from LunaCore's secret store (src/lunasworkAssetKeys.js).
+const KEYED_SOURCES = Object.freeze(['sketchfab', 'polypizza', 'freesound', 'smithsonian', 'blenderkit', 'lotsofsounds']);
 
 /**
  * Every library client, with the keys of this call.
@@ -450,6 +669,9 @@ function createFreeSources(deps = {}) {
     polypizza: createPolyPizza({ fetch: fetchFn, key: keyOf('polypizza') }),
     ambientcg: createAmbientCg({ fetch: fetchFn }),
     freesound: createFreesound({ fetch: fetchFn, key: keyOf('freesound') }),
+    smithsonian: createSmithsonian({ fetch: fetchFn, key: keyOf('smithsonian') }),
+    blenderkit: createBlenderKit({ fetch: fetchFn, key: keyOf('blenderkit') }),
+    lotsofsounds: createLotsOfSounds({ fetch: fetchFn, key: keyOf('lotsofsounds') }),
   };
 }
 

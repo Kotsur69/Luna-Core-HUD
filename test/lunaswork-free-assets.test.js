@@ -31,9 +31,10 @@ const HDR = pad('#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n');
 const FBX = pad('Kaydara FBX Binary  \0');
 const GLB = pad('glTF');
 const OGG = pad('OggS');
+const WAV = pad(Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1')]));
 // Fake keys are assembled at runtime: no key-shaped literal in the source.
 const fakeKey = (tag) => `${tag}${'k'.repeat(28)}`;
-const KEYS = { sketchfab: fakeKey('sf'), polypizza: fakeKey('pp'), freesound: fakeKey('fs') };
+const KEYS = { sketchfab: fakeKey('sf'), polypizza: fakeKey('pp'), freesound: fakeKey('fs'), smithsonian: fakeKey('si'), blenderkit: fakeKey('bk'), lotsofsounds: fakeKey('ls') };
 
 // ---- fakes ------------------------------------------------------------------------------
 
@@ -358,6 +359,73 @@ test('Freesound: the key goes in a header (never the URL), the HQ OGG preview is
   assert.equal(JSON.stringify(fake.calls.find((c) => c.url.includes('cdn.freesound.org')).headers).includes(KEYS.freesound), false);
 });
 
+// ---- Smithsonian 3D, BlenderKit, Lots of Sounds ----------------------------------------
+
+test('Smithsonian 3D: sends X-Api-Key header, searches CC0 3D models and imports GLB', async () => {
+  const dir = tempRepo();
+  const SI = 'https://api.si.edu/openaccess/api/v1.0';
+  const record = {
+    id: 'edanmdm:nmnh_101',
+    title: 'Pocket Watch Mechanism',
+    unitCode: 'NMAH',
+    content: {
+      descriptiveNonRepeating: {
+        record_link: 'https://www.si.edu/object/nmnh_101',
+        usage: { access: 'CC0' },
+        online_media: { media: [{ type: '3D Models', resources: [{ url: 'https://3d-api.si.edu/content/document/watch.glb', format: 'glb' }] }] },
+      },
+      indexedStructured: { object_type: ['Clocks'] },
+    },
+  };
+  const routes = {
+    [`${SI}/search?q=${encodeURIComponent('clock AND online_media_type:"3D Models"')}&rows=10`]: { response: { rows: [record] } },
+    [`${SI}/content/${encodeURIComponent('edanmdm:nmnh_101')}`]: { response: record },
+    'https://3d-api.si.edu/content/document/watch.glb': () => reply(GLB),
+  };
+  const fake = fakeFetch(routes);
+  const { lib } = library(dir, fake.fn);
+  const found = await lib.search({ source: 'smithsonian', query: 'clock' });
+  assert.equal(found.ok, true, JSON.stringify(found));
+  assert.deepEqual(found.results.map((r) => [r.id, r.license]), [['edanmdm:nmnh_101', 'CC0']]);
+  assert.equal(fake.calls[0].headers['X-Api-Key'], KEYS.smithsonian);
+  assert.ok(fake.calls.every((c) => !c.url.includes(KEYS.smithsonian)), 'the key is never in a URL');
+
+  const res = await lib.importAsset({ source: 'smithsonian', id: 'edanmdm:nmnh_101', name: 'Pocket Watch', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Props/pocket-watch.glb`]);
+  assert.equal(ledgerRows(dir)[0].license, 'CC0');
+});
+
+test('BlenderKit and Lots of Sounds: search and import work with or without optional keys', async () => {
+  const dir = tempRepo();
+  const BK = 'https://www.blenderkit.com/api/v1';
+  const LOS = 'https://api.lotsofsounds.com/api/v1';
+  const bkRecord = { assetBaseId: 'bk-lantern-01', displayName: 'Iron Lantern', assetType: 'model', isFree: true, license: 'cc0', author: { fullName: 'Kit Artist' }, tags: ['lantern'], files: [{ downloadUrl: 'https://cdn.blenderkit.com/files/bk-lantern-01.glb' }] };
+  const losRecord = { id: 'fs-900', name: 'Clock Tick', tags: ['clock', 'tick'], stream_url: '/api/v1/sounds/sample/fs-900/stream.wav' };
+  const routes = {
+    [`${BK}/search/?query=lantern&asset_type=model&is_free=True&page_size=10`]: { results: [bkRecord] },
+    [`${BK}/search/?query=${encodeURIComponent('asset_base_id:bk-lantern-01')}&is_free=True&page_size=1`]: { results: [bkRecord] },
+    'https://cdn.blenderkit.com/files/bk-lantern-01.glb': () => reply(GLB),
+    [`${LOS}/sounds/sample?q=tick&limit=10`]: { data: [losRecord] },
+    [`${LOS}/sounds/sample/fs-900`]: { data: losRecord },
+    'https://api.lotsofsounds.com/api/v1/sounds/sample/fs-900/stream.wav': () => reply(WAV),
+  };
+  const fake = fakeFetch(routes);
+  const { lib } = library(dir, fake.fn, { keys: {} });
+
+  const bkFound = await lib.search({ source: 'blenderkit', query: 'lantern', type: 'model' });
+  assert.deepEqual(bkFound.results.map((r) => [r.id, r.license]), [['bk-lantern-01', 'CC0']]);
+  const bkImp = await lib.importAsset({ source: 'blenderkit', id: 'bk-lantern-01', name: 'Iron Lantern', kind: 'prop' });
+  assert.equal(bkImp.ok, true, JSON.stringify(bkImp));
+  assert.deepEqual(bkImp.files, [`${ART}/Props/iron-lantern.glb`]);
+
+  const losFound = await lib.search({ source: 'lotsofsounds', query: 'tick' });
+  assert.deepEqual(losFound.results.map((r) => [r.id, r.license]), [['fs-900', 'CC0']]);
+  const losImp = await lib.importAsset({ source: 'lotsofsounds', id: 'fs-900', name: 'Clock Tick', kind: 'audio' });
+  assert.equal(losImp.ok, true, JSON.stringify(losImp));
+  assert.deepEqual(losImp.files, [`${ART}/Audio/clock-tick.wav`]);
+});
+
 // ---- keys never in an error -------------------------------------------------------------
 
 test('a key never appears in an error: thrown fetch errors, 401 answers and bad replies are redacted', async () => {
@@ -672,7 +740,7 @@ test('key store: keys are encrypted on disk, status is booleans only, a bad key 
   assert.equal(store.get('freesound'), KEYS.freesound);
   const onDisk = fs.readFileSync(path.join(dir, K.STORE_FILE), 'utf8');
   assert.equal(onDisk.includes(KEYS.freesound), false);
-  assert.deepEqual(store.status(), { ok: true, keys: { sketchfab: false, polypizza: false, freesound: true }, persisted: true });
+  assert.deepEqual(store.status(), { ok: true, keys: { sketchfab: false, polypizza: false, freesound: true, smithsonian: false, blenderkit: false, lotsofsounds: false }, persisted: true });
   assert.equal(store.set('freesound', 'short').ok, false);
   assert.equal(store.set('kenney', KEYS.freesound).reason, 'bad-source');
   assert.deepEqual(store.secrets(), [KEYS.freesound]);

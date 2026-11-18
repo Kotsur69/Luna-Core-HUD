@@ -149,4 +149,12 @@ test('workflow helpers: API format only, seeds and the prompt placeholder, no mu
   assert.ok(Number.isSafeInteger(seed) && seed >= 0);
   assert.equal(C.imageKind(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')])), 'webp');
   assert.equal(C.imageKind(Buffer.from([0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0])), 'jpg');
+  assert.equal(C.outputKind(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE')])), 'wav');
+  assert.equal(C.outputKind(Buffer.concat([Buffer.from('OggS'), Buffer.alloc(12)])), 'ogg');
+  assert.equal(C.outputKind(Buffer.concat([Buffer.from('ID3'), Buffer.alloc(12)])), 'mp3');
+  assert.equal(C.outputKind(Buffer.concat([Buffer.from('glTF'), Buffer.alloc(12)])), 'glb');
+  assert.deepEqual(C.outputFiles({ outputs: { 2: { audio: [{ filename: 'bark.wav', subfolder: '', type: 'output' }], '3d': [{ filename: 'prop.glb', subfolder: '', type: 'output' }] } } }), [
+    { filename: 'bark.wav', subfolder: '', type: 'output' },
+    { filename: 'prop.glb', subfolder: '', type: 'output' },
+  ]);
 });

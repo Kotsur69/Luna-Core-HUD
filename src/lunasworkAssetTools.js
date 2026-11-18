@@ -51,7 +51,7 @@
 const net = require('net');
 const dns = require('dns');
 const childProcess = require('child_process');
-const { createAssetPipeline, KINDS, MODEL_KINDS, IMAGE_KINDS } = require('./lunasworkAssetPipeline');
+const { createAssetPipeline, KINDS, MODEL_KINDS, COMFY_KINDS } = require('./lunasworkAssetPipeline');
 const { createComfyClient, readCappedBody } = require('./lunasworkComfy');
 const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-http');
 const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
@@ -132,16 +132,16 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: COMFY_TOOL,
-    description: "Luna's Work asset pipeline: a DRAFT image from the local ComfyUI. Runs an API-format workflow from the repo's art/comfyui/ (\"{{prompt}}\" placeholder, seed set on every sampler), saves the images under the art root and the exact workflow + seed under art/comfyui/runs/, then imports them into Unity. Free; use it for drafts.",
+    description: "Luna's Work asset pipeline: a FREE local generation from ComfyUI (images, TTS/SFX audio, or 3D GLB models). Runs an API-format workflow from the repo's art/comfyui/ (\"{{prompt}}\" placeholder, seed set on every sampler), saves the outputs under the art root and the exact workflow + seed under art/comfyui/runs/, then imports them into Unity (and makes a prefab for GLB models).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['name', 'kind', 'workflow'],
       properties: {
         name: NAME_PROP,
-        kind: { type: 'string', enum: [...IMAGE_KINDS] },
+        kind: { type: 'string', enum: [...COMFY_KINDS] },
         prompt: PROMPT_PROP,
-        workflow: { type: 'string', description: 'A workflow file name in art/comfyui/, e.g. "concept.json".' },
+        workflow: { type: 'string', description: 'A workflow file name in art/comfyui/, e.g. "concept.json", "tts.json", "sfx.json", "mesh3d.json".' },
         seed: { type: 'integer', minimum: 0, description: 'Optional; a fresh seed is picked and saved when omitted.' },
       },
     },
@@ -164,7 +164,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: SEARCH_TOOL,
-    description: "Luna's Work asset library search: FREE assets through official APIs - polyhaven (CC0 HDRIs, textures, models), ambientcg (CC0 textures, HDRIs), sketchfab (downloadable models, per-model license), polypizza (CC0 / CC-BY low-poly models), freesound (CC0 / CC-BY sounds). Results whose license is not CC0 / CC-BY / free for commercial use, or that look like a rip of a commercial game, come back under `refused` with the reason. Kenney and OpenGameArt have no official API and are not searchable.",
+    description: "Luna's Work asset library search: FREE assets through official APIs - polyhaven (CC0 HDRIs, textures, models), ambientcg (CC0 textures, HDRIs), blenderkit (free CC0 / CC-BY models, textures, HDRIs), lotsofsounds (CC0 sounds), sketchfab (downloadable models, per-model license), polypizza (CC0 / CC-BY low-poly models), freesound (CC0 / CC-BY sounds), smithsonian (CC0 3D museum scans). Results whose license is not CC0 / CC-BY / free for commercial use, or that look like a rip of a commercial game, come back under `refused` with the reason. Kenney and OpenGameArt have no official API and are not searchable.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,

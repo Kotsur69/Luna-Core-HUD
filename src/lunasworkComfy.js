@@ -80,6 +80,22 @@ function imageKind(buf) {
   return null;
 }
 
+/** The audio kind from its first bytes, or null: WAV / OGG / MP3. */
+function audioKind(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+  if (buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WAVE') return 'wav';
+  if (buf.toString('latin1', 0, 4) === 'OggS') return 'ogg';
+  if (buf.toString('latin1', 0, 3) === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) return 'mp3';
+  return null;
+}
+
+/** Any supported ComfyUI output kind from its first bytes: png / jpg / webp / glb / wav / ogg / mp3, or null. */
+function outputKind(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 4) return null;
+  if (buf.toString('latin1', 0, 4) === 'glTF') return 'glb';
+  return imageKind(buf) || audioKind(buf);
+}
+
 // ---- workflows (pure) -----------------------------------------------------------------
 
 /**
@@ -178,13 +194,16 @@ async function readCappedBody(res, max) {
 
 // ---- replies --------------------------------------------------------------------------
 
-/** The output images of one history entry, validated; [] when there are none. */
+const OUTPUT_KEYS = Object.freeze(['images', 'audio', '3d', 'meshes', 'glb']);
+
+/** The output files (images, audio, 3D meshes) of one history entry, validated; [] when there are none. */
 function outputFiles(entry) {
   const outputs = isObj(entry) && isObj(entry.outputs) ? entry.outputs : {};
   const files = [];
   for (const node of Object.values(outputs)) {
-    const images = isObj(node) && Array.isArray(node.images) ? node.images : [];
-    for (const img of images) {
+    if (!isObj(node)) continue;
+    const items = OUTPUT_KEYS.flatMap((k) => (Array.isArray(node[k]) ? node[k] : []));
+    for (const img of items) {
       if (!isObj(img) || typeof img.filename !== 'string' || !FILE_NAME_RE.test(img.filename) || img.filename.includes('..')) continue;
       const subfolder = typeof img.subfolder === 'string' ? img.subfolder : '';
       if (!SUBFOLDER_RE.test(subfolder) || subfolder.includes('..')) continue;
@@ -325,14 +344,14 @@ function createComfyClient(opts = {}) {
     }
   }
 
-  /** The bytes of one output image, checked to be a real image. @returns {Promise<{data:Buffer, ext:string}>} */
+  /** The bytes of one output file, checked to be a real image, audio or GLB mesh. @returns {Promise<{data:Buffer, ext:string}>} */
   async function view(file) {
     const q = new URLSearchParams({ filename: file.filename, subfolder: file.subfolder || '', type: file.type || 'output' });
     const res = await request(`/view?${q.toString()}`);
     if (!res.ok) throw comfyError(COMFY_ERROR.badReply, `ComfyUI /view answered HTTP ${res.status} for ${file.filename}`);
     const data = await body(res, MAX_IMAGE_BYTES);
-    const ext = imageKind(data);
-    if (!ext) throw comfyError(COMFY_ERROR.badReply, `ComfyUI /view returned something that is not an image for ${file.filename}`);
+    const ext = outputKind(data);
+    if (!ext) throw comfyError(COMFY_ERROR.badReply, `ComfyUI /view returned something that is not an image, audio or GLB file for ${file.filename}`);
     return { data, ext };
   }
 
@@ -353,6 +372,8 @@ module.exports = {
   PROMPT_PLACEHOLDER,
   COMFY_ERROR,
   imageKind,
+  audioKind,
+  outputKind,
   validateWorkflow,
   applySeed,
   applyPrompt,

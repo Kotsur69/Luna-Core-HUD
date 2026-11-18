@@ -78,6 +78,7 @@ const KINDS = Object.freeze({
 });
 const MODEL_KINDS = Object.freeze(Object.keys(KINDS).filter((k) => KINDS[k].model));
 const IMAGE_KINDS = Object.freeze(Object.keys(KINDS).filter((k) => !KINDS[k].model && !['animation', 'audio', 'material'].includes(k)));
+const COMFY_KINDS = Object.freeze([...IMAGE_KINDS, ...MODEL_KINDS, 'audio']);
 
 // A Higgsfield credit in USD when the settings name none: on the high side,
 // so the cap binds early rather than late. Set the plan's real rate in settings.
@@ -519,9 +520,9 @@ function createAssetPipeline(deps) {
     return checked.ok ? { ok: true, rel, workflow: checked.workflow } : fail('badWorkflow', `${rel}: ${checked.error}`);
   }
 
-  /** Runs a repo workflow in ComfyUI; saves the images, the workflow and the seed. */
+  /** Runs a repo workflow in ComfyUI; saves the outputs (images, audio, or GLB), the workflow and the seed. */
   async function comfyDraft(raw) {
-    const job = cleanJob(raw, IMAGE_KINDS);
+    const job = cleanJob(raw, COMFY_KINDS);
     if (!job.ok) return job;
     if (!d.comfy || typeof d.comfy.run !== 'function') return fail('toolDown', 'comfyui not connected');
     const given = isObj(raw) ? raw.seed : undefined;
@@ -537,13 +538,13 @@ function createAssetPipeline(deps) {
     } catch (err) {
       return fail(err && err.code === comfyLib.COMFY_ERROR.unreachable ? 'toolDown' : 'comfyFailed', errText(err));
     }
-    const images = (isObj(res) && Array.isArray(res.images) ? res.images : []).filter((i) => isObj(i) && comfyLib.imageKind(i.data));
-    if (!images.length) return fail('comfyFailed', 'ComfyUI returned no image');
+    const images = (isObj(res) && Array.isArray(res.images) ? res.images : []).filter((i) => isObj(i) && comfyLib.outputKind(i.data));
+    if (!images.length) return fail('comfyFailed', 'ComfyUI returned no valid output (image, audio or GLB)');
     const warnings = [];
     if (!seeded.seeded) warnings.push('the workflow has no numeric seed / noise_seed input: the seed is recorded but did not steer the image');
     if (job.prompt && !prompted.replaced) warnings.push(`the workflow has no "${comfyLib.PROMPT_PLACEHOLDER}" placeholder: the prompt was not used`);
     const runRelOf = (stem) => `${SOURCE_DIRS.comfyRuns}/${stem}.json`;
-    const imageRel = (stem, i) => assetPath(artRoot, job.kind, resultStem(stem, i, images.length), comfyLib.imageKind(images[i].data));
+    const imageRel = (stem, i) => assetPath(artRoot, job.kind, resultStem(stem, i, images.length), comfyLib.outputKind(images[i].data));
     const files = [];
     let runRel;
     try {
@@ -748,8 +749,8 @@ function normalizeAssetTools(raw) {
 
 // Blade & Bullet docs/ART_DIRECTION.md (not in this repo): the rule every 3D asset follows.
 const ART_DIRECTION_RULE = 'Art direction (docs/ART_DIRECTION.md of the game - read it when the repo has it): 3D toon / cel-shaded characters and props on a 2D plane. Model in 3D, keep gameplay on one plane (X/Y, side-on camera, no depth movement), toon shading with clean outlines, no photoreal materials.';
-const AMD_GPU_RULE = 'ComfyUI runs on an AMD GPU: use only models and nodes that run on it (ROCm / DirectML builds such as SD 1.5 and SDXL checkpoints); no CUDA-only nodes (xformers, TensorRT, NVIDIA-only custom nodes).';
-const LIBRARY_RULE = 'Free library assets: luna_asset_search {source, query} finds CC0 / CC-BY assets on Poly Haven and ambientCG (no key), Sketchfab (downloadable models only), Poly Pizza and Freesound (keys come from LunaCore, never ask for one); luna_asset_import {source, id, name, kind} reads the license again from the source API, refuses non-commercial, no-derivatives, share-alike and unknown licenses and game rips, imports the files into Unity and writes the design/ASSET_LICENSES.md row and the CC-BY credits. The Blender MCP search_assets / import_asset (Poly Haven, Sketchfab, Poly Pizza) is fine for browsing or for placing an asset in a Blender scene, but an asset that ends up in the game is brought in with luna_asset_import, so it has its ledger row. Kenney and OpenGameArt have no official API: LunaCore does not fetch from them.';
+const AMD_GPU_RULE = 'ComfyUI runs on an AMD GPU (ROCm / ZLUDA / DirectML): use only models and nodes that run on it (SD 1.5, SDXL, Flux, Kokoro-82M / F5-TTS voice, Stable Audio Open SFX, Hunyuan3D-2 / TripoSR 3D); no CUDA-only nodes (xformers, TensorRT, NVIDIA-only custom nodes).';
+const LIBRARY_RULE = 'Free library assets: luna_asset_search {source, query} finds CC0 / CC-BY assets on Poly Haven, ambientCG, BlenderKit and Lots of Sounds (no key needed for search/samples), plus Sketchfab (downloadable models only), Poly Pizza, Freesound and Smithsonian 3D (keys come from LunaCore, never ask for one); luna_asset_import {source, id, name, kind} reads the license again from the source API, refuses non-commercial, no-derivatives, share-alike and unknown licenses and game rips, imports the files into Unity and writes the design/ASSET_LICENSES.md row and the CC-BY credits. The Blender MCP search_assets / import_asset (Poly Haven, Sketchfab, Poly Pizza) is fine for browsing or for placing an asset in a Blender scene, but an asset that ends up in the game is brought in with luna_asset_import, so it has its ledger row. Kenney and OpenGameArt have no official API: LunaCore does not fetch from them.';
 const NO_RIPS_RULE = `Never assets ripped from existing games. Katana Zero, Zenless Zone Zero (ZZZ), Kurumi and Black Rock Shooter are art references, not sources: no fan rips, nothing extracted from a commercial game. Every file under Assets/**/Art/ needs a row in ${licenses.LEDGER_FILE} (name, source URL, author, license, path); the luna_asset_* tools write it, and the Critic files a card for any file without one.`;
 
 /**
@@ -804,6 +805,7 @@ module.exports = {
   KINDS,
   MODEL_KINDS,
   IMAGE_KINDS,
+  COMFY_KINDS,
   ASSET_TOOLS,
   slugOf,
   artRootOf,
