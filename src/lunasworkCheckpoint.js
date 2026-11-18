@@ -41,6 +41,7 @@ const { execFile } = require('child_process');
 const pack = require('./lunasworkPack');
 const { applyCards, REPRO_ACCEPTANCE } = require('./lunasworkCritic');
 const { runTag, MAX_DETAILS_CHARS, MAX_TEXT_CHARS } = require('./todorows');
+const { unlinkDependencyLinks } = require('./worktrees');
 
 const TAG_PREFIX = 'luna-work';
 // Subject prefix of the design-pack commits (src/lunasworkPackCommit.js).
@@ -334,7 +335,18 @@ function createCheckpoints(deps = {}) {
     return res.ok ? { ok: true, tag, sha: head.sha } : { ...res, tag };
   }
 
+  /**
+   * Throws the temporary worktree away. node_modules links go first
+   * (worktrees.unlinkDependencyLinks): `git worktree remove` deletes through a
+   * junction and would empty its target. A link that will not go leaves the
+   * folder where it is, logged, rather than risk that.
+   */
   async function removeWorktree(repoPath, dir) {
+    const links = unlinkDependencyLinks(dir);
+    if (!links.ok) {
+      log(`[lunaswork] kept ${dir}: ${links.detail}`);
+      return;
+    }
     const removed = await git(repoPath, ['worktree', 'remove', dir]);
     if (removed.ok) return;
     try {

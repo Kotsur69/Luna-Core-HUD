@@ -30,25 +30,20 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
 const { countLines } = require('./filestat');
+const { runPooledGit } = require('./gitpool');
 
 const STATUS_TIMEOUT_MS = 8000;
 const DIFF_TIMEOUT_MS = 8000;
+const MAX_BUFFER = 8 * 1024 * 1024;
 
 /** Runs git in `dir`. Resolves { ok, stdout } - never rejects, same shape as gitstation.js's helper.
  *  Exported so main.js's `files:diff` handler runs `git diff HEAD -- <file>`
  *  through the exact same spawn path this watcher uses (no second way to
- *  shell out to git). */
+ *  shell out to git). Goes through the shared pool (src/gitpool.js): a global
+ *  cap on running git processes, and identical reads share one process. */
 function git(dir, args, timeout = STATUS_TIMEOUT_MS) {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      ['-C', dir, ...args],
-      { windowsHide: true, timeout, maxBuffer: 8 * 1024 * 1024 },
-      (err, stdout) => resolve({ ok: !err, stdout: stdout || '' }),
-    );
-  });
+  return runPooledGit(dir, args, { timeout, maxBuffer: MAX_BUFFER }).then((res) => ({ ok: res.ok, stdout: res.stdout }));
 }
 
 /**
@@ -246,12 +241,18 @@ async function readChangedFiles(cwd, baseline) {
  *
  * Never polls a non-git directory: the first snapshot decides that once, and
  * a directory that is not a repo costs nothing on every later tick.
+ *
+ * Single-flight: a tick that comes while the previous one is still waiting on
+ * git is skipped, so a slow git (a loaded machine) never stacks up processes
+ * for this folder. A stop() during start()'s first snapshot wins: no timer is
+ * created afterwards.
  */
 class GitFileWatcher {
   /**
    * @param {string} cwd
    * @param {(files: {file:string, added:number, removed:number}[]) => void} onFiles
-   * @param {{intervalMs?: number}} [opts]
+   * @param {{intervalMs?: number, snapshot?: typeof snapshotDirtyPaths, read?: typeof readChangedFiles}} [opts]
+   *   snapshot / read: injected by tests in place of the real git calls
    */
   constructor(cwd, onFiles, opts = {}) {
     this.cwd = cwd;
@@ -261,7 +262,14 @@ class GitFileWatcher {
     // fresh", not turn-by-turn - matched to activefiles.js's own self-heal
     // sweep (STALE_CHECK_MS) rather than invented separately.
     this.intervalMs = opts.intervalMs || 5000;
+    this.snapshot = typeof opts.snapshot === 'function' ? opts.snapshot : snapshotDirtyPaths;
+    this.read = typeof opts.read === 'function' ? opts.read : readChangedFiles;
     this.timer = null;
+    // Bumped by every stop(): a start() or tick() begun under an older run
+    // drops its answer instead of creating a timer or emitting stale files.
+    this.run = 0;
+    this.startingRun = null;
+    this.inFlight = false;
     this.baseline = null;
     this.isRepo = true;
     // Cheap change-detection so an unchanged status does not re-emit the same
@@ -270,8 +278,16 @@ class GitFileWatcher {
   }
 
   async start() {
-    if (this.timer) return;
-    const snap = await snapshotDirtyPaths(this.cwd);
+    if (this.timer || this.startingRun === this.run) return;
+    const run = this.run;
+    this.startingRun = run;
+    let snap;
+    try {
+      snap = await this.snapshot(this.cwd);
+    } finally {
+      if (this.startingRun === run) this.startingRun = null;
+    }
+    if (run !== this.run) return;
     if (snap === null) {
       this.isRepo = false;
       return;
@@ -282,13 +298,22 @@ class GitFileWatcher {
   }
 
   stop() {
+    this.run += 1;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
 
   async tick() {
-    if (!this.isRepo || !this.onFiles) return;
-    const files = await readChangedFiles(this.cwd, this.baseline || new Set());
+    if (!this.isRepo || !this.onFiles || this.inFlight) return;
+    const run = this.run;
+    this.inFlight = true;
+    let files;
+    try {
+      files = await this.read(this.cwd, this.baseline || new Set());
+    } finally {
+      this.inFlight = false;
+    }
+    if (run !== this.run) return;
     const key = files.map((f) => `${f.file}:${f.added}:${f.removed}`).sort().join('|');
     if (key === this.lastKey) return;
     this.lastKey = key;

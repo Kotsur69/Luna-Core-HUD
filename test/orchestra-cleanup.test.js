@@ -803,7 +803,7 @@ test('removeWorktree unlinks a node_modules junction before git removes the fold
     const tree = path.join(dir, 'tree');
     realGit(repo, 'worktree', 'add', '-q', '-b', 'luna/tree-aaaaa', tree, 'main');
     fs.symlinkSync(shared, path.join(tree, 'node_modules'), 'junction');
-    assert.deepEqual(wt.unlinkNodeModulesLinks(path.join(dir, 'nowhere')), []);
+    assert.deepEqual(wt.unlinkDependencyLinks(path.join(dir, 'nowhere')), { ok: true, unlinked: [] });
     const res = await wt.removeWorktree(repo, tree);
     assert.deepEqual(res, { ok: true });
     assert.equal(fs.existsSync(tree), false);
@@ -813,7 +813,7 @@ test('removeWorktree unlinks a node_modules junction before git removes the fold
   }
 });
 
-test('unlinkNodeModulesLinks leaves a real node_modules folder for git, unlinks only links', () => {
+test('unlinkDependencyLinks leaves a real node_modules folder for git, unlinks only links', () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'luna-nm-')));
   try {
     const target = path.join(dir, 'target');
@@ -823,7 +823,8 @@ test('unlinkNodeModulesLinks leaves a real node_modules folder for git, unlinks 
     fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
     fs.mkdirSync(path.join(root, 'app'));
     fs.symlinkSync(target, path.join(root, 'app', 'node_modules'), 'junction');
-    const unlinked = wt.unlinkNodeModulesLinks(root);
+    const { ok, unlinked } = wt.unlinkDependencyLinks(root);
+    assert.equal(ok, true);
     assert.deepEqual(unlinked, [path.join(root, 'app', 'node_modules')]);
     assert.ok(fs.existsSync(path.join(root, 'node_modules')), 'real folder kept');
     assert.ok(!fs.existsSync(path.join(root, 'app', 'node_modules')));
