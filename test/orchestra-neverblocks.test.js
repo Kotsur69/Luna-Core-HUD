@@ -272,6 +272,8 @@ test('an Opus worker that stalls with noMarker is resumed once automatically, th
   const brief = s.log.briefs.get(s.log.sessions[1].task.briefPath);
   assert.match(brief, /RESUMING/);
   assert.match(brief, /noMarker/, 'the resume brief names the stall reason');
+  assert.match(brief, /saved test log finished green/, 'a noMarker restart checks the previous test log first');
+  assert.match(brief, /then the full suite, then commit/, 'a resume runs the tests and commits first');
   assert.ok(s.log.events.some(([k]) => k === 'autoResumed'));
 
   exhaust('s2');

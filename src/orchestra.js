@@ -155,7 +155,11 @@ function briefText(pkg, branch, opts = {}) {
     ...depMergeSection(pkg, depMerge, opts.resume),
     `Package \`${pkg.id}\` of a God Mode plan. You are in an isolated git worktree on branch \`${branch}\`.`,
     ...(opts.resume
-      ? ['', 'RESUMING: an earlier session already worked on this. Check `git status` and `git log` first and continue from there.']
+      ? [
+          '',
+          'RESUMING: an earlier session already worked on this. Check `git status` and `git log` first and continue from there.',
+          RESUME_COMMIT_RULE,
+        ]
       : []),
     ...(esc
       ? [
@@ -173,10 +177,12 @@ function briefText(pkg, branch, opts = {}) {
     '## Verify',
     pkg.verify ? `Run \`${pkg.verify}\` and fix until it passes.` : "Check your work with the project's tests before you finish.",
     'Run the verify command in the foreground and wait for it to finish. Do not end your turn while a test run (or any other command) of yours is still running in the background: an ended turn tells LunaCore you stopped.',
+    FOREGROUND_TEST_RULE,
     '',
     '## Rules',
     '- Work only in this worktree. Do not push, merge or switch branches.',
     `- ${DEPS_RULE}`,
+    `- ${COMMIT_EARLY_RULE}`,
     '- When the work is done and verified, commit it on this branch with a conventional commit message.',
     pushSecrets.FAKE_SECRET_RULE,
     `- End your final message with the line \`LUNA_DONE ${pkg.id}\`, or \`LUNA_BLOCKED ${pkg.id}: <reason>\` if you cannot finish.`,
@@ -189,6 +195,25 @@ function briefText(pkg, branch, opts = {}) {
 // checkout empties it when the worktree is removed.
 const DEPS_RULE =
   'Dependencies are already installed in this worktree (node_modules). Do not link node_modules to another checkout and do not reinstall, delete or replace them. If they look broken, stop and end with LUNA_BLOCKED.';
+
+// A worker that finished but never committed loses its work when the working
+// cap stops it and LunaCore restarts it for 'timeout'.
+const COMMIT_EARLY_RULE =
+  "Commit early: as soon as the brief's must-haves pass their targeted tests, commit them on this branch. Then keep extending and commit again after each further slice, so a stop at the working cap loses nothing.";
+
+// A turn that ends while `npm test` runs in the background reads as a
+// noMarker stall (no LUNA_DONE line), so the final run stays in the foreground.
+const FOREGROUND_TEST_RULE =
+  'Run the final `npm test` in the FOREGROUND with a long tool timeout (about 600000 ms); if it times out, read its log and run it again. Never end your turn while a test run is still going, and do not end it before the commit and the LUNA_DONE / LUNA_BLOCKED line are done.';
+
+// A resumed worker secures what the previous session left before new work.
+const RESUME_COMMIT_RULE =
+  'Before anything else: run the test files the earlier session touched, then the full suite, then commit what passes. Only then continue with new work.';
+
+// A noMarker restart usually means the previous turn ended while a test run
+// was still going: its log and a drafted commit may already be there.
+const NO_MARKER_RESUME_NOTE =
+  "The previous turn ended without a LUNA_DONE line, often while a test run was still going. First check whether the previous session's saved test log finished green and whether a drafted commit message is waiting; if so, commit and finish instead of starting over.";
 
 /** A package a 'noNodeModules' hold keeps waiting (verify, launch, restart or Retry). */
 const isHeld = (p) => p.awaitingDeps === true || !!p.heldResume || p.heldLaunch === true || p.heldRetry === true;
@@ -288,6 +313,7 @@ function withStallNote(text, reason, detail) {
     '',
     '## Why you were restarted',
     `The previous session on this package stalled (reason: ${reason}${detail ? ` - ${detail}` : ''}). Find out why before you continue.`,
+    ...(reason === 'noMarker' ? [NO_MARKER_RESUME_NOTE] : []),
     '',
   ].join('\n');
 }
