@@ -1601,14 +1601,17 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 /* Settings > Claude accounts: the two reserve caps of one account. */
 .claude-account-reserve { display: inline-flex; gap: var(--space-2); align-items: center; }
 .claude-account-reserve label { display: inline-flex; gap: var(--space-1); align-items: center; white-space: nowrap; }
-/* content-box + small padding: .profile-select's wide padding left no room
-   for the digits in a 7ch border-box, so a typed cap was invisible. Room for
-   "100"; the spinner arrows are hidden, they took the rest. */
-.claude-account-reserve__input {
+/* content-box + small padding: the wide padding of .profile-select and of the
+   global input[type="number"] rule left no room for the digits, so a typed cap
+   was cut off. Room for "100"; the spinner arrows are hidden, they took the
+   rest. input[type="number"] in the selector: the global rule (0,1,1) beats a
+   lone class, and it sets width: 100% and that padding. */
+input[type="number"].claude-account-reserve__input {
   box-sizing: content-box;
   flex: none;
-  width: 3.5ch;
-  min-width: 3.5ch;
+  width: 4.5ch;
+  min-width: 4.5ch;
+  font-variant-numeric: tabular-nums;
   padding: var(--space-2) var(--space-3);
   text-align: center;
   -moz-appearance: textfield;
