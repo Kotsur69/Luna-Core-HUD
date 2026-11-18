@@ -308,7 +308,9 @@ test('the views mount the visuals and keep their public names', () => {
   assert.ok(/export function showBrief\(root\)/.test(brief));
   // The weekly cost line still goes through one small function (another package edits it).
   assert.ok(/^const cost = \(usd\) =>/m.test(brief));
-  assert.ok(brief.includes("t('mc.brief.cost', { cost: cost(entry.costUsd) })"));
+  // The report-models package routes it through reportCost ('$0' on agy, which reports no cost).
+  assert.ok(brief.includes('reportCost(entry, cost)'));
+  assert.ok(brief.includes("t('mc.brief.cost', { cost: costLine })"));
   const sum = read('src/renderer/modules/godmodesummary.js');
   assert.ok(sum.includes('statTiles(runStats(run)'));
   assert.ok(sum.includes('stackBar(runStateSegments(run)'));
