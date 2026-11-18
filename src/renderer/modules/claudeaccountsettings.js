@@ -240,28 +240,56 @@ function renderRow(a, index) {
     li.append(...renameEditor(a));
     return li;
   }
+  // One grid row (styles.css .claude-accounts): dot | name, status and usage
+  // login | the two caps | the buttons. Columns line up across accounts.
   const li = document.createElement('li');
-  li.className = 'project-row';
+  li.className = 'claude-account';
   const dot = document.createElement('span');
   const dotState = a.limitedUntil ? 'fail' : a.active ? 'ok' : 'unknown';
   dot.className = `diag-item__dot diag-item__dot--${dotState}`;
-  const label = document.createElement('span');
-  label.className = 'ui-field__label';
-  label.textContent = `${index + 1}. ${a.label} - ${statusText(a)}`;
-  li.append(dot, label);
+  li.append(dot, identityCell(a, index));
+  const caps = reserveInputs(a);
+  // An empty cell keeps the actions in their own column when caps are unavailable.
+  li.append(...(caps.length > 0 ? caps : [document.createElement('span')]));
+  li.append(actionsCell(a, index));
+  return li;
+}
+
+/** Name and status on the first line, the usage login under them. */
+function identityCell(a, index) {
+  const cell = document.createElement('div');
+  cell.className = 'claude-account__id';
+  const head = document.createElement('div');
+  head.className = 'claude-account__head';
+  const name = document.createElement('span');
+  name.className = 'claude-account__name';
+  name.textContent = `${index + 1}. ${a.label}`;
+  const status = document.createElement('span');
+  status.className = a.limitedUntil ? 'claude-account__status is-fail' : 'claude-account__status';
+  status.textContent = statusText(a);
+  head.append(name, status);
+  cell.append(head);
   if (a.usage) {
     const usage = document.createElement('span');
-    usage.className = a.usage.status === 'reconnect' ? 'hint is-fail' : 'hint';
+    usage.className = a.usage.status === 'reconnect' ? 'claude-account__usage is-fail' : 'claude-account__usage';
     usage.textContent = usageText(a.usage);
-    li.append(usage);
+    // The line is cut with an ellipsis when narrow; the tooltip keeps it whole.
+    usage.title = usage.textContent;
+    cell.append(usage);
   }
-  li.append(...reserveInputs(a));
-  if (index > 0) li.append(button('accounts.moveUp', () => act(window.lunacore.moveClaudeAccountUp, a.id), 'accounts.moveUpHint'));
+  return cell;
+}
+
+/** Every button of a row, right-aligned in one group. */
+function actionsCell(a, index) {
+  const cell = document.createElement('div');
+  cell.className = 'claude-account__actions';
+  if (index > 0) cell.append(button('accounts.moveUp', () => act(window.lunacore.moveClaudeAccountUp, a.id), 'accounts.moveUpHint'));
   // A reached reserve ends with the window's reset or a higher cap, not here.
-  if (a.limitedUntil && !a.reserveHit) li.append(button('accounts.clearLimit', () => act(window.lunacore.clearClaudeAccountLimit, a.id)));
-  li.append(...usageButtons(a));
+  if (a.limitedUntil && !a.reserveHit) cell.append(button('accounts.clearLimit', () => act(window.lunacore.clearClaudeAccountLimit, a.id)));
+  cell.append(...usageButtons(a));
   if (typeof window.lunacore.renameClaudeAccount === 'function') {
-    li.append(button('accounts.edit', () => {
+    cell.append(button('accounts.edit', () => {
       editingId = a.id;
       editDraft = a.label || '';
       editJustOpened = true;
@@ -269,8 +297,8 @@ function renderRow(a, index) {
       render();
     }, 'accounts.editHint'));
   }
-  li.append(button('accounts.remove', () => act(window.lunacore.removeClaudeAccount, a.id)));
-  return li;
+  cell.append(button('accounts.remove', () => act(window.lunacore.removeClaudeAccount, a.id)));
+  return cell;
 }
 
 function render() {
