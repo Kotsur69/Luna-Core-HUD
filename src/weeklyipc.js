@@ -9,7 +9,11 @@
 //                     'exists' until the renderer confirms an overwrite; only
 //                     this week or last week can be generated
 // life:week-email    {week} -> {ok} | {ok:false, reason}  the 'Email it' button
-// life:week-model    {model} -> same as life:week
+// life:week-model    {model} -> same as life:week. model is a choice id
+//                     (src/reportmodel.js): a Claude model, 'agy' or
+//                     'agy:<id>' of the live `agy models` list; anything else
+//                     -> {ok:false, reason:'bad-value'}. Settings -> AI and
+//                     models uses the same two calls as the Week tab.
 //
 // The renderer names a week and a model from fixed lists - never a prompt,
 // a recipient or a body. Generating spends tokens (one call) and sends no
@@ -20,7 +24,8 @@
 
 const { isWeek, isoWeek, ymd } = require('./lifedays');
 const { generatable } = require('./weeklyreview');
-const { JOB_MODELS } = require('./missionrunner');
+const { choiceOf, reportModelChoices, parseChoice } = require('./reportmodel');
+const { sharedAgyModels } = require('./agymodels');
 const { weeklyEmailOn } = require('./mailprefs');
 
 /** 'Email it' sends a real mail: no bursts. */
@@ -28,9 +33,10 @@ const EMAIL_GAP_MS = 30 * 1000;
 
 /**
  * @param {{ipcMain:object, review:{generate:Function, isBusy:Function}, store:object,
- *   mail:{sendNow:Function}, sender:{status:Function}, prefs:{loadPrefs:Function}, now?:()=>number}} deps
+ *   mail:{sendNow:Function}, sender:{status:Function}, prefs:{loadPrefs:Function}, now?:()=>number,
+ *   agyModels?:object}} deps  agyModels: the live `agy models` cache (src/agymodels.js; default: the shared one)
  */
-function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = Date.now }) {
+function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = Date.now, agyModels = sharedAgyModels() }) {
   let lastEmailAt = -Infinity;
   const weekOf = (req) => (req && typeof req === 'object' && isWeek(req.week) ? req.week : null);
 
@@ -43,9 +49,10 @@ function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = 
       ok: true,
       weeks: keys.map((k) => ({ week: k, at: s.weeks[k].at, ok: Boolean(s.weeks[k].review), costUsd: s.weeks[k].costUsd })),
       entry: picked ? s.weeks[picked] : null,
-      model: s.model,
-      // A lean, tool-less call: the Claude models and agy (src/missionrunner.js JOB_MODELS).
-      models: JOB_MODELS,
+      // The picker id of the stored {provider, model}, and what the picker offers:
+      // a lean, tool-less call, so the Claude models plus agy and its live models.
+      model: choiceOf(s.model),
+      models: reportModelChoices(agyModels),
       current: isoWeek(ymd(now())),
       generatable: generatable(now()),
       busy: review.isBusy(),
@@ -82,11 +89,14 @@ function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = 
     return res.ok ? safeView(week) : res;
   });
 
-  ipcMain.handle('life:week-model', (_event, req) => {
+  ipcMain.handle('life:week-model', async (_event, req) => {
     try {
-      store.setModel(req && req.model);
+      const rm = await parseChoice(req && req.model, agyModels);
+      if (!rm) return { ok: false, reason: 'bad-value' };
+      store.setModel(rm);
       return safeView(weekOf(req));
-    } catch {
+    } catch (err) {
+      console.error('[weekly] model change failed:', err && err.message);
       return { ok: false, reason: 'bad-value' };
     }
   });

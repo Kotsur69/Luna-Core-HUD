@@ -169,12 +169,19 @@ test('unusable output keeps the inputs; history caps at 14 daily', async () => {
   assert.equal(Object.keys(h.store.load().daily).length, MAX_DAILY);
 });
 
-test('the brief store keeps Claude models only: agy is refused, a stored agy reads as haiku', () => {
+test('the brief store keeps a report model: old plain strings load as {provider, model}, junk is refused', () => {
   const h = setup();
-  assert.throws(() => h.store.setModel('agy'), /bad value/);
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-brief-agy-')), 'mission-brief.local.json');
-  fs.writeFileSync(file, JSON.stringify({ v: 1, model: 'agy' }));
-  assert.equal(createBriefStore({ file }).load().model, 'haiku');
+  assert.deepEqual(h.store.load().model, { provider: 'claude', model: 'haiku' });
+  h.store.setModel({ provider: 'agy', model: 'gemini-4-hydrogen-low' });
+  assert.deepEqual(h.store.load().model, { provider: 'agy', model: 'gemini-4-hydrogen-low' });
+  for (const junk of ['gpt-5', { provider: 'openai', model: 'gpt-5' }, { provider: 'agy', model: '--print' }, null]) {
+    assert.throws(() => h.store.setModel(junk), /bad value/, JSON.stringify(junk));
+  }
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lc-brief-old-')), 'mission-brief.local.json');
+  fs.writeFileSync(file, JSON.stringify({ v: 1, model: 'sonnet', daily: { '2026-10-26': { at: 1, model: 'opus', brief: null, failure: 'x', inputs: {} } } }));
+  const old = createBriefStore({ file }).load();
+  assert.deepEqual(old.model, { provider: 'claude', model: 'sonnet' });
+  assert.deepEqual(old.daily['2026-10-26'].model, { provider: 'claude', model: 'opus' });
 });
 
 test('rememberNews keeps the last briefing for the next brief', () => {
@@ -196,6 +203,7 @@ test('mission:brief* IPC: kinds and models from fixed lists, exists until confir
     github: { fetch: async () => ({}), urlFor: () => null },
     briefStore: createBriefStore({ file }),
     briefSources: sources().src,
+    agyModels: { ensure: async () => [], isKnownId: (id) => id === 'gemini-4-hydrogen-low', choices: () => [{ id: 'agy', name: 'Antigravity' }] },
   });
   const call = (ch, arg) => handlers.get(ch)({}, arg);
   assert.deepEqual(await call('mission:brief-run', { kind: 'evil' }), { ok: false, reason: 'bad-input' });
@@ -205,9 +213,10 @@ test('mission:brief* IPC: kinds and models from fixed lists, exists until confir
   assert.equal((await call('mission:brief-run', { kind: 'daily' })).reason, 'exists');
   assert.equal((await call('mission:brief-run', { kind: 'daily', overwrite: true })).ok, true);
   assert.deepEqual(await call('mission:brief-model', { model: 'gpt-5' }), { ok: false, reason: 'bad-input' });
-  // The brief needs Claude's Gmail connector: agy is neither offered nor accepted.
-  assert.deepEqual(await call('mission:brief-model', { model: 'agy' }), { ok: false, reason: 'bad-input' });
-  assert.equal((await call('mission:brief', {})).models.includes('agy'), false);
+  // agy is offered (it runs without mail); an agy id the live list lacks is refused.
+  assert.deepEqual(await call('mission:brief-model', { model: 'agy:gemini-9-made-up' }), { ok: false, reason: 'bad-input' });
+  assert.equal((await call('mission:brief', {})).models.some((m) => m.id === 'agy'), true);
+  assert.equal((await call('mission:brief-model', { model: 'agy:gemini-4-hydrogen-low' })).model, 'agy:gemini-4-hydrogen-low');
   assert.equal((await call('mission:brief-model', { model: 'opus' })).model, 'opus');
   assert.equal((await call('mission:brief', { daily: 'not-a-key' })).daily.keys.length, 1);
 });

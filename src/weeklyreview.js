@@ -3,8 +3,10 @@
 // ----------------------------------------------------------------------------
 // Every Sunday at 20:00 local (and on "Generate now") the week collected by
 // src/weeklycollect.js goes to ONE lean `claude -p` call (no tools, Haiku by
-// default, model picker on the Week tab; the picker also offers agy, which
-// runs it as one `agy --print` in the agy profile's env - src/missionrunner.js)
+// default; picked in Settings -> AI and models or on the Week tab, stored as
+// {provider, model} - src/reportmodel.js. agy (its default model or one of
+// `agy models`, e.g. gemini-4-hydrogen-low) runs it as one `agy --print` in
+// the agy profile's env - src/missionrunner.js)
 // that answers JSON:
 //   {headline, fun:{summary, projects[]}, work:[{project, status, openTodos[]}],
 //    claudeTable[], goals:[{goal, verdict, evidence[]}], suggestions[3],
@@ -32,9 +34,8 @@
 const { createStore } = require('./lifestore');
 const { ymd, parseDay, addDays, isoWeek, isWeek } = require('./lifedays');
 const { weekBounds, knownProjects } = require('./weeklycollect');
-// The review is one lean call with no tools, so agy is a valid pick (JOB_MODELS).
-const { JOB_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
-const { AGY_MODEL } = require('./claudeModels');
+// The review is one lean call with no tools, so an agy model is a valid pick.
+const { normalizeReportModel, isAgyReport, runModelOf, reportModelLabel, DEFAULT_REPORT_MODEL } = require('./reportmodel');
 const h = require('./reportHtml');
 
 const MAX_WEEKS = 12;
@@ -172,6 +173,13 @@ function rawLines(data) {
   return out;
 }
 
+/** The cost line of a review: agy reports no cost, so it shows $0 with the model's name. */
+function costLines(entry) {
+  const label = reportModelLabel(entry.model);
+  if (isAgyReport(normalizeReportModel(entry.model))) return ['', `Review cost: $0 (${label})`];
+  return typeof entry.costUsd === 'number' ? ['', `Review cost: ${money(entry.costUsd)} (${label})`] : [];
+}
+
 /** The whole review as plain text (email body). */
 function reviewText(entry) {
   const r = entry.review;
@@ -193,7 +201,7 @@ function reviewText(entry) {
     lines.push('The model answer was not usable - the raw numbers:', '');
   }
   lines.push('---', ...rawLines(entry.data));
-  if (typeof entry.costUsd === 'number') lines.push('', `Review cost: ${money(entry.costUsd)} (${entry.model})`);
+  lines.push(...costLines(entry));
   return lines.join('\n');
 }
 
@@ -286,7 +294,9 @@ function renderWeeklyReportHtml(entry) {
   const range = typeof data.from === 'string' && typeof data.to === 'string' ? `${str(data.from, 10)} - ${str(data.to, 10)}` : '';
   const headline = e.review ? e.review.headline : '';
   const body = [weeklyCards(e, data), weeklyCharts(data), reviewSections(e.review)].join('\n');
-  const cost = typeof e.costUsd === 'number' ? ` · review cost ${money(e.costUsd)} (${str(e.model, 32)})` : '';
+  const label = str(reportModelLabel(e.model), 120);
+  const agy = isAgyReport(normalizeReportModel(e.model));
+  const cost = agy ? ` · review cost $0 (${label})` : typeof e.costUsd === 'number' ? ` · review cost ${money(e.costUsd)} (${label})` : '';
   const at = Number.isFinite(e.at) ? new Date(e.at).toISOString().replace('T', ' ').slice(0, 16) : '-';
   return h.page({
     title: `Weekly review - ${week}`,
@@ -315,7 +325,7 @@ function entryOf(week, raw) {
   return {
     week,
     at: raw.at,
-    model: JOB_MODELS.includes(raw.model) ? raw.model : DEFAULT_MISSION_MODEL,
+    model: normalizeReportModel(raw.model),
     costUsd: typeof raw.costUsd === 'number' && Number.isFinite(raw.costUsd) ? raw.costUsd : null,
     review,
     failure: review ? null : reasonOf(raw.failure) || 'bad-json',
@@ -331,11 +341,12 @@ function normalize(raw) {
     const e = entryOf(k, src[k]);
     if (e) weeks[k] = e;
   }
-  const model = raw && JOB_MODELS.includes(raw.model) ? raw.model : DEFAULT_MISSION_MODEL;
+  // An old file's plain string ('haiku', 'agy') reads as {provider, model}.
+  const model = normalizeReportModel(raw && raw.model);
   return { v: 1, model, weeks };
 }
 
-const defaults = () => ({ v: 1, model: DEFAULT_MISSION_MODEL, weeks: {} });
+const defaults = () => ({ v: 1, model: { ...DEFAULT_REPORT_MODEL }, weeks: {} });
 
 /** @param {{file?:string}} [opts] a test path; the app uses config/mission-weekly.local.json */
 function createWeeklyStore(opts = {}) {
@@ -348,9 +359,11 @@ function createWeeklyStore(opts = {}) {
     put: (entry) => store.update((s) => ({ ...s, weeks: { ...s.weeks, [entry.week]: entry } }), file),
     setMail: (week, mail) =>
       store.update((s) => (s.weeks[week] ? { ...s, weeks: { ...s.weeks, [week]: { ...s.weeks[week], mail } } } : s), file),
+    /** A report model (src/reportmodel.js); the IPC checked it against the live lists. */
     setModel: (model) => {
-      if (!JOB_MODELS.includes(model)) throw new Error('bad value');
-      return store.update((s) => ({ ...s, model }), file);
+      const rm = normalizeReportModel(model, null);
+      if (!rm) throw new Error('bad value');
+      return store.update((s) => ({ ...s, model: rm }), file);
     },
   };
 }
@@ -407,10 +420,11 @@ function createWeeklyReview(deps) {
       if (prev && !overwrite) return { ok: false, reason: 'exists' };
       const data = await deps.collect(week);
       if (!data) return { ok: false, reason: 'bad-week' };
-      const model = deps.store.load().model;
+      const model = normalizeReportModel(deps.store.load().model);
       // agy runs in its own profile's env; without one the runner refuses (no-agy-profile).
-      const agyEnv = model === AGY_MODEL && typeof deps.getAgyEnv === 'function' ? deps.getAgyEnv() : null;
-      const res = await deps.run({ prompt: buildReviewPrompt(data), model, lean: true, env: deps.getEnv(), agyEnv, timeoutMs: JOB_TIMEOUT_MS });
+      // Never a silent Claude fallback: an agy failure is saved as the entry's failure.
+      const agyEnv = isAgyReport(model) && typeof deps.getAgyEnv === 'function' ? deps.getAgyEnv() : null;
+      const res = await deps.run({ prompt: buildReviewPrompt(data), model: runModelOf(model), lean: true, env: deps.getEnv(), agyEnv, timeoutMs: JOB_TIMEOUT_MS });
       const review = res && res.ok ? validateReview(res.answer, data) : null;
       const failure = review ? null : (res && res.ok ? 'bad-json' : reasonOf(res && res.reason) || 'generic');
       const costUsd = res && typeof res.costUsd === 'number' ? res.costUsd : null;

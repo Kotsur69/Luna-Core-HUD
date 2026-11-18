@@ -50,7 +50,7 @@ const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
 const { AGY_MODEL } = require('./claudeModels');
-const { runAgyPrint } = require('./orchestraAgy');
+const { isAgyModel } = require('./workerModels');
 
 /** Every Gmail connector tool, so a job can deny all but the ones it uses. */
 const GMAIL_TOOLS = [
@@ -91,8 +91,18 @@ const DEFAULT_TIMEOUT_MS = 120000;
  */
 const AGY_NO_TOOLS = 'Use no tools: do not read or write files, run commands or call any MCP server. Answer only from the text above.';
 
-/** runAgyPrint's failure -> the job's reason (the renderer maps reasons to text). */
-const AGY_REASONS = Object.freeze({ noAgy: 'no-agy', timeout: 'timeout', limit: 'agy-limit', failed: 'agy-failed' });
+/**
+ * execAgy's failure -> the job's reason (the renderer maps reasons to text).
+ * Every one names agy, so a report that failed there says which provider did.
+ */
+const AGY_REASONS = Object.freeze({
+  noAgyProfile: 'no-agy-profile',
+  badAgyModel: 'agy-bad-model',
+  noAgy: 'no-agy',
+  timeout: 'agy-timeout',
+  limit: 'agy-limit',
+  failed: 'agy-failed',
+});
 
 /**
  * The built-in tools of a `readOnly` job (the memory check, src/memorycheck.js):
@@ -169,28 +179,51 @@ function parseLooseJson(text) {
   return start >= 0 && end > start ? tryParse(text.slice(start, end + 1)) : null;
 }
 
+/** The text of execAgy's result envelope, or '' when it is unreadable. */
+function agyResultText(stdout) {
+  try {
+    const outer = JSON.parse(stdout);
+    return outer && typeof outer.result === 'string' ? outer.result : '';
+  } catch {
+    return '';
+  }
+}
+
 /**
  * One job on the Antigravity CLI: `agy --print` in the OS temp dir, prompt on
- * stdin, in the agy profile's env. Only a lean job without tools can run
- * there - agy has no claude.ai connectors, no tool allow-list and no
- * --strict-mcp-config - so any other job is refused, never run on claude
- * instead. agy reports no cost.
- * @param {{prompt:string, allowed?:string[], lean?:boolean, readOnly?:boolean, agyEnv?:object|null,
- *          timeoutMs:number, exec:Function}} job
+ * stdin, in the agy profile's env, through execAgy (src/agyexec.js). Only a
+ * lean job without tools can run there - agy has no claude.ai connectors, no
+ * tool allow-list and no --strict-mcp-config - so any other job is refused,
+ * never run on claude instead. `model` is 'agy' (agy's default model) or
+ * 'agy:<id>': execAgy passes the id as agy's `--model` once the live `agy
+ * models` list holds it, and refuses it otherwise ('agy-bad-model'). agy
+ * reports no cost.
+ * @param {{prompt:string, model:string, allowed?:string[], lean?:boolean, readOnly?:boolean, agyEnv?:object|null,
+ *          timeoutMs:number, exec:Function, agyModels?:object}} job
  * @returns {Promise<{ok:true, answer:object, costUsd:null}|{ok:false, reason:string, costUsd?:null}>}
  */
-async function runAgyJob({ prompt, allowed, lean, readOnly, agyEnv, timeoutMs, exec }) {
+async function runAgyJob({ prompt, model, allowed, lean, readOnly, agyEnv, timeoutMs, exec, agyModels }) {
   // A job that names connector tools needs them, even when it also says lean.
   const wantsTools = Array.isArray(allowed) && allowed.length > 0;
   if (lean !== true || readOnly || wantsTools) return { ok: false, reason: 'agy-needs-claude' };
   if (!agyEnv || typeof agyEnv !== 'object' || Array.isArray(agyEnv)) return { ok: false, reason: 'no-agy-profile' };
+  // Required lazily: agyexec pulls in the agy model cache, which main sets up.
+  const { execAgy } = require('./agyexec');
   const text = `${String(prompt || '')}\n\n${AGY_NO_TOOLS}`;
-  const res = await runAgyPrint({ cwd: os.tmpdir(), env: agyEnv, prompt: text, timeout: timeoutMs, execImpl: exec });
-  if (!res.ok) {
+  const res = await execAgy({
+    args: ['-p', '--model', model],
+    prompt: text,
+    cwd: os.tmpdir(),
+    env: agyEnv,
+    timeoutMs,
+    execImpl: exec,
+    ...(agyModels ? { agyModels } : {}),
+  });
+  if (res.error) {
     console.error('[mission] agy job failed:', res.error, res.detail || '');
     return { ok: false, reason: AGY_REASONS[res.error] || 'agy-failed', costUsd: null };
   }
-  const answer = parseLooseJson(res.stdout);
+  const answer = parseLooseJson(agyResultText(res.stdout));
   return answer ? { ok: true, answer, costUsd: null } : { ok: false, reason: 'bad-json', costUsd: null };
 }
 
@@ -200,15 +233,15 @@ async function runAgyJob({ prompt, allowed, lean, readOnly, agyEnv, timeoutMs, e
  * cwd is the OS temp dir so no project CLAUDE.md is pulled into the context,
  * except for a `readOnly` lean job: it runs in `cwd` (an absolute folder, the
  * project it reads), which is also the only folder its Read tool may open.
- * model 'agy' (AGY_MODEL) runs the job on agy in `agyEnv` (the agy profile's
- * env; `env` is never used for agy) - see runAgyJob; its extra reasons are
- * 'agy-needs-claude' (not a lean, tool-less job), 'no-agy-profile', 'no-agy',
- * 'agy-limit' and 'agy-failed'.
+ * model 'agy' (AGY_MODEL) or 'agy:<id>' runs the job on agy in `agyEnv` (the
+ * agy profile's env; `env` is never used for agy) - see runAgyJob; its extra
+ * reasons are 'agy-needs-claude' (not a lean, tool-less job), 'no-agy-profile',
+ * 'agy-bad-model', 'no-agy', 'agy-timeout', 'agy-limit' and 'agy-failed'.
  * @param {{prompt:string, model?:string, allowed?:string[], lean?:boolean, readOnly?:boolean, cwd?:string,
  *          env:Record<string,string>, agyEnv?:Record<string,string>|null, timeoutMs?:number, exec?:Function}} job
  */
-function runJob({ prompt, model, allowed, lean, readOnly = false, cwd = null, env, agyEnv = null, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile, stdin = false }) {
-  if (model === AGY_MODEL) return runAgyJob({ prompt, allowed, lean, readOnly, agyEnv, timeoutMs, exec });
+function runJob({ prompt, model, allowed, lean, readOnly = false, cwd = null, env, agyEnv = null, timeoutMs = DEFAULT_TIMEOUT_MS, exec = execFile, stdin = false, agyModels = null }) {
+  if (isAgyModel(model)) return runAgyJob({ prompt, model, allowed, lean, readOnly, agyEnv, timeoutMs, exec, agyModels });
   return new Promise((resolve) => {
     // A read-only job without a real project folder would read the temp dir: refused instead.
     if (readOnly && !(lean && typeof cwd === 'string' && path.isAbsolute(cwd))) return resolve({ ok: false, reason: 'bad-cwd' });
