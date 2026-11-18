@@ -30,8 +30,7 @@
   gap: var(--space-1);
   min-width: 0;
   padding: var(--space-3) var(--space-4);
-  border: var(--border-w) solid var(--edge);
-  border-left: 3px solid var(--rv-tone);
+  border: var(--border-w) solid color-mix(in srgb, var(--rv-tone) 35%, var(--edge));
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--rv-tone) 8%, transparent);
 }

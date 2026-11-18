@@ -110,9 +110,6 @@ td ul.plain{padding-left:16px}
 ul.pills{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
 ul.pills .pill{white-space:normal}
 .pill .ico{display:inline-block;width:1.2em;margin-right:4px;text-align:center;font-weight:700}
-.card{border-left:4px solid var(--line)}
-.card.ok{border-left-color:var(--ok)}.card.bad{border-left-color:var(--bad)}.card.warn{border-left-color:var(--warn)}
-.card.info{border-left-color:var(--info)}.card.accent{border-left-color:var(--accent)}
 details.fold{border:1px solid var(--line);border-radius:10px;margin:10px 0 0;background:var(--panel)}
 details.fold>summary{cursor:pointer;padding:10px 14px;font-weight:600;color:var(--strong);list-style:none;display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}
 details.fold>summary::-webkit-details-marker{display:none}
