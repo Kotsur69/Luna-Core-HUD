@@ -138,8 +138,10 @@ test('showBrief mounted while lang is pl repaints to English on emitLangChange()
 
   const plButtons = texts(root, (n) => n.tag === 'button');
   assert.deepEqual(plButtons, ['Dzienny brief', 'Tygodniowy brief', 'Wygeneruj ponownie', 'Przeglad niedzielny']);
-  const plHeads = texts(root, (n) => n.tag === 'h4');
-  assert.deepEqual(plHeads, ['Priorytety', 'Kalendarz', 'To-do', 'Poczta do decyzji', 'Newsy']);
+  // Sections are folding <details> (reportvisuals.details): the title is a span in <summary>.
+  const isSectionTitle = (n) => n.className === 'rv-details__title';
+  const plHeads = texts(root, isSectionTitle);
+  assert.deepEqual(plHeads, ['Priorytety', 'Kalendarz', 'Poczta do decyzji', 'To-do', 'Newsy']);
 
   // Simulate initAppearance() applying prefs.lang = 'en' after the hub opened,
   // or the user switching PL -> EN in Settings while the drawer is open.
@@ -148,8 +150,8 @@ test('showBrief mounted while lang is pl repaints to English on emitLangChange()
 
   const enButtons = texts(root, (n) => n.tag === 'button');
   assert.deepEqual(enButtons, ['Daily brief', 'Weekly brief', 'Regenerate', 'Sunday review']);
-  const enHeads = texts(root, (n) => n.tag === 'h4');
-  assert.deepEqual(enHeads, ['Priorities', 'Calendar', 'To-dos', 'Mail that needs a call', 'News']);
+  const enHeads = texts(root, isSectionTitle);
+  assert.deepEqual(enHeads, ['Priorities', 'Calendar', 'Mail that needs a call', 'To-dos', 'News']);
   const selects = walk(root).filter((n) => n.tag === 'select');
   assert.deepEqual(
     selects.map((s) => s.getAttribute('aria-label')),
