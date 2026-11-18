@@ -763,6 +763,118 @@ test('distCommand builds into dist/release-v<version> and refuses anything but x
   }
 });
 
+// What `npm run dist -- <args>` hands electron-builder: the dist script's own
+// arguments, then everything after `--` appended to it.
+const builderArgv = (script, command) => [...script.trim().split(/\s+/).slice(1), ...command.split(' -- ')[1].split(/\s+/)];
+const REAL_SCRIPTS = JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).scripts;
+
+test('distCommand output folder is the version folder, never dist/ or dist/win-unpacked', () => {
+  const cmd = release.distCommand('0.33.0');
+  const out = /-c\.directories\.output=(\S+)$/.exec(cmd)[1];
+  assert.equal(out, release.distAssets('0.33.0').dir);
+  assert.equal(path.posix.dirname(out), 'dist');
+  assert.notEqual(path.posix.normalize(out), 'dist');
+  // electron-builder writes win-unpacked INSIDE the output folder.
+  const unpacked = path.posix.join(out, 'win-unpacked');
+  assert.notEqual(unpacked, 'dist/win-unpacked');
+  assert.ok(path.posix.relative('dist/win-unpacked', unpacked).startsWith('..'));
+});
+
+test("the repo's dist script is one electron-builder command, so the override reaches it", () => {
+  assert.equal(release.distScriptProblem(REAL_SCRIPTS), null);
+  assert.deepEqual(builderArgv(REAL_SCRIPTS.dist, release.distCommand('0.33.0')), ['--win', '-c.directories.output=dist/release-v0.33.0']);
+});
+
+test("electron-builder's own CLI parser puts the override into config.directories.output", () => {
+  const builder = require('electron-builder/out/builder.js');
+  const argv = builderArgv(REAL_SCRIPTS.dist, release.distCommand('0.33.0'));
+  const parsed = builder.configureBuildCommand(builder.createYargs()).parse(argv);
+  const opts = builder.normalizeOptions(parsed);
+  assert.equal(opts.config.directories.output, 'dist/release-v0.33.0');
+});
+
+test('distScriptProblem: a chained, wrapped or self-configured dist script, or a pre/post step, is refused', () => {
+  const ok = { dist: 'electron-builder --win' };
+  assert.equal(release.distScriptProblem(ok), null);
+  assert.equal(release.distScriptProblem({ dist: '  electron-builder  ' }), null);
+  assert.equal(release.distScriptProblem({}), 'no dist script in package.json');
+  assert.equal(release.distScriptProblem(null), 'no dist script in package.json');
+  assert.equal(release.distScriptProblem({ dist: 42 }), 'no dist script in package.json');
+  const notSingle = /not a single electron-builder command/;
+  for (const dist of [
+    'electron-builder --win && node scripts/after.js',
+    'rimraf dist && electron-builder --win',
+    'electron-builder --win || exit 0',
+    'electron-builder --win; echo done',
+    'electron-builder --win | tee build.log',
+    'electron-builder --win > build.log',
+    'electron-builder --win & echo',
+    'electron-builder --win\nnode x.js',
+    'node scripts/dist.js',
+    'npx electron-builder --win',
+    'electron-builder-x --win',
+  ]) {
+    assert.match(release.distScriptProblem({ dist }), notSingle, dist);
+  }
+  assert.equal(release.distScriptProblem({ dist: 'electron-builder --win -c.directories.output=dist' }), 'the dist script sets its own output folder');
+  assert.match(release.distScriptProblem({ ...ok, predist: 'rimraf dist' }), /predist script/);
+  assert.match(release.distScriptProblem({ ...ok, postdist: 'node x.js' }), /postdist script/);
+});
+
+test('a dist script the override cannot reach refuses the release before anything changes', async () => {
+  const tools = fakeTools({ scripts: { test: 'node --test', dist: 'rimraf dist && electron-builder --win' } });
+  const res = await cut(tools);
+  assert.equal(res.ok, false);
+  assert.equal(res.refused, true);
+  assert.equal(res.stage, 'package');
+  assert.match(res.reason, /not a single electron-builder command/);
+  assert.ok(!tools.calls.includes('npm test'), 'refused before the tests');
+  assertNothingChanged(tools);
+});
+
+test('gh release create uploads exactly latest.yml, the portable exe and the DASHED setup + blockmap, never a #label', async () => {
+  const tools = fakeTools();
+  const ghCalls = [];
+  const exec = tools.deps.exec;
+  const res = await release.cutRelease(
+    { repoPath: REPO, base: 'main', landedSha: LANDED },
+    {
+      ...tools.deps,
+      exec: (bin, args, o) => {
+        if (bin === 'gh' && args[0] === 'release') ghCalls.push(args);
+        return exec(bin, args, o);
+      },
+    },
+  );
+  assert.equal(res.ok, true);
+  assert.equal(ghCalls.length, 1, 'one gh release call, no separate upload');
+  const args = ghCalls[0];
+  assert.equal(args[1], 'create');
+  // Positional args after the tag are the assets; --title / --notes-file take a value, --latest does not.
+  const VALUE_FLAGS = new Set(['--title', '--notes-file']);
+  const assets = args.slice(3).filter((a, i, all) => !a.startsWith('--') && !VALUE_FLAGS.has(all[i - 1]));
+  assert.deepEqual(
+    assets.map((a) => path.basename(a)),
+    ['latest.yml', 'LunaCore-0.21.0-portable.exe', 'LunaCore-Setup-0.21.0.exe', 'LunaCore-Setup-0.21.0.exe.blockmap'],
+  );
+  for (const a of assets) {
+    assert.equal(path.dirname(a), path.join('dist', 'release-v0.21.0'), `${a} comes from the version folder`);
+    assert.ok(!a.includes('#'), `no gh #label on ${a}`);
+    assert.ok(!/\s/.test(a), `no space in ${a}`);
+  }
+  for (const a of args) assert.ok(!a.includes('#'), `no #label in gh args: ${a}`);
+});
+
+test('latest.yml naming the spaced setup (not the dashed one) is refused: no copy, no gh release', async () => {
+  const tools = fakeTools({ badLatest: true });
+  const res = await cut(tools);
+  assert.equal(res.ok, false);
+  assert.equal(res.stage, 'assets');
+  assert.equal(res.reason, 'dist/release-v0.21.0/latest.yml does not point to LunaCore-Setup-0.21.0.exe');
+  assert.ok(!tools.calls.some((c) => c.startsWith('copy ')), 'no dashed copy made');
+  assert.ok(!tools.calls.some((c) => c.startsWith('gh release')));
+});
+
 test('a dist failure says the tag is already pushed; no gh release follows', async () => {
   const tools = fakeTools({ distFails: 'electron-builder\n  ⨯ cannot find icon' });
   const res = await cut(tools);

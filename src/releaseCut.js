@@ -3,7 +3,8 @@
 // ----------------------------------------------------------------------------
 // Exactly the manual release steps, in order, on the repo's main checkout:
 //
-//   0. refuse (nothing changed yet) on: no `dist` script in package.json, a
+//   0. refuse (nothing changed yet) on: no `dist` script in package.json, or
+//      one the step-5 output override cannot reach (distScriptProblem), a
 //      dirty tree, another branch checked out, the run's merge not in HEAD
 //      ("run not landed on base"), a base behind origin (fetched first), no
 //      `gh auth`, no previous v* tag, nothing new since it, red `npm test`
@@ -227,6 +228,33 @@ function distCommand(version) {
   return `npm run dist -- -c.directories.output=${distAssets(version).dir}`;
 }
 
+// Shell operators that would split the dist script into several commands:
+// `npm run dist -- <args>` appends <args> to the LAST one only.
+const SHELL_CHAIN_RE = /[;&|<>\r\n`]/;
+const ELECTRON_BUILDER_RE = /^electron-builder(\s|$)/;
+
+/**
+ * Why package.json's scripts cannot carry distCommand's output override, or
+ * null. The override is appended to the `dist` script, so that script must be
+ * ONE electron-builder command that does not set the output folder itself,
+ * and no predist / postdist step may run outside the override (a clean step
+ * there could touch dist/win-unpacked, which a running LunaCore holds).
+ * @param {object} scripts package.json `scripts`
+ * @returns {string|null}
+ */
+function distScriptProblem(scripts) {
+  const dist = scripts && typeof scripts === 'object' ? scripts.dist : undefined;
+  if (typeof dist !== 'string') return 'no dist script in package.json';
+  const cmd = dist.trim();
+  if (!ELECTRON_BUILDER_RE.test(cmd) || SHELL_CHAIN_RE.test(cmd)) {
+    return 'the dist script is not a single electron-builder command (the output folder override would not reach it)';
+  }
+  if (/directories\.output/.test(cmd)) return 'the dist script sets its own output folder';
+  const hook = ['predist', 'postdist'].find((name) => scripts[name] != null);
+  if (hook) return `package.json has a ${hook} script, which runs outside the build's output folder`;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Default side effects
 // ---------------------------------------------------------------------------
@@ -299,7 +327,8 @@ async function preflight(opts, d, git, npm) {
   } catch {
     return refuse('package', 'package.json unreadable');
   }
-  if (!pkg || !pkg.scripts || typeof pkg.scripts.dist !== 'string') return refuse('package', 'no dist script in package.json');
+  const scriptProblem = distScriptProblem(pkg && pkg.scripts);
+  if (scriptProblem) return refuse('package', scriptProblem);
   if (!SEMVER_RE.test(String(pkg.version))) return refuse('package', 'package.json version is not x.y.z');
 
   const status = await git(['status', '--porcelain']);
@@ -504,6 +533,7 @@ module.exports = {
   releaseNotes,
   distAssets,
   distCommand,
+  distScriptProblem,
   truncateWords,
   isSkippedSubject,
   redact,
