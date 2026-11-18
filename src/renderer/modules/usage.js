@@ -95,6 +95,7 @@ export function accountMessageKey(account) {
   if (status === 'reconnect') return account.main ? 'usage.account.reconnectMain' : 'usage.account.reconnect';
   if (status === 'unconnected') return 'usage.account.unconnected';
   if (hasBars) return null;
+  if (status === 'unreported') return 'usage.google.unreported';
   return status === 'error' ? 'usage.unavailable' : 'usage.loading';
 }
 
@@ -538,7 +539,8 @@ function markDimmed(line, state) {
 function noticeCells({ account, key }) {
   const msg = span('usage-line__msg', t(shortMessageKey(key)));
   msg.title = t(key);
-  if (key === 'usage.loading') return [msg];
+  // Nothing in Settings fixes these, so no arrow to it.
+  if (key === 'usage.loading' || key === 'usage.google.unreported') return [msg];
   const link = document.createElement('button');
   link.type = 'button';
   link.className = 'usage-line__link';
@@ -576,6 +578,55 @@ function limitLine(row, isFirst, groupSize, withAccount) {
 }
 
 /**
+ * An agy row's label once its model family moves to the name column: '' for a
+ * shared window (it localizes from `window`), else the bucket's own name
+ * without the "Group · " prefix ("3 day", "Burst").
+ */
+function modelRowLabel(limit) {
+  if (WINDOW_LABEL_KEYS[limit.window]) return '';
+  const group = limitGroup(limit);
+  const prefix = group ? `${group}${GROUP_SEPARATOR}` : '';
+  const label = typeof limit.label === 'string' ? limit.label : '';
+  return prefix && label.startsWith(prefix) ? label.slice(prefix.length) : label;
+}
+
+/** agy model families in name-column order; Argon is the one always listed. */
+const AGY_MODEL_ORDER = ['Opus', 'Gemini', 'Argon'];
+const AGY_ARGON = 'Argon';
+
+/**
+ * agy rows regrouped like Claude's accounts: one "account" per model family
+ * (Opus / Gemini / Argon, src/providerusageparse.js agyModelName) whose short
+ * name fills the name column, so the window label shows once per group and
+ * each family gets a row under it. The limits drop their model group and
+ * label, so they group under the plain 5h / wk windows. Argon is listed even
+ * without a reading (status 'unreported': a muted line says Google sent none).
+ * @param {Array<object>} limits drawable limits carrying `model`
+ * @returns {Array<{account: object, limits: Array<object>}>}
+ */
+export function modelSources(limits) {
+  const byModel = new Map();
+  for (const limit of limits) {
+    const model = (limit && typeof limit.model === 'string' && limit.model) || 'Antigravity';
+    const plain = { ...limit, group: undefined, label: modelRowLabel(limit) };
+    if (!byModel.has(model)) byModel.set(model, []);
+    byModel.get(model).push(plain);
+  }
+  if (!byModel.has(AGY_ARGON)) byModel.set(AGY_ARGON, []);
+  const rank = (m) => {
+    const i = AGY_MODEL_ORDER.indexOf(m);
+    return i === -1 ? AGY_MODEL_ORDER.length : i;
+  };
+  return [...byModel.keys()]
+    .sort((a, b) => rank(a) - rank(b))
+    .map((model) => {
+      const own = byModel.get(model);
+      const status = own.length > 0 ? 'ok' : 'unreported';
+      return { account: { label: model, status, active: false, limits: own }, limits: own };
+    });
+}
+
+/**
  * The grid input for a non-Claude provider block. A signed-in account (the
  * agy Google email) takes the account column, so its rows use the same
  * column layout as Claude's accounts. A provider without one (Codex, GLM...)
@@ -586,6 +637,7 @@ function limitLine(row, isFirst, groupSize, withAccount) {
  * @returns {{sources: Array<{account: object|null, limits: Array<object>}>, withAccount: boolean}}
  */
 export function providerSources(entry, limits) {
+  if (limits.some((l) => l && typeof l.model === 'string' && l.model)) return { sources: modelSources(limits), withAccount: true };
   const email = entry && typeof entry.account === 'string' ? entry.account : '';
   if (!email) return { sources: [{ account: null, limits }], withAccount: false };
   // status 'ok' + limits: accountMessageKey() adds no notice line for it.

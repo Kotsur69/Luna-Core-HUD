@@ -382,11 +382,14 @@ const agyCred = (over = {}) => JSON.stringify({
   auth_method: 'consumer',
   id_token_email: 'mati@example.com',
 });
-const agyDeps = (base, { cred = agyCred(), memory = new Map() } = {}) => ({
+// `cli`: what `agy -p /usage` prints; null (default) = agy could not be run,
+// so no test ever spawns the real agy.
+const agyDeps = (base, { cred = agyCred(), memory = new Map(), cli = null } = {}) => ({
   ...base,
   platform: 'win32',
   arch: 'x64',
   agyMemory: memory,
+  runAgyUsage: async () => (cli === null ? { ok: false, reason: 'agy not found' } : { ok: true, text: cli }),
   readAgyCredential: async () => (cred === null ? { ok: false, reason: 'No agy login in Windows Credential Manager' } : { ok: true, text: cred }),
 });
 const AGY_KEY = `${agyTests.AGY_QUOTA_HOST}${agyTests.AGY_QUOTA_PATH}`;
@@ -457,6 +460,161 @@ test('parseAgyQuotaSummary: windows and Argon read off snake/kebab ids; only the
   ]);
 });
 
+test('agyModelName: short family names for the usage tile', () => {
+  assert.equal(parse.agyModelName('Claude and GPT models'), 'Opus');
+  assert.equal(parse.agyModelName('gemini-3-flash'), 'Gemini');
+  assert.equal(parse.agyModelName('Gemini 4 Argon'), 'Argon');
+  assert.equal(parse.agyModelName('gemini-pro-orchestrator-argon'), 'Argon');
+  assert.equal(parse.agyModelName('', 'chat_20706'), 'chat_20706');
+  assert.equal(parse.agyModelName(), 'Antigravity');
+  const summary = parse.parseAgyQuotaSummary(AGY_SUMMARY);
+  assert.deepEqual(summary.map((l) => l.model), ['Opus', 'Opus']);
+});
+
+test('parseAgyModelQuota: Gemini from the most-used gemini bucket, window read off the reset; Argon weekly', () => {
+  const now = Date.parse('2026-11-18T12:00:00Z');
+  const rows = agyTests.parseAgyModelQuota({
+    buckets: [
+      { modelId: 'claude-opus-5-5-high', remainingFraction: 1, resetTime: '2026-11-18T16:00:00Z' },
+      { modelId: 'gemini-3-flash', remainingFraction: 0.9, resetTime: '2026-11-18T13:30:00Z' },
+      { modelId: 'gemini-2.5-pro', remainingFraction: 0.8, resetTime: '2026-11-18T13:30:00Z' },
+      { modelId: 'gemini-pro-orchestrator-argon', remainingFraction: 0.5, resetTime: '2026-11-19T00:00:00Z' },
+      { modelId: 'tab_flash_lite_preview', remainingFraction: 1 },
+      null,
+      { modelId: 'gemini-x', remainingFraction: 'abc' },
+      { modelId: 'gemini-y', remainingFraction: null },
+      { modelId: 'gemini-z', remainingFraction: '' },
+    ],
+  }, now);
+  assert.deepEqual(rows.map((l) => [l.model, l.window, l.percentUsed, l.resetsAt]), [
+    ['Gemini', '5h', 20, '2026-11-18T13:30:00.000Z'],
+    ['Argon', 'weekly', 50, '2026-11-19T00:00:00.000Z'],
+  ]);
+  assert.deepEqual(agyTests.parseAgyModelQuota(null, now), []);
+  const daily = agyTests.parseAgyModelQuota({ buckets: [{ modelId: 'gemini-3-flash', remainingFraction: 1, resetTime: '2026-11-19T06:00:00Z' }] }, now);
+  assert.equal(daily[0].window, 'daily');
+});
+
+test('Antigravity: Gemini rows from the per-model quota join the summary; its failure keeps the summary', async () => {
+  const MODEL_KEY = `${agyTests.AGY_QUOTA_HOST}${agyTests.AGY_MODEL_QUOTA_PATH}`;
+  const reset = new Date(NOW + 3600000).toISOString();
+  const { deps, calls } = fakeDeps({ responses: {
+    [AGY_KEY]: { status: 200, body: JSON.stringify(AGY_SUMMARY) },
+    [MODEL_KEY]: { status: 200, body: JSON.stringify({ buckets: [{ modelId: 'gemini-3-flash', remainingFraction: 0.75, resetTime: reset }] }) },
+  } });
+  const usage = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps));
+  assert.deepEqual(usage.limits.map((l) => [l.model, l.window, l.percentUsed]), [['Opus', 'weekly', 53], ['Opus', '5h', 0], ['Gemini', '5h', 25]]);
+  assert.equal(calls[1].headers['User-Agent'], 'antigravity/1.5.9 windows/amd64');
+  const noModel = fakeDeps({ responses: { [AGY_KEY]: { status: 200, body: JSON.stringify(AGY_SUMMARY) }, [MODEL_KEY]: { status: 200, body: '<html>' } } });
+  const only = await fetchProviderUsage(AGY_PROFILE, agyDeps(noModel.deps));
+  assert.equal(only.status, 'ok');
+  assert.equal(only.limits.length, 2);
+});
+
+const agyCli = require('../src/agyusagecli');
+// Verbatim shape of `agy -p /usage` (agy 1.5.11, 2026-11-18).
+const AGY_USAGE_TEXT = [
+  'Gemini Models\tWeekly Limit Remaining\t97%\t2026-11-25T08:30:15Z',
+  'Gemini Models\tFive Hour Limit Remaining\t89%\t2026-11-18T13:30:15Z',
+  'Claude and GPT models\tWeekly Limit Remaining\t100%\t2026-11-25T11:29:12Z',
+  'Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-11-18T16:29:12Z',
+  'Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t1%\t2026-11-25T07:04:05Z',
+  '',
+].join('\r\n');
+
+test('parseAgyUsageTable: agy /usage lines -> Opus / Gemini / Argon rows, percent used', () => {
+  const rows = agyCli.parseAgyUsageTable(AGY_USAGE_TEXT);
+  assert.deepEqual(rows.map((l) => [l.model, l.window, l.label, l.percentUsed, l.resetsAt]), [
+    ['Gemini', 'weekly', 'Weekly limit', 3, '2026-11-25T08:30:15.000Z'],
+    ['Gemini', '5h', '5-hour window', 11, '2026-11-18T13:30:15.000Z'],
+    ['Opus', 'weekly', 'Weekly limit', 0, '2026-11-25T11:29:12.000Z'],
+    ['Opus', '5h', '5-hour window', 0, '2026-11-18T16:29:12.000Z'],
+    ['Argon', 'weekly', 'Weekly limit', 99, '2026-11-25T07:04:05.000Z'],
+  ]);
+});
+
+test('parseAgyUsageTable: junk lines are skipped; nothing usable is null', () => {
+  assert.equal(agyCli.parseAgyUsageTable('Error: not logged in'), null);
+  assert.equal(agyCli.parseAgyUsageTable(''), null);
+  assert.equal(agyCli.parseAgyUsageTable(undefined), null);
+  const rows = agyCli.parseAgyUsageTable([
+    'a\tb\tc',
+    'Gemini Models\tWeekly Limit Remaining\tabc%\t2026-11-25T08:30:15Z',
+    'Gemini Models\tWeekly Limit Remaining\t150%\t2026-11-25T08:30:15Z',
+    '\tWeekly Limit Remaining\t50%\tx',
+    'Gemini Models\tBurst bucket\t40%\tnot-a-date',
+  ].join('\n'));
+  assert.deepEqual(rows.map((l) => [l.model, l.window, l.label, l.percentUsed, l.resetsAt]), [['Gemini', 'custom', 'Burst bucket', 60, null]]);
+});
+
+test('runAgyUsage runs `agy -p /usage` without a shell, hidden, from the home folder', async () => {
+  let seen = null;
+  const ok = await agyCli.runAgyUsage({ execImpl: (cmd, args, opts, cb) => { seen = { cmd, args, opts }; cb(null, 'out'); } });
+  assert.deepEqual(ok, { ok: true, text: 'out' });
+  assert.equal(seen.cmd, 'agy');
+  assert.deepEqual(seen.args, ['-p', '/usage', '--print-timeout', '30s']);
+  assert.equal(seen.opts.windowsHide, true);
+  assert.equal(seen.opts.shell, undefined);
+  const missing = await agyCli.runAgyUsage({ execImpl: (c, a, o, cb) => cb(Object.assign(new Error('x'), { code: 'ENOENT' })) });
+  assert.deepEqual(missing, { ok: false, reason: 'agy not found' });
+  const hung = await agyCli.runAgyUsage({ timeoutMs: 5, execImpl: (c, a, o, cb) => cb(Object.assign(new Error('x'), { killed: true })) });
+  assert.match(hung.reason, /timed out/);
+  const threw = await agyCli.runAgyUsage({ execImpl: () => { throw new Error('boom'); } });
+  assert.match(threw.reason, /could not start/);
+  const big = await agyCli.runAgyUsage({ execImpl: (c, a, o, cb) => cb(Object.assign(new Error('x'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true })) });
+  assert.match(big.reason, /too much/, 'an overflow is not reported as a timeout');
+});
+
+test('parseAgyUsageTable: a "3 day" bucket stays custom with its own label', () => {
+  const rows = agyCli.parseAgyUsageTable('Gemini Models\t3 day limit\t50%\t2026-11-20T00:00:00Z\nGemini Models\tDaily Limit Remaining\t80%\t2026-11-19T00:00:00Z');
+  assert.deepEqual(rows.map((l) => [l.window, l.label]), [['custom', '3 day limit'], ['daily', 'Daily limit']]);
+});
+
+test('createAgyUsageReader backs off after a failure and after unreadable output, and joins concurrent reads', async () => {
+  let t = 0;
+  let runs = 0;
+  let next = { ok: false, reason: 'agy not found' };
+  const logs = [];
+  const reader = agyCli.createAgyUsageReader({ run: async () => { runs += 1; return next; }, now: () => t, log: (l) => logs.push(l) });
+  assert.equal((await reader.read()).ok, false);
+  assert.equal(runs, 1);
+  t += agyCli.FAILED_RETRY_MS - 1;
+  await reader.read();
+  assert.equal(runs, 1, 'still backing off: agy is not started');
+  t += 1;
+  next = { ok: true, text: 'Some prose answer from a model' };
+  await reader.read();
+  assert.equal(runs, 2);
+  t += agyCli.FAILED_RETRY_MS;
+  await reader.read();
+  assert.equal(runs, 2, 'unreadable output backs off much longer');
+  t += agyCli.UNREADABLE_RETRY_MS;
+  next = { ok: true, text: AGY_USAGE_TEXT };
+  const [a, b] = await Promise.all([reader.read(), reader.read()]);
+  assert.equal(runs, 3, 'two polls at once start agy once');
+  assert.equal(a.ok, true);
+  assert.equal(a.limits.length, 5);
+  assert.equal(b, a);
+  assert.equal(logs.length, 2, 'each back-off is logged once');
+});
+
+test('Antigravity: agy /usage is the first source - Argon included, no HTTP call, works with an expired token', async () => {
+  const { deps, calls } = fakeDeps({ responses: { [AGY_KEY]: { status: 200, body: JSON.stringify(AGY_SUMMARY) } } });
+  const usage = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps, { cli: AGY_USAGE_TEXT }));
+  assert.equal(usage.status, 'ok');
+  assert.equal(usage.account, 'mati@example.com');
+  assert.equal(usage.limits.filter((l) => l.model === 'Argon').length, 1);
+  assert.equal(calls.length, 0, 'agy answered, so Google is not called directly');
+  const expired = agyCred({ expiry: new Date(NOW).toISOString() });
+  const stillOk = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps, { cred: expired, cli: AGY_USAGE_TEXT }));
+  assert.equal(stillOk.status, 'ok');
+  assert.equal(stillOk.detail, 'antigravity');
+  // agy prints something unusable: the HTTP read takes over.
+  const junk = await fetchProviderUsage(AGY_PROFILE, agyDeps(deps, { cli: 'Error: something' }));
+  assert.equal(junk.status, 'ok');
+  assert.ok(calls.length >= 1);
+});
+
 test('parseAgyCredential: token, expiry and email are validated', () => {
   const ok = agyTests.parseAgyCredential(agyCred(), NOW);
   assert.deepEqual(ok, { ok: true, accessToken: FAKE_TOKEN, email: 'mati@example.com' });
@@ -483,7 +641,8 @@ test('Antigravity: success reads the quota summary with the agy User-Agent', asy
   assert.equal(usage.providerId, 'antigravity');
   assert.equal(usage.account, 'mati@example.com');
   assert.equal(usage.limits.length, 2);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2, 'the summary, then the per-model quota');
+  assert.equal(calls[1].pathname, agyTests.AGY_MODEL_QUOTA_PATH);
   assert.equal(calls[0].method, 'POST');
   assert.equal(calls[0].headers.Authorization, `Bearer ${FAKE_TOKEN}`);
   assert.equal(calls[0].headers['User-Agent'], 'antigravity/1.5.9 windows/amd64');
@@ -552,7 +711,7 @@ test('Antigravity: an expired login shows the last good reading as stale, aged p
   const five = stale.limits.find((l) => l.window === '5h');
   assert.equal(five.resetsAt, null, 'a passed reset reads as refilled');
   assert.equal(stale.limits.find((l) => l.window === 'weekly').percentUsed, 53);
-  assert.equal(calls.length, 1, 'no request with an expired token');
+  assert.equal(calls.length, 2, 'no request with an expired token (both calls are the first, good read)');
   const fresh = await fetchProviderUsage(AGY_PROFILE, agyDeps(later, { cred: expiredCred, memory: new Map() }));
   assert.equal(fresh.status, 'unsupported');
 });
@@ -586,5 +745,5 @@ test('fetchOtherProvidersUsage reads the agy login once and lists every agy prof
   ], agyDeps(deps));
   assert.equal(out.length, 1);
   assert.deepEqual(out[0].profileIds, ['agy', 'agy-2']);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2, 'one read (summary + per-model quota) for every agy profile');
 });

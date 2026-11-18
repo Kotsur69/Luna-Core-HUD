@@ -290,6 +290,8 @@ function parseGeminiQuota(json) {
 const AGY_WINDOWS = new Set(['5h', 'daily', 'weekly', 'monthly']);
 /** Longest group / bucket name taken from the response (untrusted text). */
 const AGY_MAX_LABEL = 60;
+/** Longest model-family name for the usage tile's name column. */
+const AGY_MAX_MODEL_NAME = 24;
 
 const agyText = (v) => (typeof v === 'string' ? v.trim().slice(0, AGY_MAX_LABEL) : '');
 
@@ -362,6 +364,23 @@ function agyBucketGroup(b, groupName) {
 }
 
 /**
+ * The short model-family name the usage tile shows in its name column
+ * ("Opus" / "Gemini" / "Argon"), read off a group name or model id. Live, agy's
+ * "Claude and GPT models" group is the one Opus runs on, so it reads "Opus".
+ * Anything unknown keeps its own (trimmed) name.
+ * @param {...string} values group displayName, bucketId, modelId...
+ * @returns {string}
+ */
+function agyModelName(...values) {
+  const words = agyWords(...values);
+  if (AGY_ARGON_RE.test(words)) return AGY_ARGON_NAME;
+  if (/\b(claude|opus|sonnet|gpt)\b/.test(words)) return 'Opus';
+  if (/\bgemini\b/.test(words)) return 'Gemini';
+  // Untrusted text in a narrow name column: kept short.
+  return (values.map(agyText).find(Boolean) || 'Antigravity').slice(0, AGY_MAX_MODEL_NAME);
+}
+
+/**
  * Code Assist v1internal:retrieveUserQuotaSummary (what `agy` itself reads) ->
  * one row per bucket, or null. Shape, as answered live on 2026-11-17:
  *   {groups: [{displayName, buckets: [{bucketId, window: '5h'|'weekly',
@@ -385,7 +404,10 @@ function parseAgyQuotaSummary(json) {
     const groupName = agyGroupName(group, named);
     for (const b of buckets) {
       const limit = agyBucketLimit(b, groupName);
-      if (limit) limits.push(limit);
+      if (!limit) continue;
+      // The tile's name column: the bucket's model family, else its group's.
+      const model = mentionsArgon(b.bucketId, b.displayName) ? AGY_ARGON_NAME : agyModelName(group.displayName, b.bucketId);
+      limits.push({ ...limit, model });
     }
   }
   return limits.length > 0 ? limits : null;
@@ -451,5 +473,6 @@ module.exports = {
   parseMoonshotBalance,
   parseGeminiQuota,
   parseAgyQuotaSummary,
+  agyModelName,
   parseOpenRouterKey,
 };

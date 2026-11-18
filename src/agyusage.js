@@ -18,6 +18,12 @@
 // (`security`) and Linux (`secret-tool`) keyring reads follow the same
 // service/account but are untested.
 //
+// FIRST SOURCE since 2026-11-18: agy's own `/usage` (src/agyusagecli.js),
+// the only one with all three groups (Gemini, Claude and GPT, Gemini 4
+// Argon). The HTTP reads below are the fallback when agy cannot be run; they
+// get the Claude and GPT group from the summary and Gemini from
+// retrieveUserQuota, but never Argon.
+//
 // Every IO dep is injectable; nothing here throws or logs a token. A failure
 // becomes {status: 'unsupported' | 'error', errorMessage: <reason>}.
 // ============================================================================
@@ -27,11 +33,42 @@
 const { execFile } = require('child_process');
 const path = require('path');
 const parse = require('./providerusageparse');
+const { parseAgyUsageTable, createAgyUsageReader } = require('./agyusagecli');
+
+/** The app's one `agy -p /usage` reader (it holds the back-off). */
+const sharedAgyUsageReader = createAgyUsageReader();
+
+/**
+ * agy's `/usage` rows: {ok: true, limits} | {ok: false}. A test's injected
+ * runAgyUsage (raw {ok, text}) is parsed directly, without the shared back-off.
+ */
+async function readAgyUsageCli(deps) {
+  if (typeof deps.runAgyUsage !== 'function') return sharedAgyUsageReader.read();
+  const res = await deps.runAgyUsage();
+  const limits = res && res.ok ? parseAgyUsageTable(res.text) : null;
+  return limits ? { ok: true, limits } : { ok: false };
+}
 
 const AGY_KEYRING_SERVICE = 'gemini';
 const AGY_KEYRING_ACCOUNT = 'antigravity';
 const AGY_QUOTA_HOST = 'daily-cloudcode-pa.googleapis.com';
 const AGY_QUOTA_PATH = '/v1internal:retrieveUserQuotaSummary';
+// Per-model quota: {buckets: [{modelId, remainingFraction, resetTime?, tokenType}]}.
+// The summary above only holds the "Claude and GPT models" group; Gemini's
+// (shared by every gemini-* model) is only here. Verified live 2026-11-18.
+const AGY_MODEL_QUOTA_PATH = '/v1internal:retrieveUserQuota';
+/** Model families the summary does not cover, taken from the per-model quota. */
+const AGY_MODEL_FAMILIES = new Set(['Gemini', 'Argon']);
+const HOUR_MS = 60 * 60 * 1000;
+/** Slack on a reset distance, so a window that just started still fits it. */
+const WINDOW_SLACK_MS = 5 * 60 * 1000;
+/** Window by time to reset, shortest first. */
+const RESET_WINDOWS = [
+  { maxMs: 5 * HOUR_MS, window: '5h', label: '5-hour window' },
+  { maxMs: 24 * HOUR_MS, window: 'daily', label: 'Daily limit' },
+  { maxMs: 7 * 24 * HOUR_MS, window: 'weekly', label: 'Weekly limit' },
+];
+const WEEKLY_WINDOW = RESET_WINDOWS[2];
 /** The agy version whose User-Agent the quota endpoint was verified with. */
 const AGY_CLIENT_VERSION = '1.5.9';
 /** A keyring read (PowerShell start included) gets this long, then it is killed. */
@@ -192,6 +229,69 @@ function ageLimits(limits, nowMs) {
  */
 const lastGoodByAccount = new Map();
 
+/**
+ * The window a per-model bucket counts in. The response names none, so it is
+ * read off the time left to the reset; Argon is weekly only, whatever it says.
+ * No reset (a full bucket) falls back to the 5 h window.
+ */
+function modelWindow(family, resetsAt, nowMs) {
+  if (family === 'Argon') return WEEKLY_WINDOW;
+  const left = resetsAt ? Date.parse(resetsAt) - nowMs : NaN;
+  if (!Number.isFinite(left)) return RESET_WINDOWS[0];
+  return RESET_WINDOWS.find((w) => left <= w.maxMs + WINDOW_SLACK_MS) || WEEKLY_WINDOW;
+}
+
+/**
+ * retrieveUserQuota -> one row per model family the summary lacks (Gemini,
+ * Argon), or []. Models of one family share a quota, so the most-used bucket
+ * stands for the family. Live on 2026-11-18 every gemini-* bucket had the same
+ * fraction and reset; no Argon bucket was in the answer for a free-tier
+ * account, so the Argon branch is matched by name only (UNVERIFIED).
+ * @param {unknown} json
+ * @param {number} nowMs
+ * @returns {Array<object>}
+ */
+function parseAgyModelQuota(json, nowMs) {
+  const buckets = isObj(json) && Array.isArray(json.buckets) ? json.buckets.filter(isObj) : [];
+  const byFamily = new Map();
+  for (const b of buckets) {
+    if (typeof b.modelId !== 'string') continue;
+    const family = parse.agyModelName(b.modelId);
+    if (!AGY_MODEL_FAMILIES.has(family)) continue;
+    // proto3 JSON omits a zero double, as in the summary. Anything else must be
+    // a real number (or numeric string): Number(null) would read as spent.
+    const raw = b.remainingFraction;
+    const numeric = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '');
+    const fraction = raw === undefined ? 0 : numeric ? Number(raw) : NaN;
+    if (!Number.isFinite(fraction)) continue;
+    const prev = byFamily.get(family);
+    if (!prev || fraction < prev.fraction) byFamily.set(family, { fraction, resetsAt: parse.toIso(b.resetTime) });
+  }
+  return [...byFamily].map(([family, { fraction, resetsAt }]) => {
+    const { window, label } = modelWindow(family, resetsAt, nowMs);
+    const percentUsed = parse.clampPct((1 - fraction) * 100);
+    return { window, label, unit: 'credits', used: percentUsed, limit: 100, percentUsed, resetsAt, source: 'account', model: family };
+  });
+}
+
+/**
+ * The summary's rows plus the per-model families it lacks. A failed per-model
+ * read only costs those extra rows, never the summary.
+ */
+async function withModelRows(deps, headers, summaryLimits, nowMs) {
+  let json = null;
+  try {
+    const res = await deps.request({ method: 'POST', host: AGY_QUOTA_HOST, pathname: AGY_MODEL_QUOTA_PATH, headers, body: '{}' });
+    if (!res || res.status !== 200) return summaryLimits;
+    json = JSON.parse(res.body);
+  } catch {
+    // Network throw or a non-JSON body: the extra rows are optional, the summary stands.
+    return summaryLimits;
+  }
+  const have = new Set(summaryLimits.map((l) => l.model));
+  return [...summaryLimits, ...parseAgyModelQuota(json, nowMs).filter((l) => !have.has(l.model))];
+}
+
 /** agy's own User-Agent form: "antigravity/<version> <os>/<arch>". */
 function agyUserAgent(platform = process.platform, arch = process.arch) {
   const osName = platform === 'win32' ? 'windows' : platform;
@@ -205,8 +305,9 @@ function agyUserAgent(platform = process.platform, arch = process.arch) {
  * An expired login, a rejected token or a failed request, with an earlier good
  * reading of the same account, returns that reading as status 'ok', detail
  * 'stale', updatedAt = when it was taken, errorMessage = why.
- * @param {object} deps {request, now, readAgyCredential?, platform?, arch?,
- *   agyMemory?: Map} - agyMemory replaces the module-level memory (tests)
+ * @param {object} deps {request, now, readAgyCredential?, runAgyUsage?, platform?, arch?,
+ *   agyMemory?: Map} - agyMemory replaces the module-level memory (tests);
+ *   runAgyUsage replaces the `agy -p /usage` call (tests)
  * @param {Function} result
  */
 async function fetchAgyUsage(deps, result) {
@@ -224,14 +325,17 @@ async function fetchAgyUsage(deps, result) {
     if (last) return result('ok', ageLimits(last.limits, now), reason, { now: last.at, account, detail: 'stale' });
     return result(status, [], reason, { now, account });
   };
+  // agy's own `/usage` first: the only source with Gemini and Argon, and agy
+  // refreshes its login itself, so an expired keyring token does not stop it.
+  const cli = await readAgyUsageCli(deps);
+  const fromCli = cli && cli.ok ? cli.limits : null;
+  if (fromCli) {
+    memory.set(memoryKey, { limits: fromCli, at: now });
+    return result('ok', fromCli, null, { now, account, detail: 'antigravity' });
+  }
   if (!cred.ok) return cred.expired ? fallback('unsupported', cred.reason) : result('unsupported', [], cred.reason, { now, account });
-  const res = await deps.request({
-    method: 'POST',
-    host: AGY_QUOTA_HOST,
-    pathname: AGY_QUOTA_PATH,
-    headers: { Authorization: `Bearer ${cred.accessToken}`, 'User-Agent': agyUserAgent(deps.platform, deps.arch) },
-    body: '{}',
-  });
+  const headers = { Authorization: `Bearer ${cred.accessToken}`, 'User-Agent': agyUserAgent(deps.platform, deps.arch) };
+  const res = await deps.request({ method: 'POST', host: AGY_QUOTA_HOST, pathname: AGY_QUOTA_PATH, headers, body: '{}' });
   const status = res && typeof res.status === 'number' ? res.status : 0;
   if (status === 0) return fallback('error', 'Google quota request failed (timeout or network)');
   if (status === 401 || status === 403) {
@@ -244,8 +348,9 @@ async function fetchAgyUsage(deps, result) {
   } catch {
     return fallback('error', 'Google quota answer was not JSON');
   }
-  const limits = parse.parseAgyQuotaSummary(body);
-  if (!limits) return result('unsupported', [], 'The Google account reported no quota buckets', { now, account });
+  const summary = parse.parseAgyQuotaSummary(body);
+  if (!summary) return result('unsupported', [], 'The Google account reported no quota buckets', { now, account });
+  const limits = await withModelRows(deps, headers, summary, now);
   memory.set(memoryKey, { limits, at: now });
   return result('ok', limits, null, { now, account, detail: 'antigravity' });
 }
@@ -253,6 +358,8 @@ async function fetchAgyUsage(deps, result) {
 module.exports = {
   AGY_QUOTA_HOST,
   AGY_QUOTA_PATH,
+  AGY_MODEL_QUOTA_PATH,
+  parseAgyModelQuota,
   readAgyKeyring,
   parseAgyCredential,
   ageLimits,

@@ -1592,11 +1592,30 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .usage-line__win { max-width: 7em; color: var(--text-dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em; }
 .usage-line__mark { width: 1ch; color: var(--neon-cyan); font-size: 8px; line-height: 1; text-align: center; }
 .usage-line__name { max-width: 9em; color: var(--text-dim); }
+/* Under Claude's accounts, the agy model names (Opus / Gemini / Argon) must
+   not widen the shared name column: they size to nothing and fit the column
+   Claude's names set (cut with an ellipsis if longer), so Claude's bars never
+   shift or shrink when the Google block appears. Alone, they size it. */
+.usage:has(> .usage-grid:not(.usage-grid--solo)) .usage-provider .usage-line__name { contain: inline-size; }
 .usage-line.is-active .usage-line__name { color: var(--text); font-weight: 700; }
 /* Settings > Claude accounts: the two reserve caps of one account. */
 .claude-account-reserve { display: inline-flex; gap: var(--space-2); align-items: center; }
 .claude-account-reserve label { display: inline-flex; gap: var(--space-1); align-items: center; white-space: nowrap; }
-.claude-account-reserve__input { width: 7ch; min-width: 7ch; }
+/* content-box + small padding: .profile-select's wide padding left no room
+   for the digits in a 7ch border-box, so a typed cap was invisible. Room for
+   "100"; the spinner arrows are hidden, they took the rest. */
+.claude-account-reserve__input {
+  box-sizing: content-box;
+  flex: none;
+  width: 3.5ch;
+  min-width: 3.5ch;
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.claude-account-reserve__input::-webkit-outer-spin-button,
+.claude-account-reserve__input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 /* A non-active account's name: a button that makes it the active one. */
 .usage-line__switch {
   justify-self: start;

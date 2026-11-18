@@ -118,6 +118,39 @@ test('the Google grid uses the account column layout of Claude\'s multi-account 
   assert.deepEqual([codex.withAccount, codex.sources[0].account], [false, null]);
 });
 
+test('agy rows with a model family become Claude-style rows: Opus / Gemini / Argon under 5h and wk', () => {
+  const limits = [
+    { ...week(10), model: 'Opus' },
+    { ...five(20), model: 'Opus' },
+    { ...five(30), model: 'Gemini' },
+    { ...week(40), label: 'Argon · Weekly limit', group: 'Argon', model: 'Argon' },
+  ];
+  const google = { providerId: 'antigravity', account: 'mati@example.com', status: 'ok', limits };
+  const { sources, withAccount } = providerSources(google, limits);
+  assert.equal(withAccount, true);
+  assert.deepEqual(sources.map((s) => s.account.label), ['Opus', 'Gemini', 'Argon'], 'short names, never the email');
+  const { groups, notices } = groupUsageRows(sources);
+  assert.deepEqual(groups.map((g) => g.key), ['5h', 'weekly'], 'Argon joins the plain weekly group');
+  assert.deepEqual(groups[0].rows.map((r) => [r.account.label, r.limit.percentUsed]), [['Opus', 20], ['Gemini', 30]]);
+  assert.deepEqual(groups[1].rows.map((r) => [r.account.label, r.limit.percentUsed]), [['Opus', 10], ['Argon', 40]]);
+  assert.equal(windowShortLabel(groups[1].rows[1].limit, echo), 'usage.window.short.week');
+  assert.deepEqual(notices, []);
+});
+
+test('agy without an Argon reading still lists Argon, as a muted "not reported" line', () => {
+  const limits = [{ ...five(20), model: 'Opus' }];
+  const { sources } = providerSources({ account: 'x@example.com' }, limits);
+  assert.deepEqual(sources.map((s) => [s.account.label, s.account.status]), [['Opus', 'ok'], ['Argon', 'unreported']]);
+  const { notices } = groupUsageRows(sources);
+  assert.deepEqual(notices.map((n) => [n.account.label, n.key]), [['Argon', 'usage.google.unreported']]);
+});
+
+test('an agy custom-window row keeps its own name, without the group prefix', () => {
+  const limits = [{ window: 'custom', label: 'Claude · Burst', group: 'Claude', percentUsed: 5, model: 'Opus' }];
+  const { sources } = providerSources({}, limits);
+  assert.equal(limitLabel(sources[0].limits[0], echo), 'Burst');
+});
+
 test('an exhausted limit row is dimmed until its own reset; a blocked 5h row until the week\'s', () => {
   assert.equal(isExhausted(five(100)), true);
   assert.equal(isExhausted(five(99)), false);
