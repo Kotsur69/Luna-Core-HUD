@@ -138,7 +138,8 @@ test('runJob on agy: failures become typed reasons', async () => {
   console.error = () => {};
   try {
     assert.equal((await job(fail(err({ code: 'ENOENT' })))).reason, 'no-agy');
-    assert.equal((await job(fail(err({ killed: true })))).reason, 'timeout');
+    // The reason names agy, so a failed report says which provider timed out.
+    assert.equal((await job(fail(err({ killed: true })))).reason, 'agy-timeout');
     assert.equal((await job(fail(err({ code: 1 }), '', 'RESOURCE_EXHAUSTED: quota exceeded'))).reason, 'agy-limit');
     assert.equal((await job(fail(err({ code: 1 }), '', 'something broke'))).reason, 'agy-failed');
   } finally {

@@ -19,6 +19,8 @@
 import { t } from './util.js';
 import { el, bucket, button, select, setStatus, errText } from './lifeui.js';
 import { classRows, mailLine, generateTargets, costText } from './lifeweekmodel.js';
+import { reportModelText, reportCost, reportFailure, choiceOptions } from './reportmodelview.js';
+import { errorText } from './missionshared.js';
 
 let view = null;
 let picked = null;
@@ -45,8 +47,12 @@ function headCard(entry) {
   card.body.append(el('p', 'life-week__range', t('life.week.range', { week: entry.week, from: entry.data ? entry.data.from : '', to: entry.data ? entry.data.to : '' })));
   if (entry.review) card.body.append(el('p', 'life-week__headline', entry.review.headline));
   else card.body.append(el('p', 'hint is-fail', t('life.week.raw', { reason: entry.failure || 'bad-json' })));
-  const meta = [t('life.week.made', { at: when(entry.at), model: entry.model })];
-  if (costText(entry.costUsd)) meta.push(t('life.week.cost', { cost: costText(entry.costUsd) }));
+  // A call that failed says which provider failed (agy is never retried on Claude).
+  const failed = reportFailure(entry);
+  if (failed) card.body.append(el('p', 'hint is-fail', `${failed.provider}: ${errorText(failed.reason)}`));
+  const meta = [t('life.week.made', { at: when(entry.at), model: reportModelText(entry.model) })];
+  const cost = reportCost(entry, costText);
+  if (cost) meta.push(t('life.week.cost', { cost }));
   card.body.append(el('p', 'hint', meta.join(' · ')));
   return card.sec;
 }
@@ -232,7 +238,8 @@ function toolbar(root) {
     m.disabled = isBusy || !view.gmail.connected;
     bar.append(m);
   }
-  const model = select(view.models.map((x) => [x, x]), view.model);
+  // Same store as Settings -> AI and models -> Report models; main sends the live choices.
+  const model = select(choiceOptions(view.models), view.model);
   model.setAttribute('aria-label', t('life.week.model'));
   model.addEventListener('change', async () => {
     const res = await call('lifeWeekModel', model.value, picked);

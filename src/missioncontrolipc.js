@@ -22,7 +22,9 @@
 
 'use strict';
 
-const { runJob, MISSION_MODELS, JOB_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
+const { runJob, JOB_MODELS, DEFAULT_MISSION_MODEL } = require('./missionrunner');
+const { choiceOf, reportModelChoices, parseChoice } = require('./reportmodel');
+const { sharedAgyModels } = require('./agymodels');
 const { AGY_MODEL } = require('./claudeModels');
 const { loadMissionConfig } = require('./missionconfig');
 const mail = require('./missionmail');
@@ -119,6 +121,7 @@ function registerMissionIpc({
   briefSources = null,
   projectNames = () => new Map(),
   onResume = null,
+  agyModels = sharedAgyModels(),
 }) {
   // Built on first use: requiring it is cheap, but tests never need the real one.
   let ledger = ledgerService;
@@ -167,6 +170,8 @@ function registerMissionIpc({
     store: briefStore,
     run: (opts) => run(opts),
     getEnv,
+    // A brief on an agy model runs lean in the agy profile's env (no Gmail there).
+    getAgyEnv,
     onResume,
     sources: briefSources || defaultBriefSources({ getLedger, gcal, weather, projectNames }),
   });
@@ -313,7 +318,9 @@ function registerMissionIpc({
 
   // ---- Brief (src/missionbrief.js): weekly on its own, daily on click ----
 
-  // The brief always reads Gmail through the claude.ai connector: Claude models only, never agy.
+  // The brief's model is a report model (src/reportmodel.js): a Claude model,
+  // which reads Gmail through the claude.ai connector, or an agy model, which
+  // runs without mail. The view sends its picker id and the live choices.
   const briefView = (req) => {
     const s = briefStore.load();
     const pick = (kind) => {
@@ -321,7 +328,7 @@ function registerMissionIpc({
       const want = req && typeof req[kind] === 'string' ? req[kind] : null;
       return { keys, entry: s[kind][want && s[kind][want] ? want : keys[0]] || null };
     };
-    return { ok: true, weekly: pick('weekly'), daily: pick('daily'), model: s.model, models: MISSION_MODELS, busy: BRIEF_KINDS.filter((k) => brief.isBusy(k)) };
+    return { ok: true, weekly: pick('weekly'), daily: pick('daily'), model: choiceOf(s.model), models: reportModelChoices(agyModels), busy: BRIEF_KINDS.filter((k) => brief.isBusy(k)) };
   };
   const safeBriefView = (req) => {
     try {
@@ -344,11 +351,15 @@ function registerMissionIpc({
     return res.ok ? safeBriefView({}) : res;
   });
 
-  ipcMain.handle('mission:brief-model', (_event, req) => {
+  // req: {model} - a choice id, checked against the Claude models and the live `agy models`.
+  ipcMain.handle('mission:brief-model', async (_event, req) => {
     try {
-      briefStore.setModel(req && req.model);
+      const rm = await parseChoice(req && req.model, agyModels);
+      if (!rm) return { ok: false, reason: 'bad-input' };
+      briefStore.setModel(rm);
       return safeBriefView({});
-    } catch {
+    } catch (err) {
+      console.error('[mission] brief model change failed:', err && err.message);
       return { ok: false, reason: 'bad-input' };
     }
   });

@@ -191,14 +191,25 @@ test('reviewText: sections plus the raw tail and the cost', () => {
   const text = reviewText({ week: '2026-W43', review: validateReview(GOOD, DATA), data: DATA, costUsd: 0.02, model: 'haiku' });
   assert.match(text, /^Weekly review - 2026-W43/);
   assert.match(text, /NEXT WEEK\n1\. a/);
-  assert.match(text, /Review cost: \$0\.02 \(haiku\)/);
+  assert.match(text, /Review cost: \$0\.02 \(Haiku\)/);
 });
 
 // --- IPC -----------------------------------------------------------------------
 
+/** A fake live `agy models` cache holding one model, gemini-4-hydrogen-low. */
+const HYDROGEN = 'gemini-4-hydrogen-low';
+const FAKE_AGY_MODELS = {
+  ensure: async () => [],
+  isKnownId: (id) => id === HYDROGEN,
+  choices: () => [
+    { id: 'agy', name: 'Antigravity' },
+    { id: `agy:${HYDROGEN}`, name: 'Antigravity - Gemini 4 Hydrogen (Low)' },
+  ],
+};
+
 function ipc(h) {
   const handlers = new Map();
-  registerWeeklyIpc({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, review: h.review, store: h.store, mail: h.mail, sender: h.sender, prefs: h.prefs, now: h.now });
+  registerWeeklyIpc({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, review: h.review, store: h.store, mail: h.mail, sender: h.sender, prefs: h.prefs, now: h.now, agyModels: FAKE_AGY_MODELS });
   return (ch, arg) => handlers.get(ch)({}, arg);
 }
 
@@ -267,10 +278,10 @@ test('weekly review on agy: one lean call with the agy env; the model is kept on
   assert.equal(runs[0].model, 'agy');
   assert.equal(runs[0].lean, true);
   assert.equal(runs[0].agyEnv, AGY_ENV);
-  assert.equal(res.entry.model, 'agy');
+  assert.deepEqual(res.entry.model, { provider: 'agy', model: null });
   assert.equal(res.entry.costUsd, null);
   assert.equal(res.entry.review.headline, 'A fun-heavy week.');
-  assert.equal(h.store.load().model, 'agy');
+  assert.deepEqual(h.store.load().model, { provider: 'agy', model: null });
 });
 
 test('weekly review on agy without a profile: refused by the runner, saved as a failure, never run on claude', async () => {
@@ -307,12 +318,13 @@ test('life:week-model offers and takes agy; junk spellings are refused', async (
   const h = setup();
   const call = ipc(h);
   const view = await call('life:week', {});
-  assert.deepEqual(view.models, ['haiku', 'sonnet', 'opus', 'agy']);
-  for (const junk of ['AGY', 'agy ', '__proto__', ['agy'], null]) {
+  assert.deepEqual(view.models.map((m) => m.id), ['haiku', 'sonnet', 'opus', 'agy', `agy:${HYDROGEN}`]);
+  assert.equal(view.models[4].name, 'Antigravity - Gemini 4 Hydrogen (Low)');
+  for (const junk of ['AGY', 'agy ', '__proto__', ['agy'], null, { provider: 'claude', model: 'haiku' }]) {
     assert.deepEqual(await call('life:week-model', { model: junk }), { ok: false, reason: 'bad-value' }, String(junk));
   }
   assert.equal((await call('life:week-model', { model: 'agy' })).model, 'agy');
-  assert.equal(h.store.load().model, 'agy');
+  assert.deepEqual(h.store.load().model, { provider: 'agy', model: null });
 });
 
 test('every saved review also hands its standalone HTML page to writeHtml', async () => {

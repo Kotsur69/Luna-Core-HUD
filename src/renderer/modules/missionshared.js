@@ -50,6 +50,8 @@ const ERROR_KEYS = {
   'agy-needs-claude': 'mc.err.agyNeedsClaude',
   'no-agy-profile': 'mc.err.noAgyProfile',
   'no-agy': 'mc.err.noAgy',
+  'agy-bad-model': 'mc.err.agyBadModel',
+  'agy-timeout': 'mc.err.agyTimeout',
   'agy-limit': 'mc.err.agyLimit',
   'agy-failed': 'mc.err.agyFailed',
   generic: 'mc.err.generic',
