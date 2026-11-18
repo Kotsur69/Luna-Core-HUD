@@ -113,7 +113,7 @@ ul.pills .pill{white-space:normal}
 details.fold{border:1px solid var(--line);border-radius:10px;margin:10px 0 0;background:var(--panel)}
 details.fold>summary{cursor:pointer;padding:10px 14px;font-weight:600;color:var(--strong);list-style:none;display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}
 details.fold>summary::-webkit-details-marker{display:none}
-details.fold>summary::before{content:"";flex:none;border-left:6px solid var(--muted);border-top:5px solid transparent;border-bottom:5px solid transparent}
+details.fold>summary::before{content:"\\25B8";flex:none;color:var(--muted);font-size:12px;line-height:1}
 details.fold[open]>summary::before{transform:rotate(90deg)}
 details.fold>summary:focus-visible{outline:2px solid var(--info);outline-offset:2px}
 details.fold .count{margin-left:auto;padding:0 8px;border-radius:999px;background:var(--muted-bg);color:var(--muted-fg);font-size:12px}
