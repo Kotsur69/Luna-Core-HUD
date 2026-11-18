@@ -8,12 +8,19 @@
 // Opening it marks the run seen on all PCs (main does that on inbox:run).
 // PR links open through main (inbox:open-pr), which re-checks the row's URL
 // is github.com - the renderer never hands over a URL. textContent only.
+//
+// Layout (reportvisuals.js): stat tiles (pushed / merged of total, failed,
+// skipped, blocked, self-check, needs you), one stacked bar of package
+// states with a chip legend, the context facts, then folding sections:
+// Needs you (open when not empty), manual actions, PRs, packages (open,
+// state as an icon chip).
 // ============================================================================
 
 'use strict';
 
 import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
+import { caption, chip, details, runStateSegments, runStats, stackBar, stateLabel, stateTone, statTiles } from './reportvisuals.js';
 
 let overlay = null;
 let afterClose = null;
@@ -29,12 +36,6 @@ function el(tag, cls, text) {
 
 const when = (ms) => new Date(ms).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
-function section(titleKey, children) {
-  const sec = el('section', 'gm-sum__sec');
-  sec.append(el('h3', 'termcustom__section', t(titleKey)), ...children);
-  return sec;
-}
-
 function lineList(lines, emptyKey) {
   if (!lines.length) return el('p', 'hint', t(emptyKey));
   const ul = el('ul', 'gm-sum__list');
@@ -45,15 +46,13 @@ function lineList(lines, emptyKey) {
   return ul;
 }
 
+/** Context facts; the counts (pushed / merged, self-check) moved to the tiles. */
 function facts(run) {
-  const merge = run.integrationMode === 'merge';
   const rows = [
     ['gm.sum.repo', run.repoName || '-'],
-    ['gm.sum.pc', run.machine],
-    ['gm.sum.finished', when(run.finishedAt)],
-    [merge ? 'gm.sum.merged' : 'gm.sum.pushed', `${merge ? run.merged : run.pushed} / ${run.total}`],
-    ['gm.sum.integration', run.integrationState || '-'],
-    ['gm.sum.selfCheck', run.selfCheck],
+    ['gm.sum.pc', run.machine || '-'],
+    ['gm.sum.finished', Number.isFinite(run.finishedAt) ? when(run.finishedAt) : '-'],
+    ['gm.sum.integration', [run.integrationMode, run.integrationState].filter(Boolean).join(' · ') || '-'],
   ];
   const dl = el('dl', 'gm-sum__facts');
   for (const [key, value] of rows) dl.append(el('dt', '', t(key)), el('dd', '', String(value)));
@@ -80,28 +79,46 @@ function packages(run) {
   const wrap = el('div', 'gm-sum__table-wrap');
   const table = el('table', 'gm-sum__table');
   const head = el('tr');
-  for (const key of ['gm.sum.col.pkg', 'gm.sum.col.state', 'gm.sum.col.branch', 'gm.sum.col.notes']) head.append(el('th', '', t(key)));
+  for (const key of ['gm.sum.col.pkg', 'gm.sum.col.state', 'gm.sum.col.branch', 'gm.sum.col.notes']) {
+    const th = el('th', '', t(key));
+    th.scope = 'col';
+    head.append(th);
+  }
   table.append(head);
   for (const p of run.packages) {
     const tr = el('tr');
     const name = el('td');
     name.append(el('strong', '', p.id), el('span', 'gm-sum__dim', p.title ? ` ${p.title}` : ''));
     const notes = [p.reason, p.escalated ? t('gm.sum.escalated') : ''].filter(Boolean).join(' · ');
-    tr.append(name, el('td', `gm-sum__state is-${p.state || 'none'}`, p.state || '-'), el('td', 'gm-sum__mono', [p.branch, p.sha7].filter(Boolean).join(' @ ') || '-'), el('td', '', notes || ''));
+    const state = el('td', `gm-sum__state is-${p.state || 'none'}`);
+    state.append(chip(stateLabel(p.state), stateTone(p.state)));
+    tr.append(name, state, el('td', 'gm-sum__mono', [p.branch, p.sha7].filter(Boolean).join(' @ ') || '-'), el('td', '', notes || ''));
     table.append(tr);
   }
   wrap.append(table);
   return wrap;
 }
 
+const lines = (v) => (Array.isArray(v) ? v : []);
+const prCount = (run) => run.packages.filter((p) => p.prUrl).length;
+
 function render(run) {
   overlay.setTitle(t('gm.sum.title', { repo: run.repoName || '-' }));
+  const needs = lines(run.needs);
+  const manual = lines(run.manual);
+  const states = stackBar(runStateSegments(run), t('rv.run.states'));
   overlay.body.replaceChildren(
-    facts(run),
-    section('gm.sum.needs', [lineList(run.needs || [], 'gm.sum.needsNone')]),
-    section('gm.sum.manual', [lineList(run.manual || [], 'gm.sum.manualNone')]),
-    section('gm.sum.prs', [prLinks(run)]),
-    section('gm.sum.packages', [packages(run)]),
+    ...[
+      statTiles(runStats(run), t('rv.run.stats')),
+      states ? caption(t('rv.run.states')) : null,
+      states,
+      facts(run),
+      // Needs you opens by itself when there is something to do.
+      details(t('gm.sum.needs'), needs.length, [lineList(needs, 'gm.sum.needsNone')], { open: needs.length > 0, cls: 'gm-sum__sec' }),
+      details(t('gm.sum.manual'), manual.length, [lineList(manual, 'gm.sum.manualNone')], { open: false, cls: 'gm-sum__sec' }),
+      details(t('gm.sum.prs'), prCount(run), [prLinks(run)], { open: false, cls: 'gm-sum__sec' }),
+      details(t('gm.sum.packages'), run.packages.length, [packages(run)], { open: true, cls: 'gm-sum__sec' }),
+    ].filter(Boolean),
   );
 }
 

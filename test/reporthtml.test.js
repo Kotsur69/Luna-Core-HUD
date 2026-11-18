@@ -170,6 +170,37 @@ test('run report HTML: empty run and single package render without throwing', ()
   assert.ok(renderRunReportHtml(null, {}).startsWith('<!doctype html>'));
 });
 
+test('pills pair colour with an aria-hidden glyph; fold is a native <details>', () => {
+  assert.equal(h.pill('done', 'ok'), '<span class="pill ok"><span class="ico" aria-hidden="true">✓</span>done</span>');
+  assert.match(h.pill(EVIL, '" onload="x'), /^<span class="pill muted"><span class="ico" aria-hidden="true">·<\/span>&lt;img/);
+  const f = h.fold(EVIL, '<p>x</p>', { count: 3 });
+  assert.match(f, /^<details class="fold"><summary>&lt;img[^<]*<span class="count">3<\/span><\/summary><div class="fold-body"><p>x<\/p><\/div><\/details>$/);
+  assert.match(h.fold('t', '', { open: true }), /^<details class="fold" open>/);
+  assert.doesNotMatch(h.fold('t', ''), /class="count"/);
+});
+
+test('run report HTML: problems and log tails fold, self-check shows as pills', () => {
+  const v = view([pkg('a'), pkg('b', { state: 'stalled', error: 'verifyFailed', detail: '2 failing' }), pkg('c', { state: 'failed', error: 'spawn' })], {
+    integration: { state: 'done', skipped: [], selfCheck: { tests: 'failed', syntax: 'ok', smoke: 'skipped', fixups: 1, tail: 'not ok 1\nnot ok 2' } },
+  });
+  const html = renderRunReportHtml(v, { now: T0 + 60 * MIN });
+  const wrong = html.slice(html.indexOf('<h2>What went wrong</h2>'), html.indexOf('</section>', html.indexOf('<h2>What went wrong</h2>')));
+  assert.match(wrong, /<span class="pill bad"><span class="ico" aria-hidden="true">✕<\/span>\d+ problems?<\/span>/);
+  const folds = wrong.match(/<details class="fold"( open)?>/g) || [];
+  assert.ok(folds.length >= 2, 'one fold per problem');
+  assert.equal(folds[0], '<details class="fold" open>', 'the first problem is open');
+  assert.ok(folds.slice(1).every((f) => f === '<details class="fold">'), 'the rest start folded');
+  assert.match(html, /<summary>Failing output <span class="count">2<\/span><\/summary>/);
+  assert.match(html, /<span class="pill bad"><span class="ico" aria-hidden="true">✕<\/span>Tests: failed<\/span>/);
+  assert.match(html, /<span class="pill ok"><span class="ico" aria-hidden="true">✓<\/span>Syntax: ok<\/span>/);
+  assert.match(html, /<span class="pill warn"><span class="ico" aria-hidden="true">!<\/span>Fix-ups: 1<\/span>/);
+  assert.match(html, /prefers-reduced-motion:no-preference/);
+  // A run with no self-check says so, and a clean run says nothing went wrong.
+  const clean = renderRunReportHtml(view([pkg('a')], { integration: { state: 'done', skipped: [] } }), { now: T0 + 60 * MIN });
+  assert.match(clean, /<h2>Self-check<\/h2><p class="empty">Not run\.<\/p>/);
+  assert.match(clean, /<h2>What went wrong<\/h2><p class="empty"><span class="pill ok">/);
+});
+
 test('run report HTML is deterministic for the same input', () => {
   const v = view([pkg('a'), pkg('b', { state: 'stalled' })]);
   const extra = { now: T0 + 50 * MIN, suggestions: [] };

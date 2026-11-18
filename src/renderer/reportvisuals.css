@@ -1,0 +1,203 @@
+/* ==========================================================================
+   LunaCore - report visuals (modules/reportvisuals.js)
+   --------------------------------------------------------------------------
+   Stat tiles, inline bars, one stacked bar, status chips and <details>
+   sections for the hub's weekly / daily brief and the God Mode run summary.
+   Separate because styles.css is past the size guideline. Theme tokens only:
+   every tint is color-mix() of a theme colour, so all themes and dark mode
+   follow. Status always carries an icon glyph next to the colour.
+   ========================================================================== */
+
+/* --- tones: one custom property per status, used by tiles, bars, chips --- */
+.rv-tile, .rv-chip, .rv-bar__fill, .rv-stack__seg { --rv-tone: var(--text-dim); }
+.is-ok.rv-tile, .is-ok.rv-chip, .is-ok.rv-bar__fill, .is-ok.rv-stack__seg { --rv-tone: var(--good); }
+.is-bad.rv-tile, .is-bad.rv-chip, .is-bad.rv-bar__fill, .is-bad.rv-stack__seg { --rv-tone: var(--bad); }
+.is-warn.rv-tile, .is-warn.rv-chip, .is-warn.rv-bar__fill, .is-warn.rv-stack__seg { --rv-tone: var(--warn); }
+.is-info.rv-tile, .is-info.rv-chip, .is-info.rv-bar__fill, .is-info.rv-stack__seg { --rv-tone: var(--neon-cyan); }
+
+/* --- stat tiles ------------------------------------------------------------ */
+.rv-tiles {
+  list-style: none;
+  margin: var(--space-3) 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: var(--space-3);
+}
+.rv-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) solid color-mix(in srgb, var(--rv-tone) 35%, var(--edge));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--rv-tone) 8%, transparent);
+}
+.rv-tile__value {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.rv-tile__label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  overflow-wrap: anywhere;
+}
+
+/* --- caption above a visual ----------------------------------------------- */
+.rv-caption {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* --- inline bars ------------------------------------------------------------ */
+.rv-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.rv-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 34%) 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--fs-sm);
+}
+.rv-bar__label { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-bar__track {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+  overflow: hidden;
+}
+.rv-bar__fill { display: block; height: 100%; border-radius: 4px; background: var(--rv-tone); }
+.rv-bar__value { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* --- stacked bar + chip legend -------------------------------------------- */
+.rv-stack { margin: 0 0 var(--space-4); }
+.rv-stack__bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+}
+.rv-stack__seg { display: block; height: 100%; background: var(--rv-tone); }
+.rv-stack__seg + .rv-stack__seg { border-left: 2px solid var(--surface-panel-2, transparent); }
+.rv-stack__legend, .rv-chips {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* --- status chip: colour + icon glyph + text ------------------------------- */
+.rv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 1px var(--space-3) 1px var(--space-2);
+  border: var(--border-w) solid color-mix(in srgb, var(--rv-tone) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--rv-tone) 12%, transparent);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  vertical-align: middle;
+}
+.rv-chip__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  flex: none;
+  border-radius: 50%;
+  background: var(--rv-tone);
+  color: var(--bg, var(--surface-panel));
+  font-weight: 700;
+  font-size: 0.85em;
+  line-height: 1;
+}
+.rv-chip__text { min-width: 0; overflow-wrap: anywhere; }
+
+/* --- collapsible sections --------------------------------------------------- */
+.rv-details {
+  margin-top: var(--space-3);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-panel-2) 60%, transparent);
+}
+.rv-details__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: var(--radius-md);
+}
+.rv-details__head::-webkit-details-marker { display: none; }
+/* The disclosure triangle, drawn so it can rotate; aria comes from <details>. */
+.rv-details__head::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  flex: none;
+}
+.rv-details[open] > .rv-details__head::before { transform: rotate(90deg); }
+.rv-details__head:hover { color: var(--text); }
+.rv-details__head:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+.rv-details__title { flex: 1; min-width: 0; }
+.rv-details__count {
+  min-width: 1.6em;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--neon-cyan) 16%, transparent);
+  color: var(--text);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.rv-details__body { padding: 0 var(--space-4) var(--space-4); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .rv-details__head::before { transition: transform 150ms ease-out; }
+  .rv-details__head { transition: color 150ms ease-out; }
+}
+
+/* --- the brief's rows ------------------------------------------------------- */
+.mission-brief--hub .mission-brief__list { margin: 0; padding-left: var(--space-6); display: flex; flex-direction: column; gap: var(--space-2); }
+.mission-brief--hub ul.mission-brief__list { list-style: none; padding-left: 0; }
+.mission-brief__event, .mission-brief__mail, .mission-brief__todo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+.mission-brief__when { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--neon-cyan); white-space: nowrap; }
+.mission-brief__what, .mission-brief__subject { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.mission-brief__from { font-weight: 600; color: var(--text); }
+.mission-brief__note { flex-basis: 100%; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.mission-brief__lead { margin: var(--space-3) 0 0; color: var(--text); }
+.mission-brief__nudge, .mission-brief__fail { display: flex; align-items: flex-start; gap: var(--space-3); margin: var(--space-3) 0 0; color: var(--text); }
+
+/* --- the run summary --------------------------------------------------------- */
+.gm-sum__sec.rv-details { margin-bottom: 0; }
+.gm-sum__table .rv-chip { white-space: nowrap; }

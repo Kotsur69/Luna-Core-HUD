@@ -107,6 +107,19 @@ td ul.plain{padding-left:16px}
 .pill.ok{color:var(--ok-fg);background:var(--ok-bg)}.pill.bad{color:var(--bad-fg);background:var(--bad-bg)}
 .pill.warn{color:var(--warn-fg);background:var(--warn-bg)}.pill.info{color:var(--info-fg);background:var(--info-bg)}
 .pill.accent{color:var(--accent-fg);background:var(--accent-bg)}
+ul.pills{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+ul.pills .pill{white-space:normal}
+.pill .ico{display:inline-block;width:1.2em;margin-right:4px;text-align:center;font-weight:700}
+details.fold{border:1px solid var(--line);border-radius:10px;margin:10px 0 0;background:var(--panel)}
+details.fold>summary{cursor:pointer;padding:10px 14px;font-weight:600;color:var(--strong);list-style:none;display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"\\25B8";flex:none;color:var(--muted);font-size:12px;line-height:1}
+details.fold[open]>summary::before{transform:rotate(90deg)}
+details.fold>summary:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+details.fold .count{margin-left:auto;padding:0 8px;border-radius:999px;background:var(--muted-bg);color:var(--muted-fg);font-size:12px}
+.fold-body{padding:0 14px 12px}
+.fold-body>h3:first-child{margin-top:4px}
+@media (prefers-reduced-motion:no-preference){details.fold>summary::before{transition:transform .15s ease-out}}
 ul.plain{margin:0;padding-left:20px}
 ul.plain li{margin:4px 0;overflow-wrap:anywhere}
 ul.plain li::marker{color:var(--muted)}
@@ -321,7 +334,25 @@ function isNumericColumn(cells) {
   return real.length > 0 && real.every((c) => NUMERIC_CELL_RE.test(c));
 }
 
-const pill = (text, t) => `<span class="pill ${tone(t)}">${esc(text)}</span>`;
+// A status never rests on colour alone: each pill tone carries a glyph too.
+const PILL_ICON = { ok: '✓', bad: '✕', warn: '!', info: 'i', accent: '★', muted: '·' };
+const pill = (text, t) => {
+  const tn = tone(t);
+  const icon = PILL_ICON[tn] || PILL_ICON.muted;
+  return `<span class="pill ${tn}"><span class="ico" aria-hidden="true">${icon}</span>${esc(text)}</span>`;
+};
+
+/**
+ * A collapsible block: native <details>, keyboard and screen-reader ready.
+ * `inner` is already-escaped markup.
+ * @param {string} title
+ * @param {string} inner
+ * @param {{open?:boolean, count?:number}} [opts]
+ */
+function fold(title, inner, opts = {}) {
+  const count = Number.isFinite(opts.count) ? ` <span class="count">${esc(opts.count)}</span>` : '';
+  return `<details class="fold"${opts.open ? ' open' : ''}><summary>${esc(title)}${count}</summary><div class="fold-body">${inner}</div></details>`;
+}
 const list = (items, emptyText) => (items.length ? `<ul class="plain">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : empty(emptyText));
 
 
@@ -337,6 +368,7 @@ module.exports = {
   columnChart,
   table,
   pill,
+  fold,
   list,
   empty,
 };

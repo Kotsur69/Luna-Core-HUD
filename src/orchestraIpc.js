@@ -44,6 +44,15 @@ const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const keyOf = (projectId) => (typeof projectId === 'string' ? projectId : null);
 const refuse = (error) => ({ ok: false, error });
 
+/** True for a regular file (a symlink or a folder is not one); a missing path is false. */
+function isPlainFile(file) {
+  try {
+    return fs.lstatSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** The projectId field of a plain object; an own `projectId: null` is NO_PROJECT. */
 function scopeOf(obj) {
   if (obj.projectId === null && Object.prototype.hasOwnProperty.call(obj, 'projectId')) return NO_PROJECT;
@@ -409,18 +418,16 @@ function registerOrchestraIpc(ipcMain, ctx) {
 
   // "Open report": only the run id crosses, and it must be the run's own
   // plan; the path is built here (<userDir>/runs/<id>.md) and must be a
-  // plain file.
+  // plain file. The same run's page with tiles and charts (<id>.html, written
+  // next to it) opens instead when it is there; an older run has the .md only.
   ipcMain.handle('orchestra:openReport', async (_event, planId, opts) => {
     const file = reportFileFor(ctx.runsDir(), planId);
     if (!file) return refuse('badId');
     const run = runForPlan(projectIdOf(opts), planId);
     if (!run.ok) return run;
-    try {
-      if (!fs.lstatSync(file).isFile()) return refuse('noReport');
-    } catch {
-      return refuse('noReport');
-    }
-    const err = await ctx.openPath(file);
+    if (!isPlainFile(file)) return refuse('noReport');
+    const html = file.replace(/\.md$/, '.html');
+    const err = await ctx.openPath(isPlainFile(html) ? html : file);
     return err ? refuse('openFailed') : { ok: true };
   });
 
