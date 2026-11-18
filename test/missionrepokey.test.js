@@ -87,6 +87,25 @@ test('a removed God Mode worktree (.luna-worktrees/<repo>/<slug>) still counts f
   assert.equal(keys.resolve(path.join(root, '.luna-worktrees', 'Nope', 'slug')).key, 'other');
 });
 
+test("LunaCore's own background calls (cwd = the temp folder) get their own project", () => {
+  const fakeTemp = tmp();
+  const keys = createRepoKeys({ tmpDir: fakeTemp });
+  const bg = { key: 'local:lunacore-background', name: 'LunaCore (background)' };
+  assert.deepEqual(keys.resolve(fakeTemp), bg);
+  assert.deepEqual(keys.resolve(fakeTemp + path.sep), bg);
+  if (process.platform === 'win32') assert.deepEqual(keys.resolve(fakeTemp.toUpperCase()), bg);
+  // A session started in a subfolder (a Claude Code scratchpad) is not LunaCore's.
+  const sub = path.join(fakeTemp, 'claude', 'scratchpad');
+  fs.mkdirSync(sub, { recursive: true });
+  assert.equal(keys.resolve(sub).key, 'other');
+});
+
+test('the background key passes the cloud ledger key check', () => {
+  const { validKey } = require('../src/missionledgersync.js');
+  const fakeTemp = tmp();
+  assert.equal(validKey(createRepoKeys({ tmpDir: fakeTemp }).resolve(fakeTemp).key), true);
+});
+
 test('a folder outside any repo, or a missing one, is "other"', () => {
   const root = tmp();
   const keys = createRepoKeys();

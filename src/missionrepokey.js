@@ -15,9 +15,14 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const OTHER = Object.freeze({ key: 'other', name: 'other' });
+// LunaCore's own `claude -p` / agy jobs (missionrunner.js, missionnews.js:
+// briefs, memory upkeep, news) run with cwd = the temp folder. A `local:` key
+// so it passes the cloud ledger key check (missionledgersync.KEY_RE).
+const BACKGROUND = Object.freeze({ key: 'local:lunacore-background', name: 'LunaCore (background)' });
 const MAX_GIT_FILE = 64 * 1024;
 const MAX_DEPTH = 64;
 const SEGMENT_RE = /^[a-z0-9._-]+$/;
@@ -128,6 +133,16 @@ function removedWorktreeRepo(cwd) {
   return fs.existsSync(path.join(home, '.git')) ? findRepo(home) : null;
 }
 
+/** True when `cwd` is the temp folder itself (not a subfolder of it). */
+function isTempRoot(cwd, tmpDir) {
+  if (typeof tmpDir !== 'string' || !tmpDir) return false;
+  const norm = (p) => {
+    const abs = path.resolve(p);
+    return process.platform === 'win32' ? abs.toLowerCase() : abs;
+  };
+  return norm(cwd) === norm(tmpDir);
+}
+
 /** Git Bash writes "/c/Users/..." into some transcripts; Windows reads that as C:\c\Users. */
 function fromGitBash(cwd) {
   if (process.platform !== 'win32') return cwd;
@@ -150,14 +165,14 @@ function aliasFor(cwd, aliases) {
  * on this PC (deleted, moved, or another PC's path) can still match a pinned
  * project's folder alias.
  */
-function resolveCwd(rawCwd, aliases) {
+function resolveCwd(rawCwd, aliases, tmpDir) {
   if (typeof rawCwd !== 'string' || !rawCwd) return OTHER;
   const cwd = fromGitBash(rawCwd);
   // A UNC path (\\host\share) would make every stat a network round trip and
   // can trigger an SMB/NTLM handshake; a relative one has no stable meaning.
   if (/^[\\/]{2}/.test(cwd) || !path.isAbsolute(cwd)) return OTHER;
   const repo = findRepo(cwd) || removedWorktreeRepo(cwd);
-  if (!repo) return aliasFor(cwd, aliases) || OTHER;
+  if (!repo) return (isTempRoot(cwd, tmpDir) && BACKGROUND) || aliasFor(cwd, aliases) || OTHER;
   const remote = normalizeRemote(originUrl(readSmall(path.join(repo.gitDir, 'config'))));
   const folder = path.basename(repo.root);
   if (remote) return { key: `git:${remote}`, name: folder };
@@ -170,15 +185,16 @@ function resolveCwd(rawCwd, aliases) {
  * @param {{aliases?:()=>Map<string,{key:string,name:string}>, cacheUnresolved?:boolean}} [opts]
  *   aliases = pinned folder aliases (missionprojects.pinnedAliases), read on a
  *   cache miss; cacheUnresolved = false keeps only `git:` keys, so a folder
- *   that gets a repository or an origin remote later is seen without a restart
+ *   that gets a repository or an origin remote later is seen without a restart;
+ *   tmpDir = the folder LunaCore's background jobs run in (tests inject one)
  */
-function createRepoKeys({ aliases = () => null, cacheUnresolved = true } = {}) {
+function createRepoKeys({ aliases = () => null, cacheUnresolved = true, tmpDir = os.tmpdir() } = {}) {
   const cache = new Map();
   return {
     resolve(cwd) {
       if (typeof cwd !== 'string') return OTHER;
       if (cache.has(cwd)) return cache.get(cwd);
-      const resolved = resolveCwd(cwd, aliases());
+      const resolved = resolveCwd(cwd, aliases(), tmpDir);
       if (cacheUnresolved || resolved.key.startsWith('git:')) cache.set(cwd, resolved);
       return resolved;
     },
