@@ -68,6 +68,7 @@ const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
 // The Antigravity (agy) profile and env for worker tabs and headless jobs.
 const { agyProfileId, agyEnv } = require('./agyprofile');
+const { createAgyModels, setSharedAgyModels } = require('./agymodels');
 const { createAgyIntake } = require('./agyintake');
 const { pickCodingProfileId } = require('./orchestraHybrid');
 // Free God Mode v2 plan runs: the plan-worker lockdown and its profile.
@@ -1403,6 +1404,15 @@ function lunasworkAgyEnv() {
   return id ? agyEnv(getProfile(profiles, id)) : null;
 }
 
+// The live `agy models` list (src/agymodels.js): God Mode's 'agy:<id>' worker
+// choices, and the check every such id passes before it reaches an agy argv.
+const agyModels = createAgyModels({ envOf: () => lunasworkAgyEnv(), log: (line) => console.info(line) });
+setSharedAgyModels(agyModels);
+/** After start-up settles: read the list once so a resumed run's agy variant is checked against it. */
+const AGY_MODELS_WARMUP_MS = 30 * 1000;
+/** The pickers' `agy:models` reads spawn agy at most this often. */
+const AGY_MODELS_MIN_INTERVAL_MS = 10 * 1000;
+
 // Free God Mode v2 "Approve plan" (src/orchestraPlanApprove.js): the plan's
 // tasks land in the run project's to-do list; the board and the phone follow.
 const planApprover = createPlanApprover({
@@ -1582,6 +1592,7 @@ const orchestraCtx = {
   // Worker tabs on the Antigravity CLI: its profile and env (src/agyprofile.js).
   agyProfileId: () => agyProfileId(profiles),
   agyEnv: () => lunasworkAgyEnv(),
+  agyModels,
   // Hybrid runs (F6c): free packages run on 'FreeLLMAPI - coding', never auto:easy.
   codingProfileId: () => pickCodingProfileId(profiles, loadProviders().providers, loadChains()),
   planRunProfile: () => planProfileFrom(profiles),
@@ -4207,6 +4218,13 @@ function registerIpc() {
 
   // UI preferences: reads {theme, lang} and writes a partial update (returns the new state).
   ipcMain.handle('ui:get', () => readUiPrefs());
+  // The agy worker-model choices, read live when a picker opens: [{id, name}],
+  // plain 'agy' first. Takes no payload; ids come from main's own `agy models` call.
+  ipcMain.handle('agy:models', async () => {
+    // A picker focused again and again within the interval is answered from the cache.
+    await agyModels.refresh({ minIntervalMs: AGY_MODELS_MIN_INTERVAL_MS });
+    return { choices: agyModels.choices() };
+  });
   ipcMain.handle('ui:set', async (_event, partial) => {
     // "Apply Supabase actions: automatic" changes a live project with no
     // question after each merge: only Mati turns it on, natively.
@@ -4384,6 +4402,10 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   startActiveProjects(); // sets cwd before the first session starts
+  // Only with an agy profile: nobody else can run an agy worker.
+  setTimeout(() => {
+    if (agyProfileId(profiles)) agyModels.ensure();
+  }, AGY_MODELS_WARMUP_MS).unref();
   todoSync = startTodoSync({
     getProjects: () => projects,
     onChanged: (ids) => ids.forEach((projectId) => send('todo:changed', { projectId })),

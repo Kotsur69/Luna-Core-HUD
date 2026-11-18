@@ -30,11 +30,62 @@ function fakeExec(answer = { stdout: '{"verdict":"ship"}' }) {
 
 const claudeArgs = (extra = []) => ['-p', '--output-format', 'json', '--model', AGY_MODEL, ...extra];
 
-test('argsUseAgy: only an exact `--model agy` routes to agy', () => {
+test('argsUseAgy: only `--model agy` or a well-formed `--model agy:<id>` routes to agy', () => {
   assert.equal(argsUseAgy(claudeArgs()), true);
-  for (const args of [['-p', '--model', 'opus'], ['-p', '--model', 'AGY'], ['-p', 'agy'], ['-p', '--model'], null, 'agy', []]) {
+  assert.equal(argsUseAgy(['-p', '--model', 'agy:gemini-4-argon-medium']), true);
+  for (const args of [
+    ['-p', '--model', 'opus'],
+    ['-p', '--model', 'AGY'],
+    ['-p', 'agy'],
+    ['-p', '--model'],
+    ['-p', '--model', 'agy:'],
+    ['-p', '--model', 'agy:--print'],
+    ['-p', '--model', 'agy:a b'],
+    null,
+    'agy',
+    [],
+  ]) {
     assert.equal(argsUseAgy(args), false, JSON.stringify(args));
   }
+});
+
+/** A fake agy model cache holding `ids`; counts ensure() calls. */
+function fakeModels(ids) {
+  const seen = { ensured: 0 };
+  return {
+    seen,
+    ensure: async () => {
+      seen.ensured += 1;
+      return ids.map((id) => ({ id, name: id }));
+    },
+    isKnownId: (id) => ids.includes(id),
+  };
+}
+
+test('execAgy: --model agy:<id> runs agy with its own --model <id> once the live list holds the id', async () => {
+  const { calls, execImpl } = fakeExec({ stdout: 'done' });
+  const agyModels = fakeModels(['gemini-4-argon-medium']);
+  const res = await execAgy({ args: ['-p', '--model', 'agy:gemini-4-argon-medium'], prompt: 'hi', cwd: '.', env: AGY_ENV, timeoutMs: 1000, execImpl, agyModels });
+  assert.ok(res.stdout);
+  assert.equal(agyModels.seen.ensured, 1);
+  assert.deepEqual(calls[0].args, ['--print', '--model', 'gemini-4-argon-medium']);
+  // The internal marker never reaches agy.
+  assert.ok(!calls[0].args.includes('agy:gemini-4-argon-medium'));
+});
+
+test('execAgy: an id the live list does not hold is refused and never reaches an argv', async () => {
+  const { calls, execImpl } = fakeExec();
+  const res = await execAgy({ args: ['-p', '--model', 'agy:gemini-9-made-up'], prompt: 'hi', cwd: '.', env: AGY_ENV, timeoutMs: 1000, execImpl, agyModels: fakeModels(['gemini-4-argon-medium']) });
+  assert.equal(res.error, 'badAgyModel');
+  assert.equal(calls.length, 0);
+});
+
+test('execAgy: plain --model agy passes no --model and never reads the list', async () => {
+  const { calls, execImpl } = fakeExec({ stdout: 'done' });
+  const agyModels = fakeModels([]);
+  await execAgy({ args: claudeArgs(), prompt: 'hi', cwd: '.', env: AGY_ENV, timeoutMs: 1000, execImpl, agyModels });
+  assert.equal(agyModels.seen.ensured, 0);
+  assert.ok(!calls[0].args.includes('--model'));
 });
 
 test('schemaOf reads --json-schema, null when missing or not a JSON object', () => {

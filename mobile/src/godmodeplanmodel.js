@@ -13,7 +13,7 @@
 export const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 /** The mode a new draft starts on: no merge without Mati picking it. */
 export const DEFAULT_INTEGRATION = 'pr';
-import { WORKER_MODELS, WORKER_MODEL_NAMES, DEFAULT_WORKER_MODEL, isWorkerModel } from '../../src/workerModels.js';
+import { WORKER_MODELS, WORKER_MODEL_NAMES, DEFAULT_WORKER_MODEL, AGY_MODEL, isWorkerModel, agyModelIdOf } from '../../src/workerModels.js';
 
 /**
  * Every worker model the PC accepts, their product names and the PC's default
@@ -21,8 +21,20 @@ import { WORKER_MODELS, WORKER_MODEL_NAMES, DEFAULT_WORKER_MODEL, isWorkerModel 
  */
 export { WORKER_MODELS, WORKER_MODEL_NAMES, DEFAULT_WORKER_MODEL };
 
-/** One of WORKER_MODELS, else null. */
+/** One of WORKER_MODELS or a well-formed 'agy:<id>' (the PC checks the id again), else null. */
 const workerModelOf = (value) => (isWorkerModel(value) ? value : null);
+
+/**
+ * The worker-model select's ids: the shared list, with `current` after plain
+ * 'agy' when it is an 'agy:<id>' variant the PC chose (the phone has no live
+ * `agy models` list, so it offers only the one it was given).
+ * @param {unknown} current
+ * @returns {string[]}
+ */
+export function workerModelOptions(current) {
+  const variant = agyModelIdOf(current) ? [current] : [];
+  return WORKER_MODELS.flatMap((m) => (m === AGY_MODEL ? [m, ...variant] : [m]));
+}
 
 const ids = (plan) => (plan && Array.isArray(plan.packages) ? plan.packages.map((p) => p.id) : []);
 

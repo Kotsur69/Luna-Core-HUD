@@ -167,17 +167,17 @@ function parseChanges(stdout, paths) {
 /**
  * Runs one query. Never rejects.
  * @param {{root: string, since: string, paths: string[]}} query
- * @param {{exec?: Function}} [opts]
+ * @param {{exec?: Function, timeoutMs?: number}} [opts] timeoutMs: git's kill timer (default GIT_TIMEOUT_MS)
  * @returns {Promise<{ok: true, changes: Map<string, string>}|{ok: false, reason: string}>}
  */
-function readChanges(query, { exec = execFile } = {}) {
+function readChanges(query, { exec = execFile, timeoutMs = GIT_TIMEOUT_MS } = {}) {
   const { root, since, paths } = query || {};
   if (typeof root !== 'string' || !path.isAbsolute(root) || !DATE_RE.test(String(since)) || !Array.isArray(paths) || !paths.length) {
     return Promise.resolve({ ok: false, reason: 'bad-query' });
   }
   return new Promise((resolve) => {
     try {
-      exec('git', gitArgs({ root, since, paths }), { timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, windowsHide: true }, (error, stdout, stderr) => {
+      exec('git', gitArgs({ root, since, paths }), { timeout: timeoutMs, maxBuffer: GIT_MAX_BUFFER, windowsHide: true }, (error, stdout, stderr) => {
         if (error) return resolve({ ok: false, reason: gitFailure(error, stderr) });
         resolve({ ok: true, changes: parseChanges(stdout, paths) });
       });
@@ -228,13 +228,14 @@ const covers = (old, q) => old.root === q.root && old.since <= q.since && q.path
 
 /**
  * The cache in front of readChanges.
- * @param {{exec?: Function, now?: () => number, ttlMs?: number, headOf?: (root: string) => string|null}} [deps]
+ * @param {{exec?: Function, now?: () => number, ttlMs?: number, headOf?: (root: string) => string|null, gitTimeoutMs?: number}} [deps]
+ *   gitTimeoutMs: the kill timer of each `git log` (default GIT_TIMEOUT_MS)
  * @returns {{current: () => Object<string, Map<string, string>>, refresh: (records: [string, object][], roots: object) => Promise<boolean>}}
  *   current = the cached answers (never starts git), for reviewList's `changes`;
  *   refresh = asks git for the projects whose answer is missing or old; resolves
  *   true when an answer differs from the one it replaces. Never rejects.
  */
-function createChangeTracker({ exec = execFile, now = Date.now, ttlMs = CHANGES_TTL_MS, headOf = headSignature } = {}) {
+function createChangeTracker({ exec = execFile, now = Date.now, ttlMs = CHANGES_TTL_MS, headOf = headSignature, gitTimeoutMs = GIT_TIMEOUT_MS } = {}) {
   /** project -> {query: {root, since, paths: Set}, sig, at, changes: Map|null} */
   const cache = new Map();
   /** project -> the call in flight */
@@ -243,7 +244,7 @@ function createChangeTracker({ exec = execFile, now = Date.now, ttlMs = CHANGES_
   const fresh = (entry, query, sig) => Boolean(entry) && covers(entry.query, query) && now() - entry.at < ttlMs && (sig === null || entry.sig === sig);
 
   async function ask(project, query, sig) {
-    const res = await readChanges(query, { exec });
+    const res = await readChanges(query, { exec, timeoutMs: gitTimeoutMs });
     if (!res.ok) console.error(`[memory] changed files of ${project} unknown, git log failed:`, res.reason);
     const before = cache.get(project);
     const changes = res.ok ? res.changes : null;

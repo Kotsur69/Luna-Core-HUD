@@ -61,6 +61,10 @@ const { runToastBody } = require('./orchestraFollowupsReport');
 const { validateRunSlug, planPath: planDocPath } = require('./orchestraPlanRun');
 const { sizePackages } = require('./orchestraPlanBuild');
 const orchestraReview = require('./orchestraReview');
+const { cleanName } = require('./agymodels');
+
+/** Longest agy model name a package card gets from a transcript. */
+const MAX_AGY_MODEL_SHOWN = 80;
 
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 // How much of a worker's transcript is read to name the tool a permission
@@ -262,6 +266,14 @@ function sessionDeps(ctx) {
     // A resume after a PC shutdown (orchestraResume.js): the worker's
     // conversation id (the watcher's follows /clear, like tabResume.tabRecord)
     // and whether its transcript reached the disk.
+    // The model an agy tab's transcript reports (src/agywatcher.js), for the package card.
+    sessionAgyModel: (id) => {
+      const s = ctx.sessions.get(id);
+      const model = s && s.agyWatcher && s.agyWatcher.state ? s.agyWatcher.state.model : null;
+      // Transcript text: no control / bidi characters reach the card or the phone.
+      const shown = typeof model === 'string' ? cleanName(model).slice(0, MAX_AGY_MODEL_SHOWN) : '';
+      return shown || null;
+    },
     transcriptIdOf: (id) => {
       const s = ctx.sessions.get(id);
       return s ? (s.watcher && s.watcher.sessionUuid) || s.transcriptId || null : null;
@@ -724,6 +736,8 @@ function powerDeps(projectId, ctx, shared, self) {
     // for the run's headless helper jobs (src/orchestraAgy.js).
     agyProfileId: () => (ctx.agyProfileId ? ctx.agyProfileId() : null),
     agyEnv: () => (ctx.agyEnv ? ctx.agyEnv() : null),
+    // The live `agy models` list: 'agy:<id>' variants are checked against it (src/agymodels.js).
+    agyModels: ctx.agyModels || null,
     // Hybrid runs (F6): the shipped protected paths plus the repo's own
     // .lunacore/hybrid-protected.json; a broken file never throws.
     hybridProtected: (repoPath) => loadProtected({ repoPath }),

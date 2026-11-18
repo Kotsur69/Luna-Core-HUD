@@ -2,7 +2,8 @@
 // LunaCore - God Mode "Workers model" on the Approve screen
 // ----------------------------------------------------------------------------
 // A select next to Workers / Integration: Opus (default), Sonnet, Fable or
-// Planner's pick. It opens on the saved ui pref orchestraWorkerModel (the same
+// Planner's pick, plus Antigravity and its live models (`agy models`, read
+// again in main each time the select gets focus). It opens on the saved ui pref orchestraWorkerModel (the same
 // one as the Settings select) and a change saves it right away; Approve sends
 // it as launchOrchestra's workerModel, where main freezes it for the run.
 // Also the labels of the run line and each package card's model badge.
@@ -12,13 +13,16 @@
 'use strict';
 
 import { t } from './util.js';
-import { WORKER_MODELS, normalizeWorkerModel, badgeModelOf, modelName, runWorkerModel } from './orchestraWorkerModelRules.js';
+import { normalizeWorkerModel, badgeModelOf, modelName, runWorkerModel, workerModelChoices, agyBadgeText } from './orchestraWorkerModelRules.js';
+import { agyChoiceName, agyVariantIds, refreshAgyModels } from './agyModelChoices.js';
 
 /** The choice on screen (= the saved pref), or null before it was read. */
 let picked = null;
 
 /** Reads the saved pref; an unreadable one keeps the choice already on screen. */
 export async function loadWorkerModel() {
+  // The live agy names for badges and the picker, before any picker opens (never throws).
+  refreshAgyModels();
   try {
     const prefs = await window.lunacore.getUiPrefs();
     const saved = normalizeWorkerModel(prefs && prefs.orchestraWorkerModel);
@@ -31,9 +35,9 @@ export async function loadWorkerModel() {
 /** The run model the board shows and Approve sends (see runWorkerModel). */
 export const chosenWorkerModel = (plan) => runWorkerModel(plan, picked);
 
-/** 'Opus' / 'Sonnet' / 'Fable', or "Planner's pick" for 'plan'. */
+/** 'Opus' / 'Sonnet' / 'Fable', an agy model's live name, or "Planner's pick" for 'plan'. */
 export function workerModelLabel(model) {
-  return model === 'plan' ? t('orchset.model.plan') : modelName(model);
+  return model === 'plan' ? t('orchset.model.plan') : agyChoiceName(model) || modelName(model);
 }
 
 /**
@@ -59,7 +63,27 @@ export function packageModelBadge(pkg, plan, workers) {
   if (!takesWorkerModel(plan)) return pkg && pkg.model ? String(pkg.model) : null;
   const model = badgeModelOf(pkg, chosenWorkerModel(plan), workers);
   if (!model) return null;
-  return model === 'free' ? t('orch.pkgModel.free') : modelName(model);
+  if (model === 'free') return t('orch.pkgModel.free');
+  // Plain 'agy': which model agy picked, as its transcript reports it.
+  return agyBadgeText(model, workerModelLabel(model), pkg && pkg.agyModel);
+}
+
+/**
+ * Fills a worker-model select: the shared list, the live agy variants after
+ * plain 'agy', and `current` kept selected.
+ * @param {HTMLSelectElement} sel
+ * @param {string} current
+ */
+function fillModelOptions(sel, current) {
+  sel.replaceChildren(
+    ...workerModelChoices(agyVariantIds(), current).map((model) => {
+      const opt = document.createElement('option');
+      opt.value = model;
+      opt.textContent = workerModelLabel(model);
+      return opt;
+    }),
+  );
+  sel.value = current;
 }
 
 /**
@@ -78,14 +102,23 @@ export function workerModelControls(plan, disabled, onChange) {
   const sel = document.createElement('select');
   sel.className = 'profile-select';
   sel.setAttribute('aria-label', t('orch.workerModel'));
-  for (const model of WORKER_MODELS) {
-    const opt = document.createElement('option');
-    opt.value = model;
-    opt.textContent = workerModelLabel(model);
-    sel.append(opt);
-  }
-  sel.value = chosenWorkerModel(plan);
+  fillModelOptions(sel, chosenWorkerModel(plan));
   sel.disabled = disabled;
+  // The picker opens: read `agy models` again (main) and offer what it lists now.
+  let reading = false;
+  sel.addEventListener('focus', () => {
+    if (reading) return;
+    reading = true;
+    const before = agyVariantIds().join('\n');
+    refreshAgyModels()
+      .then((ids) => {
+        // Unchanged list: leave an open dropdown alone.
+        if (sel.isConnected && ids.join('\n') !== before) fillModelOptions(sel, normalizeWorkerModel(sel.value) || chosenWorkerModel(plan));
+      })
+      .finally(() => {
+        reading = false;
+      });
+  });
   sel.addEventListener('change', () => {
     const next = normalizeWorkerModel(sel.value);
     if (!next) return;

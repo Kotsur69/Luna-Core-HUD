@@ -202,7 +202,7 @@ test('agy launch helpers refuse control characters that the PTY would read as ke
   );
 });
 
-test('withTaskBrief drops Claude-only flags for agy and keeps the tool kit folders', () => {
+test('withTaskBrief drops Claude-only flags for agy, keeps the effort and the tool kit folders', () => {
   const cmd = launch.withTaskBrief('agy', {
     briefPath: BRIEF,
     model: 'opus',
@@ -212,8 +212,31 @@ test('withTaskBrief drops Claude-only flags for agy and keeps the tool kit folde
     mcpConfigPath: 'C:\\kit\\mcp.json',
     addDirs: ['C:\\art', 'relative\\dir', "C:\\it's"],
   });
-  assert.doesNotMatch(cmd, /--model|--effort|--allowedTools|--disallowedTools|--mcp-config/);
+  // A Claude alias is no agy model; the God Mode effort is an agy flag too.
+  assert.doesNotMatch(cmd, /--model|--allowedTools|--disallowedTools|--mcp-config/);
+  assert.match(cmd, / --effort xhigh /);
   assert.match(cmd, / --add-dir 'C:\\art'$/, 'only absolute, quotable folders are added');
+});
+
+test('withTaskBrief hands agy the id of an agy:<id> model as --model <id>', () => {
+  const cmd = launch.withTaskBrief('agy', { briefPath: BRIEF, model: 'agy:gemini-4-argon-medium', effort: 'high', permissionMode: 'acceptEdits' });
+  assert.equal(cmd, `agy --prompt-interactive ${BRIEF_MSG} --model gemini-4-argon-medium --effort high --mode accept-edits`);
+  // Plain 'agy' = agy's own default model: no --model at all.
+  assert.equal(launch.withTaskBrief('agy', { briefPath: BRIEF, model: 'agy' }), `agy --prompt-interactive ${BRIEF_MSG}`);
+  // The profile already picks a model / an effort: nothing is added twice.
+  const decided = launch.withTaskBrief('agy --model gemini-3.8-flash-low --effort=max', { briefPath: BRIEF, model: 'agy:gemini-4-argon-medium', effort: 'high' });
+  assert.equal(decided.match(/--model/g).length, 1);
+  assert.equal(decided.match(/--effort/g).length, 1);
+  assert.match(decided, /--model gemini-3\.8-flash-low/);
+});
+
+test('withTaskBrief never puts a malformed agy model id into an argv', () => {
+  for (const model of ['agy:--print', 'agy:-x', "agy:a'b", 'agy:a b', 'agy:a;rm', 'agy:', `agy:${'a'.repeat(81)}`, 'agy:a$(x)', 'AGY:gemini']) {
+    const cmd = launch.withTaskBrief('agy', { briefPath: BRIEF, model });
+    assert.equal(cmd, `agy --prompt-interactive ${BRIEF_MSG}`, model);
+  }
+  // Nor does a Claude command ever get an agy model.
+  assert.equal(launch.withTaskBrief('claude', { briefPath: BRIEF, model: 'agy:gemini-4-argon-medium' }), `claude ${BRIEF_MSG}`);
 });
 
 test('withTaskBrief refuses an agy command that brings its own prompt, a lockdown, or an unsafe brief path', () => {

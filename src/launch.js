@@ -18,7 +18,7 @@
 
 const path = require('path');
 const { isEffort } = require('./efforts');
-const { AGY_MODEL } = require('./claudeModels');
+const { isAgyModel, agyModelIdOf } = require('./workerModels');
 const { relativeBriefPath } = require('./workerBrief');
 
 // Flags meaning "the session id is already decided" - the CLI resumes an
@@ -40,12 +40,23 @@ const SESSION_ID_DECIDED =
 //   --add-dir <path>              an extra folder the agent may read
 //   --mode accept-edits           auto-accept file edits
 //   --dangerously-skip-permissions
+//   --model <id>                  run on one model of `agy models` (ids differ
+//                                 per account: src/agymodels.js reads them live)
+//   --effort low|medium|high|xhigh|max
+// A worker task's model 'agy:<id>' becomes `--model <id>` and its God Mode
+// effort `--effort <level>`, each unless the profile's command already sets
+// it; plain 'agy' passes no --model (agy's own default model). Main checks the
+// id against the live list before it gets here; this file checks its shape.
 // Not found, so never injected: a flag that SETS a new session's id (no
 // pinning for agy tabs), and any flag that passes MCP servers (agy reads them
 // only from ~/.gemini/config/mcp_config.json - src/agyintake.js writes there).
-// Claude-only task flags (--model with a Claude alias, --effort, allow / deny
-// tool rules, a tool kit's --mcp-config) have no agy equivalent and are dropped.
+// Claude-only task flags (--model with a Claude alias, allow / deny tool
+// rules, a tool kit's --mcp-config) have no agy equivalent and are dropped.
 const AGY_PROMPT_FLAG = '--prompt-interactive';
+/** The command already picks its model (claude and agy spell it the same). */
+const MODEL_DECIDED = /(^|\s)--model(\s|=|$)/;
+/** The command already picks its effort (claude and agy spell it the same). */
+const EFFORT_DECIDED = /(^|\s)--effort(\s|=|$)/;
 /** The command already brings its own first prompt (or runs headless). */
 const AGY_PROMPT_DECIDED = /(^|\s)(-i|--prompt-interactive|-p|--print|--prompt)(\s|=|$)/;
 /** The command already resumes a conversation. */
@@ -258,11 +269,11 @@ function withTaskBrief(command, task, firstMessage) {
   const message = briefMessage(briefPath, firstMessage);
   // No --add-dir for the brief: it sits inside the tab's cwd (src/workerBrief.js).
   const parts = [bin, `'${message}'`, ...rest];
-  if (task.model && task.model !== AGY_MODEL && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
+  if (task.model && !isAgyModel(task.model) && /^[a-z0-9.-]+$/i.test(task.model) && !MODEL_DECIDED.test(cmd)) {
     parts.push('--model', task.model);
   }
   // Only the four God Mode levels are ever appended - never `low`.
-  if (isEffort(task.effort) && !/(^|\s)--effort(\s|=|$)/.test(cmd)) {
+  if (isEffort(task.effort) && !EFFORT_DECIDED.test(cmd)) {
     parts.push('--effort', task.effort);
   }
   if (WORKER_PERMISSION_MODES.includes(task.permissionMode) && !PERMISSION_DECIDED.test(cmd)) {
@@ -297,7 +308,8 @@ function briefMessage(briefPath, firstMessage) {
 /**
  * withTaskBrief() for an `agy` command: the message goes in through
  * --prompt-interactive right after the binary, a tool kit's art folders
- * through --add-dir (the brief is inside the cwd), and the worker permission mode in
+ * through --add-dir (the brief is inside the cwd), an 'agy:<id>' model as
+ * `--model <id>`, the God Mode effort as `--effort`, and the worker permission mode in
  * agy's syntax. Null when the command brings its own first prompt (two
  * prompts would fight over the session).
  * @param {string} cmd trimmed agy command
@@ -312,6 +324,10 @@ function agyTaskBrief(cmd, task, message) {
   const [bin, ...rest] = cmd.split(/\s+/);
   // The brief sits inside the tab's cwd: no --add-dir for it.
   const parts = [bin, AGY_PROMPT_FLAG, `'${message}'`, ...rest];
+  // 'agy:<id>' -> agy's own `--model <id>`; the id's shape keeps quotes and flags out.
+  const model = agyModelIdOf(task.model);
+  if (model && !MODEL_DECIDED.test(cmd)) parts.push('--model', model);
+  if (isEffort(task.effort) && !EFFORT_DECIDED.test(cmd)) parts.push('--effort', task.effort);
   parts.push(...agyPermissionFlags(cmd, task));
   for (const dir of Array.isArray(task.addDirs) ? task.addDirs : []) {
     const quoted = quotablePath(dir);

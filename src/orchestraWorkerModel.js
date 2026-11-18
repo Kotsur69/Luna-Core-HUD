@@ -16,13 +16,17 @@
 const { ORCHESTRA_WORKER_MODELS } = require('./uiprefs');
 const { claudeModelOf } = require('./orchestraWorkers');
 /** The run model nobody chose: today's default. */
-const { DEFAULT_WORKER_MODEL } = require('./workerModels');
+const { DEFAULT_WORKER_MODEL, isWorkerModel } = require('./workerModels');
 /** A 'plan' run package the planner gave no model runs here. */
 const PLAN_FALLBACK_MODEL = 'opus';
 
-/** One of ORCHESTRA_WORKER_MODELS, else null. */
+/**
+ * One of ORCHESTRA_WORKER_MODELS or a well-formed 'agy:<id>' variant, else
+ * null. The variant's id is checked against the live list at Approve and at
+ * launch (src/orchestra.js, src/agymodels.js).
+ */
 function normalizeWorkerModel(value) {
-  return ORCHESTRA_WORKER_MODELS.includes(value) ? value : null;
+  return isWorkerModel(value) ? value : null;
 }
 
 /**

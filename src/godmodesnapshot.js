@@ -43,7 +43,7 @@
 // that has one not started yet (src/hostgodmode.js plans()): {planId,
 // projectId, repoName, state: planning|ready|failed, errors, packages:
 // [{id, title, deps, model}], todos: the picked to-do titles, workerModel:
-// the run's worker model (one of src/workerModels.js WORKER_MODELS, null when unknown)}. Text
+// the run's worker model (src/workerModels.js isWorkerModel, 'agy:<id>' included; null when unknown)}. Text
 // only, paths scrubbed from errors. The phone launches a ready plan by its ids.
 // ============================================================================
 
@@ -52,7 +52,7 @@
 const { needsFromReport } = require('./godmodeneeds');
 const { publicDecisions } = require('./lunasworkDecisions');
 const { publicFeedback } = require('./lunasworkFeedback');
-const { WORKER_MODELS } = require('./workerModels');
+const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 
 const VERSION = 2;
 /** Row versions a reader accepts: v1 rows (no hub lines) still parse. */
@@ -60,6 +60,8 @@ const READ_VERSIONS = new Set([1, 2]);
 const isKnownVersion = (v) => READ_VERSIONS.has(v);
 // The God Mode worker models (src/workerModels.js, which the phone bundles too).
 const PLAN_WORKER_MODELS = WORKER_MODELS;
+/** A finished run's model as shown: room for 'agy:<id>' (ids up to 80 characters). */
+const MAX_RUN_MODEL = 96;
 const HUB_MAX_LINES = 10;
 const HUB_MAX_LINE = 200;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;
@@ -382,7 +384,7 @@ function cleanPlanPackage(p) {
     id,
     title: clean(scrubPaths(p.title), MAX_TITLE),
     deps: (Array.isArray(p.deps) ? p.deps : []).slice(0, MAX_DEPS).map((d) => clean(d, MAX_ID)).filter(Boolean),
-    model: clean(p.model, MAX_STATE),
+    model: clean(p.model, MAX_RUN_MODEL),
   };
 }
 
@@ -399,7 +401,8 @@ function cleanPlan(p) {
     errors: (Array.isArray(p.errors) ? p.errors : []).slice(0, MAX_LINES).map((e) => clean(scrubPaths(e), MAX_LINE)).filter(Boolean),
     packages: (Array.isArray(p.packages) ? p.packages : []).slice(0, MAX_PACKAGES).map(cleanPlanPackage).filter(Boolean),
     todos: (Array.isArray(p.todos) ? p.todos : []).slice(0, MAX_LINES).map((t) => clean(scrubPaths(t), MAX_TITLE)).filter(Boolean),
-    workerModel: PLAN_WORKER_MODELS.includes(p.workerModel) ? p.workerModel : null,
+    // A known choice or a well-formed 'agy:<id>': the phone keeps it rather than sending Opus back.
+    workerModel: isWorkerModel(p.workerModel) ? p.workerModel : null,
   };
 }
 
@@ -433,7 +436,7 @@ function cleanRun(r, now) {
     finishedAt: Math.min(r.finishedAt, now),
     repoName: clean(r.repoName, MAX_NAME),
     baseBranch: clean(r.baseBranch, MAX_BRANCH),
-    workerModel: clean(r.workerModel, MAX_STATE),
+    workerModel: clean(r.workerModel, MAX_RUN_MODEL),
     integrationMode: clean(r.integrationMode, MAX_STATE),
     integrationState: clean(r.integrationState, MAX_STATE),
     pushed: Math.min(count(r.pushed), total),

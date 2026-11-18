@@ -28,7 +28,7 @@ const fs = require('fs');
 const paths = require('./paths');
 const { EFFORTS, isEffort } = require('./efforts');
 const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
-const { WORKER_MODELS } = require('./workerModels');
+const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
 const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
 
@@ -107,8 +107,10 @@ const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
 // 'plan' = the planner's per-package pick. Fable is a manual choice only: the
 // planner itself still assigns sonnet / opus (orchestraPlan.js MODELS).
 // 'agy' = every worker on the Antigravity CLI (src/claudeModels.js AGY_MODEL),
-// also a manual choice; never passed to `claude --model`. The list itself
-// lives in src/workerModels.js.
+// also a manual choice; never passed to `claude --model`. 'agy:<id>' = the
+// same on one model of `agy models`: stored when well-formed (isWorkerModel),
+// checked against the live list (src/agymodels.js) before it is used. The
+// list itself lives in src/workerModels.js.
 const ORCHESTRA_WORKER_MODELS = WORKER_MODELS;
 const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // Worker --effort: 'plan' = the planner's per-package pick (medium if none);
@@ -757,7 +759,7 @@ function readUiPrefs() {
       // Missing key => ENABLED, same reasoning as screenshotPasteEnabled.
       todoToolsEnabled:
         typeof obj.todoToolsEnabled === 'boolean' ? obj.todoToolsEnabled : DEFAULTS.todoToolsEnabled,
-      orchestraWorkerModel: ORCHESTRA_WORKER_MODELS.includes(obj.orchestraWorkerModel)
+      orchestraWorkerModel: isWorkerModel(obj.orchestraWorkerModel)
         ? obj.orchestraWorkerModel
         : DEFAULTS.orchestraWorkerModel,
       orchestraPermissionMode: ORCHESTRA_PERMISSION_MODES.includes(obj.orchestraPermissionMode)
@@ -893,7 +895,7 @@ function writeUiPrefs(partial) {
     if (partial && typeof partial.todoToolsEnabled === 'boolean') {
       next.todoToolsEnabled = partial.todoToolsEnabled;
     }
-    if (partial && ORCHESTRA_WORKER_MODELS.includes(partial.orchestraWorkerModel)) {
+    if (partial && isWorkerModel(partial.orchestraWorkerModel)) {
       next.orchestraWorkerModel = partial.orchestraWorkerModel;
     }
     if (partial && ORCHESTRA_PERMISSION_MODES.includes(partial.orchestraPermissionMode)) {

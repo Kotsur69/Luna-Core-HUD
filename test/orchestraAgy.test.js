@@ -90,6 +90,99 @@ test('approveAgyProfile: an agy run gets the agy profile; none configured is a c
   assert.deepEqual(agy.approveAgyProfile({ packages: [{ model: 'sonnet' }] }, { workers: 'hybrid', agyProfileId: null }), { ok: true, profileId: null });
 });
 
+// ---- agy:<id> model variants ---------------------------------------------------------
+
+const ARGON = 'agy:gemini-4-argon-medium';
+const FLASH = 'agy:gemini-3.8-flash-low';
+
+test('packageRunsAgy / runUsesAgy: an agy:<id> variant routes exactly like plain agy', () => {
+  assert.equal(agy.packageRunsAgy({ workerModel: ARGON }, { model: 'opus' }), true, 'plan level');
+  assert.equal(agy.packageRunsAgy({ workers: 'hybrid' }, { model: FLASH }), true, 'hybrid per-package level');
+  assert.equal(agy.packageRunsAgy({ workers: 'hybrid' }, { model: FLASH, modelOverride: 'sonnet' }), false, 'a hand-over goes to Claude');
+  assert.equal(agy.packageRunsAgy({}, { modelOverride: ARGON }), true, 'per-package override');
+  assert.equal(agy.packageRunsAgy({ workerModel: ARGON }, { modelOverride: 'opus' }), false, 'an override to Claude wins');
+  assert.equal(agy.packageRunsAgy({ workers: 'free', workerModel: ARGON }, {}), false);
+  assert.equal(agy.runUsesAgy({ workerModel: ARGON }), true);
+  // Malformed variants are no agy model at all.
+  for (const bad of ['agy:', 'agy:--print', 'agy:a b', 'AGY:x']) {
+    assert.equal(agy.packageRunsAgy({ workerModel: bad }, {}), false, bad);
+    assert.equal(agy.runUsesAgy({ workerModel: bad }), false, bad);
+  }
+});
+
+test('packageAgyModel: override, then the package pick, then the run model, else plain agy', () => {
+  assert.equal(agy.packageAgyModel({ workers: 'agy' }, {}), 'agy');
+  assert.equal(agy.packageAgyModel({ workers: 'agy', workerModel: 'opus' }, { model: 'sonnet' }), 'agy');
+  assert.equal(agy.packageAgyModel({ workerModel: ARGON }, { model: 'opus' }), ARGON);
+  assert.equal(agy.packageAgyModel({ workers: 'hybrid', workerModel: ARGON }, { model: FLASH }), FLASH);
+  assert.equal(agy.packageAgyModel({ workerModel: ARGON }, { model: FLASH, modelOverride: 'agy' }), 'agy');
+  assert.equal(agy.packageAgyModel({ workerModel: 'agy' }, { modelOverride: ARGON }), ARGON);
+  assert.equal(agy.packageAgyModel(null, null), 'agy');
+  // Claude-only run on worker model agy: the planner's agy:<id> on a package does not override the user's choice.
+  assert.equal(agy.packageAgyModel({ workerModel: 'agy' }, { model: FLASH }), 'agy');
+  assert.equal(agy.packageAgyModel({ workers: 'agy' }, { model: FLASH }), FLASH);
+});
+
+test('approveAgyProfile: variants at every level need the agy profile', () => {
+  const none = { agyProfileId: null };
+  assert.deepEqual(agy.approveAgyProfile({ packages: [{ model: 'sonnet' }] }, { workers: 'claude', workerModel: ARGON, ...none }), { ok: false, error: 'noAgyProfile' });
+  assert.deepEqual(agy.approveAgyProfile({ packages: [{ model: FLASH }] }, { workers: 'hybrid', workerModel: 'opus', ...none }), { ok: false, error: 'noAgyProfile' });
+  assert.deepEqual(agy.approveAgyProfile({ packages: [{ model: 'opus', modelOverride: ARGON }] }, { workers: 'claude', workerModel: 'opus', ...none }), { ok: false, error: 'noAgyProfile' });
+  assert.deepEqual(agy.approveAgyProfile({ packages: [{ model: FLASH }] }, { workers: 'hybrid', workerModel: 'opus', agyProfileId: 'agy-1' }), { ok: true, profileId: 'agy-1' });
+  // Plain agy still works as before (back-compat of saved plans).
+  assert.deepEqual(agy.approveAgyProfile({ packages: [] }, { workers: 'claude', workerModel: 'agy', agyProfileId: 'agy-1' }), { ok: true, profileId: 'agy-1' });
+});
+
+test('runAgyVariants: every variant a run would hand agy, deduplicated; plain agy and Claude need no check', () => {
+  const pkgs = { packages: [{ id: 'a', model: FLASH }, { id: 'b', model: 'sonnet' }, { id: 'c', model: FLASH }, { id: 'd', model: 'agy' }] };
+  assert.deepEqual(agy.runAgyVariants(pkgs, { workers: 'hybrid', workerModel: 'opus' }), [FLASH]);
+  // A Claude-only run: the run's model decides, a package's own agy pick does not.
+  assert.deepEqual(agy.runAgyVariants(pkgs, { workers: 'claude', workerModel: ARGON }), [ARGON]);
+  assert.deepEqual(agy.runAgyVariants(pkgs, { workers: 'agy', workerModel: 'opus' }), [FLASH]);
+  assert.deepEqual(agy.runAgyVariants(pkgs, { workers: 'claude', workerModel: 'opus' }), []);
+  assert.deepEqual(agy.runAgyVariants(pkgs, { workers: 'free', workerModel: ARGON }), []);
+  assert.deepEqual(agy.runAgyVariants({ packages: [{ id: 'a', modelOverride: ARGON }] }, { workers: 'claude', workerModel: 'opus' }), [ARGON]);
+});
+
+test('a stored run keeps agy variants at the run, package and override level across a restore', () => {
+  const sup = require('../src/orchestraSupervisor');
+  const repoPath = require('path').resolve('repo');
+  const back = sup.normalizeStoredPlan({
+    id: 'r1',
+    repoPath,
+    workerModel: ARGON,
+    packages: [
+      { id: 'a', model: FLASH, modelOverride: ARGON },
+      { id: 'b', modelOverride: 'agy' },
+      { id: 'c', modelOverride: 'sonnet' },
+      { id: 'd', modelOverride: 'agy:--print' },
+    ],
+  });
+  assert.equal(back.workerModel, ARGON);
+  const byId = Object.fromEntries(back.packages.map((p) => [p.id, p]));
+  assert.equal(byId.a.model, FLASH);
+  assert.equal(byId.a.modelOverride, ARGON);
+  assert.equal(byId.b.modelOverride, 'agy');
+  assert.equal(byId.c.modelOverride, 'sonnet');
+  assert.equal(byId.d.modelOverride, null, 'a malformed id is dropped');
+});
+
+test('runAgyPrint / agyPrintArgs: a checked model id goes to agy as --model <id>; junk never does', async () => {
+  const { calls, exec } = fakeExec({ stdout: 'ok' });
+  await agy.runAgyPrint({ cwd: '.', env: {}, prompt: 'x', timeout: 1000, edits: true, model: 'gemini-4-argon-medium', execImpl: exec });
+  assert.deepEqual(calls[0].args, ['--print', '--mode', 'accept-edits', '--model', 'gemini-4-argon-medium']);
+  for (const bad of ['--print', '-x', 'a b', '', null, 'agy:gemini-4-argon-medium', 42]) {
+    assert.deepEqual(agy.agyPrintArgs({ model: bad }), ['--print'], String(bad));
+  }
+});
+
+test('validatePlan: a well-formed agy:<id> package model survives; a malformed one is dropped', () => {
+  const pkg = (model) => ({ packages: [{ ...PLAN_JSON.packages[0], model }] });
+  assert.equal(plan.validatePlan(pkg(FLASH), TODOS).packages[0].model, FLASH);
+  assert.equal(plan.validatePlan(pkg(FLASH), TODOS, { hybrid: true }).packages[0].model, FLASH);
+  for (const bad of ['agy:', 'agy:--print', 'agy:a b']) assert.equal(plan.validatePlan(pkg(bad), TODOS).packages[0].model, null, bad);
+});
+
 // ---- headless agy -----------------------------------------------------------------
 
 test('extractJsonObject: bare, fenced or wrapped in prose; junk is null', () => {

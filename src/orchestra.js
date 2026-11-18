@@ -79,6 +79,7 @@ const hybridGuard = require('./orchestraHybridGuard');
 const hybridRules = require('./orchestraHybrid');
 // Antigravity (agy) runs: which packages and helper jobs go to agy.
 const agyRules = require('./orchestraAgy');
+const { agyModelIdOf } = require('./workerModels');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -995,6 +996,8 @@ function createOrchestra(deps) {
         todos: p.todoAts.map((at) => plan.todoText.get(at) || String(at)),
         state: p.state,
         sessionId: p.sessionId,
+        // The agy model an Antigravity worker runs on (null otherwise or unknown).
+        agyModel: agyModelShown(p),
         branch: p.branch,
         headSha: p.headSha,
         error: p.error,
@@ -1552,7 +1555,7 @@ function createOrchestra(deps) {
           runSlug: plan.planRun.runSlug,
           mcpConfigPath: deps.planMcpConfigPath ? deps.planMcpConfigPath() : null,
         })
-      : withKit(pkg, { briefPath, model: modelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] });
+      : withKit(pkg, { briefPath, model: taskModelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] });
     return deps.createSession({
       ...resume,
       // An agy package runs on the agy profile fixed at Approve (orchestraAgy.js);
@@ -1564,6 +1567,42 @@ function createOrchestra(deps) {
       // The God Mode marker: a scoped intake token, never the tab's full one (orchestraFollowupsLaunch.js).
       task: followupLaunch.godModeTask(task, { runId: plan.id, packageId: pkg.id, followups: plan.followups === true }),
     });
+  }
+
+  /**
+   * The model a worker task carries. On agy: its agy choice, an 'agy:<id>'
+   * variant only while the live `agy models` list (deps.agyModels,
+   * src/agymodels.js) holds the id - else plain 'agy', agy's default model.
+   * On Claude: packageModelOf.
+   */
+  function taskModelFor(pkg) {
+    if (!agyRules.packageRunsAgy(plan, pkg)) return modelFor(pkg);
+    const chosen = agyRules.packageAgyModel(plan, pkg);
+    if (chosen === agyRules.AGY) return chosen;
+    return deps.agyModels && deps.agyModels.resolveModelId(chosen) ? chosen : agyRules.AGY;
+  }
+
+  /**
+   * Before packages that name an agy variant (re)start: the agy model list,
+   * read once if no call has worked yet (one ensure() for all of them).
+   * @param {object[]} pkgs
+   */
+  async function agyModelsReady(pkgs) {
+    if (!deps.agyModels || !plan) return;
+    const named = (p) => p && agyRules.packageRunsAgy(plan, p) && agyRules.packageAgyModel(plan, p) !== agyRules.AGY;
+    if (pkgs.some(named)) await deps.agyModels.ensure();
+  }
+
+  /**
+   * The agy model a package's worker runs on, for its card: the variant's id
+   * when the live list holds it, else what the tab's agy transcript reports
+   * (src/agytranscript.js), else null. Null for a package not on agy.
+   */
+  function agyModelShown(pkg) {
+    if (!pkg.sessionId || !agyRules.packageRunsAgy(plan, pkg)) return null;
+    const id = agyModelIdOf(agyRules.packageAgyModel(plan, pkg));
+    if (id && deps.agyModels && deps.agyModels.isKnownId(id)) return id;
+    return deps.sessionAgyModel ? deps.sessionAgyModel(pkg.sessionId) : null;
   }
 
   /** A Luna's Work build's tool kit on top of a package's task (deps.workerTools); the task as is otherwise. */
@@ -1706,6 +1745,7 @@ function createOrchestra(deps) {
     // No package is stalled for a machine problem: the run holds and Resume
     // starts this worker in the same worktree.
     if (!ready.ok) return { ...where, state: 'pending', heldLaunch: true, held: ready };
+    await agyModelsReady([pkg]);
     return startWorker(pkg, where);
   }
 
@@ -2149,13 +2189,28 @@ function createOrchestra(deps) {
       else delete plan.hybridProfileId;
       // Antigravity (agy): the agy profile its packages run on, fixed for the
       // run - refused with a clear reason when none is configured.
+      // The model the run will freeze: Approve's pick, else the plan's, else Settings (Ctrl+L).
+      const runModel = workerModelRules.normalizeWorkerModel(o.workerModel) || plan.workerModel || workerSettings().model || null;
       const agy = agyRules.approveAgyProfile(plan, {
         workers,
-        // The model the run will freeze: Approve's pick, else the plan's, else Settings (Ctrl+L).
-        workerModel: workerModelRules.normalizeWorkerModel(o.workerModel) || plan.workerModel || workerSettings().model || null,
+        workerModel: runModel,
         agyProfileId: deps.agyProfileId ? deps.agyProfileId() : null,
       });
       if (!agy.ok) return { ok: false, error: agy.error };
+      // Every 'agy:<id>' the run would hand agy must be on the live `agy models` list.
+      const variants = agyRules.runAgyVariants(plan, { workers, workerModel: runModel });
+      if (variants.length) {
+        if (!deps.agyModels) return { ok: false, error: 'badAgyModel' };
+        await deps.agyModels.ensure();
+        // A planner's per-package pick the list does not hold (Mati has no
+        // per-package picker to fix it): plain agy, logged by resolveModelId.
+        for (const p of plan.packages) {
+          if (!p.modelOverride && agyModelIdOf(p.model) && !deps.agyModels.resolveModelId(p.model)) p.model = agyRules.AGY;
+        }
+        // Mati's own picks (the run model, an override) are refused instead.
+        const left = agyRules.runAgyVariants(plan, { workers, workerModel: runModel });
+        if (left.some((v) => !deps.agyModels.isKnownId(agyModelIdOf(v)))) return { ok: false, error: 'badAgyModel' };
+      }
       if (agy.profileId) plan.agyProfileId = agy.profileId;
       else delete plan.agyProfileId;
     }
@@ -3287,6 +3342,8 @@ function createOrchestra(deps) {
         return { ok: false, error: 'noNodeModules', plan: view() };
       }
     }
+    // A held launch starts its worker below: an agy variant needs the live list first.
+    await agyModelsReady(waiting);
     plan.hold = null;
     holdWatch.cancel();
     onRunEvent('resumed', { reason: 'noNodeModules' });
