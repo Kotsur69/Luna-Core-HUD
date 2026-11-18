@@ -7,7 +7,36 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.32.0 — google (agy) usage limits and per-tab-kind usage visibility.**
+> **Current release: v0.33.0 — Ctrl+L Report models pickers for the weekly review and daily.**
+> - Ctrl+L Report models pickers for the weekly review and daily brief
+> - weekly review and brief can run on any agy model, stored as {provider,
+>   model}
+> - open the charted God Mode run report, with icon pills and folding
+>   problems
+> - stat tiles, bars, chips and folding sections in the hub briefs and run
+>   summary
+> - God Mode workers can run on a specific agy (Antigravity) model
+> - Claude accounts - click to switch in Usage panel, per-account usage
+>   reserve
+> - usage panel - agy bars match Claude's, Argon weekly meter, dim spent
+>   limits
+> - Fix: release cut refuses a dist script the output override cannot reach
+> - Fix: draw the report fold marker as a glyph instead of a border triangle
+> - Fix: drop the side-stripe accent on stat tiles and report cards
+> - Fix: git timeouts that cut real-repository memory checks short under
+>   load
+> - Fix: cap HUD git processes and make pollers single-flight
+> - Fix: one shared helper unlinks node_modules links before every worktree
+>   removal
+> - Fix: gate memory auto-accept on the usefulness score
+> - Fix: manual Retry on a still-open stalled tab reopens it with a fresh
+>   token
+> - Fix: GM briefs tell workers to commit early and keep npm test in the
+>   foreground
+> - Fix: deliver worker briefs inside the worker cwd, drop the brief
+>   --add-dir
+>
+> **v0.32.0 — google (agy) usage limits and per-tab-kind usage visibility.**
 > - Google (agy) usage limits and per-tab-kind usage visibility
 > - active files and context window for Antigravity (agy) tabs
 > - Antigravity (agy) as a role, fallback and second-opinion CLI
