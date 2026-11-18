@@ -10,10 +10,27 @@
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
 
-const dot = document.getElementById('pty-status-dot');
-const label = document.getElementById('pty-status-text');
+const dot = typeof document !== 'undefined' ? document.getElementById('pty-status-dot') : null;
+const label = typeof document !== 'undefined' ? document.getElementById('pty-status-text') : null;
 
 let ptyStatusState = { live: true, key: 'ptystatus.connecting', params: {} };
+let ptyVersion = '';
+
+/**
+ * Combines the localized PTY status string with the app version (e.g.
+ * "PTY: active · v0.33.0"). Pure, exported for tests.
+ */
+export function formatPtyStatus(statusText, version) {
+  const base = typeof statusText === 'string' ? statusText : '';
+  const ver = typeof version === 'string' ? version.trim().replace(/^v/i, '') : '';
+  if (!ver) return base;
+  return base ? `${base} · v${ver}` : `v${ver}`;
+}
+
+export function setPtyVersion(version) {
+  ptyVersion = typeof version === 'string' ? version.trim() : '';
+  renderPtyStatus();
+}
 
 export function setPtyStatus(isLive, key, params = {}) {
   ptyStatusState = { live: isLive, key, params };
@@ -21,9 +38,26 @@ export function setPtyStatus(isLive, key, params = {}) {
 }
 
 export function renderPtyStatus() {
-  dot.classList.toggle('dot--live', ptyStatusState.live);
-  dot.classList.toggle('dot--dead', !ptyStatusState.live);
-  label.textContent = t(ptyStatusState.key, ptyStatusState.params);
+  if (dot) {
+    dot.classList.toggle('dot--live', ptyStatusState.live);
+    dot.classList.toggle('dot--dead', !ptyStatusState.live);
+  }
+  if (label && typeof window !== 'undefined' && window.i18n) {
+    label.textContent = formatPtyStatus(t(ptyStatusState.key, ptyStatusState.params), ptyVersion);
+  }
 }
 
 onLangChange(renderPtyStatus);
+
+// Populate the app version once from main (update:status -> app.getVersion()).
+if (typeof window !== 'undefined' && window.lunacore && typeof window.lunacore.getUpdateStatus === 'function') {
+  Promise.resolve(window.lunacore.getUpdateStatus())
+    .then((status) => {
+      if (status && typeof status.version === 'string' && status.version) {
+        setPtyVersion(status.version);
+      }
+    })
+    .catch(() => {
+      /* IPC unavailable - keep showing the status text without a version suffix */
+    });
+}
