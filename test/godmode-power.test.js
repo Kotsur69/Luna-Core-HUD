@@ -616,7 +616,7 @@ test('no battery percentage available: warns only, nothing is held', async () =>
   assert.equal(r.verifies.length, 1);
 });
 
-test('a Retry that would launch a worker is refused on a low battery; a live tab is only nudged', async () => {
+test('a Retry that would launch a worker is refused on a low battery, a still-open tab included', async () => {
   const r = await batteryRun();
   r.alive.delete('s2');
   r.orch.onSessionClosed('s2');
@@ -624,6 +624,11 @@ test('a Retry that would launch a worker is refused on a low battery; a live tab
   r.b.unplug(10);
   await r.flush();
   assert.deepEqual(await r.orch.retry({ planId: r.planId, id: 'b' }), { ok: false, error: 'batteryLow' });
+  // A stalled package whose tab is still open is reopened in a new tab (its
+  // intake token was revoked), so it waits for the charger too.
+  r.orch.onApproval('s1');
+  await r.flush();
+  assert.deepEqual(await r.orch.retry({ planId: r.planId, id: 'a' }), { ok: false, error: 'batteryLow' });
   r.b.plugIn();
   await r.flush();
   assert.equal((await r.orch.retry({ planId: r.planId, id: 'b' })).ok, true);
