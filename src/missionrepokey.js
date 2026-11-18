@@ -21,6 +21,9 @@ const OTHER = Object.freeze({ key: 'other', name: 'other' });
 const MAX_GIT_FILE = 64 * 1024;
 const MAX_DEPTH = 64;
 const SEGMENT_RE = /^[a-z0-9._-]+$/;
+// Same folder name as worktrees.WORKTREE_DIR; not required from there, since
+// worktrees.js pulls in child_process and this module must stay spawn-free.
+const WORKTREE_DIR = '.luna-worktrees';
 
 /** Reads a small text file, or null. */
 function readSmall(file) {
@@ -111,6 +114,20 @@ function findRepo(dir) {
   return null;
 }
 
+/**
+ * A God Mode / tab worktree lives at <parent>/.luna-worktrees/<repo>/<slug>
+ * (worktrees.worktreePathFor) and is deleted when the run is cleaned up, so
+ * its transcripts point at a folder with no `.git` left. Maps such a path back
+ * to the main checkout <parent>/<repo> when that still is a repository.
+ */
+function removedWorktreeRepo(cwd) {
+  const parts = path.resolve(cwd).split(/[\\/]+/);
+  const at = parts.findIndex((p) => p.toLowerCase() === WORKTREE_DIR);
+  if (at < 1 || at + 2 >= parts.length) return null;
+  const home = [...parts.slice(0, at), parts[at + 1]].join(path.sep);
+  return fs.existsSync(path.join(home, '.git')) ? findRepo(home) : null;
+}
+
 /** Git Bash writes "/c/Users/..." into some transcripts; Windows reads that as C:\c\Users. */
 function fromGitBash(cwd) {
   if (process.platform !== 'win32') return cwd;
@@ -139,7 +156,7 @@ function resolveCwd(rawCwd, aliases) {
   // A UNC path (\\host\share) would make every stat a network round trip and
   // can trigger an SMB/NTLM handshake; a relative one has no stable meaning.
   if (/^[\\/]{2}/.test(cwd) || !path.isAbsolute(cwd)) return OTHER;
-  const repo = findRepo(cwd);
+  const repo = findRepo(cwd) || removedWorktreeRepo(cwd);
   if (!repo) return aliasFor(cwd, aliases) || OTHER;
   const remote = normalizeRemote(originUrl(readSmall(path.join(repo.gitDir, 'config'))));
   const folder = path.basename(repo.root);

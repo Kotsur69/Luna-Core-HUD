@@ -75,6 +75,18 @@ test('a worktree folds into its parent repo', () => {
   assert.deepEqual(createRepoKeys().resolve(wt), { key: 'git:github.com/me/main-repo', name: 'Main-Repo' });
 });
 
+test('a removed God Mode worktree (.luna-worktrees/<repo>/<slug>) still counts for its repo', () => {
+  const root = tmp();
+  makeRepo(root, 'GEDP', 'https://github.com/me/GEDP.git');
+  // The worktree folder is gone once the run is cleaned up; only the path is left.
+  const gone = path.join(root, '.luna-worktrees', 'GEDP', 'pkg-audit-log-gyh3s');
+  const keys = createRepoKeys();
+  assert.deepEqual(keys.resolve(gone), { key: 'git:github.com/me/gedp', name: 'GEDP' });
+  assert.deepEqual(keys.resolve(path.join(gone, 'src', 'deep')), { key: 'git:github.com/me/gedp', name: 'GEDP' });
+  // The parent repo is gone too (another PC's path): still "other", not a crash.
+  assert.equal(keys.resolve(path.join(root, '.luna-worktrees', 'Nope', 'slug')).key, 'other');
+});
+
 test('a folder outside any repo, or a missing one, is "other"', () => {
   const root = tmp();
   const keys = createRepoKeys();
