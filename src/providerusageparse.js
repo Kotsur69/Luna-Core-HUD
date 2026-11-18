@@ -301,6 +301,66 @@ function agyWindowLabel(window) {
   return labelForMinutes(30 * MINUTES_PER_DAY);
 }
 
+/** The Argon model family (agy "Gemini 4 Argon"), which has its own weekly-only quota. Tested on agyWords(). */
+const AGY_ARGON_RE = /\bargon\b/;
+const AGY_ARGON_NAME = 'Argon';
+
+/**
+ * Response text as separate lower-case words: "_", "-" and "." become spaces,
+ * so word-boundary tests also hold for snake_case / kebab-case ids.
+ */
+function agyWords(...values) {
+  return values.map(agyText).join(' ').replace(/[_\-.]+/g, ' ').toLowerCase();
+}
+
+/** "N day" in a bucket's words -> its window ('custom' for an unknown N), or null. */
+function agyDaysWindow(words) {
+  const m = /\b(\d+)\s*days?\b/.exec(words);
+  return m ? windowForMinutes(Number(m[1]) * MINUTES_PER_DAY) : null;
+}
+
+/**
+ * A bucket's window: its own `window` when the panel knows it, else one read
+ * off its bucketId / displayName ("argon_weekly", "Weekly limit", "7-day"),
+ * else 'custom'.
+ */
+function agyBucketWindow(b) {
+  if (AGY_WINDOWS.has(b.window)) return b.window;
+  const words = agyWords(b.bucketId, b.displayName);
+  const days = agyDaysWindow(words);
+  if (days) return days;
+  if (/\bweek(ly)?\b/.test(words)) return 'weekly';
+  if (/\b5\s*h(ours?|rs?)?\b|\bfive\s*hours?\b/.test(words)) return '5h';
+  if (/\b(daily|day)\b/.test(words)) return 'daily';
+  if (/\bmonth(ly)?\b/.test(words)) return 'monthly';
+  return 'custom';
+}
+
+/** True when any of the texts names the Argon model family. */
+function mentionsArgon(...values) {
+  return AGY_ARGON_RE.test(agyWords(...values));
+}
+
+/**
+ * The name a group's rows are prefixed with, or ''. An Argon group (by its
+ * displayName) is always named, so it shows as its own meter even as the
+ * only group; other groups are named only when there are several.
+ */
+function agyGroupName(group, named) {
+  const own = agyText(group.displayName);
+  return named || mentionsArgon(own) ? own : '';
+}
+
+/**
+ * The group a single bucket's row goes under: an Argon bucket inside a group
+ * that is not itself Argon (the group name is missing or generic) becomes its
+ * own 'Argon' meter; every other bucket keeps its group's name.
+ */
+function agyBucketGroup(b, groupName) {
+  if (mentionsArgon(groupName)) return groupName;
+  return mentionsArgon(b.bucketId, b.displayName) ? AGY_ARGON_NAME : groupName;
+}
+
 /**
  * Code Assist v1internal:retrieveUserQuotaSummary (what `agy` itself reads) ->
  * one row per bucket, or null. Shape, as answered live on 2026-11-17:
@@ -308,7 +368,12 @@ function agyWindowLabel(window) {
  *     remainingFraction: 0..1, resetTime: ISO, displayName}]}]}
  * With one group the rows keep the generic window labels, so they localize
  * and line up with Claude's; with several, the group name prefixes each row
- * so two groups' weekly rows stay apart.
+ * (and rides along as `group`, so the renderer can localize the window part)
+ * so two groups' weekly rows stay apart. Argon ("Gemini 4 Argon") has only a
+ * weekly bucket and is always its own named group; only the buckets the
+ * response holds become rows, so no empty 5 h row is made up for it. The
+ * Argon group's live shape is UNVERIFIED: it is matched by name from
+ * displayName / bucketId as this parser sees them.
  */
 function parseAgyQuotaSummary(json) {
   const groups = json && Array.isArray(json.groups) ? json.groups.filter((g) => g && typeof g === 'object') : null;
@@ -317,27 +382,35 @@ function parseAgyQuotaSummary(json) {
   const limits = [];
   for (const group of groups) {
     const buckets = Array.isArray(group.buckets) ? group.buckets : [];
+    const groupName = agyGroupName(group, named);
     for (const b of buckets) {
-      if (!b || typeof b !== 'object') continue;
-      // proto3 JSON omits a zero double: a bucket that names its window or
-      // reset but has no remainingFraction is spent, not unknown.
-      const omittedZero = b.remainingFraction === undefined && (typeof b.window === 'string' || typeof b.resetTime === 'string');
-      const fraction = omittedZero ? 0 : num(b.remainingFraction);
-      if (fraction === null) continue;
-      const known = AGY_WINDOWS.has(b.window);
-      const window = known ? b.window : 'custom';
-      const base = known ? agyWindowLabel(window) : agyText(b.displayName) || agyText(b.bucketId) || 'Limit';
-      const groupName = agyText(group.displayName);
-      limits.push(pctLimit({
-        window,
-        label: named && groupName ? `${groupName} · ${base}` : base,
-        percentUsed: clampPct((1 - fraction) * 100),
-        resetsAt: toIso(b.resetTime),
-        unit: 'credits',
-      }));
+      const limit = agyBucketLimit(b, groupName);
+      if (limit) limits.push(limit);
     }
   }
   return limits.length > 0 ? limits : null;
+}
+
+/** One quota bucket -> a percentage row (prefixed with its group's name when it has one), or null. */
+function agyBucketLimit(b, groupOfGroup) {
+  if (!b || typeof b !== 'object') return null;
+  const groupName = agyBucketGroup(b, groupOfGroup);
+  // proto3 JSON omits a zero double: a bucket that names its window or
+  // reset but has no remainingFraction is spent, not unknown.
+  const omittedZero = b.remainingFraction === undefined && (typeof b.window === 'string' || typeof b.resetTime === 'string');
+  const fraction = omittedZero ? 0 : num(b.remainingFraction);
+  if (fraction === null) return null;
+  const window = agyBucketWindow(b);
+  const known = window !== 'custom';
+  const base = known ? agyWindowLabel(window) : agyText(b.displayName) || agyText(b.bucketId) || 'Limit';
+  const limit = pctLimit({
+    window,
+    label: groupName ? `${groupName} · ${base}` : base,
+    percentUsed: clampPct((1 - fraction) * 100),
+    resetsAt: toIso(b.resetTime),
+    unit: 'credits',
+  });
+  return groupName ? { ...limit, group: groupName } : limit;
 }
 
 // --- OpenRouter -------------------------------------------------------------------

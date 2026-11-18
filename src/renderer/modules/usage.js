@@ -190,23 +190,54 @@ const SHORT_MESSAGE_KEYS = {
 /** Settings anchor the muted row's arrow opens (index.html, Claude accounts). */
 const ACCOUNTS_SETTINGS_ANCHOR = 'claude-accounts-section';
 
+/** Joins a model group's name to a window label ("Argon · Weekly"). */
+const GROUP_SEPARATOR = ' · ';
+
+/**
+ * The model group a limit belongs to (agy: "Argon"), or ''. The parser
+ * prefixes such a label with the group (src/providerusageparse.js), so the
+ * label without that prefix still says which window it is.
+ */
+function limitGroup(limit) {
+  return limit && typeof limit.group === 'string' ? limit.group : '';
+}
+
 function hasGenericLabel(limit) {
-  return Boolean(WINDOW_LABEL_KEYS[limit && limit.window]) && (!limit.label || GENERIC_LABELS.includes(limit.label));
+  if (!limit || !WINDOW_LABEL_KEYS[limit.window]) return false;
+  const group = limitGroup(limit);
+  const prefix = group ? `${group}${GROUP_SEPARATOR}` : '';
+  const label = typeof limit.label === 'string' && prefix && limit.label.startsWith(prefix)
+    ? limit.label.slice(prefix.length)
+    : limit.label;
+  return !label || GENERIC_LABELS.includes(label);
+}
+
+/** Prefixes a localized window name with the limit's group, when it has one. */
+function withGroup(limit, text) {
+  const group = limitGroup(limit);
+  return group ? `${group}${GROUP_SEPARATOR}${text}` : text;
 }
 
 /**
  * The row label: the localized window name when the provider's label is the
- * generic English one, otherwise the provider's own (a model name, "MCP").
+ * generic English one (with its model group, if any), otherwise the
+ * provider's own (a model name, "MCP").
  */
 export function limitLabel(limit, translate = t) {
-  if (hasGenericLabel(limit)) return translate(WINDOW_LABEL_KEYS[limit.window]);
+  if (hasGenericLabel(limit)) return withGroup(limit, translate(WINDOW_LABEL_KEYS[limit.window]));
   return (limit && limit.label) || translate('usage.window.custom');
 }
 
-/** The left-column label: "5h" / "wk" for shared windows, else limitLabel(). */
+/**
+ * The left-column label: "5h" / "wk" for shared windows, else limitLabel().
+ * A grouped one puts the window FIRST ("wk · Argon"): the narrow column cuts
+ * the end off, and the window is the part that must stay readable.
+ */
 export function windowShortLabel(limit, translate = t) {
-  if (hasGenericLabel(limit)) return translate(WINDOW_SHORT_KEYS[limit.window]);
-  return limitLabel(limit, translate);
+  if (!hasGenericLabel(limit)) return limitLabel(limit, translate);
+  const short = translate(WINDOW_SHORT_KEYS[limit.window]);
+  const group = limitGroup(limit);
+  return group ? `${short}${GROUP_SEPARATOR}${group}` : short;
 }
 
 /** The one-line key for a message key from accountMessageKey(). */
@@ -219,9 +250,40 @@ export function usageLevel(percent) {
   return percent >= 90 ? 'bad' : percent >= 70 ? 'warn' : 'good';
 }
 
-/** Rows with the same key share a group: the window, or window + label for custom ones. */
+/**
+ * Rows with the same key share a group: the window, window + model group for
+ * a grouped one (its own meter, after the shared windows), or window + label
+ * for custom ones.
+ */
 function groupKey(limit) {
-  return hasGenericLabel(limit) ? limit.window : `${limit.window || 'custom'}:${limit.label || ''}`;
+  if (!hasGenericLabel(limit)) return `${limit.window || 'custom'}:${limit.label || ''}`;
+  const group = limitGroup(limit);
+  return group ? `${limit.window}:${group}` : limit.window;
+}
+
+/** A spent limit: its window has no room left until the reset. */
+export function isExhausted(limit) {
+  return Boolean(limit) && typeof limit.percentUsed === 'number' && limit.percentUsed >= 100;
+}
+
+/**
+ * How one grid row is dimmed, or null for a plain row. A 5 h row behind a
+ * spent week is 'blocked' until the WEEK resets (that is the later reset, so
+ * it wins over the row's own); a spent row is 'exhausted' until its own reset.
+ * `sole` says the row is its group's only one, so its window label dims too.
+ * @param {{limit: object, blockedBy?: object|null}} row
+ * @param {number} groupSize rows in the row's group
+ * @returns {{kind: 'blocked'|'exhausted', resetsAt: string|null, sole: boolean}|null}
+ */
+export function rowDimState(row, groupSize) {
+  if (!row || !row.limit) return null;
+  const source = row.blockedBy ? row.blockedBy : isExhausted(row.limit) ? row.limit : null;
+  if (!source) return null;
+  return {
+    kind: row.blockedBy ? 'blocked' : 'exhausted',
+    resetsAt: typeof source.resetsAt === 'string' ? source.resetsAt : null,
+    sole: groupSize === 1,
+  };
 }
 
 /**
@@ -233,8 +295,9 @@ function groupKey(limit) {
  */
 export function blockingWeekly(limit, siblings) {
   if (!limit || limit.window !== '5h' || !Array.isArray(siblings)) return null;
+  const group = limitGroup(limit);
   return siblings.find((l) => l && l.window === 'weekly' && hasGenericLabel(l)
-    && typeof l.percentUsed === 'number' && l.percentUsed >= 100) || null;
+    && limitGroup(l) === group && isExhausted(l)) || null;
 }
 
 function isDrawable(limit) {
@@ -340,11 +403,25 @@ function usageLine({ win, account, withAccount, cells }) {
   return line;
 }
 
-/** Dims a 5 h line whose week is spent; the tooltip says why and until when. */
-function markBlocked(line, weekly) {
-  line.classList.add('is-blocked');
-  const when = fmtResetWhen(typeof weekly.resetsAt === 'string' ? weekly.resetsAt : null);
-  line.title = t('usage.blockedByWeekly', { when: when || t('usage.resetNow') });
+/** Line class and tooltip key per rowDimState() kind. */
+const DIM_STYLES = {
+  blocked: { className: 'is-blocked', key: 'usage.blockedByWeekly' },
+  exhausted: { className: 'is-exhausted', key: 'usage.limitReached' },
+};
+
+/**
+ * Dims a line that has no room (rowDimState); the tooltip and the accessible
+ * name say why and until when.
+ */
+function markDimmed(line, state) {
+  const style = DIM_STYLES[state.kind];
+  line.classList.add(style.className);
+  if (state.sole) line.classList.add('is-sole');
+  const when = fmtResetWhen(state.resetsAt);
+  const text = t(style.key, { when: when || t('usage.resetNow') });
+  line.title = text;
+  line.setAttribute('role', 'group');
+  line.setAttribute('aria-label', text);
   // The cell tooltips (reset time, account name) would hide the line's one.
   // The window label keeps its own: it names the group, not this account.
   for (const cell of line.querySelectorAll(':not(.usage-line__win)[title]')) cell.removeAttribute('title');
@@ -370,6 +447,45 @@ function noticeCells({ account, key }) {
 }
 
 /**
+ * The grid's class: the account layout (dot + name columns), or the solo one
+ * for the single ~/.claude read, whose window label spans those two columns
+ * so its bar still lines up with an account grid's (styles.css .usage).
+ * @param {boolean} withAccount
+ * @returns {string}
+ */
+export function usageGridClass(withAccount) {
+  return withAccount ? 'usage-grid' : 'usage-grid usage-grid--solo';
+}
+
+/** One limit's line: the window label on a group's first line, dimmed when spent. */
+function limitLine(row, isFirst, groupSize, withAccount) {
+  const { account, limit } = row;
+  const win = isFirst ? { short: windowShortLabel(limit), full: limitLabel(limit) } : null;
+  const line = usageLine({ win, account, withAccount, cells: limitCells(limit) });
+  const dim = rowDimState(row, groupSize);
+  if (dim) markDimmed(line, dim);
+  return line;
+}
+
+/**
+ * The grid input for a non-Claude provider block. A signed-in account (the
+ * agy Google email) takes the account column, so its rows use the same
+ * column layout as Claude's accounts. A provider without one (Codex, GLM...)
+ * keeps the solo layout: its heading already names it. Either way the bars
+ * share the tile's one column grid (styles.css .usage), so they line up.
+ * @param {object} entry one `others` entry
+ * @param {Array<object>} limits its drawable limits
+ * @returns {{sources: Array<{account: object|null, limits: Array<object>}>, withAccount: boolean}}
+ */
+export function providerSources(entry, limits) {
+  const email = entry && typeof entry.account === 'string' ? entry.account : '';
+  if (!email) return { sources: [{ account: null, limits }], withAccount: false };
+  // status 'ok' + limits: accountMessageKey() adds no notice line for it.
+  const account = { label: email, status: 'ok', active: false, limits };
+  return { sources: [{ account, limits }], withAccount: true };
+}
+
+/**
  * The compact grid: one line per (window, account), the window label only on
  * a group's first line, then one muted line per account with a message.
  * @param {Array<{account?: object|null, limits?: Array<object>}>} sources
@@ -377,15 +493,10 @@ function noticeCells({ account, key }) {
  */
 function usageGrid(sources, withAccount) {
   const grid = document.createElement('div');
-  grid.className = withAccount ? 'usage-grid' : 'usage-grid usage-grid--solo';
+  grid.className = usageGridClass(withAccount);
   const { groups, notices } = groupUsageRows(sources);
   for (const group of groups) {
-    group.rows.forEach(({ account, limit, blockedBy }, i) => {
-      const win = i === 0 ? { short: windowShortLabel(limit), full: limitLabel(limit) } : null;
-      const line = usageLine({ win, account, withAccount, cells: limitCells(limit) });
-      if (blockedBy) markBlocked(line, blockedBy);
-      grid.appendChild(line);
-    });
+    group.rows.forEach((row, i) => grid.appendChild(limitLine(row, i === 0, group.rows.length, withAccount)));
   }
   notices.forEach((notice, i) => {
     const line = usageLine({ win: null, account: notice.account, withAccount, cells: noticeCells(notice) });
@@ -405,8 +516,8 @@ function providerMessageKey(entry) {
 
 /**
  * One non-Claude provider: a heading, then its rows or "not available". The
- * heading is the signed-in account (the agy Google email) when the entry has
- * one, with the profile name as its tooltip.
+ * heading is the profile name; the signed-in account (the agy Google email)
+ * fills the rows' name column (providerSources) and the heading's tooltip.
  */
 function usageProviderBlock(entry) {
   const block = document.createElement('div');
@@ -414,12 +525,15 @@ function usageProviderBlock(entry) {
   const title = document.createElement('div');
   title.className = 'usage-provider__title';
   const name = loc(entry.displayName) || entry.profileId || '';
-  title.textContent = typeof entry.account === 'string' && entry.account ? entry.account : name;
-  title.title = name;
+  const email = typeof entry.account === 'string' ? entry.account : '';
+  // The rows' name column carries the account; the heading names the provider.
+  title.textContent = name || email;
+  title.title = email || name;
   block.appendChild(title);
   const limits = entry.status === 'ok' ? (entry.limits || []).filter(isDrawable) : [];
   if (limits.length > 0) {
-    block.appendChild(usageGrid([{ account: null, limits }], false));
+    const { sources, withAccount } = providerSources(entry, limits);
+    block.appendChild(usageGrid(sources, withAccount));
     // A last good reading kept while agy's login is expired (src/agyusage.js).
     if (entry.detail === 'stale') {
       const when = fmtAgo(entry.updatedAt);

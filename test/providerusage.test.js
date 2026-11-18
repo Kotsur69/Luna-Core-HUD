@@ -416,6 +416,47 @@ test('parseAgyQuotaSummary: several groups prefix the group name; garbage is ski
   assert.equal(parse.parseAgyQuotaSummary({ groups: 'x' }), null);
 });
 
+test('parseAgyQuotaSummary: an Argon group with only a weekly bucket gives exactly one Argon weekly row', () => {
+  const limits = parse.parseAgyQuotaSummary({
+    groups: [
+      AGY_SUMMARY.groups[0],
+      { displayName: 'Gemini 4 Argon', buckets: [{ bucketId: 'argon-weekly', window: 'weekly', remainingFraction: 0.25, resetTime: '2026-10-24T00:00:00Z' }] },
+    ],
+  });
+  const argon = limits.filter((l) => /argon/i.test(l.label));
+  assert.equal(argon.length, 1);
+  assert.deepEqual([argon[0].window, argon[0].group, argon[0].label, argon[0].percentUsed],
+    ['weekly', 'Gemini 4 Argon', 'Gemini 4 Argon · Weekly limit', 75]);
+  assert.equal(limits.filter((l) => l.window === '5h').length, 1, 'no 5h row is made up for Argon');
+});
+
+test('parseAgyQuotaSummary: Argon is its own named meter even as the only group, found by bucketId', () => {
+  const limits = parse.parseAgyQuotaSummary({
+    groups: [{ buckets: [{ bucketId: 'gemini-argon-weekly', remainingFraction: 0.5 }] }],
+  });
+  assert.deepEqual(limits.map((l) => [l.window, l.group, l.label, l.percentUsed]), [
+    ['weekly', 'Argon', 'Argon · Weekly limit', 50],
+  ]);
+});
+
+test('parseAgyQuotaSummary: windows and Argon read off snake/kebab ids; only the Argon bucket of a mixed group is Argon', () => {
+  const limits = parse.parseAgyQuotaSummary({
+    groups: [{
+      displayName: 'Gemini models',
+      buckets: [
+        { bucketId: 'GEMINI_ARGON_WEEKLY', remainingFraction: 0.5 },
+        { bucketId: 'gemini_5h', remainingFraction: 0.9 },
+        { bucketId: 'pro-7-day', remainingFraction: 0.8 },
+        { bucketId: 'flash_daily_limit', remainingFraction: 1 },
+        { displayName: '5 hours', remainingFraction: 0.7 },
+      ],
+    }],
+  });
+  assert.deepEqual(limits.map((l) => [l.window, l.group || '']), [
+    ['weekly', 'Argon'], ['5h', ''], ['weekly', ''], ['daily', ''], ['5h', ''],
+  ]);
+});
+
 test('parseAgyCredential: token, expiry and email are validated', () => {
   const ok = agyTests.parseAgyCredential(agyCred(), NOW);
   assert.deepEqual(ok, { ok: true, accessToken: FAKE_TOKEN, email: 'mati@example.com' });

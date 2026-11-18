@@ -17,6 +17,10 @@ const {
   limitLabel,
   shortMessageKey,
   accountMessageKey,
+  isExhausted,
+  rowDimState,
+  usageGridClass,
+  providerSources,
 } = require('../src/renderer/modules/usage.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -98,6 +102,48 @@ test('blockingWeekly: only a weekly at 100% blocks, only a 5h row', () => {
   assert.equal(blockingWeekly(five(10), undefined), null);
 });
 
+test('the Google grid uses the account column layout of Claude\'s multi-account rows', () => {
+  const google = { providerId: 'antigravity', profileId: 'agy', account: 'mati@example.com', status: 'ok', limits: [five(20), week(40)] };
+  const { sources, withAccount } = providerSources(google, google.limits);
+  assert.equal(withAccount, true);
+  assert.equal(usageGridClass(withAccount), usageGridClass(true), 'same class as the Claude accounts grid');
+  assert.ok(!usageGridClass(withAccount).includes('usage-grid--solo'));
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].account.label, 'mati@example.com', 'the email fills the name column');
+  const { groups, notices } = groupUsageRows(sources);
+  assert.deepEqual(groups.map((g) => g.key), ['5h', 'weekly']);
+  assert.deepEqual(notices, [], 'an ok provider account adds no notice line');
+  // No signed-in account (Codex, GLM...): the solo layout, the heading names it.
+  const codex = providerSources({ profileId: 'cx' }, [five(1)]);
+  assert.deepEqual([codex.withAccount, codex.sources[0].account], [false, null]);
+});
+
+test('an exhausted limit row is dimmed until its own reset; a blocked 5h row until the week\'s', () => {
+  assert.equal(isExhausted(five(100)), true);
+  assert.equal(isExhausted(five(99)), false);
+  assert.equal(isExhausted({ window: 'balance', valueText: '$1' }), false);
+  const spent = { ...five(100), resetsAt: '2026-11-17T20:00:00.000Z' };
+  assert.deepEqual(rowDimState({ limit: spent, blockedBy: null }, 1), { kind: 'exhausted', resetsAt: spent.resetsAt, sole: true });
+  assert.equal(rowDimState({ limit: five(40), blockedBy: null }, 2), null);
+  const weekly = { ...week(100), resetsAt: '2026-11-20T00:00:00.000Z' };
+  const both = rowDimState({ limit: spent, blockedBy: weekly }, 2);
+  assert.deepEqual(both, { kind: 'blocked', resetsAt: weekly.resetsAt, sole: false });
+  // Through groupUsageRows: the spent weekly row itself dims as exhausted.
+  const { groups } = groupUsageRows([{ account: null, limits: [five(10), week(100)] }]);
+  const weekRow = groups[1].rows[0];
+  assert.equal(rowDimState(weekRow, groups[1].rows.length).kind, 'exhausted');
+});
+
+test('a grouped (Argon) weekly limit is its own meter with a localized, group-prefixed label', () => {
+  const argon = { window: 'weekly', group: 'Argon', label: 'Argon · Weekly limit', percentUsed: 30 };
+  const { groups } = groupUsageRows([{ account: null, limits: [five(5), week(10), argon] }]);
+  assert.deepEqual(groups.map((g) => [g.key, g.rows.length]), [['5h', 1], ['weekly', 1], ['weekly:Argon', 1]]);
+  assert.equal(windowShortLabel(argon, echo), 'usage.window.short.week · Argon', 'window first, so truncation keeps it');
+  assert.equal(limitLabel(argon, echo), 'Argon · usage.window.week');
+  // An Argon week at 100% does not block the shared 5 h row.
+  assert.equal(blockingWeekly(five(10), [five(10), { ...argon, percentUsed: 100 }]), null);
+});
+
 test('usageLevel: neutral below 70, warn from 70, bad from 90', () => {
   assert.equal(usageLevel(0), 'good');
   assert.equal(usageLevel(69), 'good');
@@ -132,7 +178,7 @@ test('new usage strings exist in pl and en, pl without diacritics', () => {
   const en = src.slice(enAt);
   const keys = [
     'usage.window.short.5h', 'usage.window.short.day', 'usage.window.short.week', 'usage.window.short.month',
-    'usage.resetNow', 'usage.blockedByWeekly', 'usage.account.openSettings', 'usage.account.short.reconnect',
+    'usage.resetNow', 'usage.blockedByWeekly', 'usage.limitReached', 'usage.account.openSettings', 'usage.account.short.reconnect',
     'usage.account.short.reconnectMain', 'usage.account.short.unconnected',
     'usage.account.short.unavailable', 'usage.account.short.loading',
   ];
