@@ -25,7 +25,18 @@
 //   - proposes to supersede a memory (that would take another one off the card),
 //   - is global or was suggested global (it would reach every project's card),
 //   - comes from a session that read outside content (decision 61), or
-//   - is a near-duplicate of an entry that waits in the inbox.
+//   - is a near-duplicate of an entry that waits in the inbox, or
+//   - has no usefulness score, or one under the usefulness floor
+//     (MIN_AUTO_USEFULNESS, 0-100, the same `usefulness` field the inbox sorts
+//     by; captureScore reads it). Only these two holds are logged, as a `held`
+//     line with reason 'no-usefulness' or 'low-usefulness' (heldEvent), so a
+//     low-scored memory that waits says why. The floor is checked last: a
+//     `held` line means every other rule would have let it through.
+//
+// The floor can be set per PC with `minUsefulness` (a whole number 0-100) in
+// the settings file below. It is local: the provider does not sync it, and a
+// missing or invalid value means MIN_AUTO_USEFULNESS. It applies to the score
+// switch too, though that switch's own bar (AUTO_SAVE_FROM) is higher.
 //
 // An auto-accepted memory is `confirmed` at once, its source ends in
 // ', auto-accepted', and the log gets an `auto-accepted` line. The memory
@@ -46,7 +57,7 @@
 //
 // The switches sync like the per-project memory switch (src/memoryprojects.js):
 //
-//   memory-autoaccept.local.json = {types: ["gotcha", ...], score: true|false}
+//   memory-autoaccept.local.json = {types: ["gotcha", ...], score: true|false, minUsefulness?: 0-100}
 //   config-scope unit              memory-auto:<type> = {on: true}
 //                                  memory-auto:score  = {on: true}
 // ============================================================================
@@ -86,6 +97,18 @@ const PREFIX = 'memory-auto:';
 /** The config unit of the score switch; 'score' is no memory type, so it cannot clash with one. */
 const SCORE_UNIT = PREFIX + SCORE_SWITCH;
 const SETTINGS_FILE = 'memory-autoaccept.local.json';
+/**
+ * The usefulness score (0-100) a candidate needs to be auto-accepted.
+ * Conservatively low: capture already buries everything under
+ * AUTO_REJECT_BELOW (50), so this only holds back the marginal 50-59 band.
+ */
+const MIN_AUTO_USEFULNESS = 60;
+/** The highest usefulness score (src/memoryrecord.js clamps to 0-100). */
+const MAX_USEFULNESS = 100;
+/** The holds that are logged as `held` lines: a candidate kept in the inbox by its usefulness. */
+const LOW_USEFULNESS_HOLD = 'low-usefulness';
+const NO_USEFULNESS_HOLD = 'no-usefulness';
+const USEFULNESS_HOLDS = [LOW_USEFULNESS_HOLD, NO_USEFULNESS_HOLD];
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const typeOf = (k) => (typeof k === 'string' && k.startsWith(PREFIX) && CANDIDATE_TYPES.includes(k.slice(PREFIX.length)) ? k.slice(PREFIX.length) : null);
@@ -94,12 +117,52 @@ const errText = (err) => (err && (err.code || err.message)) || 'error';
 
 // ---------------------------------------------------------------- the switches
 
-/** Every switch in the file: {types, score}; throws when the file exists but is unreadable. */
+/** A valid usefulness floor (a whole number 0-100), or null. */
+const floorOf = (v) => (Number.isInteger(v) && v >= 0 && v <= MAX_USEFULNESS ? v : null);
+
+/**
+ * Every setting in the file: {types, score, minUsefulness}; throws when the file
+ * exists but is unreadable. minUsefulness = the file's own floor, null when it
+ * has none or an invalid one; rawFloor = whatever the file held there.
+ */
 function readSettingsStrict(file) {
   const doc = readDoc(file);
   const list = isObject(doc) && Array.isArray(doc.types) ? doc.types : [];
+  const rawFloor = isObject(doc) ? doc.minUsefulness : undefined;
   // Only a literal true switches it on: anything else in a hand-edited file is off.
-  return { types: [...new Set(list.filter((t) => CANDIDATE_TYPES.includes(t)))].sort(), score: isObject(doc) && doc.score === true };
+  return {
+    types: [...new Set(list.filter((t) => CANDIDATE_TYPES.includes(t)))].sort(),
+    score: isObject(doc) && doc.score === true,
+    minUsefulness: floorOf(rawFloor),
+    rawFloor,
+  };
+}
+
+/**
+ * The usefulness floor this PC auto-accepts from: the file's `minUsefulness`
+ * when valid, else MIN_AUTO_USEFULNESS. An invalid value is reported and never
+ * lowers the floor below the default.
+ */
+function readMinUsefulness(file) {
+  try {
+    const { minUsefulness, rawFloor } = readSettingsStrict(file);
+    if (minUsefulness !== null) return minUsefulness;
+    if (rawFloor !== undefined) console.error('[memory] auto-accept minUsefulness invalid, using', MIN_AUTO_USEFULNESS);
+    return MIN_AUTO_USEFULNESS;
+  } catch (err) {
+    console.error('[memory] auto-accept settings unreadable, default usefulness floor:', errText(err));
+    return MIN_AUTO_USEFULNESS;
+  }
+}
+
+/** The file's own floor, kept across a rewrite of the switches; null when it has none or cannot be read. */
+function keptFloor(file) {
+  try {
+    return readSettingsStrict(file).minUsefulness;
+  } catch {
+    // An unreadable file is rewritten whole by the caller; there is no floor to keep.
+    return null;
+  }
 }
 
 /** The switched-on types, sorted; throws when the file exists but is unreadable. */
@@ -125,9 +188,11 @@ function readScoreAuto(file) {
   }
 }
 
+/** Writes the switches; a valid local usefulness floor already in the file is kept. */
 function writeSettings(file, { types, score }) {
+  const floor = keptFloor(file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeAtomic(file, `${JSON.stringify({ types, score })}\n`);
+  writeAtomic(file, `${JSON.stringify({ types, score, ...(floor === null ? {} : { minUsefulness: floor }) })}\n`);
 }
 
 /**
@@ -286,14 +351,30 @@ function exclusion(record, pending) {
 }
 
 /**
+ * Why a candidate's usefulness score keeps it in the inbox, or null.
+ * @param {object} record
+ * @param {number} floor the usefulness floor (readMinUsefulness)
+ * @returns {'no-usefulness'|'low-usefulness'|null}
+ */
+function usefulnessHold(record, floor) {
+  // An invalid floor (null, NaN, out of range) must not open the gate: it means the default.
+  const bar = floorOf(floor) ?? MIN_AUTO_USEFULNESS;
+  const score = captureScore(record);
+  if (!Number.isInteger(score)) return NO_USEFULNESS_HOLD;
+  return score < bar ? LOW_USEFULNESS_HOLD : null;
+}
+
+/**
  * Whether a captured candidate is auto-accepted.
  * @param {object} record
- * @param {{enabled: string[], stats: object, pending: object[], scoreOn?: boolean, scoreStat?: object|null}} ctx
- *   scoreOn = the score switch (readScoreAuto); scoreStat = scoreStats()
+ * @param {{enabled: string[], stats: object, pending: object[], scoreOn?: boolean, scoreStat?: object|null,
+ *   minUsefulness?: number}} ctx
+ *   scoreOn = the score switch (readScoreAuto); scoreStat = scoreStats();
+ *   minUsefulness = the usefulness floor (readMinUsefulness), MIN_AUTO_USEFULNESS when left out
  * @returns {{accept: boolean, reason: string}} reason = 'auto', 'off', 'no-evidence', 'failing',
- *   'not-offered' (score path only) or the exclusion
+ *   'not-offered' (score path only), the exclusion, 'no-usefulness' or 'low-usefulness'
  */
-function decide(record, { enabled, stats, pending, scoreOn = false, scoreStat = null }) {
+function decide(record, { enabled, stats, pending, scoreOn = false, scoreStat = null, minUsefulness = MIN_AUTO_USEFULNESS }) {
   if (!record) return { accept: false, reason: 'off' };
   const byType = enabled.includes(record.type);
   // The score switch stands in for the type's switch only: every rule below still applies.
@@ -305,7 +386,10 @@ function decide(record, { enabled, stats, pending, scoreOn = false, scoreStat = 
   // By score alone, the type must still earn what its own switch would need to be offered.
   if (!byType && !isOffered(stat)) return { accept: false, reason: 'not-offered' };
   const why = exclusion(record, pending);
-  return why ? { accept: false, reason: why } : { accept: true, reason: 'auto' };
+  if (why) return { accept: false, reason: why };
+  // Last on purpose: a usefulness hold then means every other rule would have accepted it.
+  const hold = usefulnessHold(record, minUsefulness);
+  return hold ? { accept: false, reason: hold } : { accept: true, reason: 'auto' };
 }
 
 /** The candidate as an auto-accepted memory: confirmed today, its source labelled. Throws on a bad record. */
@@ -330,25 +414,41 @@ const autoEvent = (record) => ({
 });
 
 /**
+ * The log line of a candidate its usefulness kept in the inbox (src/memorylog.js).
+ * @param {object} record
+ * @param {'low-usefulness'|'no-usefulness'} reason createLanding's `held`
+ */
+const heldEvent = (record, reason) => ({ ...autoEvent(record), ev: 'held', reason });
+
+/**
  * The landing step for capture: decides each candidate before it is written.
  * The log is read once per piece; the inbox is read per candidate, so a
  * candidate that repeats one written a moment ago still waits.
  * @param {{file: string, dir: string, log: {read: () => object[], add: (e: object) => boolean}|null, now: number}} opts
  *   file = the switches (memoryPaths().autoAccept); no log = no numbers = nothing is auto-accepted
- * @returns {(record: object) => {record: object, auto: boolean}} never throws: when the
- *   check fails the candidate waits in the inbox, as it would with every switch off
+ * @returns {(record: object) => {record: object, auto: boolean, held: string|null}} never throws: when the
+ *   check fails the candidate waits in the inbox, as it would with every switch off;
+ *   held = 'low-usefulness' or 'no-usefulness' when only its score kept it from being
+ *   auto-accepted (the caller logs heldEvent once the record is written), else null
  */
 function createLanding({ file, dir, log, now }) {
-  const waits = (record) => ({ record, auto: false });
-  if (!log) return waits;
+  const waits = (record, held = null) => ({ record, auto: false, held });
+  if (!log) return (record) => waits(record);
   let ctx;
   try {
     const events = log.read();
     enforceAutoOff({ file, events, now, log });
-    ctx = { enabled: readAuto(file), stats: typeStats(events, now), scoreOn: readScoreAuto(file), scoreStat: scoreStats(events, now), today: isoDate(now) };
+    ctx = {
+      enabled: readAuto(file),
+      stats: typeStats(events, now),
+      scoreOn: readScoreAuto(file),
+      scoreStat: scoreStats(events, now),
+      minUsefulness: readMinUsefulness(file),
+      today: isoDate(now),
+    };
   } catch (err) {
     console.error('[memory] auto-accept unavailable, candidates wait:', errText(err));
-    return waits;
+    return (record) => waits(record);
   }
   return (record) => {
     if (!ctx.enabled.includes(record.type) && !(ctx.scoreOn && isHighScore(record))) return waits(record);
@@ -356,8 +456,9 @@ function createLanding({ file, dir, log, now }) {
       const pending = scan(dir)
         .records.map(([, r]) => r)
         .filter((r) => r.confidence !== 'confirmed');
-      const { accept } = decide(record, { ...ctx, pending });
-      return accept ? { record: asAutoAccepted(record, ctx.today), auto: true } : waits(record);
+      const { accept, reason } = decide(record, { ...ctx, pending });
+      if (accept) return { record: asAutoAccepted(record, ctx.today), auto: true, held: null };
+      return waits(record, USEFULNESS_HOLDS.includes(reason) ? reason : null);
     } catch (err) {
       console.error('[memory] auto-accept check failed, the candidate waits:', errText(err));
       return waits(record);
@@ -474,6 +575,9 @@ module.exports = {
   asAutoAccepted,
   isAutoAccepted,
   autoEvent,
+  heldEvent,
+  readMinUsefulness,
+  usefulnessHold,
   createLanding,
   enforceAutoOff,
   recentAutoOffs,
@@ -493,4 +597,7 @@ module.exports = {
   SCORE_UNIT,
   AUTO_SAVE_FROM,
   SETTINGS_FILE,
+  MIN_AUTO_USEFULNESS,
+  LOW_USEFULNESS_HOLD,
+  NO_USEFULNESS_HOLD,
 };

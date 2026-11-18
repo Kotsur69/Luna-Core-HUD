@@ -16,6 +16,8 @@
 //                                  `card` (src/memorytodo.js); never a `rejected` line, the extractor must not learn from it
 //   {"at": <ms>, "ev": "auto-off", "type", "rate"}   a type's auto-accept turned itself off (src/memoryautoaccept.js);
 //                                  type = SCORE_SWITCH: the 'auto-save memories scored 90+' switch did
+//   {"at": <ms>, "ev": "held",     "key", "type", "reason", "usefulness"?}   auto-accept would have taken it but
+//                                  its usefulness did not (src/memoryautoaccept.js): reason = low-usefulness | no-usefulness
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
@@ -194,6 +196,11 @@ function cleanEvent(raw) {
     return { at, ev, project: projectOf(raw.project), hits, ...tagged(raw.session) };
   }
   if (ev === 'get') return key ? { at, ev, key, ...tagged(raw.session) } : null;
+  // A candidate whose type was switched on but whose usefulness kept it in the inbox (src/memoryautoaccept.js).
+  if (ev === 'held') {
+    const reason = line(raw.reason, MAX_REASON);
+    return key && type && reason ? { at, ev, key, type, reason, ...scored(raw.usefulness) } : null;
+  }
   if (ev === 'auto-off') {
     const rate = Number.isFinite(raw.rate) && raw.rate >= 0 && raw.rate <= 1 ? raw.rate : null;
     const switched = type || (raw.type === SCORE_SWITCH ? SCORE_SWITCH : null);

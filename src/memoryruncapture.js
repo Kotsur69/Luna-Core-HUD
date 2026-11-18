@@ -51,7 +51,7 @@ const { droppedEvents, MAX_PENDING } = require('./memorycapture');
 const { runDigest, countRunOutside, runFailureSignatures } = require('./memoryrundigest');
 const { recordFailures, repeatedFailures, uncoveredRepeats, floorRepeated, FAILURE_LEDGER_FILE } = require('./memoryfailures');
 const { RUN_ID_RE } = require('./orchestraReport');
-const { createLanding, autoEvent } = require('./memoryautoaccept');
+const { createLanding, autoEvent, heldEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
 const { bury, graveyardPath } = require('./memorygraveyard');
 const { staleCandidates, staleSection, parseObsolete, reportObsolete } = require('./memoryrunstale');
@@ -172,11 +172,12 @@ function createRunCapture({
     const land = createLanding({ file: paths.autoAccept, dir: paths.dir, log, now: now() });
     for (const candidate of records) {
       try {
-        const { record, auto } = land(candidate);
+        const { record, auto, held } = land(candidate);
         writeRecord(paths.dir, record);
         saved++;
         if (log) log.add({ ev: 'proposed', key: `${record.project}/${record.id}`, type: record.type, usefulness: record.usefulness });
         if (log && auto) log.add(autoEvent(record));
+        if (log && held) log.add(heldEvent(record, held));
       } catch (err) {
         console.error('[memory] run candidate not written:', errText(err));
       }
