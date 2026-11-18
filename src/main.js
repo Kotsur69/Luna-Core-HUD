@@ -107,6 +107,7 @@ const { createClaudeAccounts, failoverEligible, ACCOUNT_ENV } = require('./claud
 const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
 // Per-account 5 h + weekly usage through usage-only logins (src/claudeaccountusage.js).
 const { createAccountUsage } = require('./claudeaccountusage');
+const { reserveLimits } = require('./accountreserve');
 const { claudePath } = require('./hostchat');
 const { createTabFailover } = require('./claudefailover');
 // Project switcher: session working directories (cwd) from config/projects.json.
@@ -417,6 +418,9 @@ const claudeAccounts = createClaudeAccounts({
   // Read lazily - the registry is built further down.
   extraLimits: () => orchestraRuns.limitedAccounts(),
   onLimitCleared: (id) => orchestraRuns.clearAccountLimit(id),
+  // An account at its reserve cap counts as limited (src/accountreserve.js).
+  // accountUsage is built just below; read lazily, its last readings only.
+  reserveLimits: (accounts, t) => reserveLimits(accounts, accountUsage.readings(), t),
 });
 setAccountLayer((env) => claudeAccounts.authLayer(env));
 // Usage-only logins per account; the watcher (startUsageWatcher) reads them.

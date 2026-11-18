@@ -30,6 +30,10 @@
 // label once per group, then one line per account (dot on the one new work
 // runs on, name, bar, percent, reset), plus one muted line per account that
 // needs attention. See visibleAccounts() / groupUsageRows() / usageGrid().
+// The name of an account new work does not run on is a button: a click makes
+// it the active one (switchToAccount()). An account's reserve caps (Settings,
+// src/accountreserve.js) show as a tick on its bar; a row at its cap is dimmed
+// like a spent one (rowDimState() kind 'reserve').
 //
 // PER TAB KIND: a Codex / GLM / ... tab shows only that provider's block
 // (selectVisibleUsage()). A Claude tab and an Antigravity (agy) tab show the
@@ -271,18 +275,32 @@ export function isExhausted(limit) {
  * spent week is 'blocked' until the WEEK resets (that is the later reset, so
  * it wins over the row's own); a spent row is 'exhausted' until its own reset.
  * `sole` says the row is its group's only one, so its window label dims too.
- * @param {{limit: object, blockedBy?: object|null}} row
+ * A row at or over its account's reserve cap is 'reserve' (with `cap`) until
+ * its reset: LunaCore treats that account as limited (src/accountreserve.js).
+ * @param {{account?: object|null, limit: object, blockedBy?: object|null}} row
  * @param {number} groupSize rows in the row's group
- * @returns {{kind: 'blocked'|'exhausted', resetsAt: string|null, sole: boolean}|null}
+ * @returns {{kind: 'blocked'|'exhausted'|'reserve', resetsAt: string|null, sole: boolean, cap?: number}|null}
  */
 export function rowDimState(row, groupSize) {
   if (!row || !row.limit) return null;
   const source = row.blockedBy ? row.blockedBy : isExhausted(row.limit) ? row.limit : null;
-  if (!source) return null;
+  if (!source) return reserveDimState(row, groupSize);
   return {
     kind: row.blockedBy ? 'blocked' : 'exhausted',
     resetsAt: typeof source.resetsAt === 'string' ? source.resetsAt : null,
     sole: groupSize === 1,
+  };
+}
+
+/** rowDimState() for a row that is not spent: dimmed only at its reserve cap. */
+function reserveDimState(row, groupSize) {
+  const cap = reserveCapFor(row.account, row.limit);
+  if (cap === null || typeof row.limit.percentUsed !== 'number' || row.limit.percentUsed < cap) return null;
+  return {
+    kind: 'reserve',
+    resetsAt: typeof row.limit.resetsAt === 'string' ? row.limit.resetsAt : null,
+    sole: groupSize === 1,
+    cap,
   };
 }
 
@@ -350,8 +368,56 @@ function span(className, text) {
   return el;
 }
 
-/** The marker + name cells of an account row (multi-account grid only). */
-function accountCells(account) {
+/**
+ * Makes a Claude account the one new work runs on (main moves it to the top
+ * of the order - src/claudeaccounts.js moveToTop). Resolves to main's answer,
+ * or {ok:false} when the call is unavailable or fails.
+ * @param {string} accountId
+ * @param {{makeClaudeAccountActive?: (id: string) => Promise<object>}} [api]
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function switchToAccount(accountId, api = globalThis.window && window.lunacore) {
+  if (!api || typeof api.makeClaudeAccountActive !== 'function') return { ok: false, error: 'unavailable' };
+  try {
+    const res = await api.makeClaudeAccountActive(accountId);
+    return res && typeof res === 'object' ? res : { ok: false, error: 'noAnswer' };
+  } catch (err) {
+    console.error('[usage] could not switch the Claude account:', err);
+    return { ok: false, error: 'failed' };
+  }
+}
+
+/**
+ * True when the row's account can be made active by a click: a stored Claude
+ * account (it has an accountId) that new work does not run on yet.
+ * @param {object|null} account
+ */
+export function isSwitchable(account) {
+  return Boolean(account && typeof account.accountId === 'string' && account.accountId && !account.active);
+}
+
+/** The name cell as a button that makes the account active. */
+function switchButton(account, label) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'usage-line__name usage-line__switch';
+  btn.textContent = label;
+  const hint = t('usage.account.switch', { name: label });
+  btn.title = hint;
+  btn.setAttribute('aria-label', hint);
+  btn.addEventListener('click', () => {
+    btn.disabled = true;
+    // main answers with claudeAccounts:changed -> a usage repaint with the new dot.
+    switchToAccount(account.accountId).finally(() => { btn.disabled = false; });
+  });
+  return btn;
+}
+
+/**
+ * The marker + name cells of an account row (multi-account grid only). With
+ * `switchable`, a non-active account's name is a button that makes it active.
+ */
+function accountCells(account, switchable = false) {
   const isActive = Boolean(account && account.active);
   const mark = span('usage-line__mark', isActive ? '●' : '');
   if (isActive) {
@@ -361,13 +427,43 @@ function accountCells(account) {
     mark.setAttribute('aria-hidden', 'true');
   }
   const label = (account && account.label) || '';
+  if (switchable && isSwitchable(account)) return [mark, switchButton(account, label)];
   const name = span('usage-line__name', label);
-  name.title = label;
+  name.title = isActive ? `${label} - ${t('usage.account.active')}` : label;
   return [mark, name];
 }
 
-/** The bar, percent and reset cells of one limit (or one value cell). */
-function limitCells(limit) {
+/** Reserve cap fields per window (src/accountreserve.js CAP_FIELDS). */
+const RESERVE_FIELDS = { '5h': 'fiveHour', weekly: 'weekly' };
+
+/**
+ * The reserve cap (1-100) an account keeps on this limit's window, or null.
+ * Only Claude's own 5 h / weekly windows carry one.
+ * @param {object|null} account
+ * @param {object|null} limit
+ * @returns {number|null}
+ */
+export function reserveCapFor(account, limit) {
+  const field = limit && RESERVE_FIELDS[limit.window];
+  const reserve = account && account.reserve;
+  const cap = field && reserve && typeof reserve === 'object' ? reserve[field] : null;
+  return Number.isInteger(cap) && cap >= 1 && cap <= 100 ? cap : null;
+}
+
+/** A thin tick on the bar at the account's reserve cap. */
+function capMarker(cap) {
+  const mark = document.createElement('div');
+  mark.className = 'usage-bar__cap';
+  mark.style.setProperty('--cap', String(cap / 100));
+  mark.setAttribute('aria-hidden', 'true');
+  return mark;
+}
+
+/**
+ * The bar, percent and reset cells of one limit (or one value cell). `cap`
+ * draws the account's reserve cap on the bar (null: none).
+ */
+function limitCells(limit, cap = null) {
   if (typeof limit.percentUsed !== 'number') {
     return [span('usage-line__value', limit.valueText)];
   }
@@ -378,6 +474,10 @@ function limitCells(limit) {
   fill.style.setProperty('--usage', String(Math.min(100, Math.max(0, limit.percentUsed)) / 100));
   fill.dataset.level = usageLevel(limit.percentUsed);
   bar.appendChild(fill);
+  if (cap !== null) {
+    bar.appendChild(capMarker(cap));
+    bar.title = t('usage.reserveCap', { cap });
+  }
   const pct = span('usage-line__pct', `${limit.percentUsed}%`);
   // Only a real resetsAt from the provider is trustworthy. A "now + window"
   // fallback restarts on every repaint and pins the label at the full window.
@@ -387,8 +487,12 @@ function limitCells(limit) {
   return [bar, pct, reset];
 }
 
-/** One grid row. `win` is the window label, or null on a group's later rows. */
-function usageLine({ win, account, withAccount, cells }) {
+/**
+ * One grid row. `win` is the window label, or null on a group's later rows.
+ * `switchable`: the account name may be a "make active" button (limit rows;
+ * notice rows keep their Settings link only).
+ */
+function usageLine({ win, account, withAccount, cells, switchable = false }) {
   const line = document.createElement('div');
   line.className = 'usage-line';
   const winCell = span('usage-line__win', win ? win.short : '');
@@ -397,7 +501,7 @@ function usageLine({ win, account, withAccount, cells }) {
     winCell.title = win.full;
   }
   line.appendChild(winCell);
-  if (withAccount) line.append(...accountCells(account));
+  if (withAccount) line.append(...accountCells(account, switchable));
   line.classList.toggle('is-active', Boolean(account && account.active));
   line.append(...cells);
   return line;
@@ -407,6 +511,8 @@ function usageLine({ win, account, withAccount, cells }) {
 const DIM_STYLES = {
   blocked: { className: 'is-blocked', key: 'usage.blockedByWeekly' },
   exhausted: { className: 'is-exhausted', key: 'usage.limitReached' },
+  // Same look as a spent limit: the account takes no new work until the reset.
+  reserve: { className: 'is-exhausted', key: 'usage.reserveReached' },
 };
 
 /**
@@ -418,13 +524,14 @@ function markDimmed(line, state) {
   line.classList.add(style.className);
   if (state.sole) line.classList.add('is-sole');
   const when = fmtResetWhen(state.resetsAt);
-  const text = t(style.key, { when: when || t('usage.resetNow') });
+  const text = t(style.key, { when: when || t('usage.resetNow'), cap: state.cap });
   line.title = text;
   line.setAttribute('role', 'group');
   line.setAttribute('aria-label', text);
   // The cell tooltips (reset time, account name) would hide the line's one.
-  // The window label keeps its own: it names the group, not this account.
-  for (const cell of line.querySelectorAll(':not(.usage-line__win)[title]')) cell.removeAttribute('title');
+  // The window label keeps its own: it names the group, not this account; so
+  // does the switch button, whose tooltip says what a click does.
+  for (const cell of line.querySelectorAll(':not(.usage-line__win):not(.usage-line__switch)[title]')) cell.removeAttribute('title');
 }
 
 /** The muted one-line stand-in for an account's bars, with a Settings arrow. */
@@ -461,7 +568,8 @@ export function usageGridClass(withAccount) {
 function limitLine(row, isFirst, groupSize, withAccount) {
   const { account, limit } = row;
   const win = isFirst ? { short: windowShortLabel(limit), full: limitLabel(limit) } : null;
-  const line = usageLine({ win, account, withAccount, cells: limitCells(limit) });
+  const cells = limitCells(limit, reserveCapFor(account, limit));
+  const line = usageLine({ win, account, withAccount, cells, switchable: true });
   const dim = rowDimState(row, groupSize);
   if (dim) markDimmed(line, dim);
   return line;

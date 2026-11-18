@@ -1535,6 +1535,20 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
    duration, so it survived prefers-reduced-motion. Only the color remains. */
 .usage-bar__fill[data-level='bad'] { background: var(--bar-sheen), var(--bad); }
 .usage-row__reset { font-size: 10px; opacity: 0.6; }
+/* An account's reserve cap (src/accountreserve.js): a thin tick across the
+   bar at the cap, so the room left before LunaCore stops using it is visible. */
+.usage-bar:has(.usage-bar__cap) { position: relative; }
+.usage-bar__cap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--cap, 1) * 100%);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  opacity: 0.85;
+  pointer-events: none;
+}
 /* God Mode planning parked on a spent Claude limit: message + cancel. */
 .orchestra__wait { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 /* A non-Claude provider's limits - shown alone, for the active tab's profile. */
@@ -1579,6 +1593,25 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 var(--glow-siz
 .usage-line__mark { width: 1ch; color: var(--neon-cyan); font-size: 8px; line-height: 1; text-align: center; }
 .usage-line__name { max-width: 9em; color: var(--text-dim); }
 .usage-line.is-active .usage-line__name { color: var(--text); font-weight: 700; }
+/* Settings > Claude accounts: the two reserve caps of one account. */
+.claude-account-reserve { display: inline-flex; gap: var(--space-2); align-items: center; }
+.claude-account-reserve label { display: inline-flex; gap: var(--space-1); align-items: center; white-space: nowrap; }
+.claude-account-reserve__input { width: 7ch; min-width: 7ch; }
+/* A non-active account's name: a button that makes it the active one. */
+.usage-line__switch {
+  justify-self: start;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.usage-line__switch:hover { color: var(--text); text-decoration: underline dotted; }
+.usage-line__switch:focus-visible { outline: var(--border-w) solid var(--neon-cyan); outline-offset: 1px; }
+.usage-line__switch:disabled { cursor: progress; }
 .usage-line .usage-bar { height: 6px; }
 .usage-line__pct { text-align: right; font-weight: 700; }
 .usage-line__reset { text-align: right; font-size: var(--fs-xs); color: var(--text-dim); }

@@ -1,7 +1,8 @@
 // ============================================================================
 // LunaCore - Claude accounts IPC (Settings -> Claude accounts)
 // ----------------------------------------------------------------------------
-// The renderer lists, adds, renames, removes and reorders accounts. A token only ever
+// The renderer lists, adds, renames, removes and reorders accounts, makes one
+// active (Usage panel click) and sets its reserve caps. A token only ever
 // travels renderer -> main (the paste on "Add"); list() never returns one.
 // Every payload is validated here - the renderer is not trusted.
 //
@@ -11,6 +12,8 @@
 // ============================================================================
 
 'use strict';
+
+const { validateReserve } = require('./accountreserve');
 
 const ID_RE = /^[a-z0-9]{1,20}$/;
 const MAX_LABEL_IN = 200;
@@ -43,6 +46,16 @@ function registerClaudeAccountsIpc({ ipcMain, accounts, openTokenTab, accountUsa
   ipcMain.handle('claudeAccounts:remove', (_event, id) => (validId(id) ? accounts.remove(id) : bad('notFound')));
   ipcMain.handle('claudeAccounts:move-up', (_event, id) => (validId(id) ? accounts.moveUp(id) : bad('notFound')));
   ipcMain.handle('claudeAccounts:clear-limit', (_event, id) => (validId(id) ? accounts.clearLimit(id) : bad('notFound')));
+  // Usage panel click: the account becomes the one new work runs on. One id
+  // argument; moveToTop() answers 'notFound' for an id not in the stored list.
+  ipcMain.handle('claudeAccounts:make-active', (_event, id) => (validId(id) ? accounts.moveToTop(id) : bad('notFound')));
+  // Reserve caps (src/accountreserve.js): each an integer 1-100 or empty.
+  ipcMain.handle('claudeAccounts:set-reserve', (_event, payload) => {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    if (!validId(p.id)) return bad('notFound');
+    const checked = validateReserve({ fiveHour: p.fiveHour, weekly: p.weekly });
+    return checked.ok ? accounts.setReserve(p.id, checked.reserve) : checked;
+  });
 
   // Opens a tab running `claude setup-token` (browser OAuth for one account).
   ipcMain.on('claudeAccounts:open-token-tab', () => openTokenTab());

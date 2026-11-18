@@ -38,6 +38,7 @@ const { execFile } = require('child_process');
 const { isUsageDirFor, cleanEmail, BACKEND_KEYS, ACCOUNT_ENV } = require('./claudeaccounts');
 const { claudeLimits, getClaudeUsage, parseRetryAfter } = require('./usage');
 const { refreshUsageLogin } = require('./claudeoauthrefresh');
+const { cleanReserve } = require('./accountreserve');
 
 const ID_RE = /^[a-z0-9]{1,20}$/;
 /** Just under the watcher's 90 s, so every regular tick reads each account. */
@@ -334,6 +335,7 @@ function createAccountUsage(deps) {
     accountId: target.id,
     label: target.label,
     active: Boolean(target.active),
+    reserve: reserveOf(target),
     main: Boolean(target.usageDir) && isMain(target.usageDir),
     status: target.usageDir ? slot.status : 'unconnected',
     limits: target.usageDir ? slot.limits.map(copyLimit) : [],
@@ -462,7 +464,28 @@ function createAccountUsage(deps) {
     return attach(id, null, null);
   }
 
-  return { read, decorate, connect, useMain, disconnect };
+  /**
+   * account id -> the limits of its last reading (stale ones included, as
+   * the panel shows them); only accounts that have one. Main-process only:
+   * the reserve check (src/accountreserve.js) reads it on every pick, so it
+   * never fetches - it is the cache of the last pass.
+   * @returns {Map<string, Array<object>>}
+   */
+  function readings() {
+    const out = new Map();
+    for (const [id, slot] of cache) {
+      if (Array.isArray(slot.limits) && slot.limits.length > 0) out.set(id, slot.limits);
+    }
+    return out;
+  }
+
+  return { read, decorate, connect, useMain, disconnect, readings };
+}
+
+/** Only the two caps of a target's reserve (null = no cap); never anything else. */
+function reserveOf(target) {
+  const r = cleanReserve(target && target.reserve) || {};
+  return { fiveHour: r.fiveHour || null, weekly: r.weekly || null };
 }
 
 module.exports = {
