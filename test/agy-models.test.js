@@ -295,6 +295,9 @@ test('no exact agy equality is left in the God Mode worker paths: they all use i
     'src/agyexec.js',
     'src/launch.js',
     'src/orchestraPlan.js',
+    'src/lunaswork.js',
+    'src/lunasworkPlaytest.js',
+    'src/lunasworkHookDeps.js',
     'src/renderer/modules/orchestraWorkerModelRules.js',
     'mobile/src/godmodeplanmodel.js',
   ];

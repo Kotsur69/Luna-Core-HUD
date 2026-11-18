@@ -45,12 +45,17 @@ test('agyFallback defaults to false, only exactly true turns it on, and it is in
   assert.equal(S.normalizeSettings({ freeFallback: true }).agyFallback, false);
 });
 
-test('agy is a valid global and per-project role model', () => {
-  const settings = S.normalizeSettings({ models: { director: 'agy' }, projects: { p: { models: { builder: 'agy', critic: 'AGY' } } } });
+test('agy and agy:<id> are valid global and per-project role models', () => {
+  const settings = S.normalizeSettings({
+    models: { director: 'agy', playtester: 'agy:gemini-4-argon-medium' },
+    projects: { p: { models: { builder: 'agy:claude-opus-5-5-thinking', critic: 'AGY', reviewer: 'agy:--bad' } } },
+  });
   const models = S.modelsFor(settings, 'p');
   assert.equal(models.director, 'agy');
-  assert.equal(models.builder, 'agy');
+  assert.equal(models.playtester, 'agy:gemini-4-argon-medium');
+  assert.equal(models.builder, 'agy:claude-opus-5-5-thinking');
   assert.equal(models.critic, DEFAULT_MODELS.critic, 'a look-alike value is dropped');
+  assert.equal(models.reviewer, DEFAULT_MODELS.reviewer, 'a malformed agy variant is dropped');
 });
 
 // ---- models -----------------------------------------------------------------------

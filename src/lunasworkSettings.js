@@ -72,7 +72,7 @@
 const fs = require('fs');
 const os = require('os');
 const paths = require('./paths');
-const { ROLES, MODEL_CHOICES, normalizeModels } = require('./lunasworkRules');
+const { ROLES, isModelChoice, normalizeModels } = require('./lunasworkRules');
 const { keyFor } = require('./todo');
 const { CATEGORIES: LIGHTHOUSE_CATEGORIES, budgetsFrom } = require('./lunasworkLighthouse');
 const { SECOND_OPINION_CLIS } = require('./lunasworkSecondOpinion');
@@ -276,7 +276,7 @@ function normalizeModelOverride(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const out = {};
   for (const role of ROLES) {
-    if (MODEL_CHOICES.includes(src[role])) out[role] = src[role];
+    if (isModelChoice(src[role])) out[role] = src[role];
   }
   return out;
 }

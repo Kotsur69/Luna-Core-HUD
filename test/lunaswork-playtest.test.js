@@ -314,6 +314,8 @@ test('a Playtester set to agy plays on agy in the agy env; the SHIP pass stays o
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.model, 'agy');
   assert.match(res.modelReason, /^setting; on agy: no adapter MCP tools and no read sandbox/, 'the run log says what agy loses');
+  assert.match(P.playtestModel('explore', { playtester: 'agy:gemini-4-argon-medium' }).reason, /^setting; on agy: no adapter MCP tools and no read sandbox/);
+  assert.equal(P.playtestModel('explore', { playtester: 'agy:gemini-4-argon-medium' }).model, 'agy:gemini-4-argon-medium');
   assert.equal(fake.calls[0].file, AGY_BIN);
   assert.deepEqual(fake.calls[0].options.env, agyEnv, 'the Claude env never reaches agy');
   assert.ok(fake.calls[0].args.includes('--print'));

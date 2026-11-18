@@ -35,7 +35,7 @@ const { REVIEW_ROLE, reviewsDue, runReviews } = require('./lunasworkReviews');
 const { runSecondOpinion } = require('./lunasworkSecondOpinion');
 const { runGateSkills } = require('./lunasworkSkills');
 const { execClaude } = require('./lunasworkCritic');
-const { AGY_MODEL } = require('./claudeModels');
+const { isAgyModel } = require('./workerModels');
 
 const GIT_TIMEOUT_MS = 30 * 1000;
 
@@ -134,7 +134,8 @@ function designPack(repoPath) {
  * @returns {((role:string)=>{model:string}|null)|null}
  */
 function reviewPickFor(models) {
-  return isObj(models) && models[REVIEW_ROLE] === AGY_MODEL ? () => ({ model: AGY_MODEL }) : null;
+  const model = isObj(models) ? models[REVIEW_ROLE] : null;
+  return isAgyModel(model) ? () => ({ model }) : null;
 }
 
 /**

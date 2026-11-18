@@ -139,6 +139,7 @@ const {
   stuckOutcome,
 } = require('./lunasworkRules');
 const { AGY_MODEL } = require('./claudeModels');
+const { isAgyModel } = require('./workerModels');
 const { syncMailReplies } = require('./lunasworkMailReplies');
 const { checkList } = require('./lunasworkChecks');
 const { createLoadTest } = require('./lunasworkLoad');
@@ -613,7 +614,7 @@ function createLunasWork(deps) {
    */
   function agyFallbackFor(settings, role) {
     if (!settings || settings.agyFallback !== true || !AGY_FALLBACK_ROLES.has(role) || onAgy()) return false;
-    if (isObj(run.models) && run.models[role] === AGY_MODEL) return false;
+    if (isObj(run.models) && isAgyModel(run.models[role])) return false;
     if (typeof deps.agyReady === 'function' && deps.agyReady()) return true;
     logEvent(`usage limit (${role}): the Antigravity fallback is on, but no agy profile is configured`);
     return false;
@@ -988,9 +989,9 @@ function createLunasWork(deps) {
 
   /**
    * The build runs on agy (God Mode planner and workers): the agy fallback is
-   * on, or the Builder is set to agy (every card then carries model 'agy').
+   * on, or the Builder is set to agy (every card then carries an agy model).
    */
-  const buildsOnAgy = (cards) => onAgy() || cards.some((c) => isObj(c) && c.model === AGY_MODEL);
+  const buildsOnAgy = (cards) => onAgy() || cards.some((c) => isObj(c) && isAgyModel(c.model));
 
   /** @param {string|null} on where the build ran when not on Claude (for the run log) */
   function buildRecord(r, cards, on) {

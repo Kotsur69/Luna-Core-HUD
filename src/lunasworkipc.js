@@ -66,7 +66,7 @@
 const path = require('path');
 const settingsStore = require('./lunasworkSettings');
 const pack = require('./lunasworkPack');
-const { ROLES, MODEL_CHOICES } = require('./lunasworkRules');
+const { ROLES, MODEL_CHOICES, isModelChoice } = require('./lunasworkRules');
 const { getProject, resolveProjectDir } = require('./projects');
 const { keyFor } = require('./todo');
 const { publicStatus, publicEvent, evidenceDirOf } = require('./lunasworkStatus');
@@ -145,7 +145,7 @@ function parseModels(raw) {
   if (!isObject(raw)) return null;
   const out = {};
   for (const [role, choice] of Object.entries(raw)) {
-    if (!ROLES.includes(role) || !MODEL_CHOICES.includes(choice)) return null;
+    if (!ROLES.includes(role) || !isModelChoice(choice)) return null;
     out[role] = choice;
   }
   return out;

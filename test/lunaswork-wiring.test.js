@@ -192,7 +192,7 @@ test('createHookDeps: the second opinion is off without a CLI order; no review d
   for (const key of ['refreshGraph', 'i18n', 'lighthouse', 'reviews', 'secondOpinion']) assert.equal(typeof on[key], 'function', key);
 });
 
-test('createHookDeps: a reviewer set to agy runs the reviews with --model agy through the injected runner', async () => {
+test('createHookDeps: a reviewer set to agy or agy:<id> runs the reviews with that model through the injected runner', async () => {
   const { DEFAULT_MODELS } = require('../src/lunasworkRules');
   const modelsSeen = [];
   const runClaude = async ({ args }) => {
@@ -204,6 +204,9 @@ test('createHookDeps: a reviewer set to agy runs the reviews with --model agy th
   const agy = await deps.reviews({ iteration: 3, isGate: false, runId: 'lwtest1', repoPath: os.tmpdir(), models: { reviewer: 'agy' } });
   assert.deepEqual(agy.due, ['security']);
   assert.deepEqual(modelsSeen, ['agy']);
+  modelsSeen.length = 0;
+  await deps.reviews({ iteration: 3, isGate: false, runId: 'lwtest1', repoPath: os.tmpdir(), models: { reviewer: 'agy:gemini-4-argon-medium' } });
+  assert.deepEqual(modelsSeen, ['agy:gemini-4-argon-medium']);
 
   // Any Claude choice keeps the reviews on runReviews' own default, as before.
   for (const reviewer of ['opus', 'auto', undefined]) {

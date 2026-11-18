@@ -22,7 +22,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { ROLES, MODEL_CHOICES } = require('./lunasworkRules');
+const { ROLES, isModelChoice } = require('./lunasworkRules');
 const { ALL_PHASES } = require('./lunasworkRun');
 const { publicDecisions } = require('./lunasworkDecisions');
 const { cleanWheel } = require('./lunasworkWheel');
@@ -48,8 +48,9 @@ const oneOf = (list, v) => (list.includes(v) ? v : null);
 function roleMap(raw, allowed) {
   const out = {};
   if (!isObj(raw)) return out;
+  const check = typeof allowed === 'function' ? allowed : (v) => allowed.includes(v);
   for (const role of ROLES) {
-    if (allowed.includes(raw[role])) out[role] = raw[role];
+    if (check(raw[role])) out[role] = raw[role];
   }
   return out;
 }
@@ -85,7 +86,7 @@ function publicStatus(raw, isKnownProject) {
     iteration: Number.isInteger(raw.iteration) && raw.iteration >= 0 ? raw.iteration : 0,
     phase: oneOf(ALL_PHASES, raw.phase),
     role: oneOf(ROLES, raw.role),
-    models: roleMap(raw.models, MODEL_CHOICES),
+    models: roleMap(raw.models, isModelChoice),
     modelSources: roleMap(raw.modelSources, MODEL_SOURCES),
     milestone: text(raw.milestone),
     verdict: oneOf(VERDICTS, raw.verdict),

@@ -53,6 +53,7 @@ const { MAX_PROMPT_CHARS } = require('./orchestraPlan');
 const KIT_NOTE_GAP = '\n\n';
 
 const { MODEL_RANK, AGY_MODEL, isClaudeModel, strongerModel } = require('./claudeModels');
+const { isAgyModel } = require('./workerModels');
 
 // God Mode workers run on these (orchestraPlan.js PACKAGE_MODELS).
 const WORKER_MODELS = ['sonnet', 'opus', 'fable'];
@@ -65,7 +66,7 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /**
  * A planned package's model: the strongest model any of its cards got, as a
- * God Mode worker model. No known card = the planner's own pick.
+ * God Mode worker model (or the card's agy choice). No known card = the planner's own pick.
  * @param {number[]} todoAts
  * @param {Map<number,string>} cardModels
  * @param {string|null} fallback
@@ -73,12 +74,14 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
  */
 function packageModel(todoAts, cardModels, fallback) {
   let best = null;
+  let agy = null;
   for (const at of Array.isArray(todoAts) ? todoAts : []) {
     const m = cardModels.get(at);
     if (m in MODEL_RANK && (best === null || MODEL_RANK[m] > MODEL_RANK[best])) best = m;
+    else if (agy === null && isAgyModel(m)) agy = m;
   }
-  if (best === null) return fallback;
-  return WORKER_MODELS.includes(best) ? best : 'sonnet';
+  if (best !== null) return WORKER_MODELS.includes(best) ? best : 'sonnet';
+  return agy || fallback;
 }
 
 /**

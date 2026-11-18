@@ -26,14 +26,13 @@
 import { sfx } from './sound.js';
 import { t } from './util.js';
 import { onLangChange } from './bus.js';
-import { mountLunasWorkPanel } from './lunasworkPanel.js';
+import { mountLunasWorkPanel, roleModelChoices, roleModelLabel } from './lunasworkPanel.js';
+import { agyVariantIds, refreshAgyModels } from './agyModelChoices.js';
 import { mountLunasWorkDashboard } from './lunasworkDashboard.js';
 import { mountLunasWorkAsk } from './lunasworkAsk.js';
 import { mountLunasWorkQueue } from './lunasworkQueuePanel.js';
 import { mountLunasWorkPlaytestPass } from './lunasworkPlaytestPass.js';
 
-// 'agy' is the Antigravity CLI, not a Claude model (src/claudeModels.js AGY_MODEL).
-const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', agy: 'Antigravity (agy)' };
 const SAVED_FLASH_MS = 2000;
 
 let refreshPane = null;
@@ -113,22 +112,39 @@ export function mountLunasWorkSettings(root) {
   let savedTimer = null;
   const projectId = () => el.project.value || null;
 
-  function fillModelOptions(choices) {
-    for (const select of el.selects) {
-      if (select.options.length === choices.length) continue;
-      select.replaceChildren(...choices.map((c) => {
-        const opt = document.createElement('option');
-        opt.value = c;
-        opt.textContent = c === 'auto' ? t('lw.model.auto') : MODEL_LABELS[c] || c;
-        return opt;
-      }));
-    }
+  function fillSelectOptions(select, choices, current) {
+    const opts = roleModelChoices(choices, agyVariantIds(), current);
+    select.replaceChildren(...opts.map((c) => {
+      const opt = document.createElement('option');
+      opt.value = c;
+      opt.textContent = roleModelLabel(c);
+      return opt;
+    }));
+    if (current) select.value = current;
+  }
+
+  let readingAgy = false;
+  function refreshAgyOnFocus() {
+    if (readingAgy) return;
+    readingAgy = true;
+    const before = agyVariantIds().join('\n');
+    refreshAgyModels()
+      .then((ids) => {
+        if (!state || ids.join('\n') === before) return;
+        for (const select of el.selects) {
+          fillSelectOptions(select, state.choices, select.value || state.models[select.dataset.lwRole]);
+        }
+      })
+      .finally(() => {
+        readingAgy = false;
+      });
   }
 
   function paintModels() {
     if (!state) return;
-    fillModelOptions(state.choices);
-    for (const select of el.selects) select.value = state.models[select.dataset.lwRole];
+    for (const select of el.selects) {
+      fillSelectOptions(select, state.choices, state.models[select.dataset.lwRole]);
+    }
     el.free.checked = state.freeFallback === true;
     el.freeStatus.textContent = t(state.freeFallback ? 'lw.free.on' : 'lw.free.off');
     if (hasAgySwitch) {
@@ -217,6 +233,7 @@ export function mountLunasWorkSettings(root) {
     const [settings, status] = await Promise.all([
       window.lunacore.lunasworkGetSettings(id),
       window.lunacore.lunasworkPackStatus(id),
+      refreshAgyModels(),
     ]);
     if (settings && settings.ok) state = settings;
     else show(el.error, errorText(settings));
@@ -249,6 +266,7 @@ export function mountLunasWorkSettings(root) {
   }
 
   for (const select of el.selects) {
+    select.addEventListener('focus', refreshAgyOnFocus);
     select.addEventListener('change', () => {
       sfx.modeToggle();
       save({ models: { [select.dataset.lwRole]: select.value } });

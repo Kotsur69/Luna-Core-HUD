@@ -79,7 +79,8 @@ const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
 const designMatch = require('./lunasworkDesignMatch');
 const variants = require('./lunasworkVariants');
-const { AGY_MODEL, argsUseAgy, execAgy } = require('./agyexec');
+const { argsUseAgy, execAgy } = require('./agyexec');
+const { isAgyModel } = require('./workerModels');
 
 /**
  * What a Playtester on agy loses (the run log's model reason): the adapter's
@@ -323,7 +324,7 @@ function playtestModel(mode, models) {
   if (mode === 'shipConfirm') return { model: SHIP_CONFIRM_MODEL, reason: 'SHIP confirmation pass' };
   const pick = pickModel('playtester', models, { shipConfirm: false }) || { model: FALLBACK_MODEL, reason: 'default' };
   // On agy the Claude tool lists are dropped (src/agyexec.js): say so in the run log.
-  return pick.model === AGY_MODEL ? { ...pick, reason: `${pick.reason}; ${AGY_PLAYTEST_CAVEAT}` } : pick;
+  return isAgyModel(pick.model) ? { ...pick, reason: `${pick.reason}; ${AGY_PLAYTEST_CAVEAT}` } : pick;
 }
 
 // ---- prompt -------------------------------------------------------------------------

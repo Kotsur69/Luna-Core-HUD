@@ -27,7 +27,7 @@
 'use strict';
 
 const path = require('path');
-const { PHASES, ROLES, MODEL_CHOICES, normalizeModels, normalizeStoredRun } = require('./lunasworkRules');
+const { PHASES, ROLES, isModelChoice, normalizeModels, normalizeStoredRun } = require('./lunasworkRules');
 const settingsStore = require('./lunasworkSettings');
 const { keyFor } = require('./todo');
 const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./todorows');
@@ -38,7 +38,7 @@ const { appendResult } = require('./lunasworkLighthouse');
 const { cleanLedger } = require('./lunasworkUsage');
 const { cleanTargets, cleanVariants } = require('./lunasworkVariants');
 const { cleanGuardFields } = require('./lunasworkToolGuard');
-const { WORKER_MODEL_CHOICES } = require('./claudeModels');
+const { WORKER_MODEL_CHOICES, isWorkerModelChoice } = require('./claudeModels');
 
 const PREPROD = 'preprod';
 const DONE = 'done';
@@ -192,7 +192,7 @@ function parseModelOverride(raw) {
   if (!isObj(raw)) return null;
   const out = {};
   for (const [role, choice] of Object.entries(raw)) {
-    if (!ROLES.includes(role) || !MODEL_CHOICES.includes(choice)) return null;
+    if (!ROLES.includes(role) || !isModelChoice(choice)) return null;
     out[role] = choice;
   }
   return out;
@@ -272,7 +272,7 @@ function cleanCard(raw) {
     ...(str(raw.size, 10) ? { size: str(raw.size, 10) } : {}),
     ...(acceptance.length ? { acceptance } : {}),
     ...(str(raw.verify, MAX_PATH_CHARS) ? { verify: str(raw.verify, MAX_PATH_CHARS) } : {}),
-    model: BUILDER_MODELS.includes(raw.model) ? raw.model : 'opus',
+    model: isWorkerModelChoice(raw.model) ? raw.model : 'opus',
     reason: str(raw.reason, MAX_LOG_TEXT) || 'setting',
   };
 }
@@ -284,7 +284,7 @@ function cleanLogEntry(raw) {
     n: Number.isInteger(raw.n) ? raw.n : 0,
     kind: raw.kind,
     ...(ROLES.includes(raw.role) ? { role: raw.role } : {}),
-    ...(str(raw.model, 20) ? { model: str(raw.model, 20) } : {}),
+    ...(str(raw.model, 100) ? { model: str(raw.model, 100) } : {}),
     ...(str(raw.reason, MAX_LOG_TEXT) ? { reason: str(raw.reason, MAX_LOG_TEXT) } : {}),
     ...(Number.isFinite(raw.card) ? { card: raw.card } : {}),
     ...(str(raw.text, MAX_LOG_TEXT) ? { text: str(raw.text, MAX_LOG_TEXT) } : {}),

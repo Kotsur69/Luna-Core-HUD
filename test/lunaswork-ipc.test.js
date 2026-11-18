@@ -131,9 +131,9 @@ test('getSettings returns the defaults for a fresh machine', async () => {
   s.done();
 });
 
-test('saveSettings stores agy for every role and the agyFallback switch', async () => {
+test('saveSettings stores agy and agy:<id> variants for every role and the agyFallback switch', async () => {
   const s = setup();
-  const all = Object.fromEntries(Object.keys(DEFAULT_MODELS).map((role) => [role, 'agy']));
+  const all = Object.fromEntries(Object.keys(DEFAULT_MODELS).map((role, i) => [role, i % 2 === 0 ? 'agy' : 'agy:gemini-4-argon-medium']));
   const saved = await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', models: all, agyFallback: true });
   assert.equal(saved.ok, true);
   const again = await s.ipc.invoke('lunaswork:getSettings', { projectId: 'game' });
@@ -151,7 +151,7 @@ test('saveSettings refuses a non-boolean agyFallback and look-alike agy models w
   for (const junk of ['true', 1, null, {}, ['agy']]) {
     assert.deepEqual(await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', agyFallback: junk }), { ok: false, reason: 'bad-value' }, String(junk));
   }
-  for (const model of ['AGY', 'antigravity', 'agy.exe']) {
+  for (const model of ['AGY', 'antigravity', 'agy.exe', 'agy:', 'agy:--print', 'agy:a b']) {
     assert.deepEqual(await s.ipc.invoke('lunaswork:saveSettings', { projectId: 'game', models: { builder: model } }), { ok: false, reason: 'bad-models' }, model);
   }
   // A bad model next to a good agyFallback refuses the whole save.
@@ -440,8 +440,8 @@ const RAW_STATUS = {
 };
 
 test('publicStatus keeps known roles, models, phases and projects only, and hides paths', () => {
-  const out = publicStatus(RAW_STATUS, (id) => id === 'game');
-  assert.deepEqual(out.models, { builder: 'sonnet' });
+  const out = publicStatus({ ...RAW_STATUS, models: { ...RAW_STATUS.models, director: 'agy:gemini-4-argon-medium', reviewer: 'agy:--bad' } }, (id) => id === 'game');
+  assert.deepEqual(out.models, { director: 'agy:gemini-4-argon-medium', builder: 'sonnet' });
   assert.deepEqual(out.modelSources, { builder: 'run' });
   assert.equal(out.phase, 'building');
   assert.equal(out.role, 'builder');

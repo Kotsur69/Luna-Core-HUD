@@ -26,12 +26,19 @@
 
 const path = require('path');
 const { AGY_MODEL } = require('./claudeModels');
+const { agyModelIdOf } = require('./workerModels');
 
 const ROLES = ['director', 'builder', 'playtester', 'critic', 'reviewer', 'researcher'];
-// 'fable' and 'agy' are manual choices only: `auto` never picks them (autoModel below).
-// 'agy' runs the role on the Antigravity CLI (src/agyexec.js; the Builder's
+// 'fable' and 'agy' (plus 'agy:<id>' variants from `agy models`) are manual choices only:
+// `auto` never picks them (autoModel below).
+// 'agy' / 'agy:<id>' runs the role on the Antigravity CLI (src/agyexec.js; the Builder's
 // God Mode run plans and works on agy, src/lunasworkBuild.js).
 const MODEL_CHOICES = ['opus', 'sonnet', 'haiku', 'fable', AGY_MODEL, 'auto'];
+
+/** True for one of MODEL_CHOICES or a well-formed 'agy:<id>' variant. */
+function isModelChoice(value) {
+  return typeof value === 'string' && (MODEL_CHOICES.includes(value) || agyModelIdOf(value) !== null);
+}
 // Mati's standard (2026-10-22): director + builders opus, playtester sonnet.
 // Critic and reviewers are Luna's defaults for the roles he did not name.
 const DEFAULT_MODELS = Object.freeze({
@@ -73,7 +80,7 @@ function normalizeModels(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const out = { ...DEFAULT_MODELS };
   for (const role of ROLES) {
-    if (MODEL_CHOICES.includes(src[role])) out[role] = src[role];
+    if (isModelChoice(src[role])) out[role] = src[role];
   }
   return out;
 }
@@ -612,6 +619,7 @@ module.exports = {
   timeToShip,
   ROLES,
   MODEL_CHOICES,
+  isModelChoice,
   DEFAULT_MODELS,
   PHASES,
   STEP_BACK_EVERY,

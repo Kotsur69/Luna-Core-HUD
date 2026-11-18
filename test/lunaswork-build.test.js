@@ -242,9 +242,10 @@ test('wrapPlanner gives each package the strongest model of its cards, only duri
   await building;
 });
 
-test('packageModel: haiku is not a God Mode worker model; no known card keeps the planner pick', () => {
+test('packageModel: haiku is not a God Mode worker model; agy:<id> cards keep their variant; no known card keeps the planner pick', () => {
   assert.equal(packageModel([1], new Map([[1, 'haiku']]), 'opus'), 'sonnet');
   assert.equal(packageModel([1, 2], new Map([[1, 'haiku'], [2, 'opus']]), 'sonnet'), 'opus');
+  assert.equal(packageModel([1], new Map([[1, 'agy:gemini-4-argon-medium']]), 'sonnet'), 'agy:gemini-4-argon-medium');
   assert.equal(packageModel([3], new Map([[1, 'opus']]), 'sonnet'), 'sonnet');
   assert.deepEqual(planCard({ at: 5, text: 't', reason: 'x', tags: ['a'] }), { at: 5, text: 't' });
 });

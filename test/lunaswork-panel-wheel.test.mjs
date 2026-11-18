@@ -51,3 +51,20 @@ test('waitLine: limit wait, error retry with its count, and God Mode busy read d
   assert.equal(waitLine(run({ waitUntil: 5, waitReason: 'godModeBusy' }), at).key, 'lw.run.godModeBusy');
   assert.equal(waitLine(run({}), at), null);
 });
+
+test('roleModelChoices and roleModelLabel: live agy variants follow plain agy, saved variant stays offered', async () => {
+  const { roleModelChoices, roleModelLabel } = await import('../src/renderer/modules/lunasworkPanel.js');
+  const base = ['opus', 'sonnet', 'haiku', 'fable', 'agy', 'auto'];
+  const argon = 'agy:gemini-4-argon-medium';
+  const flash = 'agy:gemini-3.8-flash-low';
+  assert.deepEqual(roleModelChoices(base, [flash, argon, 'agy:--bad', 'opus'], 'opus'), [
+    'opus', 'sonnet', 'haiku', 'fable', 'agy', flash, argon, 'auto',
+  ]);
+  assert.deepEqual(roleModelChoices(base, [], argon), [
+    'opus', 'sonnet', 'haiku', 'fable', 'agy', argon, 'auto',
+  ]);
+  assert.deepEqual(roleModelChoices(base, null, null), base);
+  assert.equal(roleModelLabel('opus'), 'Opus');
+  assert.equal(roleModelLabel('agy'), 'Antigravity (agy)');
+  assert.equal(roleModelLabel(argon), 'Antigravity - gemini-4-argon-medium');
+});

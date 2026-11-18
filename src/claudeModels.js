@@ -28,7 +28,7 @@ const MODEL_RANK = Object.freeze(Object.fromEntries(CLAUDE_MODELS.map((m, i) => 
 // worker model, a task card's model) and never in CLAUDE_MODELS, so no
 // `claude --model` flag ever carries it. Defined in src/workerModels.js, which
 // also holds every product name.
-const { AGY_MODEL, MODEL_NAMES } = require('./workerModels');
+const { AGY_MODEL, MODEL_NAMES, agyModelIdOf } = require('./workerModels');
 
 const MODEL_LABELS = Object.freeze(Object.fromEntries(CLAUDE_MODELS.map((m) => [m, MODEL_NAMES[m]])));
 
@@ -40,9 +40,9 @@ function isClaudeModel(model) {
   return CLAUDE_MODELS.includes(model);
 }
 
-/** True for a Claude alias or agy: a valid worker-model choice. */
+/** True for a Claude alias or agy (including 'agy:<id>'): a valid worker-model choice. */
 function isWorkerModelChoice(model) {
-  return WORKER_MODEL_CHOICES.includes(model);
+  return typeof model === 'string' && (WORKER_MODEL_CHOICES.includes(model) || agyModelIdOf(model) !== null);
 }
 
 /**

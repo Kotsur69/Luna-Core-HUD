@@ -29,6 +29,8 @@ import { t } from './util.js';
 import { sfx } from './sound.js';
 import { onLangChange } from './bus.js';
 import { sparkPoints } from './spark.js';
+import { AGY_MODEL, agyModelIdOf, agyModelLabel } from '../../workerModels.js';
+import { agyChoiceName, agyVariantIds, refreshAgyModels } from './agyModelChoices.js';
 
 // 'agy' is the Antigravity CLI, not a Claude model (src/claudeModels.js AGY_MODEL).
 const MODEL_LABELS = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', agy: 'Antigravity (agy)' };
@@ -124,8 +126,36 @@ function el(tag, cls, text) {
   return node;
 }
 
+/**
+ * The ids a role-model select offers: main's base choices with the live agy
+ * variants right after plain 'agy', plus `current` when it is an agy variant
+ * the live list does not hold (so a saved pick stays visible and selected).
+ * @param {string[]} choices main's MODEL_CHOICES
+ * @param {string[]} variants 'agy:<id>' ids from main's `agy models` list
+ * @param {string|null} [current]
+ * @returns {string[]}
+ */
+export function roleModelChoices(choices, variants, current = null) {
+  const base = Array.isArray(choices) ? choices : [];
+  const live = (Array.isArray(variants) ? variants : []).filter((v) => agyModelIdOf(v) !== null);
+  if (agyModelIdOf(current) !== null && !live.includes(current)) live.push(current);
+  const out = [];
+  for (const id of base) {
+    out.push(id);
+    if (id === AGY_MODEL) out.push(...new Set(live));
+  }
+  return out;
+}
+
+/** Display name for a role model choice: product name, live agy name, or 'auto'. */
+export function roleModelLabel(model) {
+  if (model === 'auto') return t('lw.model.auto');
+  if (Object.prototype.hasOwnProperty.call(MODEL_LABELS, model)) return MODEL_LABELS[model];
+  return agyChoiceName(model) || agyModelLabel(model) || String(model || '');
+}
+
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-const modelLabel = (m) => (m === 'auto' ? t('lw.model.auto') : MODEL_LABELS[m] || m);
+const modelLabel = roleModelLabel;
 
 /** Localized text for a refused call. */
 function reasonText(res) {
@@ -357,6 +387,32 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     dialogBlocker = null;
   }
 
+  function fillDialogSelect(select, choices, current) {
+    select.replaceChildren(...roleModelChoices(choices, agyVariantIds(), current).map((choice) => {
+      const opt = el('option', '', modelLabel(choice));
+      opt.value = choice;
+      return opt;
+    }));
+    select.value = current;
+  }
+
+  let readingDialogAgy = false;
+  function refreshDialogAgyOnFocus() {
+    if (readingDialogAgy) return;
+    readingDialogAgy = true;
+    const before = agyVariantIds().join('\n');
+    refreshAgyModels()
+      .then((ids) => {
+        if (!dialogView || ui.dialog.hidden || ids.join('\n') === before) return;
+        for (const select of ui.dialogModels.querySelectorAll('[data-lw-run-role]')) {
+          fillDialogSelect(select, dialogView.choices, select.value);
+        }
+      })
+      .finally(() => {
+        readingDialogAgy = false;
+      });
+  }
+
   function paintDialog(view, blocker) {
     const effective = effectiveModels(view);
     const sources = modelSources(view);
@@ -364,12 +420,8 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
       const label = el('label', 'ui-field');
       const select = el('select', 'profile-select');
       select.dataset.lwRunRole = role;
-      for (const choice of view.choices) {
-        const opt = el('option', '', modelLabel(choice));
-        opt.value = choice;
-        select.append(opt);
-      }
-      select.value = effective[role];
+      fillDialogSelect(select, view.choices, effective[role]);
+      select.addEventListener('focus', refreshDialogAgyOnFocus);
       const name = el('span', 'ui-field__label', t(`lw.role.${role}`));
       label.append(name, select, el('span', 'termcustom__hint', t(`lw.source.${sources[role]}`)));
       return label;
@@ -391,6 +443,7 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     const [view, pack] = await Promise.all([
       window.lunacore.lunasworkGetSettings(id),
       window.lunacore.lunasworkPackStatus(id),
+      refreshAgyModels(),
     ]);
     if (!view || !view.ok) return setMsg(ui.error, reasonText(view), 'bad');
     dialogView = view;
@@ -493,6 +546,7 @@ export function mountLunasWorkPanel(root, { projectId, projectLabel }) {
     paint();
     if (dialogView && !ui.dialog.hidden) paintDialog(dialogView, dialogBlocker);
   });
+  refreshAgyModels().then(() => paint());
   loadStatus();
 
   return {

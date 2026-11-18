@@ -229,7 +229,7 @@ function rollbacks(run) {
 function modelChoices(run) {
   return list(run.log)
     .filter((e) => e.kind === 'model')
-    .map((e) => `Iteration ${e.n}, ${oneLine(e.role, 20)}: ${oneLine(e.model, 20)} (${oneLine(e.reason || 'setting', 160)})${Number.isFinite(e.card) ? `, card ${e.card}` : ''}`);
+    .map((e) => `Iteration ${e.n}, ${oneLine(e.role, 20)}: ${oneLine(e.model, 100)} (${oneLine(e.reason || 'setting', 160)})${Number.isFinite(e.card) ? `, card ${e.card}` : ''}`);
 }
 
 function decisions(run) {

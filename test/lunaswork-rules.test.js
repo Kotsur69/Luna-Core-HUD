@@ -72,14 +72,17 @@ test('pickModel returns null for an unknown role', () => {
 
 // ---- Antigravity (agy) as a role choice ----------------------------------------------
 
-test('MODEL_CHOICES offers agy (the shared AGY_MODEL constant) for every role', () => {
+test('MODEL_CHOICES offers agy (the shared AGY_MODEL constant) and agy:<id> variants for every role', () => {
   const { AGY_MODEL } = require('../src/claudeModels');
   assert.equal(AGY_MODEL, 'agy');
   assert.ok(rules.MODEL_CHOICES.includes(AGY_MODEL));
   assert.equal(rules.ROLES.length, 6);
-  const all = Object.fromEntries(rules.ROLES.map((r) => [r, 'agy']));
-  assert.deepEqual(rules.normalizeModels(all), all);
-  for (const role of rules.ROLES) assert.deepEqual(rules.pickModel(role, all, { gate: true, size: 'L' }), { model: 'agy', reason: 'setting' }, role);
+  for (const choice of ['agy', 'agy:gemini-4-argon-medium', 'agy:claude-opus-5-5-thinking']) {
+    assert.equal(rules.isModelChoice(choice), true, choice);
+    const all = Object.fromEntries(rules.ROLES.map((r) => [r, choice]));
+    assert.deepEqual(rules.normalizeModels(all), all);
+    for (const role of rules.ROLES) assert.deepEqual(rules.pickModel(role, all, { gate: true, size: 'L' }), { model: choice, reason: 'setting' }, `${role} ${choice}`);
+  }
 });
 
 test('agy next to Claude choices: each role keeps its own pick', () => {
@@ -89,9 +92,10 @@ test('agy next to Claude choices: each role keeps its own pick', () => {
   assert.equal(rules.pickModel('playtester', models, {}).model, rules.DEFAULT_MODELS.playtester);
 });
 
-test('look-alike agy values are rejected and fall back to the defaults', () => {
-  const bad = ['AGY', 'Agy', 'agy.exe', ' agy', 'antigravity', 'gemini', 'agy;rm', ['agy'], { agy: true }, 1];
+test('look-alike agy values and malformed agy:<id> variants are rejected and fall back to the defaults', () => {
+  const bad = ['AGY', 'Agy', 'agy.exe', ' agy', 'antigravity', 'gemini', 'agy;rm', 'agy:', 'agy:--print', 'agy:a b', `agy:${'a'.repeat(81)}`, 'AGY:x', ['agy'], { agy: true }, 1];
   for (const value of bad) {
+    assert.equal(rules.isModelChoice(value), false, String(value));
     const models = Object.fromEntries(rules.ROLES.map((r) => [r, value]));
     assert.deepEqual(rules.normalizeModels(models), rules.DEFAULT_MODELS, String(value));
   }
