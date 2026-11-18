@@ -15,9 +15,8 @@
 
 const { ORCHESTRA_WORKER_MODELS } = require('./uiprefs');
 const { claudeModelOf } = require('./orchestraWorkers');
-
 /** The run model nobody chose: today's default. */
-const DEFAULT_WORKER_MODEL = 'opus';
+const { DEFAULT_WORKER_MODEL } = require('./workerModels');
 /** A 'plan' run package the planner gave no model runs here. */
 const PLAN_FALLBACK_MODEL = 'opus';
 

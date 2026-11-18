@@ -119,12 +119,11 @@ test('God Mode worker / planner model settings accept fable; defaults did not mo
 
 test('the renderer copies match the main-side lists', () => {
   assert.deepEqual(listIn(src('renderer/modules/orchestraPick.js'), 'PLANNER_MODELS'), [...plan.PLANNER_MODELS]);
-  assert.deepEqual(listIn(src('renderer/modules/orchestrasettings.js'), 'MODELS'), uiprefs.ORCHESTRA_WORKER_MODELS);
+  // The worker-model select is built from src/workerModels.js (test/worker-models.test.js).
+  assert.match(src('renderer/modules/orchestrasettings.js'), /from '\.\.\/\.\.\/workerModels\.js'/);
   const html = src('renderer/index.html');
   const select = /<select id="orchestra-worker-model"[\s\S]*?<\/select>/.exec(html)[0];
-  const values = [...select.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(values, uiprefs.ORCHESTRA_WORKER_MODELS);
-  assert.match(select, /<option value="fable">Fable<\/option>/);
+  assert.doesNotMatch(select, /<option/);
 });
 
 test('new picker strings exist in pl and en', () => {

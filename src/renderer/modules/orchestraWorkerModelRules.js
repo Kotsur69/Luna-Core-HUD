@@ -4,24 +4,24 @@
 // The run's worker model choices and the model each package card's badge
 // shows. packageModelOf mirrors src/orchestraWorkerModel.js packageModelOf
 // (the renderer cannot require main-side modules); test/orchestra-worker-model.test.js
-// runs both over the same cases. No DOM, no imports: node --test reads it directly.
+// runs both over the same cases. No DOM; its only import is the pure shared
+// list (src/workerModels.js), so node --test reads it directly.
 // ============================================================================
 
 'use strict';
 
-/** src/uiprefs.js ORCHESTRA_WORKER_MODELS. Main allow-lists the choice again. */
-export const WORKER_MODELS = ['opus', 'sonnet', 'fable', 'agy', 'plan'];
-export const DEFAULT_WORKER_MODEL = 'opus';
+import { WORKER_MODELS, MODEL_NAMES, DEFAULT_WORKER_MODEL, AGY_MODEL, isWorkerModel, isAgyModel } from '../../workerModels.js';
+
+/** The shared list (src/workerModels.js). Main allow-lists the choice again. */
+export { WORKER_MODELS, DEFAULT_WORKER_MODEL };
 /** A 'plan' run package the planner gave no model runs here (main does the same). */
 const PLAN_FALLBACK_MODEL = 'opus';
 /** src/orchestraWorkers.js FREE_PACKAGE_CLAUDE_MODEL: a hybrid "free" package's Claude model. */
 const FREE_PACKAGE_CLAUDE_MODEL = 'sonnet';
-/** Product names of the models a worker can run on (agy = the Antigravity CLI). */
-const MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', fable: 'Fable', haiku: 'Haiku', agy: 'Antigravity' };
 
 /** One of WORKER_MODELS, else null. */
 export function normalizeWorkerModel(value) {
-  return WORKER_MODELS.includes(value) ? value : null;
+  return isWorkerModel(value) ? value : null;
 }
 
 /**
@@ -56,8 +56,8 @@ export function badgeModelOf(pkg, workerModel, workers) {
   const override = pkg && typeof pkg.modelOverride === 'string' && pkg.modelOverride;
   if (workers === 'hybrid' && pkg && pkg.model === 'free' && !override) return 'free';
   // Antigravity (src/orchestraAgy.js packageRunsAgy): an agy run, or a hybrid agy pick not handed over.
-  if (workers === 'agy') return 'agy';
-  if (workers === 'hybrid' && pkg && pkg.model === 'agy' && !override) return 'agy';
+  if (workers === 'agy') return AGY_MODEL;
+  if (workers === 'hybrid' && pkg && isAgyModel(pkg.model) && !override) return AGY_MODEL;
   return packageModelOf(pkg, workerModel);
 }
 

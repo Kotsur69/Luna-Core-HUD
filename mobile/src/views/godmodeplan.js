@@ -19,13 +19,12 @@ import { h } from '../dom.js';
 import { t, tf } from '../i18n.js';
 import { godmodePlansFrom } from '../snapmodel.js';
 import { hostForMachine } from '../godmodestart.js';
-import { INTEGRATION_MODES, WORKER_MODELS, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
+import { INTEGRATION_MODES, WORKER_MODELS, WORKER_MODEL_NAMES, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
 import { confirmSheet } from './sheet.js';
 
 const INTEGRATION_KEY = { pr: 'gmIntegrationPr', merge: 'gmIntegrationMerge', branches: 'gmIntegrationBranches' };
-/** Product names; 'plan' = each package on the planner's pick. */
-const WORKER_MODEL_NAMES = { opus: 'Opus', sonnet: 'Sonnet', fable: 'Fable', agy: 'Antigravity' };
-const workerModelName = (m) => (m === 'plan' ? t('gmWorkerModelPlan') : WORKER_MODEL_NAMES[m] || m);
+/** Product name (src/workerModels.js); the nameless 'plan' = each package on the planner's pick. */
+const workerModelName = (m) => (Object.hasOwn(WORKER_MODEL_NAMES, m) ? WORKER_MODEL_NAMES[m] : m === 'plan' ? t('gmWorkerModelPlan') : m);
 
 const planKey = (plan) => `${plan.machine.toLowerCase()}|${plan.projectId}`;
 /** A DOM id from free text. */

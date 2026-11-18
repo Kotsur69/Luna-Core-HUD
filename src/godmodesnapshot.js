@@ -43,7 +43,7 @@
 // that has one not started yet (src/hostgodmode.js plans()): {planId,
 // projectId, repoName, state: planning|ready|failed, errors, packages:
 // [{id, title, deps, model}], todos: the picked to-do titles, workerModel:
-// the run's worker model (opus|sonnet|fable|plan, null when unknown)}. Text
+// the run's worker model (one of src/workerModels.js WORKER_MODELS, null when unknown)}. Text
 // only, paths scrubbed from errors. The phone launches a ready plan by its ids.
 // ============================================================================
 
@@ -52,14 +52,14 @@
 const { needsFromReport } = require('./godmodeneeds');
 const { publicDecisions } = require('./lunasworkDecisions');
 const { publicFeedback } = require('./lunasworkFeedback');
+const { WORKER_MODELS } = require('./workerModels');
 
 const VERSION = 2;
 /** Row versions a reader accepts: v1 rows (no hub lines) still parse. */
 const READ_VERSIONS = new Set([1, 2]);
 const isKnownVersion = (v) => READ_VERSIONS.has(v);
-// src/uiprefs.js ORCHESTRA_WORKER_MODELS (this file also runs on the phone,
-// which cannot require uiprefs; test/orchestra-worker-model.test.js keeps them in line).
-const PLAN_WORKER_MODELS = ['opus', 'sonnet', 'fable', 'agy', 'plan'];
+// The God Mode worker models (src/workerModels.js, which the phone bundles too).
+const PLAN_WORKER_MODELS = WORKER_MODELS;
 const HUB_MAX_LINES = 10;
 const HUB_MAX_LINE = 200;
 const MACHINE_RE = /^[A-Za-z0-9-]{1,63}$/;

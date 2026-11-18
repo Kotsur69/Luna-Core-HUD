@@ -2284,13 +2284,8 @@
               <h3 class="termcustom__section" data-i18n="orchset.section">God Mode v2 - workery</h3>
               <label class="ui-field" data-i18n-title="orchset.model.hint" title="Model kazdego workera. Plan = model wybrany przez planiste dla danej paczki.">
                 <span class="ui-field__label" data-i18n="orchset.model">Model workerow</span>
-                <select id="orchestra-worker-model" class="profile-select">
-                  <option value="opus">Opus</option>
-                  <option value="sonnet">Sonnet</option>
-                  <option value="fable">Fable</option>
-                  <option value="agy">Antigravity</option>
-                  <option value="plan" data-i18n="orchset.model.plan">Wg planu</option>
-                </select>
+                <!-- Options are built from src/workerModels.js (orchestrasettings.js). -->
+                <select id="orchestra-worker-model" class="profile-select"></select>
               </label>
               <label class="ui-field" data-i18n-title="orchset.effort.hint" title="Poziom --effort kazdego workera. Wg planu = poziom wybrany przez planiste (medium, gdy brak). Nigdy ponizej medium.">
                 <span class="ui-field__label" data-i18n="orchset.effort">Wysilek workerow</span>
