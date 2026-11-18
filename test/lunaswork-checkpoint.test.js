@@ -19,14 +19,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { removeDir } = require('../test-support/under-load');
+const { removeDir, patientGit } = require('../test-support/under-load');
 
 const {
   tagName,
   rolledBackTagName,
   forbiddenGit,
   guardedGit,
-  execGit,
   parseLog,
   revertArgs,
   regressedJourneys,
@@ -100,12 +99,22 @@ function fixupCommit(repo, text) {
 
 const originMain = (origin) => git(origin, 'rev-parse', 'refs/heads/main');
 
-/** The real runner, recording every args list. `override` may answer a call instead. */
+/**
+ * execGit's {ok, out, err} shape (out trimmed) with test-support's patient cap:
+ * under load one real git call has taken longer than execGit's 60 s, and a
+ * timed-out tag read made a correct rollback answer `noGoodTag`.
+ */
+async function patientExecGit(cwd, args) {
+  const res = await patientGit(cwd, args);
+  return { ok: res.ok, out: res.out.trim(), err: res.err };
+}
+
+/** The real runner (patient cap), recording every args list. `override` may answer a call instead. */
 function recorder(override) {
   return async (cwd, args) => {
     issued.push([...args]);
     const answer = override ? override(args) : null;
-    return answer || execGit(cwd, args);
+    return answer || patientExecGit(cwd, args);
   };
 }
 
@@ -355,7 +364,7 @@ junctionTest('the temporary revert worktree: a node_modules junction is unlinked
   const run = async (cwd, args) => {
     issued.push([...args]);
     if (args[0] === 'push' && args.includes('HEAD:refs/heads/main')) return { ok: false, out: '', err: 'rejected (fetch first)' };
-    const res = await execGit(cwd, args);
+    const res = await patientExecGit(cwd, args);
     if (res.ok && args[0] === 'worktree' && args[1] === 'add') {
       const link = path.join(args[args.length - 2], 'node_modules');
       fs.symlinkSync(target, link, 'junction');
