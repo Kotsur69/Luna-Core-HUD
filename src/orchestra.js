@@ -39,6 +39,7 @@ const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer, ABORT_FINISH_AFTER_MS, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
+const workerBrief = require('./workerBrief');
 const followupLaunch = require('./orchestraFollowupsLaunch');
 const { normalizeFollowupEntries, followupBriefLines } = require('./orchestraFollowups');
 const pushSecrets = require('./pushSecrets');
@@ -109,6 +110,9 @@ function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, ex
   };
 }
 
+// LunaCore's own folder under userDir() for worker launch files that are not
+// briefs (the plan workers' --mcp-config). Briefs live in the worker's cwd
+// (src/workerBrief.js).
 const BRIEF_DIR = 'tasks';
 // A turn end and the usage-limit error that ended it arrive in one transcript
 // fragment, the limit second; the nudge waits this long so the pause can
@@ -364,7 +368,7 @@ function runPackage(p) {
  * @param {{
  *   runPlanner: Function, addWorktree: Function, createSession: Function,
  *   readTodos: Function, dirtyCount: Function, writeBrief: Function,
- *   briefDir: () => string, now?: () => number,
+ *   removeBrief?: (file:string) => boolean, now?: () => number,
  *   finishPackage?: Function, headSha?: Function, writePty?: Function,
  *   sessionAlive?: Function, tickTodos?: Function, workerSettings?: Function, workerTools?: Function,
  *   saveState?: Function, loadState?: Function, onChange?: Function, onLive?: Function,
@@ -485,7 +489,7 @@ function createOrchestra(deps) {
     getPlan: () => plan,
     createSession: (opts) => deps.createSession(opts),
     writeBrief: (file, text) => deps.writeBrief(file, text),
-    briefDir: () => deps.briefDir(),
+    removeBrief: (file) => (typeof deps.removeBrief === 'function' ? deps.removeBrief(file) : false),
     closeSession: (id) => closeSession(id),
     sessionAlive: (id) => sessionAlive(id),
     // The run's (frozen) worker model and permission mode; 'plan' has no single model -> CLI default.
@@ -1666,7 +1670,7 @@ function createOrchestra(deps) {
     const baseSha = await headSha(wt.root);
     // After any dependency merges: the branch has no own work beyond this yet.
     if (baseSha) made.base = baseSha;
-    const briefPath = path.join(deps.briefDir(), `${path.basename(wt.root)}.md`);
+    const briefPath = briefPathFor(wt.cwd, wt.root);
     const where = { branch: wt.branch, root: wt.root, cwd: wt.cwd, briefPath, baseSha, depMerge };
     // The worktree's own dependencies, before the worker starts. A failed
     // install keeps the worktree (Retry installs again) and stalls the package.
@@ -1685,12 +1689,45 @@ function createOrchestra(deps) {
    * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
    */
   function startWorker(pkg, where) {
-    if (!deps.writeBrief(where.briefPath, runBrief(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
+    if (!where.briefPath || !deps.writeBrief(where.briefPath, runBrief(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
       return { ...where, state: 'failed', error: 'briefFailed' };
     }
-    const session = openTab(pkg, where.cwd, where.branch, where.briefPath);
+    // Same folder briefPathFor() used: the first message names the brief relative to it.
+    const session = openTab(pkg, where.cwd || where.root, where.branch, where.briefPath);
     if (!session) return { ...where, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
+  }
+
+  /**
+   * A worker's brief file: inside the folder its tab starts in
+   * (src/workerBrief.js), named after its worktree. Always recomputed, never
+   * taken from the saved run, so only that folder is ever written to.
+   * @param {string|null} cwd the tab's cwd (null: the worktree root)
+   * @param {string} root the package worktree
+   * @returns {string|null} null when the folder is unusable (callers fail with briefFailed)
+   */
+  function briefPathFor(cwd, root) {
+    try {
+      return workerBrief.briefPathIn(cwd || root, path.basename(String(root || '')));
+    } catch (err) {
+      log(`[orchestra] no brief path for ${String(root)}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Deletes a package's brief (finished or discarded run); never throws. The
+   * path is recomputed from the worktree, never taken from the saved run.
+   */
+  function dropBrief(pkg) {
+    if (!pkg || !pkg.root || typeof deps.removeBrief !== 'function') return;
+    const file = briefPathFor(pkg.cwd, pkg.root);
+    if (!file) return;
+    try {
+      deps.removeBrief(file);
+    } catch (err) {
+      log(`[orchestra] brief of ${pkg.id} not removed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /** briefText with this run's follow-up option: every worker brief of the run goes through here. */
@@ -2267,10 +2304,10 @@ function createOrchestra(deps) {
    */
   function reopenInWorktree(pkg, text) {
     if (!depsReady(pkg)) return { ok: false, error: 'noNodeModules' };
-    // Recomputed, never taken from the saved run: only LunaCore's own
+    // Recomputed, never taken from the saved run: only the worktree's own
     // brief folder is ever written to.
-    const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
-    if (!deps.writeBrief(briefPath, text)) return { ok: false, error: 'briefFailed' };
+    const briefPath = briefPathFor(pkg.cwd, pkg.root);
+    if (!briefPath || !deps.writeBrief(briefPath, text)) return { ok: false, error: 'briefFailed' };
     const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath);
     if (!session) return { ok: false, error: 'noTab' };
     const old = pkg.sessionId;
@@ -2290,8 +2327,8 @@ function createOrchestra(deps) {
     if (!transcriptId) return { ok: false, error: 'noTranscript' };
     if (!depsReady(pkg)) return { ok: false, error: 'noNodeModules' };
     // The brief stays readable (and current) should the worker look again.
-    const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
-    if (!deps.writeBrief(briefPath, runBrief(pkg, pkg.branch, { resume: true }))) return { ok: false, error: 'briefFailed' };
+    const briefPath = briefPathFor(pkg.cwd, pkg.root);
+    if (!briefPath || !deps.writeBrief(briefPath, runBrief(pkg, pkg.branch, { resume: true }))) return { ok: false, error: 'briefFailed' };
     const session = safeOpenTab(pkg, pkg.cwd || pkg.root, pkg.branch, briefPath, { resumeId: transcriptId, resumeMessage: text });
     if (!session) return { ok: false, error: 'noTab' };
     // Main could not build a --resume command (a profile that decides its own
@@ -2366,9 +2403,9 @@ function createOrchestra(deps) {
    */
   function escalate(pkg, reason, detail) {
     if (!depsReady(pkg)) return false;
-    const briefPath = path.join(deps.briefDir(), `${path.basename(pkg.root)}.md`);
+    const briefPath = briefPathFor(pkg.cwd, pkg.root);
     const text = resumeBrief(pkg, { escalation: { reason, detail } });
-    if (!deps.writeBrief(briefPath, text)) return false;
+    if (!briefPath || !deps.writeBrief(briefPath, text)) return false;
     const old = pkg.sessionId;
     // New tab first: closing the old one first could leave main opening an
     // empty replacement tab when it was the last one.
@@ -2615,6 +2652,8 @@ function createOrchestra(deps) {
   function landPushed(id) {
     const pkg = findPkg(id);
     patch(id, { state: 'pushed', terminal: false });
+    // The package is finished: its brief goes. Every later reopen writes a fresh one.
+    dropBrief(pkg);
     // A plan doc: copied next to the report; PLAN.md's tasks sized (one split round).
     if (pkg.planRun && onPlanDocPushed(id)) {
       commit();
@@ -3224,7 +3263,8 @@ function createOrchestra(deps) {
     const p = findPkg(id);
     if (p.heldLaunch) {
       const before = p;
-      const result = startWorker(p, { branch: p.branch, root: p.root, cwd: p.cwd, briefPath: p.briefPath, baseSha: p.baseSha, depMerge: p.depMerge || null });
+      // The brief path is recomputed: a run saved by an older LunaCore kept it outside the worktree.
+      const result = startWorker(p, { branch: p.branch, root: p.root, cwd: p.cwd, briefPath: briefPathFor(p.cwd, p.root), baseSha: p.baseSha, depMerge: p.depMerge || null });
       if (result.state === 'failed') {
         // The worktree stays recorded: the automatic relaunch clears it first.
         patch(id, { ...result, heldLaunch: false, failure: failureOf(result, null, now()) });
@@ -3375,6 +3415,8 @@ function createOrchestra(deps) {
     if (plan && plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
     clearAllTimers();
     if (plan && deps.revokeRunFollowups) revokeQuietly(() => deps.revokeRunFollowups(plan.id));
+    // A worktree kept after the run (stalled, killed, closed) loses its brief with the run.
+    if (plan) for (const p of plan.packages) dropBrief(p);
     plan = null;
     commit();
     return { ok: true };

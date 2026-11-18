@@ -90,7 +90,7 @@ test('Approve launches only dependency-free packages, max 3, each in its own wor
   const brief = log.briefs.get(first.task.briefPath);
   assert.match(brief, /edited a/, 'the review edit reaches the brief');
   assert.match(brief, /LUNA_DONE a/);
-  assert.equal(path.dirname(first.task.briefPath), path.join('/cfg/tasks'));
+  assert.equal(path.dirname(first.task.briefPath), path.join(first.cwd, '.luna-brief'), 'inside the worktree cwd');
   assert.equal(res.plan.packages[4].prompt, 'not launched', 'edits apply to pending packages only when launched');
 });
 
@@ -148,10 +148,10 @@ test('briefText wraps the planner prompt in LunaCore\'s own contract', () => {
 
 // ---- launch.js: withTaskBrief -------------------------------------------------------
 
-test('withTaskBrief puts the first message right after the binary and grants the brief folder', () => {
+test('withTaskBrief puts the first message right after the binary and adds no --add-dir for the brief', () => {
   assert.equal(
     withTaskBrief('claude --allowedTools Read Edit', { briefPath: 'C:\\cfg\\tasks\\a.md', model: 'opus' }),
-    "claude 'Your task brief is in the file `C:\\cfg\\tasks\\a.md` - read it first, then carry it out.' --allowedTools Read Edit --add-dir 'C:\\cfg\\tasks' --model opus",
+    "claude 'Your task brief is in the file `C:\\cfg\\tasks\\a.md` - read it first, then carry it out.' --allowedTools Read Edit --model opus",
   );
 });
 

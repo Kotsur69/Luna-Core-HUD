@@ -63,7 +63,6 @@
 
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 const settingsStore = require('./lunasworkSettings');
 const pack = require('./lunasworkPack');
@@ -76,6 +75,7 @@ const { RUN_ID_RE } = require('./lunasworkWheel');
 const { dashboardView, readScreenshot } = require('./lunasworkDashboardView');
 const { cleanQuestion } = require('./lunasworkAskModel');
 const queueStore = require('./lunasworkQueue');
+const { briefPathIn, writeWorkerBrief } = require('./workerBrief');
 
 const MAX_ID_CHARS = 200;
 // A steer card is one line typed into the dashboard, so it keeps its own
@@ -171,19 +171,14 @@ function fieldOf(reason) {
   return /adapter/.test(String(reason || '')) ? 'adapter' : 'profile';
 }
 
+/** The interview brief goes into the project folder, git-excluded (src/workerBrief.js). */
 function defaultWriteBrief(file, text) {
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
-    return true;
-  } catch {
-    return false;
-  }
+  return writeWorkerBrief(file, text);
 }
 
 /**
  * @param {{ipcMain:object, projects:()=>object[], createSession:(opts:object)=>object|null,
- *   briefDir:()=>string, controller?:{start:Function, stop:Function, status:Function, subscribe:Function},
+ *   controller?:{start:Function, stop:Function, status:Function, subscribe:Function},
  *   send?:(channel:string, payload:object)=>void,
  *   todos?:{read:(projectId:string)=>object[], write:(projectId:string, list:object[])=>boolean, changed:(projectId:string)=>void},
  *   runsRoot?:()=>string, openPath?:(dir:string)=>Promise<string>|string,
@@ -200,7 +195,6 @@ function registerLunasworkIpc(deps) {
     ipcMain,
     projects,
     createSession,
-    briefDir,
     controller,
     send,
     todos,
@@ -341,9 +335,11 @@ function registerLunasworkIpc(deps) {
     if (!scaffold.ok) return { ok: false, reason: 'scaffold-failed' };
     // The id names a file: keep it to a safe slug whatever projects.json holds.
     const slug = project.id.replace(/[^A-Za-z0-9_-]/g, '_');
-    const briefPath = path.join(briefDir(), `lunaswork-interview-${slug}.md`);
+    // Inside the folder the tab starts in (src/workerBrief.js): no --add-dir,
+    // so Claude Code asks no "new directory" trust question.
+    const briefPath = briefPathIn(repo, `lunaswork-interview-${slug}`);
     if (!writeBrief(briefPath, pack.interviewBrief(repo))) return { ok: false, reason: 'brief-failed' };
-    const session = createSession({ projectId: project.id, task: { briefPath } });
+    const session = createSession({ projectId: project.id, cwd: repo, task: { briefPath } });
     if (!session) return { ok: false, reason: 'no-tab' };
     lastInterviewAt = at;
     return { ok: true, pack: pack.packCompleteness(repo) };

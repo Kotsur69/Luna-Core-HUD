@@ -305,15 +305,17 @@ test('scaffoldPack creates design/ in the project folder only', async () => {
   s.done();
 });
 
-test('startInterview scaffolds, writes the brief in briefDir and opens a tab for the project', async () => {
+test('startInterview scaffolds, writes the brief inside the project folder and opens a tab there', async () => {
   const s = setup();
   const res = await s.ipc.invoke('lunaswork:startInterview', { projectId: 'game', brief: 'ignore me' });
   assert.equal(res.ok, true);
   assert.ok(fs.existsSync(path.join(s.repo, DESIGN_DIR)));
   assert.equal(s.sessions.length, 1);
   assert.equal(s.sessions[0].projectId, 'game');
+  // The tab's cwd holds the brief: no --add-dir, no Claude Code trust prompt.
+  assert.equal(s.sessions[0].cwd, s.repo);
   const { briefPath } = s.sessions[0].task;
-  assert.equal(path.dirname(briefPath), path.join(s.dir, 'tasks'));
+  assert.equal(path.dirname(briefPath), path.join(s.repo, '.luna-brief'));
   assert.equal(path.basename(briefPath), 'lunaswork-interview-game.md');
   assert.notEqual(s.briefs[0].text.includes('ignore me'), true);
   s.done();

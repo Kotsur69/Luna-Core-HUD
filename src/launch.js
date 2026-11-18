@@ -19,6 +19,7 @@
 const path = require('path');
 const { isEffort } = require('./efforts');
 const { AGY_MODEL } = require('./claudeModels');
+const { relativeBriefPath } = require('./workerBrief');
 
 // Flags meaning "the session id is already decided" - the CLI resumes an
 // existing conversation, or the profile stated an id itself. Adding a second
@@ -217,9 +218,10 @@ const UNSAFE_QUOTE_RE = /['`\r\n‘-‛]/;
 
 /**
  * Hands a God Mode worker tab its task (DONE_ORCHESTRATOR_PLAN.md slice 3): the
- * brief sits in a file, `--add-dir` lets the tab read it without a
- * permission prompt, and the first message - a positional argument - tells
- * Claude to read it. A positional prompt is delivered by the CLI itself, so
+ * brief sits in a file inside the tab's cwd (`<cwd>/.luna-brief/`, see
+ * src/workerBrief.js), so reading it needs no --add-dir - an --add-dir
+ * outside a trusted folder stops Claude Code 2.1.326+ at a trust dialog - and
+ * the first message - a positional argument - tells Claude to read it. A positional prompt is delivered by the CLI itself, so
  * nothing is typed into a shell that might not have started Claude yet.
  *
  * The prompt goes right after the binary, before any profile flag, so a
@@ -254,7 +256,8 @@ function withTaskBrief(command, task, firstMessage) {
   if (!isClaudeCommand(cmd)) return null;
   const [bin, ...rest] = cmd.split(/\s+/);
   const message = briefMessage(briefPath, firstMessage);
-  const parts = [bin, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(briefPath)}'`];
+  // No --add-dir for the brief: it sits inside the tab's cwd (src/workerBrief.js).
+  const parts = [bin, `'${message}'`, ...rest];
   if (task.model && task.model !== AGY_MODEL && /^[a-z0-9.-]+$/i.test(task.model) && !/(^|\s)--model(\s|=|$)/.test(cmd)) {
     parts.push('--model', task.model);
   }
@@ -285,15 +288,16 @@ function withTaskBrief(command, task, firstMessage) {
  * @returns {string}
  */
 function briefMessage(briefPath, firstMessage) {
-  return typeof firstMessage === 'string' && firstMessage && !UNSAFE_QUOTE_RE.test(firstMessage)
-    ? firstMessage
-    : `Your task brief is in the file \`${briefPath}\` - read it first, then carry it out.`;
+  if (typeof firstMessage === 'string' && firstMessage && !UNSAFE_QUOTE_RE.test(firstMessage)) return firstMessage;
+  // A brief in `<cwd>/.luna-brief/` is named relative to the tab's cwd.
+  const shown = relativeBriefPath(briefPath) || briefPath;
+  return `Your task brief is in the file \`${shown}\` - read it first, then carry it out.`;
 }
 
 /**
  * withTaskBrief() for an `agy` command: the message goes in through
- * --prompt-interactive right after the binary, the brief's folder and a tool
- * kit's art folders through --add-dir, and the worker permission mode in
+ * --prompt-interactive right after the binary, a tool kit's art folders
+ * through --add-dir (the brief is inside the cwd), and the worker permission mode in
  * agy's syntax. Null when the command brings its own first prompt (two
  * prompts would fight over the session).
  * @param {string} cmd trimmed agy command
@@ -306,7 +310,8 @@ function agyTaskBrief(cmd, task, message) {
   // A control character would be typed into the PTY as a keystroke (Ctrl-C...).
   if (PATH_CONTROL_RE.test(message) || PATH_CONTROL_RE.test(task.briefPath)) return null;
   const [bin, ...rest] = cmd.split(/\s+/);
-  const parts = [bin, AGY_PROMPT_FLAG, `'${message}'`, ...rest, '--add-dir', `'${path.dirname(task.briefPath)}'`];
+  // The brief sits inside the tab's cwd: no --add-dir for it.
+  const parts = [bin, AGY_PROMPT_FLAG, `'${message}'`, ...rest];
   parts.push(...agyPermissionFlags(cmd, task));
   for (const dir of Array.isArray(task.addDirs) ? task.addDirs : []) {
     const quoted = quotablePath(dir);
