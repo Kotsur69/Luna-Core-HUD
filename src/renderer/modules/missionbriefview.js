@@ -16,6 +16,8 @@
 
 import { t } from './util.js';
 import { openLifeTab } from './lifepanel.js';
+import { reportModelText, reportCost, reportFailure, choiceOptions } from './reportmodelview.js';
+import { errorText } from './missionshared.js';
 
 let view = null;
 let pending = null; // kind waiting for an overwrite confirm
@@ -89,8 +91,12 @@ function body(entry) {
     const parts = [section('mc.brief.events', events.map((e) => eventLine(e, ''))), section('mc.brief.todos', todos.slice(0, 8))];
     box.append(...parts.filter(Boolean));
   }
-  const meta = [t('mc.brief.made', { at: when(entry.at), model: entry.model })];
-  if (cost(entry.costUsd)) meta.push(t('mc.brief.cost', { cost: cost(entry.costUsd) }));
+  // A call that failed says which provider failed (agy is never retried on Claude).
+  const failed = reportFailure(entry);
+  if (failed) box.append(el('p', 'hint is-fail', `${failed.provider}: ${errorText(failed.reason)}`));
+  const meta = [t('mc.brief.made', { at: when(entry.at), model: reportModelText(entry.model) })];
+  const costLine = reportCost(entry, cost);
+  if (costLine) meta.push(t('mc.brief.cost', { cost: costLine }));
   box.append(el('p', 'hint', meta.join(' · ')));
   return box;
 }
@@ -166,9 +172,10 @@ function controls() {
   if (view) {
     const model = el('select', 'mc-input');
     model.setAttribute('aria-label', t('mc.brief.model'));
-    for (const m of view.models) {
-      const o = el('option', '', m);
-      o.value = m;
+    // Same store as Settings -> AI and models -> Report models; main sends the live choices.
+    for (const [value, label] of choiceOptions(view.models)) {
+      const o = el('option', '', label);
+      o.value = value;
       model.append(o);
     }
     model.value = view.model;

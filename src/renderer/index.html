@@ -2204,6 +2204,24 @@
               <p id="claude-accounts-status" class="hint" role="status" hidden></p>
             </div>
             <div class="termcustom__group">
+              <!-- Which model writes the weekly review and the daily brief: a Claude
+                   model or Antigravity (agy) with one of its live models
+                   (modules/reportmodelsettings.js -> src/reportmodel.js). Same
+                   stores as the Week tab picker and the brief card. -->
+              <h3 id="report-models-section" class="termcustom__section" data-i18n="reportmodels.title">Modele raportow</h3>
+              <p class="termcustom__hint" data-i18n="reportmodels.hint">Model, ktory pisze przeglad tygodnia i brief dnia: Claude albo Antigravity (agy), takze konkretny model z listy agy models.</p>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="reportmodels.weekly">Przeglad tygodnia</span>
+                <select id="report-model-weekly" class="profile-select"></select>
+              </label>
+              <label class="ui-field">
+                <span class="ui-field__label" data-i18n="reportmodels.daily">Brief dnia</span>
+                <select id="report-model-daily" class="profile-select"></select>
+              </label>
+              <p id="report-model-daily-hint" class="termcustom__hint" hidden></p>
+              <p id="report-models-status" class="hint" role="status" hidden></p>
+            </div>
+            <div class="termcustom__group">
               <!-- Usage limits shown per tab kind (uiprefs usageVisibility):
                    modules/usagevisibilitysettings.js fills both selects. -->
               <h3 id="usage-visibility-section" class="termcustom__section" data-i18n="usage.visibility.title">Widoczne limity uzycia</h3>

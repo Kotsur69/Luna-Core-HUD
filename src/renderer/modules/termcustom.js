@@ -23,6 +23,7 @@ import { mountNotify } from './notify.js';
 import { mountEditorAutosave } from './editorautosave.js';
 import { mountHubSettings, refreshHubSyncLine } from './hubsettings.js';
 import { mountUsageVisibilitySettings } from './usagevisibilitysettings.js';
+import { mountReportModelSettings } from './reportmodelsettings.js';
 import { mountAutoCompactSettings } from './autocompact.js';
 import { mountOrchestraSettings } from './orchestrasettings.js';
 import { mountLunasWorkSettings } from './lunaswork.js';
@@ -595,6 +596,8 @@ export async function initTermcustomSettings() {
   mountHubSettings(termcustomEl, prefs);
   // Usage limits shown per tab kind (Claude / agy): usagevisibilitysettings.js.
   mountUsageVisibilitySettings(termcustomEl, prefs);
+  // Which model writes the weekly review and the daily brief: reportmodelsettings.js.
+  mountReportModelSettings(termcustomEl);
 
   // Feature #4: the auto-compact trigger-mode picker (context / turns / time).
   // Same static-overlay shape as mountNotify above - the arm toggle itself
