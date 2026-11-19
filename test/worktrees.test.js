@@ -27,6 +27,7 @@ const {
   MAX_SLUG_CHARS,
   GIT_TIMEOUT_MS,
   REMOVE_TIMEOUT_MS,
+  ADD_TIMEOUT_MS,
 } = require('../src/worktrees.js');
 
 // ---- rev-parse failure classification (fake git) ------------------------------
@@ -78,6 +79,26 @@ test('addWorktree: a timeout on the HEAD check is gitFailed, not noCommits', asy
   const res = await addWorktree('C:\\repo', 'x', { execImpl });
   assert.equal(res.error, 'gitFailed');
   assert.match(res.detail, /rev-parse --verify HEAD.*timed out/);
+});
+
+test('addWorktree: `git worktree add` gets the longer checkout limit, not the 30s guard', async () => {
+  // Regression: a 1241-file checkout on a loaded PC was killed at 95% by the
+  // generic 30s GIT_TIMEOUT_MS, and every retry redid the whole checkout.
+  const calls = [];
+  const execImpl = (cmd, args, opts, cb) => {
+    calls.push({ args: args.slice(2), timeout: opts.timeout });
+    if (args[2] === 'rev-parse' && args[3] === '--show-toplevel') return cb(null, 'C:/repo\n', '');
+    if (args[2] === 'rev-parse') return cb(null, 'abc1234\n', '');
+    return cb(Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null }), '', 'Updating files: 95% (1179/1241)\n');
+  };
+  const res = await addWorktree('C:\\repo', 'x', { execImpl, fsImpl: { existsSync: () => false } });
+  const add = calls.find((c) => c.args[0] === 'worktree');
+  assert.ok(ADD_TIMEOUT_MS > GIT_TIMEOUT_MS);
+  assert.equal(add.timeout, ADD_TIMEOUT_MS);
+  assert.ok(calls.filter((c) => c.args[0] === 'rev-parse').every((c) => c.timeout === GIT_TIMEOUT_MS), 'quick checks keep the 30s guard');
+  assert.equal(res.error, 'gitFailed');
+  assert.equal(res.retryable, true, 'a killed checkout is still retried');
+  assert.match(res.detail, new RegExp(`timed out after ${ADD_TIMEOUT_MS / 1000}s`));
 });
 
 test('runGit reports exit code, timeout and the limit it used', async () => {
@@ -220,10 +241,11 @@ test('copyEnvFiles copies only missing top-level .env files', () => {
 
 // ---- addWorktree against real git -------------------------------------------
 
-// Real git with no kill timer. addWorktree's own 30s GIT_TIMEOUT_MS is a
-// production guard against a hung git; on a loaded machine (several suites
-// running at once) `git worktree add` alone has taken longer than that, and a
-// killed git surfaces as gitFailed with an empty detail - a flake, not a bug.
+// Real git with no kill timer. addWorktree's own limits (30s GIT_TIMEOUT_MS
+// for probes, ADD_TIMEOUT_MS for the checkout) are production guards against
+// a hung git; on a loaded machine (several suites running at once) git has
+// taken longer than the 30s probe limit, and a killed git surfaces as
+// gitFailed - a flake, not a bug.
 const PATIENT = {
   execImpl: (cmd, args, opts, cb) => execFile(cmd, args, { ...opts, timeout: 0 }, cb),
 };

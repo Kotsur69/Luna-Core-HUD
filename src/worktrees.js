@@ -51,6 +51,11 @@ const GIT_TIMEOUT_MS = 30000;
 // `git worktree remove` deletes the folder's ignored files too: a real
 // node_modules on Windows can take minutes, far longer than GIT_TIMEOUT_MS.
 const REMOVE_TIMEOUT_MS = 10 * 60 * 1000;
+// `git worktree add` checks out the whole tree: ~1250 files on a loaded
+// Windows PC (AV, parallel suites, other workers' installs) has run past
+// GIT_TIMEOUT_MS while still making progress, and each retry redid it all.
+// Quick probes (rev-parse) keep the 30s guard against a truly hung git.
+const ADD_TIMEOUT_MS = 5 * 60 * 1000;
 const STDERR_TAIL_CHARS = 300;
 // git's own words for "this folder is in no repository".
 const NOT_REPO_RE = /not a git repository/i;
@@ -292,7 +297,7 @@ async function addWorktree(repoPath, name, deps = {}) {
 
   const branch = branchFor(slug, deps.branchPrefix);
   const base =typeof deps.base === 'string' && BASE_SHA_RE.test(deps.base) ? deps.base : 'HEAD';
-  const add = await runGit(root, ['worktree', 'add', '-b', branch, target, base], execImpl);
+  const add = await runGit(root, ['worktree', 'add', '-b', branch, target, base], execImpl, { timeoutMs: ADD_TIMEOUT_MS });
   if (!add.ok) {
     const reason = gitError(add.stderr);
     const failed = {
@@ -693,6 +698,7 @@ module.exports = {
   gitDetail,
   GIT_TIMEOUT_MS,
   REMOVE_TIMEOUT_MS,
+  ADD_TIMEOUT_MS,
   listWorktrees,
   pruneWorktrees,
   deleteMergedBranch,
