@@ -116,9 +116,36 @@ test('editStatOf counts replace chunks exactly, in both chunk forms', () => {
   ]);
   assert.deepEqual(editStatOf('Edit', { ReplacementChunks: chunks }), { added: 2, removed: 2 });
   assert.deepEqual(editStatOf('Edit', { TargetContent: '"one"', ReplacementContent: '"two"' }), { added: 1, removed: 1 });
+  assert.deepEqual(editStatOf('Edit', { Target: 'a\nb', Replacement: 'a\nB\nc' }), { added: 2, removed: 1 });
+  assert.deepEqual(editStatOf('Edit', { Target: 'a\nb', Replacement: '' }), { added: 0, removed: 2 });
+  assert.deepEqual(editStatOf('Edit', { Target: '', Replacement: 'x\ny' }), { added: 2, removed: 0 });
+  assert.deepEqual(editStatOf('Edit', { Target: '""', Replacement: '"x\\ny"' }), { added: 2, removed: 0 });
   assert.deepEqual(editStatOf('Edit', { ReplacementChunks: 'not json' }), { added: 0, removed: 0 });
   assert.deepEqual(editStatOf('Write', { CodeContent: 'a\nb\n' }), { added: 2, removed: 0 });
+  assert.deepEqual(editStatOf('Write', { Content: 'a\nb\n' }), { added: 2, removed: 0 });
   assert.deepEqual(editStatOf('Read', { CodeContent: 'a' }), { added: 0, removed: 0 });
+});
+
+test('edit_file step yields file edit stats after read_file', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const text = [
+    JSON.stringify({
+      step_index: 0,
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      tool_calls: [
+        { name: 'read_file', args: { Path: '"C:/repo/src/mod.js"' } },
+        { name: 'edit_file', args: { Path: '"C:/repo/src/mod.js"', Target: '"const x = 1;"', Replacement: '"const x = 2;\\nconst y = 3;"' } },
+      ],
+    }),
+    JSON.stringify({ step_index: 1, type: 'GENERIC', status: 'DONE', content: 'const x = 1;\n' }),
+    JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', content: 'Edited' }),
+  ].join('\n');
+  const events = state.apply(parseSteps(text).steps);
+  const editEnd = events.find((e) => e.phase === 'end' && e.tile === 'Edit');
+  assert.ok(editEnd);
+  assert.equal(editEnd.file, fixturePath('C:/repo/src/mod.js'));
+  assert.deepEqual([editEnd.added, editEnd.removed], [2, 1]);
 });
 
 // ---- file events ----------------------------------------------------------------

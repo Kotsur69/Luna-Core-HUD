@@ -194,14 +194,14 @@ function editStatOf(tile, args) {
   }
   if (tile !== 'Edit') return { added: 0, removed: 0 };
   const chunks = structuredArg(args.ReplacementChunks);
-  // The single-chunk form carries TargetContent / ReplacementContent itself.
+  // The single-chunk form carries TargetContent / ReplacementContent (or edit_file's Target / Replacement).
   const list = Array.isArray(chunks) ? chunks : [args];
   let added = 0;
   let removed = 0;
   for (const chunk of list) {
     if (!isObj(chunk)) continue;
-    const from = unquoteArg(chunk.TargetContent);
-    const to = unquoteArg(chunk.ReplacementContent);
+    const from = unquoteArg(chunk.TargetContent ?? chunk.Target);
+    const to = unquoteArg(chunk.ReplacementContent ?? chunk.Replacement);
     if (typeof from !== 'string' || typeof to !== 'string') continue;
     // An empty side is a pure insert or delete; countStringDiff would count
     // the empty string as one (empty) line.

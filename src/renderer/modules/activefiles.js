@@ -70,8 +70,8 @@ const MAX_LIVE_MS = 20000;
 const STALE_CHECK_MS = 5000;
 
 /** Absolute path -> { file, added, removed, touches, lastAt, inProgress,
- *  liveSince, deleted }. App state, not view state - survives unmount/remount
- *  and tab backgrounding. */
+ *  liveSince, deleted, gitEdits }. App state, not view state - survives
+ *  unmount/remount and tab backgrounding. */
 let files = new Map();
 
 /** Absolute path -> {file, added, removed}: EVERY git-detected change in the
@@ -168,6 +168,7 @@ export function applyFileEvent(map, ev) {
       inProgress: false,
       liveSince: 0,
       deleted: false,
+      gitEdits: false,
     };
 
   if (ev.phase === 'start') {
@@ -176,8 +177,11 @@ export function applyFileEvent(map, ev) {
   } else {
     row.inProgress = false;
     row.liveSince = 0;
-    row.added += ev.added || 0;
-    row.removed += ev.removed || 0;
+    const added = ev.added || 0;
+    const removed = ev.removed || 0;
+    row.added += added;
+    row.removed += removed;
+    if (added + removed > 0) row.gitEdits = false;
     row.touches += 1;
     if (ev.contextChars > 0) {
       row.contextChars += ev.contextChars;
@@ -199,12 +203,14 @@ export function applyFileEvent(map, ev) {
 
 /**
  * Folds one git-sourced stat (src/gitfiles.js's GitFileWatcher) into the file
- * map. A file the transcript already has real touches for (`row.touches > 0`)
- * is left alone - the transcript's structuredPatch-derived numbers are exact,
- * git's are a second opinion, and this is a Bash/PowerShell-only backstop, not
- * a source that should fight the more precise one for the same row (plan
- * §12/R4's whole point about ONLY READ COUNTS applies here too: don't blend
- * two measurements of the same thing).
+ * map. A file the transcript already has real edits for (`row.added +
+ * row.removed > 0` without `gitEdits`) is left alone - the transcript's
+ * structuredPatch-derived numbers are exact, git's are a second opinion, and
+ * this is a Bash/PowerShell-only backstop, not a source that should fight the
+ * more precise one for the same row (plan §12/R4's whole point about ONLY READ
+ * COUNTS applies here too: don't blend two measurements of the same thing). A
+ * row that only has read/zero-stat touches still gets git's diff counts so
+ * Read-then-shell edits are never hidden behind tokens/% alone.
  *
  * Unlike applyFileEvent's 'end' branch, this OVERWRITES added/removed rather
  * than accumulating: `files:` git status/diff is polled repeatedly and each
@@ -218,7 +224,8 @@ export function applyFileEvent(map, ev) {
 export function applyGitStat(map, stat) {
   if (!stat || !stat.file) return map;
   const existing = map.get(stat.file);
-  if (existing && existing.touches > 0) return map;
+  if (existing && existing.inProgress) return map;
+  if (existing && existing.touches > 0 && !existing.gitEdits && existing.added + existing.removed > 0) return map;
 
   const row = existing || {
     file: stat.file,
@@ -232,11 +239,16 @@ export function applyGitStat(map, stat) {
     inProgress: false,
     liveSince: 0,
     deleted: false,
+    gitEdits: false,
   };
-  row.added = stat.added || 0;
-  row.removed = stat.removed || 0;
-  row.lastAt = Date.now();
-  row.deleted = false;
+  const nextAdded = stat.added || 0;
+  const nextRemoved = stat.removed || 0;
+  const changed = !existing || row.added !== nextAdded || row.removed !== nextRemoved;
+  row.added = nextAdded;
+  row.removed = nextRemoved;
+  row.gitEdits = true;
+  if (changed) row.lastAt = Date.now();
+  if (!existing || nextAdded > 0) row.deleted = false;
 
   map.set(stat.file, row);
   return map;

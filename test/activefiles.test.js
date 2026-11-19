@@ -127,7 +127,7 @@ test('applyGitStat OVERWRITES rather than accumulates on a repeated poll', () =>
   assert.equal(row.removed, 2);
 });
 
-test('applyGitStat leaves a transcript-tracked row (touches > 0) alone', () => {
+test('applyGitStat leaves a transcript-edited row (!gitEdits && added + removed > 0) alone', () => {
   const map = new Map();
   applyFileEvent(map, startEv('a.js'));
   applyFileEvent(map, endEv('a.js', 4, 2));
@@ -135,6 +135,58 @@ test('applyGitStat leaves a transcript-tracked row (touches > 0) alone', () => {
   const row = map.get('a.js');
   assert.equal(row.added, 4);
   assert.equal(row.removed, 2);
+});
+
+test('applyGitStat fills in edits for a row that only had reads or zero-stat touches', () => {
+  const map = new Map();
+  applyFileEvent(map, { phase: 'start', id: 'r0', tile: 'Read', at: 1000, file: 'a.js' });
+  applyFileEvent(map, {
+    phase: 'end',
+    id: 'r0',
+    tile: 'Read',
+    at: 1100,
+    file: 'a.js',
+    added: 0,
+    removed: 0,
+    contextChars: 3600,
+    contextTokens: 1000,
+  });
+  applyGitStat(map, { file: 'a.js', added: 7, removed: 3 });
+  const row = map.get('a.js');
+  assert.equal(row.added, 7);
+  assert.equal(row.removed, 3);
+  assert.equal(row.contextTokens, 1000);
+  assert.equal(row.reads, 1);
+
+  // Subsequent git polls still update git-backed edits, while a real transcript
+  // edit locks out further git overwrites.
+  applyGitStat(map, { file: 'a.js', added: 10, removed: 4 });
+  assert.equal(row.added, 10);
+  assert.equal(row.removed, 4);
+
+  // Unchanged git stats do not bump lastAt.
+  row.lastAt = 12345;
+  applyGitStat(map, { file: 'a.js', added: 10, removed: 4 });
+  assert.equal(row.lastAt, 12345);
+
+  applyFileEvent(map, endEv('a.js', 2, 1));
+  applyGitStat(map, { file: 'a.js', added: 999, removed: 999 });
+  assert.equal(row.added, 12);
+  assert.equal(row.removed, 5);
+});
+
+test('applyGitStat skips rows with an edit inProgress and preserves deleted on zero-added removal', () => {
+  const map = new Map();
+  applyFileEvent(map, { phase: 'end', id: 'r0', tile: 'Read', at: 1000, file: 'a.js', added: 0, removed: 0 });
+  applyFileEvent(map, startEv('a.js', 1100));
+  applyGitStat(map, { file: 'a.js', added: 5, removed: 1 });
+  assert.equal(map.get('a.js').added, 0, 'does not race an in-progress tool');
+
+  applyFileEvent(map, endEv('a.js', 0, 0, 1200));
+  applyDeletedFlags(map, { 'a.js': false });
+  applyGitStat(map, { file: 'a.js', added: 0, removed: 20 });
+  assert.equal(map.get('a.js').deleted, true, 'pure removal from git does not clear deleted');
+  assert.equal(map.get('a.js').removed, 20);
 });
 
 test('applyGitStat ignores a stat with no file', () => {
