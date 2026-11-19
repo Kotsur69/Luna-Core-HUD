@@ -31,7 +31,7 @@ const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
 const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
 const { normalizePool, runsOnOf } = require('./workerPool');
-/** The agy planner's model pref: an agy family key ('agy-opus' / 'agy-argon' / 'agy-hydrogen') or null. */
+/** The agy planner's model pref: an agy family key ('agy-opus' / 'agy-neon' / 'agy-argon' / 'agy-hydrogen') or null. */
 const agyPlannerModelOf = (v) => (runsOnOf(v) === 'agy' ? v : null);
 const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
 

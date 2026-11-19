@@ -136,8 +136,8 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
     // The default model passes no key (the makePlan call as before); the free
     // and agy planners have their own model.
     ...(!free && !agy && plannerModel !== PLANNER_MODEL ? { plannerModel } : {}),
-    // The agy planner's model: an agy family of the pool menu ('agy-opus' / 'agy-argon' /
-    // 'agy-hydrogen'), resolved against the live list in makePlan; none = agy's default.
+    // The agy planner's model: an agy family of the pool menu ('agy-opus' / 'agy-neon' /
+    // 'agy-argon' / 'agy-hydrogen'), resolved against the live list in makePlan; none = agy's default.
     ...(agy && runsOnOf(model) === 'agy' ? { plannerAgyModel: model } : {}),
     // F6 "Workers": "Plan with free models in mind" changes planning and
     // "Antigravity (agy)" is kept on the plan; a Claude-only request passes no

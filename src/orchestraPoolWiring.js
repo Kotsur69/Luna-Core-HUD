@@ -124,7 +124,7 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
 
   /**
    * The agy planner's `--model` id: the live variant of an agy family key
-   * ('agy-opus' / 'agy-argon' / 'agy-hydrogen') nearest the planner effort.
+   * ('agy-opus' / 'agy-neon' / 'agy-argon' / 'agy-hydrogen') nearest the planner effort.
    * Null for anything else, or a family the live list lacks (logged): agy
    * then plans on its own default model, as before the choice existed.
    * @param {unknown} key

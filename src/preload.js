@@ -747,7 +747,7 @@ contextBridge.exposeInMainWorld('lunacore', {
   // effort: the planner's --effort level; main falls back to 'high' for
   // anything that is not one of src/efforts.js EFFORTS.
   // planner: 'claude' | 'free' (D1) | 'agy'; anything else is sent as 'claude' (main allow-lists it again).
-  // model: for the agy planner, an agy family ('agy-opus' / 'agy-argon' / 'agy-hydrogen'); main resolves it live.
+  // model: for the agy planner, an agy family ('agy-opus' / 'agy-neon' / 'agy-argon' / 'agy-hydrogen'); main resolves it live.
   // workers: 'claude' | 'hybrid' | 'free' (F6); main treats anything else as Claude only.
   // model: the Claude planner's model alias; main allow-lists it (anything else = opus).
   // followups: "Sessions may file new to-dos"; only an exact true turns it on (main checks again).

@@ -306,6 +306,16 @@ function agyWindowLabel(window) {
 /** The Argon model family (agy "Gemini 4 Argon"), which has its own weekly-only quota. Tested on agyWords(). */
 const AGY_ARGON_RE = /\bargon\b/;
 const AGY_ARGON_NAME = 'Argon';
+/**
+ * Model families with a quota of their own, named apart from "Gemini" (their
+ * ids also say gemini): Argon, and Neon, its replacement. Neon's own bucket
+ * is UNVERIFIED (agy /usage listed none on 2026-11-19); it is matched by name
+ * so it gets its own row the day agy reports one.
+ */
+const AGY_OWN_FAMILIES = Object.freeze([
+  Object.freeze({ re: AGY_ARGON_RE, name: AGY_ARGON_NAME }),
+  Object.freeze({ re: /\bneon\b/, name: 'Neon' }),
+]);
 
 /**
  * Response text as separate lower-case words: "_", "-" and "." become spaces,
@@ -338,9 +348,11 @@ function agyBucketWindow(b) {
   return 'custom';
 }
 
-/** True when any of the texts names the Argon model family. */
-function mentionsArgon(...values) {
-  return AGY_ARGON_RE.test(agyWords(...values));
+/** The own-quota family (Argon / Neon) the texts name, else null. */
+function ownFamilyOf(...values) {
+  const words = agyWords(...values);
+  const hit = AGY_OWN_FAMILIES.find((f) => f.re.test(words));
+  return hit ? hit.name : null;
 }
 
 /**
@@ -350,7 +362,7 @@ function mentionsArgon(...values) {
  */
 function agyGroupName(group, named) {
   const own = agyText(group.displayName);
-  return named || mentionsArgon(own) ? own : '';
+  return named || ownFamilyOf(own) ? own : '';
 }
 
 /**
@@ -359,8 +371,8 @@ function agyGroupName(group, named) {
  * own 'Argon' meter; every other bucket keeps its group's name.
  */
 function agyBucketGroup(b, groupName) {
-  if (mentionsArgon(groupName)) return groupName;
-  return mentionsArgon(b.bucketId, b.displayName) ? AGY_ARGON_NAME : groupName;
+  if (ownFamilyOf(groupName)) return groupName;
+  return ownFamilyOf(b.bucketId, b.displayName) || groupName;
 }
 
 /**
@@ -373,7 +385,8 @@ function agyBucketGroup(b, groupName) {
  */
 function agyModelName(...values) {
   const words = agyWords(...values);
-  if (AGY_ARGON_RE.test(words)) return AGY_ARGON_NAME;
+  const own = ownFamilyOf(...values);
+  if (own) return own;
   if (/\b(claude|opus|sonnet|gpt)\b/.test(words)) return 'Opus';
   if (/\bgemini\b/.test(words)) return 'Gemini';
   // Untrusted text in a narrow name column: kept short.
@@ -406,7 +419,7 @@ function parseAgyQuotaSummary(json) {
       const limit = agyBucketLimit(b, groupName);
       if (!limit) continue;
       // The tile's name column: the bucket's model family, else its group's.
-      const model = mentionsArgon(b.bucketId, b.displayName) ? AGY_ARGON_NAME : agyModelName(group.displayName, b.bucketId);
+      const model = ownFamilyOf(b.bucketId, b.displayName) || agyModelName(group.displayName, b.bucketId);
       limits.push({ ...limit, model });
     }
   }

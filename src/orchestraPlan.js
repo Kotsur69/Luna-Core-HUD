@@ -197,6 +197,7 @@ const POOL_KEY_TEXT = Object.freeze({
   opus: 'Claude Opus',
   sonnet: 'Claude Sonnet',
   'agy-opus': 'Claude Opus on the Antigravity CLI',
+  'agy-neon': 'Gemini Neon on the Antigravity CLI',
   'agy-argon': 'Gemini Argon on the Antigravity CLI',
   'agy-hydrogen': 'Gemini Hydrogen on the Antigravity CLI',
   [POOL_FREE_KEY]: 'a free model, much weaker than the others',

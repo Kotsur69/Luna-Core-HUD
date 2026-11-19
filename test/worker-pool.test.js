@@ -35,9 +35,9 @@ const e = (model, effort = 'plan') => ({ model, effort });
 // ---- the shared shape ------------------------------------------------------------
 
 test('the pool menu: ids, order, tiers and the strength order', () => {
-  assert.deepEqual([...pool.POOL_MODELS], ['opus', 'sonnet', 'agy-opus', 'agy-argon', 'agy-hydrogen']);
-  assert.deepEqual([...pool.STRENGTH_ORDER], ['opus', 'agy-opus', 'agy-argon', 'sonnet', 'agy-hydrogen', 'free']);
-  assert.deepEqual(['opus', 'agy-opus', 'agy-argon'].map(pool.tierOf), ['hard', 'hard', 'hard']);
+  assert.deepEqual([...pool.POOL_MODELS], ['opus', 'sonnet', 'agy-opus', 'agy-neon', 'agy-argon', 'agy-hydrogen']);
+  assert.deepEqual([...pool.STRENGTH_ORDER], ['opus', 'agy-opus', 'agy-neon', 'agy-argon', 'sonnet', 'agy-hydrogen', 'free']);
+  assert.deepEqual(['opus', 'agy-opus', 'agy-neon', 'agy-argon'].map(pool.tierOf), ['hard', 'hard', 'hard', 'hard']);
   assert.deepEqual(['sonnet', 'agy-hydrogen', 'free'].map(pool.tierOf), ['easy', 'easy', 'easy']);
   assert.deepEqual(pool.DEFAULT_POOL, [{ model: 'opus', effort: 'plan' }]);
   assert.ok(Object.isFrozen(pool.POOL_MODEL_LIST) && Object.isFrozen(pool.DEFAULT_POOL));
@@ -116,6 +116,26 @@ test('agy families come from the live list by name; Orchestrator (Argon) is no A
   assert.deepEqual(ids('opus'), ['claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high']);
   assert.deepEqual(ids('nothing'), []);
   assert.deepEqual(pool.agyFamilyVariants(LIVE, 'argon').map((v) => v.level), ['medium', 'high', 'low']);
+});
+
+test('Neon (Argon\'s replacement) is its own family; Orchestrator (Neon) is no Neon model', () => {
+  // The live `agy models` lines of 2026-11-19 that name Neon.
+  const withNeon = [
+    { id: 'gemini-4-neon-high', name: 'Gemini 4 Neon (High)' },
+    { id: 'gemini-4-neon-xhigh', name: 'Gemini 4 Neon (XHigh)' },
+    { id: 'gemini-4-neon-medium', name: 'Gemini 4 Neon (Medium)' },
+    { id: 'gemini-4-neon-low', name: 'Gemini 4 Neon (Low)' },
+    { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)' },
+    ...LIVE,
+  ];
+  const neon = pool.agyFamilyVariants(withNeon, 'neon');
+  assert.deepEqual(neon.map((v) => v.id), ['gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low']);
+  assert.equal(pool.agyVariantFor(neon, 'max'), 'gemini-4-neon-xhigh');
+  assert.equal(pool.agyFamilyVariants(withNeon, 'argon').length, 3, 'Argon stays its own family');
+  assert.equal(pool.strongestKey(['agy-argon', 'agy-neon', 'sonnet']), 'agy-neon');
+  assert.equal(pool.poolModelName('agy-neon'), 'Neon (agy)');
+  const res = rules.applyPool([{ id: 'a', model: 'agy-neon', effort: 'medium' }], [e('opus'), e('agy-neon')], { agyList: withNeon });
+  assert.equal(res.packages[0].model, 'agy:gemini-4-neon-medium');
 });
 
 test('agyVariantFor: the level nearest the package effort; no effort aims at high', () => {

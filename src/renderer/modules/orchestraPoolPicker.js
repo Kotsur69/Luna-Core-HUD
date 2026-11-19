@@ -1,7 +1,7 @@
 // ============================================================================
 // LunaCore - God Mode "Workers" pool picker (plan screen + Approve)
 // ----------------------------------------------------------------------------
-// A checkbox dropdown: Opus, Sonnet, Opus / Argon / Hydrogen on agy (one entry
+// A checkbox dropdown: Opus, Sonnet, Opus / Neon / Argon / Hydrogen on agy (one entry
 // per family, its live variants in the tooltip) and Mati's free profiles,
 // listed live by main (window.lunacore.orchestraPoolOptions, src/orchestraPool.js).
 // An agy family the live `agy models` list lacks, and an easy-tasks free
@@ -82,7 +82,7 @@ export function poolText(list) {
 
 /**
  * The agy families of the live menu: [{model, available}] in menu order
- * ('agy-opus' / 'agy-argon' / 'agy-hydrogen'); [] before the first read.
+ * ('agy-opus' / 'agy-neon' / 'agy-argon' / 'agy-hydrogen'); [] before the first read.
  */
 export function agyFamilyOptions() {
   return options ? options.models.filter((m) => m.model.startsWith('agy-')).map((m) => ({ model: m.model, available: m.available })) : [];
