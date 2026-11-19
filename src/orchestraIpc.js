@@ -177,7 +177,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
   // tab's local-model profile must not silently plan the whole run.
   // The selection rules, refusals and makePlan call are shared with the
   // phone's godmode.plan (src/orchestraPlanStart.js).
-  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort, planner, workers, model, followups) => {
+  ipcMain.handle('orchestra:plan', async (_event, sessionId, todoAts, effort, planner, workers, model, followups, modelPool) => {
     // To-do `at` values only, capped like the list itself; an off-shape
     // selection fails closed ([] -> 'noneSelected'). makePlan re-checks each
     // value against the list it reads.
@@ -192,7 +192,9 @@ function registerOrchestraIpc(ipcMain, ctx) {
     // F6 "Workers": runPlan accepts one of three names only; anything else is Claude only.
     // model: the planner's model; runPlan allow-lists it (anything else = opus).
     // followups: the boolean true only; anything else (a string, 1, an object) is off.
-    return runPlan(ctx, session, target, { picked, effort, planner, workers, model, followups: followups === true });
+    // modelPool: the "Workers" pool; runPlan validates it (src/workerPool.js normalizePool) and
+    // only 2+ valid entries make a pool run - anything else plans as before.
+    return runPlan(ctx, session, target, { picked, effort, planner, workers, model, followups: followups === true, modelPool });
   });
 
   // Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js): the request
@@ -283,6 +285,19 @@ function registerOrchestraIpc(ipcMain, ctx) {
   ipcMain.handle('orchestra:cancelPlanWait', (_event, opts) => {
     const run = resolveRun(projectIdOf(opts));
     return run.ok ? run.controller.cancelPlanWait() : run;
+  });
+
+  // The "Workers" pool menu (src/orchestraPool.js poolOptions): no payload,
+  // read live in main. A failed read is logged and answers an empty menu
+  // (the picker then offers only the Claude models).
+  ipcMain.handle('orchestra:poolOptions', async () => {
+    if (!ctx.poolOptions) return { models: [], free: [] };
+    try {
+      return await ctx.poolOptions();
+    } catch (err) {
+      console.warn('[orchestra] reading the Workers pool menu failed:', err instanceof Error ? err.message : String(err));
+      return { models: [], free: [] };
+    }
   });
 
   // Approve / Launch. orchestra.launch() validates the rest of the payload:

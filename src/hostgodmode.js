@@ -366,6 +366,8 @@ function createHostGodmode(deps) {
       todos,
       // The run's worker model the phone's select opens on (the saved pref until Approve).
       workerModel: normalizeWorkerModel(view.workerModel),
+      // A pool plan's "Workers" pool, read-only on the phone (src/workerPool.js); no key otherwise.
+      ...(Array.isArray(view.modelPool) ? { modelPool: view.modelPool } : {}),
     };
   }
 

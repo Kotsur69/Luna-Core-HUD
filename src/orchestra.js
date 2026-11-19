@@ -80,6 +80,9 @@ const hybridRules = require('./orchestraHybrid');
 // Antigravity (agy) runs: which packages and helper jobs go to agy.
 const agyRules = require('./orchestraAgy');
 const { agyModelIdOf } = require('./workerModels');
+// "Workers" pools (2+ ticked worker models): planned for, routed per package.
+const { createPoolWiring } = require('./orchestraPoolWiring');
+const { poolWorkers } = require('./workerPool');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -96,7 +99,7 @@ const { createContextGuard, contextResumeSection } = require('./orchestraContext
  * it always had; the free planner, plan docs, a follow-up request and a
  * hybrid run add keys - and so does a planner model other than the default.
  */
-function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid, abBuild }) {
+function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid, abBuild, pool = null }) {
   return {
     cwd,
     env,
@@ -108,6 +111,8 @@ function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, ex
     ...(extraPrompt ? { extraPrompt } : {}),
     ...(hybrid === true ? { hybrid: true } : {}),
     ...(abBuild === true ? { abBuild: true } : {}),
+    // A pool run: the planner keys it may name (orchestraPlan.js plannerPool).
+    ...(Array.isArray(pool) && pool.length ? { pool } : {}),
   };
 }
 
@@ -920,7 +925,11 @@ function createOrchestra(deps) {
       dirty: plan.dirty,
       // The planner's model: the picker's choice, opus on every plan without one.
       model: plannerModelOf(plan.plannerModel),
-      workerModel: plan.workerModel || workerSettings().model,
+      // A pool plan reads 'plan' before Approve, so a phone that sends the view's
+      // model back keeps the pool (approvePool) instead of one Settings model.
+      workerModel: plan.workerModel || (Array.isArray(plan.modelPool) ? 'plan' : workerSettings().model),
+      // The "Workers" pool of a pool run ([{model, effort}]); no key on any other plan.
+      ...(Array.isArray(plan.modelPool) ? { modelPool: plan.modelPool.map((e) => ({ ...e })) } : {}),
       workerEffort: plan.workerEffort || workerSettings().effort || 'plan',
       permissionMode: plan.permissionMode || workerSettings().permissionMode,
       integrationMode: plan.integrationMode || workerSettings().integration,
@@ -988,6 +997,8 @@ function createOrchestra(deps) {
         model: p.modelOverride || p.model,
         // The board's model badge tells an override from the planner's pick.
         modelOverride: p.modelOverride || null,
+        // A pool run: the ticked model it runs on, the planner's reason, the pick it was moved from.
+        ...(p.poolModel ? { poolModel: p.poolModel, modelReason: p.modelReason || '', poolFrom: p.poolFrom || null } : {}),
         // F6 guard: why a "free" package was upgraded to Sonnet (null = it was not).
         hybridGuard: p.hybridGuard || null,
         // F6c/F6d: free worker, review, hand-overs, free wait (null outside hybrid runs).
@@ -1171,6 +1182,9 @@ function createOrchestra(deps) {
       log(`[orchestra] worker model pref not saved: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  // "Workers" pools (src/orchestraPoolWiring.js): planned for, then routed per package.
+  const poolRun = createPoolWiring({ planOf: () => plan, deps, log, workerSettings });
+
   /** Escalation override, then a forced Settings level, then the planner's pick, then medium. */
   const effortFor = (pkg) =>
     normalizeEffort(pkg.effortOverride) || normalizeEffort(plan.workerEffort) || normalizeEffort(pkg.effort) || DEFAULT_EFFORT;
@@ -1209,29 +1223,36 @@ function createOrchestra(deps) {
     const plannerModel = plannerModelOf(ctx.plannerModel);
     // D1: "Planner: Claude / Free". Plan to-dos bring their PLAN.md (F4b).
     const planner = planBuild.plannerOf(ctx.planner);
-    // F6 "Workers": a free planner is always free-only; hybrid plans with Claude.
-    const workers = workersRules.planWorkers(ctx.workers, planner);
-    const hybrid = workers === 'hybrid';
-    // The God Mode settings' opt-in switches, fixed for this plan. A/B builds
-    // need a Claude planner and Claude workers; a Luna's Work build (cards) never gets them.
+    // The God Mode settings' opt-in switches, fixed for this plan.
     const settings = workerSettings();
-    const abBuild = settings.abBuild === true && planner === 'claude' && workers === 'claude' && !Array.isArray(ctx.cards);
     const planDocs = readPlanDocs(ctx.repoPath, openTodos);
     // Every planner call of this plan that reported tokens (a free sizing
     // round calls it twice); booked once the plan exists.
     const plannerUsage = [];
-    const callPlanner = async (extraPrompt) => {
-      // The picker's planner effort and model ride in ctx too, so a limit-wait
-      // or account-failover replan plans at the same level on the same model.
-      const res = await deps.runPlanner(
-        plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid, abBuild }),
-      );
-      if (res && res.ok && res.usage) plannerUsage.push(res.usage);
-      return res;
-    };
     busy = true;
     planningRepo = ctx.repoPath;
     try {
+      // "Workers" pool (2+ ticked models, never for the free planner): read
+      // after `busy`, since checking agy families against the live list may
+      // wait on `agy models`. No pool asked = no await, the call as before.
+      const pool = planner !== 'free' && ctx.modelPool ? await poolRun.livePlanPool(ctx.modelPool) : null;
+      // F6 "Workers": a free planner is always free-only; hybrid plans with
+      // Claude; a pool with a free profile runs hybrid (src/workerPool.js).
+      const asked = workersRules.planWorkers(ctx.workers, planner);
+      const workers = pool ? poolWorkers(pool.pool, asked) : asked;
+      const hybrid = workers === 'hybrid';
+      // A/B builds need a Claude planner and Claude workers on one model; a
+      // Luna's Work build (cards) never gets them.
+      const abBuild = settings.abBuild === true && planner === 'claude' && workers === 'claude' && !pool && !Array.isArray(ctx.cards);
+      const callPlanner = async (extraPrompt) => {
+        // The picker's planner effort and model ride in ctx too, so a limit-wait
+        // or account-failover replan plans at the same level on the same model.
+        const res = await deps.runPlanner(
+          plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid, abBuild, pool: pool ? pool.keys : null }),
+        );
+        if (res && res.ok && res.usage) plannerUsage.push(res.usage);
+        return res;
+      };
       const [res, dirty, baseBranch] = await Promise.all([
         callPlanner(null),
         deps.dirtyCount(ctx.repoPath),
@@ -1254,8 +1275,11 @@ function createOrchestra(deps) {
         planWaiter.arm(ctx, decision);
         return { ok: false, error: 'waiting', planWait: planWaiter.view() };
       }
-      const built = await plannedPackages({ res, openTodos, planner, callPlanner, repoPath: ctx.repoPath, hybrid, abBuild });
+      const built = await plannedPackages({ res, openTodos, planner, callPlanner, repoPath: ctx.repoPath, hybrid, abBuild, pool });
       const { checked } = built;
+      for (const w of checked.warnings) {
+        if (w.code === 'outOfPool') log(`[orchestra] package ${w.id}: ${w.from || 'no model'} is not in the Workers pool, runs on ${w.to}`);
+      }
       const ownership = sup.normalizeOwnership(ctx.ownership);
       clearAllTimers();
       ownershipNudged.clear();
@@ -1277,6 +1301,8 @@ function createOrchestra(deps) {
         ...(planner !== 'claude' ? { buildPlanner: planner } : {}),
         // F6 "Workers"; a Claude-only plan carries no key (as before the selector).
         ...(workers !== 'claude' ? { workers } : {}),
+        // The "Workers" pool the plan was made for; only a pool run carries the key.
+        ...(pool ? { modelPool: pool.pool } : {}),
         dirty,
         // Opt-in: sessions may file follow-up cards (orchestraFollowups.js); off unless asked for.
         followups: ctx.followups === true,
@@ -1340,9 +1366,9 @@ function createOrchestra(deps) {
    * strict sizing with ONE resize round (flagged after that); every package
    * built from plan to-dos links the plan and its acceptance tests.
    */
-  async function plannedPackages({ res, openTodos, planner, callPlanner, repoPath, hybrid = false, abBuild = false }) {
-    const validate = (raw) =>
-      validatePlan(raw, openTodos, hybrid || abBuild ? { ...(hybrid ? { hybrid: true } : {}), ...(abBuild ? { abBuild: true } : {}) } : undefined);
+  async function plannedPackages({ res, openTodos, planner, callPlanner, repoPath, hybrid = false, abBuild = false, pool = null }) {
+    const opts = { ...(hybrid ? { hybrid: true } : {}), ...(abBuild ? { abBuild: true } : {}), ...(pool ? { pool: pool.keys } : {}) };
+    const validate = (raw) => validatePlan(raw, openTodos, Object.keys(opts).length ? opts : undefined);
     let checked = validate(res.raw);
     let costUsd = res.costUsd;
     if (planner === 'free') {
@@ -1352,7 +1378,12 @@ function createOrchestra(deps) {
     }
     const linked = planBuild.withPlanLinks(checked.packages, openTodos);
     // F6 guard: after the plan links, so a plan's acceptance tests count as verify.
-    const packages = hybrid ? hybridGuard.applyHybridGuard(linked, protectedRules(repoPath)) : linked;
+    const guarded = hybrid ? hybridGuard.applyHybridGuard(linked, protectedRules(repoPath)) : linked;
+    // A pool run: each package on the model its worker runs on (after the
+    // guard, so a free package it upgraded stays on a ticked Claude model).
+    const pooled = pool ? poolRun.applyPlanPool(guarded, pool) : null;
+    const packages = pooled ? pooled.packages : guarded;
+    if (pooled && pooled.warnings.length) checked = { ...checked, warnings: [...checked.warnings, ...pooled.warnings] };
     // A/B builds: a package with two variants becomes its group plus one package per variant.
     if (abBuild) {
       const expanded = variantRules.expandVariants(packages);
@@ -2170,7 +2201,21 @@ function createOrchestra(deps) {
     if (!plan.started && o.workers !== undefined && o.workers !== null && !workersRules.normalizeWorkers(o.workers)) {
       return { ok: false, error: 'badWorkers' };
     }
-    const workers = plan.started ? workersRules.storedWorkers(plan) : workersRules.approveWorkers(plan, o);
+    // "Workers" pool (src/orchestraPool.js): 0 or 1 ticked model is today's
+    // single value, 2+ a pool run. A named pool must be an array.
+    if (!plan.started && o.modelPool !== undefined && o.modelPool !== null && !Array.isArray(o.modelPool)) {
+      return { ok: false, error: 'badModelPool' };
+    }
+    const approved = plan.started ? workersRules.storedWorkers(plan) : workersRules.approveWorkers(plan, o);
+    const planAtApprove = plan;
+    const pendingPool = poolRun.approvePool(o, approved);
+    const poolChoice = pendingPool instanceof Promise ? await pendingPool : pendingPool;
+    // The `agy models` read let other calls in: a replaced, started or busy plan is not this Approve's.
+    if (pendingPool instanceof Promise && (plan !== planAtApprove || plan.started || isBusy())) return { ok: false, error: 'busy' };
+    if (poolChoice.kind === 'error') return { ok: false, error: poolChoice.error };
+    const workers = poolChoice.workers || approved;
+    // The run model Approve asks for: a pool run's 'plan', a one-model pool's value, else the select's.
+    const askedModel = poolChoice.workerModel || o.workerModel;
     // A/B variants (orchestraVariants.js) are built and judged on Claude only:
     // a plan that has them is refused as a free run (replan without A/B for that).
     if (!plan.started && workers === 'free' && variantRules.hasGroups(plan.packages)) return { ok: false, error: 'abNeedsClaude' };
@@ -2181,8 +2226,11 @@ function createOrchestra(deps) {
     }
     // Hybrid (F6c): the coding profile its free packages run on, fixed for the run.
     if (!plan.started && !plan.planRun) {
+      // A pool run's packages are only STAGED here: the checks read them,
+      // the plan takes them after the last refusal below.
+      const staged = poolChoice.packages ? { ...plan, packages: poolChoice.packages } : plan;
       const coding = workers === 'hybrid'
-        ? hybridRules.approveProfile(plan, deps.codingProfileId ? deps.codingProfileId() : null)
+        ? hybridRules.approveProfile(staged, deps.codingProfileId ? poolRun.codingProfileFor(poolChoice.freeProfileId) : null)
         : { ok: true, profileId: null };
       if (!coding.ok) return { ok: false, error: coding.error };
       if (coding.profileId) plan.hybridProfileId = coding.profileId;
@@ -2190,25 +2238,25 @@ function createOrchestra(deps) {
       // Antigravity (agy): the agy profile its packages run on, fixed for the
       // run - refused with a clear reason when none is configured.
       // The model the run will freeze: Approve's pick, else the plan's, else Settings (Ctrl+L).
-      const runModel = workerModelRules.normalizeWorkerModel(o.workerModel) || plan.workerModel || workerSettings().model || null;
-      const agy = agyRules.approveAgyProfile(plan, {
+      const runModel = workerModelRules.normalizeWorkerModel(askedModel) || plan.workerModel || workerSettings().model || null;
+      const agy = agyRules.approveAgyProfile(staged, {
         workers,
         workerModel: runModel,
         agyProfileId: deps.agyProfileId ? deps.agyProfileId() : null,
       });
       if (!agy.ok) return { ok: false, error: agy.error };
       // Every 'agy:<id>' the run would hand agy must be on the live `agy models` list.
-      const variants = agyRules.runAgyVariants(plan, { workers, workerModel: runModel });
+      const variants = agyRules.runAgyVariants(staged, { workers, workerModel: runModel });
       if (variants.length) {
         if (!deps.agyModels) return { ok: false, error: 'badAgyModel' };
         await deps.agyModels.ensure();
         // A planner's per-package pick the list does not hold (Mati has no
         // per-package picker to fix it): plain agy, logged by resolveModelId.
-        for (const p of plan.packages) {
+        for (const p of staged.packages) {
           if (!p.modelOverride && agyModelIdOf(p.model) && !deps.agyModels.resolveModelId(p.model)) p.model = agyRules.AGY;
         }
         // Mati's own picks (the run model, an override) are refused instead.
-        const left = agyRules.runAgyVariants(plan, { workers, workerModel: runModel });
+        const left = agyRules.runAgyVariants(staged, { workers, workerModel: runModel });
         if (left.some((v) => !deps.agyModels.isKnownId(agyModelIdOf(v)))) return { ok: false, error: 'badAgyModel' };
       }
       if (agy.profileId) plan.agyProfileId = agy.profileId;
@@ -2216,7 +2264,8 @@ function createOrchestra(deps) {
     }
     const wantsFree = workers === 'free';
     if (wantsFree && !plan.started && !plan.freeMode && !plan.planRun) {
-      const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? deps.freeProfileId() : null });
+      // A one-model pool's free profile is preferred (kept only when it has a chain).
+      const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? poolRun.freeProfileFor(poolChoice.freeProfileId) : null });
       if (!free.ok) return { ok: false, error: free.error };
       plan.freeMode = true;
       plan.profileId = free.profileId;
@@ -2233,7 +2282,16 @@ function createOrchestra(deps) {
       plan.options = sup.normalizeOptions(release ? { ...rest, releaseAfter: true } : rest);
     }
     // After every refusal above: a refused or declined launch saves nothing.
-    applyWorkerModel(o.workerModel, workers);
+    // A pool run is frozen as worker model 'plan' + plan.modelPool and saves
+    // no single-model pref; anything else is the single model as before.
+    if (poolChoice.kind === 'pool') {
+      plan.packages = poolChoice.packages;
+      plan.workerModel = 'plan';
+      plan.modelPool = poolChoice.pool;
+    } else {
+      if (!plan.started && !plan.scheduledAt && !plan.planRun) delete plan.modelPool;
+      applyWorkerModel(askedModel, workers);
+    }
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;

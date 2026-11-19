@@ -80,6 +80,29 @@ test('Approve with workerModel "plan": each package on its planner pick', async 
   assert.deepEqual(models(log), ['sonnet', 'opus']);
 });
 
+test('Approve with workerModel "plan": an agy pick runs on the agy profile with its --model, the rest on Claude', async () => {
+  const packages = [
+    { ...PACKAGES[0], model: 'agy:gemini-4-argon-medium' },
+    PACKAGES[1],
+  ];
+  const agyModels = fakeAgyModels(['gemini-4-argon-medium']);
+  const { orch, log } = setup({ packages, extraDeps: { agyProfileId: () => 'agy-profile', agyModels } });
+  const { plan } = await orch.makePlan(ctx);
+  const res = await orch.launch(approve(plan, { workerModel: 'plan' }));
+  assert.equal(res.ok, true);
+  assert.deepEqual(models(log), ['agy:gemini-4-argon-medium', 'opus']);
+  assert.deepEqual(log.sessions.map((s) => s.profileId), ['agy-profile', 'claude-cloud']);
+});
+
+test('Approve with workerModel "plan": an agy pick without an agy profile is refused, never run on Claude', async () => {
+  const packages = [{ ...PACKAGES[0], model: 'agy' }, PACKAGES[1]];
+  const { orch, log } = setup({ packages, extraDeps: { agyProfileId: () => null } });
+  const { plan } = await orch.makePlan(ctx);
+  const res = await orch.launch(approve(plan, { workerModel: 'plan' }));
+  assert.deepEqual(res, { ok: false, error: 'noAgyProfile' });
+  assert.equal(log.sessions.length, 0);
+});
+
 test('Approve with workerModel "agy": the run freezes it, the pref is saved, tabs open on the agy profile', async () => {
   const { orch, log } = setup({ extraDeps: { agyProfileId: () => 'agy-profile' } });
   const { plan } = await orch.makePlan(ctx);
@@ -354,6 +377,10 @@ const CASES = [
   { name: 'run choice for a free pick', pkg: { model: 'free' }, run: 'opus', want: 'opus' },
   { name: 'no run choice -> Opus', pkg: { model: 'sonnet' }, run: undefined, want: 'opus' },
   { name: 'empty override is no override', pkg: { modelOverride: '', model: 'sonnet' }, run: 'plan', want: 'sonnet' },
+  // The known gap: a 'plan' / pool run's agy pick names agy, never a Claude --model.
+  { name: 'plan: an agy:<id> pick stays agy', pkg: { model: 'agy:gemini-4-argon-high' }, run: 'plan', want: 'agy:gemini-4-argon-high' },
+  { name: 'plan: plain agy pick stays agy', pkg: { model: 'agy' }, run: 'plan', want: 'agy' },
+  { name: 'plan: an override beats the agy pick (rescue)', pkg: { model: 'agy:gemini-4-argon-high', modelOverride: 'opus' }, run: 'plan', want: 'opus' },
 ];
 
 for (const c of CASES) {

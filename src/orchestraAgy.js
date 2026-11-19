@@ -6,7 +6,8 @@
 //   PLANNERS / AGY             the shared allow-list of planner names
 //   packageRunsAgy(plan, pkg)  does this package's worker tab run on the agy
 //                              profile (workers 'agy', worker model 'agy', a
-//                              hybrid package the planner marked 'agy';
+//                              hybrid or 'plan' / pool-run package whose own
+//                              pick is agy;
 //                              every test is isAgyModel, so 'agy:<id>'
 //                              variants count too)
 //   packageAgyModel(plan, pkg) which agy choice it runs: 'agy' or 'agy:<id>'
@@ -77,8 +78,17 @@ function packageRunsAgy(plan, pkg) {
   if (workers === 'free') return false;
   const p = isObj(pkg) ? pkg : {};
   if (typeof p.modelOverride === 'string' && p.modelOverride) return isAgyModel(p.modelOverride);
-  if (workers === 'hybrid' && isAgyModel(p.model)) return true;
+  if (picksOwnModel(workers, plan.workerModel) && isAgyModel(p.model)) return true;
   return isAgyModel(plan.workerModel);
+}
+
+/**
+ * True when a run lets each package's own pick decide where it runs: a
+ * hybrid run, or worker model 'plan' (Planner's pick, a worker-model pool -
+ * src/orchestraPool.js). Elsewhere the run's single model decides.
+ */
+function picksOwnModel(workers, workerModel) {
+  return workers === 'hybrid' || workerModel === 'plan';
 }
 
 /**
@@ -98,8 +108,8 @@ function packageAgyModel(plan, pkg) {
   const override = typeof p.modelOverride === 'string' && p.modelOverride ? p.modelOverride : null;
   if (override) return isAgyModel(override) ? override : AGY;
   const workers = isObj(plan) ? storedWorkers(plan) : null;
-  if ((workers === 'hybrid' || workers === AGY) && isAgyModel(p.model)) return p.model;
   const run = isObj(plan) ? plan.workerModel : null;
+  if ((picksOwnModel(workers, run) || workers === AGY) && isAgyModel(p.model)) return p.model;
   return isAgyModel(run) ? run : AGY;
 }
 
@@ -129,7 +139,7 @@ function approveAgyProfile(plan, { workers, workerModel = null, agyProfileId }) 
   const needs =
     workers === AGY ||
     (workers !== 'free' && isAgyModel(workerModel)) ||
-    (workers === 'hybrid' && packages.some((p) => isAgyModel(p.model) && !p.modelOverride)) ||
+    (workers !== 'free' && picksOwnModel(workers, workerModel) && packages.some((p) => isAgyModel(p.model) && !p.modelOverride)) ||
     (workers !== 'free' && packages.some((p) => isAgyModel(p.modelOverride)));
   if (!needs) return { ok: true, profileId: null };
   const id = typeof agyProfileId === 'string' && agyProfileId ? agyProfileId : null;
@@ -253,6 +263,7 @@ module.exports = {
   AGY_BIN,
   PLANNERS,
   normalizePlanner,
+  picksOwnModel,
   packageRunsAgy,
   packageAgyModel,
   runUsesAgy,

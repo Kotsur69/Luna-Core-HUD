@@ -137,7 +137,9 @@ export function mountOrchestraSettings(root, prefs) {
   model.addEventListener('change', () => {
     if (!isWorkerModel(model.value)) return;
     sfx.modeToggle();
-    window.lunacore.setUiPrefs({ orchestraWorkerModel: model.value });
+    // The newest choice wins: a saved "Workers" pool (src/workerPool.js) is
+    // cleared, so the plan screen and Approve open on this model again.
+    window.lunacore.setUiPrefs({ orchestraWorkerModel: model.value, orchestraModelPool: null });
   });
   perm.addEventListener('change', () => {
     if (!PERMISSION_MODES.includes(perm.value)) return;

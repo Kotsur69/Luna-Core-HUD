@@ -31,6 +31,8 @@ const { FREE_PLANNER_MODEL, planContextLines } = require('./orchestraPlanBuild')
 const { withVariantsSchema, validateVariants, AB_PLANNER_RULES } = require('./orchestraVariants');
 // The agy planner: a headless `agy --print` with the JSON contract in the prompt.
 const { runAgyPrint, agyJsonPrompt, parseAgyJson } = require('./orchestraAgy');
+// Worker-model pools (2+ ticked models): the planner is offered only those.
+const { isPoolKey, strongestKey, tierOf, POOL_FREE_KEY, STRENGTH_ORDER } = require('./workerPool');
 
 const PLANNER_MODEL = 'opus';
 // The Claude CLI model aliases Mati may pick for the planner in the to-do
@@ -132,12 +134,54 @@ const HYBRID_PLAN_SCHEMA = (() => {
   };
 })();
 
+// Worker-model pools (src/workerPool.js): a run with 2+ ticked models offers
+// the planner exactly those keys, and each package says why it got its model.
+const MAX_REASON_CHARS = 200;
+
+/**
+ * The planner keys of a pool run, strongest first; null unless 2+ valid keys
+ * (a pool of one model is today's run and changes nothing here).
+ * @param {unknown} pool planner keys ('opus', 'agy-argon', 'free', ...)
+ * @returns {string[]|null}
+ */
+function plannerPool(pool) {
+  if (!Array.isArray(pool)) return null;
+  const given = new Set(pool.filter(isPoolKey));
+  const keys = STRENGTH_ORDER.filter((k) => given.has(k));
+  return keys.length >= 2 ? keys : null;
+}
+
+/** PLAN_SCHEMA with the pool's keys as the model enum and a required modelReason. */
+function poolPlanSchema(keys) {
+  const items = PLAN_SCHEMA.properties.packages.items;
+  return {
+    ...PLAN_SCHEMA,
+    properties: {
+      ...PLAN_SCHEMA.properties,
+      packages: {
+        ...PLAN_SCHEMA.properties.packages,
+        items: {
+          ...items,
+          required: [...items.required, 'modelReason'],
+          properties: {
+            ...items.properties,
+            model: { type: 'string', enum: [...keys] },
+            modelReason: { type: 'string', maxLength: MAX_REASON_CHARS },
+          },
+        },
+      },
+    },
+  };
+}
+
 /**
  * The schema for a run: hybrid adds "free" to the model enum; abBuild adds
- * each package's `variants` (orchestraVariants.js).
+ * each package's `variants` (orchestraVariants.js); a pool (2+ keys) makes
+ * the model enum exactly the pool's keys.
  */
-function planSchemaFor(hybrid, abBuild = false) {
-  const base = hybrid === true ? HYBRID_PLAN_SCHEMA : PLAN_SCHEMA;
+function planSchemaFor(hybrid, abBuild = false, pool = null) {
+  const keys = plannerPool(pool);
+  const base = keys ? poolPlanSchema(keys) : hybrid === true ? HYBRID_PLAN_SCHEMA : PLAN_SCHEMA;
   return abBuild === true ? withVariantsSchema(base) : base;
 }
 
@@ -147,6 +191,50 @@ const HYBRID_MODEL_RULES = [
   '- A "free" package must list its files and have a "verify" command. Never mark a package "free" when it touches an entry point, preload, IPC handlers, auth / keys / secrets, migrations, package.json / lockfiles, build config, CI or test infrastructure.',
   '- "model": "agy" is also allowed: the package runs on the Antigravity CLI (Gemini). Use it for self-contained work of routine difficulty; when in doubt: "sonnet".',
 ];
+
+/** What the planner is told each pool key runs on. */
+const POOL_KEY_TEXT = Object.freeze({
+  opus: 'Claude Opus',
+  sonnet: 'Claude Sonnet',
+  'agy-opus': 'Claude Opus on the Antigravity CLI',
+  'agy-argon': 'Gemini Argon on the Antigravity CLI',
+  'agy-hydrogen': 'Gemini Hydrogen on the Antigravity CLI',
+  [POOL_FREE_KEY]: 'a free model, much weaker than the others',
+});
+
+const quoteKeys = (keys) => keys.map((k) => `"${k}"`).join(' or ');
+
+/** The free rules of a pool run with a free profile (the hybrid rules, with the pool's fallback). */
+const poolFreeRules = (fallback) => [
+  `- "free": use it ONLY for small, mechanical, low-risk changes - styling, layout, copy, i18n strings, a config value - in 1-2 files, with no logic, state, IPC, security, data or build changes. When in doubt: "${fallback}".`,
+  '- A "free" package must list its files and have a "verify" command. Never mark a package "free" when it touches an entry point, preload, IPC handlers, auth / keys / secrets, migrations, package.json / lockfiles, build config, CI or test infrastructure.',
+];
+
+/**
+ * The model rules of a pool run: only the ticked keys, easy / hard tiers
+ * (a tier no ticked model covers goes to the nearest one), the strongest when
+ * unsure, and a reason per package.
+ * @param {string[]} keys plannerPool() output
+ * @returns {string[]}
+ */
+function poolModelRules(keys) {
+  const strongest = strongestKey(keys);
+  const paid = keys.filter((k) => k !== POOL_FREE_KEY);
+  const easy = keys.filter((k) => tierOf(k) === 'easy');
+  const hard = keys.filter((k) => tierOf(k) === 'hard');
+  const easyTo = easy.length ? easy : [paid[paid.length - 1]];
+  const hardTo = hard.length ? hard : [paid[0]];
+  const easyPaid = easy.filter((k) => k !== POOL_FREE_KEY);
+  return [
+    `- "model": this run's workers are exactly these models - plan the WHOLE run for them and never name another: ${keys.map((k) => `"${k}" (${POOL_KEY_TEXT[k]})`).join(', ')}.`,
+    `- Easy work - styling, copy, i18n strings, config values, 1-3 files, no IPC, security, state or build changes - goes to ${quoteKeys(easyTo)}.`,
+    `- Hard work - logic, IPC, main-process entry points, several modules, refactors, debugging - goes to ${quoteKeys(hardTo)}.`,
+    '- Use every model of the run where its tier fits, for the whole run - not one model for everything.',
+    `- If unsure, use "${strongest}".`,
+    ...(keys.includes(POOL_FREE_KEY) ? poolFreeRules(easyPaid[0] || paid[0]) : []),
+    '- "modelReason": one short sentence on why the package got its model.',
+  ];
+}
 
 /** Trimmed, capped string ('' when unusable). */
 function clean(raw, max) {
@@ -203,6 +291,12 @@ function buildPlannerPrompt(openTodos, opts = {}) {
   // is exactly what it always was.
   const context = planContextLines(opts.planDocs);
   const extra = typeof opts.extraPrompt === 'string' && opts.extraPrompt.trim() ? ['', opts.extraPrompt.trim()] : [];
+  // A pool run (2+ ticked models) replaces the model rules; without one the
+  // prompt is exactly what it always was.
+  const pool = plannerPool(opts.pool);
+  const modelRules = pool
+    ? poolModelRules(pool)
+    : ['- "model": "opus" for hard or cross-cutting work, "sonnet" otherwise.', ...(opts.hybrid === true ? HYBRID_MODEL_RULES : [])];
   return [
     'You are the planner for LunaCore God Mode. Split the open to-dos below into work packages.',
     'Each package is done by a separate Claude Code session in its own git worktree, in parallel with the others.',
@@ -215,8 +309,7 @@ function buildPlannerPrompt(openTodos, opts = {}) {
     '- Tell the worker to run the verify command, fix until it passes, and commit its work on the current branch. It must not push, merge or switch branches.',
     '- "dependsOn" lists other package ids that must be finished first. Mark real dependencies only.',
     '- "verify" is the command that proves the package works (e.g. "npm test"); use the to-do\'s own verify when it has one.',
-    '- "model": "opus" for hard or cross-cutting work, "sonnet" otherwise.',
-    ...(opts.hybrid === true ? HYBRID_MODEL_RULES : []),
+    ...modelRules,
     ...(opts.abBuild === true ? AB_PLANNER_RULES : []),
     '- "effort": the to-do\'s own effort when it has one; otherwise "medium" for routine work, "high" or "xhigh" for hard or cross-cutting work, "max" only for the heaviest.',
     '- "id": short kebab-case, unique. "notes": one short paragraph on why you grouped it this way.',
@@ -261,7 +354,7 @@ function plannerModelOf(model) {
   return PLANNER_MODELS.includes(model) ? model : PLANNER_MODEL;
 }
 
-function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd, planner = 'claude', hybrid = false, abBuild = false } = {}) {
+function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budgetUsd, planner = 'claude', hybrid = false, abBuild = false, pool = null } = {}) {
   // The free planner (D1): the same call on the coding profile. The model is
   // the coding chain; no effort and no dollar cap (the CLI's cost estimate
   // means nothing on a free gateway).
@@ -286,8 +379,8 @@ function buildPlannerArgs({ model = PLANNER_MODEL, effort = PLANNER_EFFORT, budg
     '--output-format',
     'json',
     '--json-schema',
-    // Hybrid (F6) and A/B builds are Claude-planned runs only; the free planner never gets them.
-    JSON.stringify(planSchemaFor(hybrid, abBuild)),
+    // Hybrid (F6), A/B builds and pools are Claude-planned runs only; the free planner never gets them.
+    JSON.stringify(planSchemaFor(hybrid, abBuild, pool)),
     '--model',
     plannerModelOf(model),
     '--effort',
@@ -377,6 +470,28 @@ function topoOrder(packages) {
 }
 
 /**
+ * A pool run's model fields of one package: the planner's key when it is in
+ * the pool, else the strongest ticked key with an 'outOfPool' warning (the
+ * run logs it); the planner's reason, capped. `model` is the key here: main
+ * turns it into the model the worker runs on (src/orchestraPool.js).
+ * @param {object} p the raw package
+ * @param {string} id its checked id
+ * @param {string[]} keys plannerPool() output
+ * @param {object[]} warnings validatePlan()'s list, appended to
+ */
+function poolPick(p, id, keys, warnings) {
+  const asked = typeof p.model === 'string' ? clean(p.model, 40) : '';
+  const picked = keys.includes(asked) ? asked : strongestKey(keys);
+  if (picked !== asked) warnings.push({ code: 'outOfPool', id, from: asked || null, to: picked });
+  return {
+    model: picked,
+    poolModel: picked,
+    modelReason: clean(p.modelReason, MAX_REASON_CHARS),
+    ...(picked !== asked ? { poolFrom: asked || null } : {}),
+  };
+}
+
+/**
  * Validates and normalizes the planner's reply against the to-do list this
  * process read. Problems the user can judge (an uncovered to-do, two parallel
  * packages touching one file) are warnings; a dependency cycle is an error,
@@ -386,9 +501,11 @@ function topoOrder(packages) {
  * @param {Array<{at:number, text:string}>} openTodos
  * @returns {{packages:Array<object>, notes:string, warnings:Array<object>, errors:Array<object>}}
  */
-function validatePlan(raw, openTodos, { hybrid = false, abBuild = false } = {}) {
+function validatePlan(raw, openTodos, { hybrid = false, abBuild = false, pool = null } = {}) {
   // "free" is a valid pick only in a hybrid plan (F6).
   const models = hybrid === true ? withCardModels(HYBRID_MODELS) : PACKAGE_MODELS;
+  // A pool run: only the ticked keys; anything else goes to the strongest one.
+  const keys = plannerPool(pool);
   const warnings = [];
   const errors = [];
   const openAts = new Set(openTodos.map((t) => t.at));
@@ -441,6 +558,7 @@ function validatePlan(raw, openTodos, { hybrid = false, abBuild = false } = {}) 
       // An 'agy:<id>' variant (a manual or Luna's Work pick) survives like 'agy' does.
       model: models.includes(p.model) || agyModelIdOf(p.model) ? p.model : null,
       effort: normalizeEffort(p.effort),
+      ...(keys ? poolPick(p, id, keys, warnings) : {}),
     });
   }
 
@@ -553,12 +671,15 @@ function runPlanner({
   extraPrompt = null,
   hybrid = false,
   abBuild = false,
+  pool = null,
 }) {
   // Hybrid (F6) only with the Claude planner: the free planner plans free-only runs.
   const hybridRun = hybrid === true && planner !== 'free';
   // A/B builds likewise: only a Claude planner is asked for variants.
   const abRun = abBuild === true && planner !== 'free';
-  const extraOpts = { ...(hybridRun ? { hybrid: true } : {}), ...(abRun ? { abBuild: true } : {}) };
+  // A worker-model pool (2+ keys) likewise; the free planner's run is free-only.
+  const poolRun = planner !== 'free' ? plannerPool(pool) : null;
+  const extraOpts = { ...(hybridRun ? { hybrid: true } : {}), ...(abRun ? { abBuild: true } : {}), ...(poolRun ? { pool: poolRun } : {}) };
   const level = plannerEffortOf(effort);
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : plannerCaps(level).timeoutMs;
   // A missing cwd fails execFile with ENOENT - that is a missing project
@@ -604,7 +725,7 @@ function runPlanner({
  * No dollar cap and no effort flag: agy has neither.
  */
 async function runAgyPlanner({ cwd, env, timeout, execImpl, started, prompt, extraOpts }) {
-  const schema = planSchemaFor(extraOpts.hybrid === true, extraOpts.abBuild === true);
+  const schema = planSchemaFor(extraOpts.hybrid === true, extraOpts.abBuild === true, extraOpts.pool || null);
   const res = await runAgyPrint({ cwd, env, timeout, execImpl, prompt: agyJsonPrompt(prompt, schema) });
   if (!res.ok) return res;
   const parsed = parseAgyJson(res.stdout);
@@ -615,6 +736,9 @@ module.exports = {
   PLAN_SCHEMA,
   HYBRID_PLAN_SCHEMA,
   planSchemaFor,
+  plannerPool,
+  POOL_KEY_TEXT,
+  MAX_REASON_CHARS,
   PLANNER_MODEL,
   PLANNER_MODELS,
   PACKAGE_MODELS,

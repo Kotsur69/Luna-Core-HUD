@@ -70,7 +70,8 @@ const { pickFreeProfileId } = require('./orchestraFree');
 const { agyProfileId, agyEnv } = require('./agyprofile');
 const { createAgyModels, setSharedAgyModels } = require('./agymodels');
 const { createAgyIntake } = require('./agyintake');
-const { pickCodingProfileId } = require('./orchestraHybrid');
+const { pickCodingProfileId, isCodingProfile } = require('./orchestraHybrid');
+const { poolOptions } = require('./orchestraPool');
 // Free God Mode v2 plan runs: the plan-worker lockdown and its profile.
 const { workerLaunchCommand, lockedRestartCommand, planProfileFrom } = require('./orchestraPlanRunLaunch');
 const { createPlanApprover } = require('./orchestraPlanApprove');
@@ -1592,13 +1593,15 @@ const orchestraCtx = {
   },
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
-  freeProfileId: () => pickFreeProfileId(profiles, loadProviders().providers, loadChains()),
+  // preferredId: the free profile a "Workers" pool ticked (src/workerPool.js); kept only when it has a chain.
+  freeProfileId: (preferredId = null) => pickFreeProfileId(profiles, loadProviders().providers, loadChains(), preferredId),
   // Worker tabs on the Antigravity CLI: its profile and env (src/agyprofile.js).
   agyProfileId: () => agyProfileId(profiles),
   agyEnv: () => lunasworkAgyEnv(),
   agyModels,
   // Hybrid runs (F6c): free packages run on 'FreeLLMAPI - coding', never auto:easy.
-  codingProfileId: () => pickCodingProfileId(profiles, loadProviders().providers, loadChains()),
+  // preferredId: a pool's free profile; it wins only when it is a coding profile.
+  codingProfileId: (preferredId = null) => pickCodingProfileId(profiles, loadProviders().providers, loadChains(), preferredId || undefined),
   planRunProfile: () => planProfileFrom(profiles),
   // Free God Mode v2 build runs: the free planner and its auto-split (Q8).
   freePlannerEnv: () => lunasworkFreeEnv(),
@@ -4078,6 +4081,21 @@ function registerIpc() {
     planRunEnv: () => {
       const p = planProfileFrom(profiles);
       return p ? withClaudeOnPath(buildSessionEnv(process.env, p.env)) : null;
+    },
+    // The God Mode "Workers" pool menu (orchestra:poolOptions): agy families
+    // from the live `agy models` list (an unlisted one comes back unavailable),
+    // free profiles with a chain (coding or not - auto:easy never writes code).
+    // Ids and names only.
+    poolOptions: async () => {
+      const offered = await agyModels.refresh({ minIntervalMs: AGY_MODELS_MIN_INTERVAL_MS });
+      const providers = loadProviders().providers;
+      const chains = loadChains();
+      return poolOptions({
+        agyList: offered,
+        profiles,
+        isFreeProfile: (p) => !!resolveProfileChain(p, providers, chains),
+        isCodingProfile: (p) => isCodingProfile(p, providers, chains),
+      });
     },
     // D1: the free BUILD planner runs on the coding profile (freellm-chain).
     freePlannerEnv: () => lunasworkFreeEnv(),

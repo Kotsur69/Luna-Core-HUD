@@ -750,7 +750,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   // workers: 'claude' | 'hybrid' | 'free' (F6); main treats anything else as Claude only.
   // model: the Claude planner's model alias; main allow-lists it (anything else = opus).
   // followups: "Sessions may file new to-dos"; only an exact true turns it on (main checks again).
-  planOrchestra: (sessionId, todoAts, effort, planner, workers, model, followups) =>
+  // modelPool: the "Workers" pool [{model, effort}]; main validates every entry.
+  planOrchestra: (sessionId, todoAts, effort, planner, workers, model, followups, modelPool) =>
     ipcRenderer.invoke(
       'orchestra:plan',
       typeof sessionId === 'string' ? sessionId : null,
@@ -760,6 +761,7 @@ contextBridge.exposeInMainWorld('lunacore', {
       typeof workers === 'string' ? workers : null,
       typeof model === 'string' ? model : null,
       followups === true,
+      Array.isArray(modelPool) ? modelPool : null,
     ),
   /**
    * Free God Mode v2 "Plan only" (src/orchestraPlanRunStart.js). Two fixed
@@ -1011,6 +1013,12 @@ contextBridge.exposeInMainWorld('lunacore', {
   setUiPrefs: (partial) => ipcRenderer.invoke('ui:set', partial),
   /** Reads `agy models` again in main: { choices: [{id: 'agy' | 'agy:<id>', name}] }. No payload. */
   agyModels: () => ipcRenderer.invoke('agy:models'),
+  /**
+   * The God Mode "Workers" pool menu (src/orchestraPool.js poolOptions), read
+   * live in main: { models: [{model, available, variants}], free: [{model, name, coding}] }.
+   * No payload.
+   */
+  orchestraPoolOptions: () => ipcRenderer.invoke('orchestra:poolOptions'),
   /**
    * Opens the native terminal background image picker; reads the file IN MAIN
    * (the renderer has no fs access) and returns { dataUrl } (CSP: only

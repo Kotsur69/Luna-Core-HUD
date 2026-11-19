@@ -35,7 +35,8 @@ import { pkgStateKey, recoverAsk } from './orchestraState.js';
 import { pkgErrorText, progressText, ladderLines } from './orchestraCardLines.js';
 import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetry.js';
 import { loadPicker, pickerView } from './orchestraPick.js';
-import { loadWorkerModel, chosenWorkerModel, takesWorkerModel, runModelLabel, packageModelBadge, workerModelControls } from './orchestraWorkerModel.js';
+import { loadWorkerModel, takesWorkerModel, runModelLabel, packageModelBadge, workerModelControls, chosenRunWorkers, launchModelFields } from './orchestraWorkerModel.js';
+import { poolModelName } from '../../workerPool.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
@@ -155,6 +156,7 @@ function warningText(w) {
   if (w.code === 'sizing') return t('orch.warn.sizing', { id: w.id, reasons: (w.reasons || []).join('; ') });
   if (w.code === 'uncovered') return t('orch.warn.uncovered', { list: w.texts.join('; ') });
   if (w.code === 'overlap') return t('orch.warn.overlap', { a: w.a, b: w.b, files: w.files.join(', ') });
+  if (w.code === 'outOfPool') return t('orch.warn.outOfPool', { id: w.id, from: w.from || '-', to: poolModelName(w.to) || w.to });
   return t(`orch.warn.${w.code}`, { id: w.id, dep: w.dep });
 }
 
@@ -235,7 +237,7 @@ function startOptions() {
   row.append(workersLabel, workersSel);
   if (chosenWorkers() !== 'free') {
     // Which Claude model every worker runs on (saved pref, frozen at start).
-    if (takesWorkerModel(plan)) row.append(...workerModelControls(plan, phase !== 'idle', render));
+    if (takesWorkerModel(plan)) row.append(...workerModelControls(plan, phase !== 'idle', render, chosenWorkers()));
     row.append(
       el('span', 'orchestra__optlabel', t('orch.integ')),
       selectEl(integrationOptions(), chosenIntegration(), (v) => {
@@ -373,15 +375,21 @@ function pkgCard(pkg) {
   if (pkg.files.length) meta.push(t('orch.files', { n: pkg.files.length }));
   if (pkg.verify) meta.push(t('orch.verify', { cmd: pkg.verify }));
   // The model it WILL run on (override, planner's pick or the run's choice).
-  const badge = packageModelBadge(pkg, plan, plan.started || plan.scheduledAt ? plan.workers : chosenWorkers());
+  const badge = packageModelBadge(pkg, plan, plan.started || plan.scheduledAt ? plan.workers : chosenRunWorkers(plan, chosenWorkers()));
   if (badge) meta.push(badge);
   // The Claude account the worker is on (claude-accounts failover), when main says.
   if (typeof pkg.account === 'string' && pkg.account) meta.push(t('orch.account.on', { account: pkg.account }));
   if (pkg.branch) meta.push(pkg.branch);
   if (meta.length) {
     const line = el('div', 'orchestra__meta', meta.join(' · '));
-    if (pkg.files.length) line.title = pkg.files.join('\n');
+    // A pool run: why the planner gave the package its model, under the files.
+    const tip = [...pkg.files, ...(pkg.modelReason ? [t('orch.pool.reason', { reason: pkg.modelReason })] : [])];
+    if (tip.length) line.title = tip.join('\n');
     card.append(line);
+  }
+  // A pool run: the planner named a model the pool does not tick; it runs on the strongest one.
+  if (pkg.poolFrom && pkg.poolModel) {
+    card.append(msg(t('orch.pool.moved', { from: pkg.poolFrom, to: poolModelName(pkg.poolModel) || pkg.poolModel }), 'is-warn'));
   }
   // F6 guard: the planner marked it "free", the rules moved it to Sonnet.
   const guard = hybridGuardText(pkg.hybridGuard);
@@ -713,7 +721,7 @@ function render() {
       pickerView({
         disabled: phase !== 'idle',
         canCancel: !!plan,
-        onPlan: (ats, effort, planner, workers, model, followups) => startPlanning(ats, effort, planner, workers, model, followups),
+        onPlan: (ats, effort, planner, workers, model, followups, modelPool) => startPlanning(ats, effort, planner, workers, model, followups, modelPool),
         onCancel: () => {
           picking = false;
           render();
@@ -787,7 +795,8 @@ async function refetchAndRender() {
  * @param {string} [model] the Claude planner's model (main falls back to opus)
  * @param {boolean} [followups] "Sessions may file new to-dos" (main: only true is on)
  */
-async function startPlanning(ats, effort, planner, workers, model, followups) {
+/** modelPool: the "Workers" pool when it makes a pool run (2+ models), else null - the call as before. */
+async function startPlanning(ats, effort, planner, workers, model, followups, modelPool = null) {
   if (phase !== 'idle') return;
   phase = 'planning';
   picking = false;
@@ -795,7 +804,7 @@ async function startPlanning(ats, effort, planner, workers, model, followups) {
   render();
   let res;
   try {
-    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner, workers, model, followups === true);
+    res = await window.lunacore.planOrchestra(getActiveSessionId(), ats, effort, planner, workers, model, followups === true, modelPool);
   } catch {
     res = { ok: false, error: 'failed' };
   }
@@ -909,8 +918,8 @@ async function launch(ids) {
   const free = workers === 'free';
   const integration = approve && !free ? chosenIntegration() : null;
   const releaseAfter = integration === 'merge' && releaseAfterChoice(plan.projectId);
-  // The Approve screen's "Workers model"; a Free-only run has none.
-  const workerModel = approve && !free && takesWorkerModel(plan) ? chosenWorkerModel(plan) : null;
+  // The Approve screen's "Workers model" pool ({workerModel} or {modelPool}); a Free-only run has none.
+  const modelFields = approve && !free && takesWorkerModel(plan) ? launchModelFields(plan, workers) : {};
   const scope = board.project();
   phase = 'launching';
   busyPkg = Array.isArray(ids) && ids.length === 1 ? ids[0] : null;
@@ -919,7 +928,7 @@ async function launch(ids) {
   let res;
   try {
     res = await window.lunacore.launchOrchestra({
-      planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), ...(workerModel ? { workerModel } : {}), releaseAfter, projectId: scope,
+      planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), ...modelFields, releaseAfter, projectId: scope,
     });
   } catch {
     res = { ok: false, error: 'failed' };
