@@ -25,10 +25,12 @@
 //                              its text, then checked by the caller's own
 //                              validator exactly like a Claude answer
 //
-// agy's flags were read from agy.exe 1.5.9 (see the header of src/launch.js):
-// `--print` runs one prompt headless (the prompt comes from stdin, which keeps
-// long prompts clear of the Windows command-line limit), `--mode accept-edits`
-// auto-accepts file edits. None of this was confirmed by a live headless run.
+// A headless call is agy with its prompt piped on stdin and NO `--print`:
+// checked live against agy 1.5.12 (2026-11-19), `--print` takes the prompt
+// as its VALUE, so a bare `--print` fails ("flag needs an argument") and
+// `--print --model X` runs "--model" as the prompt. Piped stdin alone runs one
+// turn non-interactively and exits, and keeps long prompts clear of the
+// Windows command-line limit. `--mode accept-edits` auto-accepts file edits.
 // ============================================================================
 
 'use strict';
@@ -43,7 +45,6 @@ const AGY = AGY_MODEL;
 /** God Mode planners (the picker, orchestra:plan, Plan only, the phone). */
 const PLANNERS = Object.freeze(['claude', AGY, 'free']);
 const AGY_BIN = 'agy';
-const AGY_PRINT_ARGS = Object.freeze(['--print']);
 const AGY_EDIT_ARGS = Object.freeze(['--mode', 'accept-edits']);
 const MAX_DETAIL_CHARS = 300;
 const DEFAULT_MAX_BUFFER = 20 * 1024 * 1024;
@@ -175,7 +176,8 @@ function runAgyVariants(plan, { workers, workerModel = null }) {
  * @returns {string[]}
  */
 function agyPrintArgs({ edits = false, model = null } = {}) {
-  return [...AGY_PRINT_ARGS, ...(edits ? AGY_EDIT_ARGS : []), ...(isAgyModelId(model) ? ['--model', model] : [])];
+  // No --print: it would swallow the next token as the prompt (header).
+  return [...(edits ? AGY_EDIT_ARGS : []), ...(isAgyModelId(model) ? ['--model', model] : [])];
 }
 
 /**
@@ -227,7 +229,7 @@ function parseAgyJson(stdout) {
 }
 
 /**
- * One headless `agy --print` in `cwd`, prompt on stdin. Always resolves.
+ * One headless agy call in `cwd`, prompt on stdin (no `--print`). Always resolves.
  * @param {{cwd:string, env:object, prompt:string, timeout:number, edits?:boolean,
  *   model?:string|null, execImpl?:Function, maxBuffer?:number}} args
  *   model: an agy model id the caller checked against the live list (src/agymodels.js)

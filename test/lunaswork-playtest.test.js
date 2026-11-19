@@ -318,7 +318,7 @@ test('a Playtester set to agy plays on agy in the agy env; the SHIP pass stays o
   assert.equal(P.playtestModel('explore', { playtester: 'agy:gemini-4-argon-medium' }).model, 'agy:gemini-4-argon-medium');
   assert.equal(fake.calls[0].file, AGY_BIN);
   assert.deepEqual(fake.calls[0].options.env, agyEnv, 'the Claude env never reaches agy');
-  assert.ok(fake.calls[0].args.includes('--print'));
+  assert.equal(fake.calls[0].args.includes('--print'), false);
   assert.equal(fake.calls[0].args.includes('accept-edits'), false, 'the Playtester never edits code');
   assert.match(fake.calls[0].prompt, /exactly ONE JSON object/, 'the report schema travels in the prompt');
 

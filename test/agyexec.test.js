@@ -68,7 +68,7 @@ test('execAgy: --model agy:<id> runs agy with its own --model <id> once the live
   const res = await execAgy({ args: ['-p', '--model', 'agy:gemini-4-argon-medium'], prompt: 'hi', cwd: '.', env: AGY_ENV, timeoutMs: 1000, execImpl, agyModels });
   assert.ok(res.stdout);
   assert.equal(agyModels.seen.ensured, 1);
-  assert.deepEqual(calls[0].args, ['--print', '--model', 'gemini-4-argon-medium']);
+  assert.deepEqual(calls[0].args, ['--model', 'gemini-4-argon-medium']);
   // The internal marker never reaches agy.
   assert.ok(!calls[0].args.includes('agy:gemini-4-argon-medium'));
 });
@@ -128,12 +128,12 @@ test('execAgy without --json-schema hands back the text only, never a structured
   assert.match(env.result, /old answer/);
 });
 
-test('execAgy runs agy --print with the schema in the prompt, in the agy env and cwd', async () => {
+test('execAgy runs agy (prompt on stdin, no --print) with the schema in the prompt, in the agy env and cwd', async () => {
   const { calls, execImpl } = fakeExec();
   const res = await execAgy({ args: claudeArgs(['--json-schema', JSON.stringify(SCHEMA)]), prompt: 'Judge the build.', cwd: '/repo', env: AGY_ENV, timeoutMs: 1234, execImpl });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].bin, AGY_BIN);
-  assert.ok(calls[0].args.includes('--print'));
+  assert.equal(calls[0].args.includes('--print'), false);
   assert.equal(calls[0].args.includes('accept-edits'), false, 'read-only call: no accept-edits');
   assert.equal(calls[0].opts.cwd, '/repo');
   assert.deepEqual(calls[0].opts.env, AGY_ENV);

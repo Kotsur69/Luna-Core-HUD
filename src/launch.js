@@ -43,6 +43,9 @@ const SESSION_ID_DECIDED =
 //   --model <id>                  run on one model of `agy models` (ids differ
 //                                 per account: src/agymodels.js reads them live)
 //   --effort low|medium|high|xhigh|max
+// agy 1.5.12's usage text (2026-11-19, printed on a bad flag) confirms
+// --model, --effort, --mode and --prompt-interactive. `--print` takes the
+// prompt as its value; headless calls pipe stdin instead (src/orchestraAgy.js).
 // A worker task's model 'agy:<id>' becomes `--model <id>` and its God Mode
 // effort `--effort <level>`, each unless the profile's command already sets
 // it; plain 'agy' passes no --model (agy's own default model). Main checks the

@@ -147,7 +147,7 @@ test('parseChoice: agy ids are checked against the live list, never trusted', as
 
 // --- routing --------------------------------------------------------------------------
 
-test('runJob on agy:<id>: one `agy --print --model <id>` with the agy env, never claude', async () => {
+test('runJob on agy:<id>: one `agy --model <id>` with the agy env, never claude', async () => {
   const f = fakeExec(() => [null, '{"headline":"H"}', '']);
   const res = await runJob({ prompt: 'review', model: `agy:${HYDROGEN}`, lean: true, env: CLAUDE_ENV, agyEnv: AGY_ENV, exec: f.exec, agyModels: fakeAgyModels() });
   assert.deepEqual(res, { ok: true, answer: { headline: 'H' }, costUsd: null });
