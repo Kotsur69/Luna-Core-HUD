@@ -32,6 +32,7 @@ const FIXUP_KINDS = new Set([SELFCHECK_PACKAGE_ID, FIXUP_PACKAGE_ID]);
  * @param {{
  *   getPlan: () => object|null, createSession: Function, writeBrief: Function,
  *   removeBrief?: (file:string) => boolean, closeSession: Function, sessionAlive: Function,
+ *   profileId?: () => string|null, strictProfile?: () => boolean, strictBackend?: () => string|null,
  *   model: () => string|null, effort?: () => string|null, permissionMode: () => string|null, setTimer: Function, clearTimer: Function,
  *   revokeFollowups?: (list:Array<{sessionId:string, runId:string, packageId:string}>) => void,
  * }} deps
@@ -84,6 +85,10 @@ function createFixupRunner(deps) {
       return Promise.resolve({ ok: false });
     }
     const packageId = FIXUP_KINDS.has(o.packageId) ? o.packageId : SELFCHECK_PACKAGE_ID;
+    const profileId = deps.profileId ? deps.profileId() : plan.profileId;
+    const strict = !!(deps.strictProfile && deps.strictProfile());
+    const strictBackend = deps.strictBackend ? deps.strictBackend() : null;
+    if (strict && !profileId) return Promise.resolve({ ok: false });
     let session = null;
     let briefPath = null;
     // One folder for both the tab and its brief, so the brief's relative name holds.
@@ -95,7 +100,9 @@ function createFixupRunner(deps) {
       if (!deps.writeBrief(briefPath, withFollowupBrief(o.brief, plan.followups === true))) return Promise.resolve({ ok: false });
       const task = { briefPath, model: deps.model(), effort: deps.effort ? deps.effort() : null, permissionMode: deps.permissionMode(), allowedTools: plan.allowedTools || [] };
       session = deps.createSession({
-        profileId: plan.profileId,
+        ...(strict ? { strictProfile: true } : {}),
+        ...(strict && strictBackend ? { strictBackend } : {}),
+        profileId,
         projectId: plan.projectId,
         cwd,
         branch: null,

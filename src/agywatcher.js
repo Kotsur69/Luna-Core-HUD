@@ -161,12 +161,15 @@ class AgyTranscriptWatcher {
   /**
    * @param {(metrics: object) => void} onMetrics context metrics (estimated)
    * @param {{cwd?: string, conversationId?: string|null, onTools?: Function,
+   *   onTurnStart?: Function, onTurnEnd?: Function,
    *   intervalMs?: number, appDataDir?: string, log?: (msg: string) => void,
    *   chunkBytes?: number}} [opts] chunkBytes: read size per tick (tests)
    */
   constructor(onMetrics, opts = {}) {
     this.onMetrics = typeof onMetrics === 'function' ? onMetrics : () => {};
     this.onTools = typeof opts.onTools === 'function' ? opts.onTools : null;
+    this.onTurnStart = typeof opts.onTurnStart === 'function' ? opts.onTurnStart : null;
+    this.onTurnEnd = typeof opts.onTurnEnd === 'function' ? opts.onTurnEnd : null;
     this.cwd = typeof opts.cwd === 'string' ? opts.cwd : '';
     const id = typeof opts.conversationId === 'string' ? opts.conversationId.toLowerCase() : '';
     this.conversationId = UUID_RE.test(id) ? id : null;
@@ -179,6 +182,8 @@ class AgyTranscriptWatcher {
     this.startedAt = 0;
     /** conversation id -> transcript mtime when the tab started: someone else's, unless it grows. */
     this.baseline = new Map();
+    /** conversation claim keys already owned by other live tabs when this watcher started. */
+    this.claimedAtStart = new Set();
     /** {key, full} of the conversation this tab reads, once picked. */
     this.pinned = null;
     this.offset = 0;
@@ -222,6 +227,9 @@ class AgyTranscriptWatcher {
   snapshotBaseline() {
     this.startedAt = Date.now();
     this.baseline = new Map();
+    // Snapshot conversations owned right now so a dying replaced tab releasing its
+    // claim moments later cannot be adopted as a resumed conversation by this new tab.
+    this.claimedAtStart = new Set(claimedAgyConversations);
     try {
       for (const t of this.list()) this.baseline.set(t.id, t.mtimeMs);
     } catch (err) {
@@ -274,7 +282,10 @@ class AgyTranscriptWatcher {
       const found = transcriptOf(this.appDataDir, this.conversationId);
       return found ? this.pin(found, true) : null;
     }
-    const free = this.list().filter((t) => !claimedAgyConversations.has(this.keyOf(t.id)));
+    const free = this.list().filter((t) => {
+      const key = this.keyOf(t.id);
+      return !claimedAgyConversations.has(key) && !this.claimedAtStart.has(key);
+    });
     const fresh = free.filter((t) => !this.baseline.has(t.id));
     const resumed = free.filter((t) => this.baseline.has(t.id) && t.mtimeMs > this.baseline.get(t.id));
     const pool = this.inThisFolder([...fresh, ...resumed]);
@@ -376,6 +387,15 @@ class AgyTranscriptWatcher {
     if (events.length > 0 && this.onTools) this.onTools(events);
   }
 
+  emitTurns(turns) {
+    for (const turn of turns) {
+      if (turn.type === 'start' && this.onTurnStart) this.onTurnStart({ at: turn.at });
+      else if (turn.type === 'end' && this.onTurnEnd) {
+        this.onTurnEnd({ startedAt: turn.startedAt, endedAt: turn.endedAt, text: turn.text });
+      }
+    }
+  }
+
   /**
    * Reads what was appended since the last tick, at most chunkBytes, and
    * folds its complete lines into the state. Offsets are bytes; a read only
@@ -411,19 +431,21 @@ class AgyTranscriptWatcher {
       this.offset += start;
       return this.offset + (buf.length - start) >= size ? 'partial' : 'more';
     }
-    const events = this.foldLines(file, buf, start, lastNl + 1);
+    const { events, turns } = this.foldLines(file, buf, start, lastNl + 1);
     // The place moves on before anyone hears of it: a listener that throws
     // must not make the next tick fold the same lines again.
     this.offset += lastNl + 1;
     this.emitTools(events);
+    this.emitTurns(turns);
     return this.offset >= size ? 'eof' : 'more';
   }
 
   /**
    * Folds the complete lines buf[start, end) and returns their live tool
-   * events. Lines that were in the file when it was pinned are history: they
-   * count toward the context window but light no tool, and what they left
-   * open is dropped where history ends.
+   * events plus live turn notifications. Lines that were in the file when it
+   * was pinned are history: they count toward the context window but light
+   * no tool and fire no turns, and what they left open is dropped where
+   * history ends.
    */
   foldLines(file, buf, start, end) {
     let liveFrom = start;
@@ -433,14 +455,17 @@ class AgyTranscriptWatcher {
       const lastHistoryNl = boundary > start ? buf.lastIndexOf(NEWLINE, Math.min(boundary, end) - 1) : -1;
       if (lastHistoryNl >= start) {
         this.applyLines(file, buf.toString('utf8', start, lastHistoryNl + 1));
+        this.state.takeTurns();
         liveFrom = lastHistoryNl + 1;
       }
-      if (this.offset + end < this.historyUntil) return [];
+      if (this.offset + end < this.historyUntil) return { events: [], turns: [] };
       // A call the past left open (a killed session) must not light anything now.
       this.state.forgetPending();
       this.historyUntil = 0;
     }
-    return liveFrom < end ? this.applyLines(file, buf.toString('utf8', liveFrom, end)) : [];
+    const events = liveFrom < end ? this.applyLines(file, buf.toString('utf8', liveFrom, end)) : [];
+    const turns = this.state.takeTurns();
+    return { events, turns };
   }
 
   /** Parses whole lines, logs the ones it cannot use, returns the tool events. */

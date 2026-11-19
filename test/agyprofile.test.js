@@ -49,12 +49,46 @@ test('agyProfileId: a preferred profile wins only when it is an agy profile', ()
 });
 
 test('agyEnv: inherited env minus Claude session markers, the profile env on top', () => {
-  const inherited = { PATH: 'C:\\bin', CLAUDE_CODE_ENTRYPOINT: 'cli', AGY_CLI_HIDE_LOGO: '0' };
+  const inherited = {
+    PATH: 'C:\\bin',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-secret',
+    LUNACORE_CLAUDE_ACCOUNT: 'acc1',
+    AGY_CLI_HIDE_LOGO: '0',
+  };
   const env = agyEnv(handWritten, { inherited });
   assert.equal(env.PATH, 'C:\\bin');
   assert.equal(env.AGY_CLI_HIDE_LOGO, '1', 'the profile env wins');
   assert.equal('CLAUDE_CODE_ENTRYPOINT' in env, false, 'an outer Claude session marker never reaches agy');
+  assert.equal('CLAUDE_CODE_OAUTH_TOKEN' in env, false, 'Claude subscription token never reaches agy');
+  assert.equal('LUNACORE_CLAUDE_ACCOUNT' in env, false, 'Claude account marker never reaches agy');
   assert.equal(inherited.AGY_CLI_HIDE_LOGO, '0', 'the inherited env is not mutated');
+});
+
+test('agyEnv: strips Claude account and OAuth vars case-insensitively and unconditionally', () => {
+  const custom = {
+    id: 'agy-custom',
+    command: 'agy',
+    env: {
+      LUNACORE_CLAUDE_ACCOUNT: 'explicit',
+      claude_code_oauth_token: 'sk-ant-oat01-profile',
+      CUSTOM_FOO: 'bar',
+    },
+    templateId: 'antigravity',
+  };
+  const env = agyEnv(custom, {
+    inherited: {
+      claude_code_oauth_token: 'sk-ant-oat01-secret',
+      lunacore_claude_account: 'acc1',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+    },
+  });
+  for (const key of Object.keys(env)) {
+    assert.notEqual(key.toLowerCase(), 'claude_code_oauth_token');
+    assert.notEqual(key.toLowerCase(), 'lunacore_claude_account');
+    assert.notEqual(key.toLowerCase(), 'claude_code_entrypoint');
+  }
+  assert.equal(env.CUSTOM_FOO, 'bar');
 });
 
 test('agyEnv: null for anything that is not an agy profile', () => {

@@ -20,11 +20,37 @@
 // TTS reading Claude's own words", not "read every character no matter how
 // long", and there is no way to skip ahead once SAPI starts speaking.
 const MAX_SPOKEN_CHARS = 1500;
+/** agy status values representing a finished (not running/statusless/errored) step. */
+const AGY_DONE_STATUSES = Object.freeze(new Set(['DONE', 'COMPLETED']));
 
 /**
- * Finds the LAST assistant message in `text` whose turn is fully done
- * (stop_reason present and not "tool_use") - same signal as
- * observer.js's hasTurnEnd(), kept as the object instead of a boolean.
+ * True when a raw or normalized agy step is a finished assistant turn
+ * (PLANNER_RESPONSE with done status, non-empty content, and no tool calls).
+ * @param {object|null} step
+ * @returns {boolean}
+ */
+function isAgyTurnEndStep(step) {
+  if (!step || typeof step.type !== 'string') return false;
+  if (step.type.replace(/^CORTEX_STEP_TYPE_/, '') !== 'PLANNER_RESPONSE') return false;
+  const calls = Array.isArray(step.toolCalls) ? step.toolCalls : step.tool_calls;
+  if (Array.isArray(calls) && calls.length > 0) return false;
+  const status = typeof step.status === 'string' ? step.status.replace(/^CORTEX_STEP_STATUS_/, '').toUpperCase() : '';
+  if (!AGY_DONE_STATUSES.has(status)) return false;
+  return typeof step.content === 'string' && step.content.trim().length > 0;
+}
+
+/**
+ * Extracts a turn-ending assistant message from one parsed agy step object.
+ * Returns {role: 'assistant', content} or null.
+ */
+function agyTurnEndFromStepObj(obj) {
+  return isAgyTurnEndStep(obj) ? { role: 'assistant', content: obj.content } : null;
+}
+
+/**
+ * Finds the LAST assistant message in `text` whose turn is fully done:
+ * Claude JSONL lines with a terminal `stop_reason` (not "tool_use"), or agy
+ * `PLANNER_RESPONSE` lines with no `tool_calls`.
  * @param {string} text fragment of the JSONL file (whole lines)
  * @returns {object|null} the message object, or null if none found
  */
@@ -32,12 +58,17 @@ function findTurnEndMessage(text) {
   let found = null;
   for (const raw of String(text || '').split('\n')) {
     const line = raw.trim();
-    if (!line || !line.includes('"stop_reason"')) continue;
+    if (!line || (!line.includes('"stop_reason"') && !line.includes('PLANNER_RESPONSE'))) continue;
     try {
       const obj = JSON.parse(line);
       const message = obj && obj.message;
       const reason = message && message.stop_reason;
-      if (reason && reason !== 'tool_use') found = message;
+      if (reason) {
+        if (reason !== 'tool_use') found = message;
+        continue;
+      }
+      const agyMessage = agyTurnEndFromStepObj(obj);
+      if (agyMessage) found = agyMessage;
     } catch {
       /* incomplete line - skip */
     }
@@ -131,4 +162,13 @@ function extractSpokenText(text) {
   return capLength(prose);
 }
 
-module.exports = { extractSpokenText, stripMarkdown, findTurnEndMessage, textBlocks, capLength, MAX_SPOKEN_CHARS };
+module.exports = {
+  extractSpokenText,
+  stripMarkdown,
+  findTurnEndMessage,
+  textBlocks,
+  capLength,
+  MAX_SPOKEN_CHARS,
+  AGY_DONE_STATUSES,
+  isAgyTurnEndStep,
+};

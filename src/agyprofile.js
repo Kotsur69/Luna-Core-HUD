@@ -17,6 +17,7 @@
 
 const { isAgyCommand } = require('./launch');
 const { buildSessionEnv } = require('./sessionenv');
+const { ACCOUNT_ENV } = require('./claudeaccounts');
 
 /** config/providers.json id of the Antigravity template. */
 const AGY_TEMPLATE_ID = 'antigravity';
@@ -60,7 +61,22 @@ function agyProfileId(profiles, preferredId = null) {
 function agyEnv(profile, { inherited = process.env } = {}) {
   if (!isAgyProfile(profile)) return null;
   const own = isObj(profile.env) ? profile.env : {};
-  return buildSessionEnv(inherited, own);
+  // Filter inherited env case-insensitively on Windows before layering own env.
+  const cleanedInherited = {};
+  if (isObj(inherited)) {
+    for (const [k, v] of Object.entries(inherited)) {
+      const upper = k.toUpperCase();
+      if (upper === 'CLAUDE_CODE_OAUTH_TOKEN' || upper === ACCOUNT_ENV) continue;
+      cleanedInherited[k] = v;
+    }
+  }
+  const env = buildSessionEnv(cleanedInherited, own);
+  // Always strip Claude account tokens/markers case-insensitively so agy never runs with them.
+  for (const k of Object.keys(env)) {
+    const upper = k.toUpperCase();
+    if (upper === 'CLAUDE_CODE_OAUTH_TOKEN' || upper === ACCOUNT_ENV) delete env[k];
+  }
+  return env;
 }
 
 module.exports = { AGY_TEMPLATE_ID, isAgyProfile, agyProfileId, agyEnv };

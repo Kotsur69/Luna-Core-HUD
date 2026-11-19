@@ -28,12 +28,16 @@ const {
   editStatOf,
   modelFromUserInput,
   parseSteps,
+  isAgyTurnEndStep,
+  agyTurnEndLine,
   AgyTranscriptState,
   agyContextMetrics,
   workspacesFromRows,
   workspaceMatch,
 } = require('../src/agytranscript');
 const { AgyTranscriptWatcher, readConversationWorkspaces } = require('../src/agywatcher');
+const { markerFrom, openBackgroundTasks, normalizeStoredPlan } = require('../src/orchestraSupervisor');
+const { lastWordsFrom } = require('../src/orchestraDiagnose');
 const { TOOL_TILES, usageToMetrics } = require('../src/observer');
 
 const FIXTURE = fs.readFileSync(path.join(__dirname, 'fixtures', 'agy-transcript.assumed.jsonl'), 'utf8');
@@ -807,4 +811,127 @@ test('the Context widget shows an agy reading as approximate, a Claude one as be
   const i18n = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'i18n.js'), 'utf8');
   assert.equal((i18n.match(/'ctx\.tokens\.estimated':/g) || []).length, 2, 'pl + en');
   assert.equal((i18n.match(/'ctx\.estimated\.title':/g) || []).length, 2, 'pl + en');
+});
+
+// ---- turn-end events for LUNA_DONE / LUNA_BLOCKED & lastWords -----------------------
+
+test('AgyTranscriptState: turn start/end emit once per finished PLANNER_RESPONSE without tool calls', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const t1 = Date.parse('2026-11-17T08:00:00Z');
+  const t2 = Date.parse('2026-11-17T08:01:00Z');
+  const steps = parseSteps([
+    JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: '2026-11-17T08:00:00Z', content: 'Go' }),
+    JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'RUNNING', created_at: '2026-11-17T08:00:10Z', content: '' }),
+    JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-17T08:00:12Z', content: 'Reading.', tool_calls: [{ name: 'view_file', args: { AbsolutePath: 'C:/repo/a.js' } }] }),
+    JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', content: 'code' }),
+    JSON.stringify({ step_index: 3, type: 'PLANNER_RESPONSE', status: 'RUNNING', created_at: '2026-11-17T08:00:50Z', content: 'All good.' }),
+    JSON.stringify({ step_index: 3, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-17T08:01:00Z', content: 'All good.\nLUNA_DONE pkg-1' }),
+    // Repeating step 3 again must not emit a duplicate turn end.
+    JSON.stringify({ step_index: 3, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-17T08:01:00Z', content: 'All good.\nLUNA_DONE pkg-1' }),
+  ].join('\n')).steps;
+
+  const toolEvents = state.apply(steps);
+  assert.deepEqual(toolEvents.map((e) => `${e.phase}:${e.tile}`), ['start:Read', 'end:Read']);
+  const turns = state.takeTurns();
+  assert.equal(turns.length, 2);
+  assert.deepEqual(turns[0], { type: 'start', at: t1 });
+  assert.equal(turns[1].type, 'end');
+  assert.equal(turns[1].startedAt, t1);
+  assert.equal(turns[1].endedAt, t2);
+  assert.deepEqual(markerFrom(turns[1].text, 'pkg-1'), { kind: 'done' });
+  assert.deepEqual(state.takeTurns(), []);
+  assert.equal(isAgyTurnEndStep({ type: 'PLANNER_RESPONSE', status: 'DONE', content: 'ok', toolCalls: [] }), true);
+  assert.equal(isAgyTurnEndStep({ type: 'PLANNER_RESPONSE', status: 'ERROR', content: 'err', toolCalls: [] }), false);
+});
+
+test('watcher: emits onTurnStart / onTurnEnd for live LUNA_DONE and LUNA_BLOCKED, skipping history', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const turnsStarted = [];
+  const turnsEnded = [];
+  // Pre-existing history includes an old LUNA_DONE that must NOT fire on resume.
+  const file = writeTranscript(root, ID_A, [
+    JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: '2026-11-17T07:00:00Z', content: 'Old' }),
+    JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-17T07:01:00Z', content: 'LUNA_DONE old' }),
+    '',
+  ].join('\n'));
+  const { watcher } = makeWatcher(root, CWD, {
+    conversationId: ID_A,
+    onTurnStart: (t) => turnsStarted.push(t),
+    onTurnEnd: (t) => turnsEnded.push(t),
+  });
+  watcher.safeTick();
+  assert.deepEqual([turnsStarted, turnsEnded], [[], []], 'resumed history fires no turns');
+
+  fs.appendFileSync(file, [
+    JSON.stringify({ step_index: 2, type: 'USER_INPUT', created_at: '2026-11-17T08:00:00Z', content: 'Task' }),
+    JSON.stringify({ step_index: 3, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-17T08:00:30Z', content: 'Working on it\nLUNA_BLOCKED a: Cannot find module \'chalk\'' }),
+    '',
+  ].join('\n'));
+  watcher.safeTick();
+  assert.equal(turnsStarted.length, 1);
+  assert.equal(turnsEnded.length, 1);
+  assert.deepEqual(markerFrom(turnsEnded[0].text, 'a'), { kind: 'blocked', reason: "Cannot find module 'chalk'" });
+  assert.match(lastWordsFrom(turnsEnded[0].text), /Cannot find module 'chalk'/);
+
+  // Truncated / rewritten file re-enters as history: no duplicate turn end.
+  fs.writeFileSync(file, `${agyTurnEndLine('LUNA_DONE stale')}\n`);
+  watcher.safeTick();
+  assert.equal(turnsEnded.length, 1);
+  watcher.stop();
+});
+
+test('orchestraSupervisor handles agy prose and preserves buildPlanner agy', () => {
+  const quoted = JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', content: 'Saw "Command running in background with ID: fake-1"' });
+  assert.deepEqual(openBackgroundTasks(quoted, []), []);
+  const stored = normalizeStoredPlan({
+    id: 'p-agy',
+    repoPath: path.resolve('repo'),
+    buildPlanner: 'agy',
+    workers: 'agy',
+    agyProfileId: 'agy-1',
+    packages: [{ id: 'a', todoAts: [1], prompt: 'do a' }],
+  });
+  assert.equal(stored.buildPlanner, 'agy');
+});
+
+test('AgyTranscriptState: statusless PLANNER_RESPONSE does not fire early and allows later DONE update to fire', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const streaming = parseSteps([
+    JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: '2026-11-17T08:00:00Z', content: 'Go' }),
+    JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: '', created_at: '2026-11-17T08:00:05Z', content: 'Partial without marker' }),
+  ].join('\n')).steps;
+  state.apply(streaming);
+  const firstTurns = state.takeTurns();
+  assert.deepEqual(firstTurns.map((t) => t.type), ['start']);
+
+  const done = parseSteps(
+    JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-17T08:00:10Z', content: 'Partial without marker\nLUNA_DONE pkg-1' }),
+  ).steps;
+  state.apply(done);
+  const nextTurns = state.takeTurns();
+  assert.equal(nextTurns.length, 1);
+  assert.equal(nextTurns[0].type, 'end');
+  assert.deepEqual(markerFrom(nextTurns[0].text, 'pkg-1'), { kind: 'done' });
+});
+
+test('watcher: conversation claimed when snapshotBaseline ran stays ignored after old watcher stops', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData({ [ID_A]: tabDir, [ID_B]: tabDir });
+  const w1 = makeWatcher(root, tabDir);
+  const fileA = writeTranscript(root, ID_A, FIXTURE);
+  w1.watcher.safeTick();
+  assert.equal(w1.watcher.pinned.full, fileA);
+
+  // Reopened watcher snapshots baseline while w1 still claims ID_A.
+  const w2 = makeWatcher(root, tabDir);
+  // Old watcher stops, then dying process flushes another line to ID_A.
+  w1.watcher.stop();
+  fs.appendFileSync(fileA, `${agyTurnEndLine('LUNA_DONE stale-from-dying-tab')}\n`);
+  w2.watcher.safeTick();
+  assert.equal(w2.watcher.pinned, null, 'reopened tab must not adopt a conversation claimed at start');
+
+  const fileB = writeTranscript(root, ID_B, FIXTURE);
+  w2.watcher.safeTick();
+  assert.equal(w2.watcher.pinned.full, fileB, 'new conversation for reopened tab is adopted');
+  w2.watcher.stop();
 });

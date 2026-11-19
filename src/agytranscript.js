@@ -44,6 +44,7 @@ const { AGY_MODEL } = require('./claudeModels');
 const { isClaudeCommand, isAgyCommand } = require('./launch');
 const { countLines, countStringDiff, estimateTokens } = require('./filestat');
 const { pathKey } = require('./gitattribution');
+const { isAgyTurnEndStep } = require('./ttsExtract');
 
 /**
  * Context window assumed for an agy tab. agy states no window, and its models
@@ -261,9 +262,9 @@ function parseStepLine(line) {
   return {
     step: {
       index: Number.isInteger(obj.step_index) ? obj.step_index : null,
-      // The enum's full name (CORTEX_STEP_TYPE_GENERIC) is accepted too.
+      // The enum's full name (CORTEX_STEP_TYPE_GENERIC / CORTEX_STEP_STATUS_DONE) is accepted too.
       type: obj.type.replace(/^CORTEX_STEP_TYPE_/, ''),
-      status: typeof obj.status === 'string' ? obj.status : '',
+      status: typeof obj.status === 'string' ? obj.status.replace(/^CORTEX_STEP_STATUS_/, '') : '',
       at: typeof obj.created_at === 'string' ? Date.parse(obj.created_at) || null : null,
       content,
       toolCalls: toolCallsOf(obj.tool_calls),
@@ -295,6 +296,24 @@ function parseSteps(text) {
   return { steps, skipped };
 }
 
+const MAX_TURN_END_CHARS = 65536;
+
+/**
+ * Serializes an agy assistant response into the compact JSONL line expected by
+ * downstream turn-end handlers (findTurnEndMessage / markerFrom / lastWordsFrom).
+ * Keeps the tail if oversized so end-of-message markers are preserved.
+ * @param {string} content
+ * @returns {string}
+ */
+function agyTurnEndLine(content) {
+  const s = String(content || '');
+  return JSON.stringify({
+    type: 'PLANNER_RESPONSE',
+    status: 'DONE',
+    content: s.length > MAX_TURN_END_CHARS ? s.slice(-MAX_TURN_END_CHARS) : s,
+  });
+}
+
 /**
  * The running state of one agy conversation: tool calls waiting for their
  * result, the characters in the context window and the model. It spans
@@ -315,10 +334,14 @@ class AgyTranscriptState {
     this.unresolved = 0;
     /** Highest step_index seen: a line repeating one is an update, not a new step. */
     this.lastIndex = -1;
-    /** {type, chars, opened} of the step with that index, for its updates; null when unknown. */
+    /** {type, chars, opened, turnEnded} of the step with that index, for its updates; null when unknown. */
     this.last = null;
     /** Event ids are ours, so they never collide (agy's own are not logged). */
     this.callSeq = 0;
+    /** Start timestamp of the current user-initiated turn, if known. */
+    this.turnStartedAt = null;
+    /** Pending turn start/end notifications accumulated during apply(). */
+    this.turnEvents = [];
   }
 
   /**
@@ -340,14 +363,25 @@ class AgyTranscriptState {
       // A checkpoint is agy compacting the conversation: its summary replaces
       // everything before it in the window.
       this.contextChars = step.type === 'CHECKPOINT' ? step.chars : this.contextChars + step.chars;
-      if (step.type === 'USER_INPUT') this.model = modelFromUserInput(step.content) || this.model;
+      if (step.type === 'USER_INPUT') {
+        this.model = modelFromUserInput(step.content) || this.model;
+        this.turnStartedAt = step.at || Date.now();
+        this.turnEvents.push({ type: 'start', at: this.turnStartedAt });
+      }
       if (step.type === 'PLANNER_RESPONSE') this.openBatch(step, events);
       else if (step.type === 'GENERIC' && this.pending.length > 0) {
         const call = this.pending.shift();
         if (call.tile) events.push(endEvent(call, step));
       }
+      const turnEnded = isAgyTurnEndStep(step);
+      if (turnEnded) this.recordTurnEnd(step);
       this.last = step.index === null ? null
-        : { type: step.type, chars: step.chars, opened: step.type === 'PLANNER_RESPONSE' && step.toolCalls.length > 0 };
+        : {
+            type: step.type,
+            chars: step.chars,
+            opened: step.type === 'PLANNER_RESPONSE' && step.toolCalls.length > 0,
+            turnEnded,
+          };
     }
     return events;
   }
@@ -368,6 +402,31 @@ class AgyTranscriptState {
       this.openBatch(step, events);
       last.opened = true;
     }
+    if (step.type === 'PLANNER_RESPONSE' && !last.opened && !last.turnEnded && isAgyTurnEndStep(step)) {
+      last.turnEnded = true;
+      this.recordTurnEnd(step);
+    }
+  }
+
+  /** Records one finished turn so the watcher can fire onTurnEnd once. */
+  recordTurnEnd(step) {
+    const endedAt = step.at || Date.now();
+    const startedAt = this.turnStartedAt || endedAt;
+    this.turnStartedAt = null;
+    this.turnEvents.push({
+      type: 'end',
+      startedAt,
+      endedAt,
+      text: agyTurnEndLine(step.content),
+    });
+  }
+
+  /** Drains and returns accumulated turn events since the previous drain. */
+  takeTurns() {
+    if (this.turnEvents.length === 0) return [];
+    const out = this.turnEvents;
+    this.turnEvents = [];
+    return out;
   }
 
   /** A planner step: the previous batch is over, this one's calls start. */
@@ -552,6 +611,8 @@ module.exports = {
   modelFromUserInput,
   parseStepLine,
   parseSteps,
+  isAgyTurnEndStep,
+  agyTurnEndLine,
   AgyTranscriptState,
   agyContextMetrics,
   workspacesFromRows,

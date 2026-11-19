@@ -10,6 +10,7 @@ const {
   extractSpokenText,
   stripMarkdown,
   findTurnEndMessage,
+  isAgyTurnEndStep,
   capLength,
   MAX_SPOKEN_CHARS,
 } = require('../src/ttsExtract');
@@ -45,6 +46,22 @@ test('findTurnEndMessage returns the LAST matching message in a multi-line fragm
 
 test('findTurnEndMessage survives a torn line mid-write', () => {
   assert.equal(findTurnEndMessage('{"message":{"stop_reason":"end_'), null);
+});
+
+test('findTurnEndMessage reads completed agy PLANNER_RESPONSE lines without breaking Claude lines', () => {
+  const agy = (over) => JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', content: 'hi', ...over });
+  assert.equal(findTurnEndMessage(agy({ content: 'LUNA_DONE p1' })).content, 'LUNA_DONE p1');
+  assert.equal(findTurnEndMessage(agy({ type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', status: 'CORTEX_STEP_STATUS_COMPLETED', content: 'ok' })).content, 'ok');
+  assert.equal(findTurnEndMessage(agy({ status: 'RUNNING', content: 'partial' })), null);
+  assert.equal(findTurnEndMessage(agy({ status: 'ERROR', content: 'boom' })), null);
+  assert.equal(findTurnEndMessage(agy({ tool_calls: [{ name: 'view_file' }], content: 'LUNA_DONE p1' })), null);
+  assert.equal(findTurnEndMessage(agy({ content: '   ' })), null);
+  // Multi-line: returns the last finished agy response.
+  assert.equal(findTurnEndMessage([agy({ content: 'first' }), agy({ content: 'second' })].join('\n')).content, 'second');
+  // Claude assistant line mentioning "PLANNER_RESPONSE" still parses via stop_reason only.
+  const claudeMention = assistantLine('end_turn', [textBlock('Mentioning "PLANNER_RESPONSE" in prose.')]);
+  assert.equal(findTurnEndMessage(claudeMention).stop_reason, 'end_turn');
+  assert.equal(findTurnEndMessage(claudeMention).content[0].text, 'Mentioning "PLANNER_RESPONSE" in prose.');
 });
 
 // ---- stripMarkdown ------------------------------------------------------------
@@ -114,4 +131,19 @@ test('extractSpokenText caps pathologically long output at MAX_SPOKEN_CHARS + 1'
   const line = assistantLine('end_turn', [textBlock(long)]);
   const out = extractSpokenText(line);
   assert.ok(out.length <= MAX_SPOKEN_CHARS + 1);
+});
+
+test('isAgyTurnEndStep and findTurnEndMessage require a completed status on PLANNER_RESPONSE', () => {
+  for (const status of ['', 'RUNNING', 'CORTEX_STEP_STATUS_RUNNING', 'ERROR']) {
+    const step = { type: 'PLANNER_RESPONSE', status, content: 'LUNA_DONE pkg-1', tool_calls: [] };
+    assert.equal(isAgyTurnEndStep(step), false);
+    assert.equal(findTurnEndMessage(JSON.stringify(step)), null);
+  }
+  for (const status of ['DONE', 'COMPLETED', 'CORTEX_STEP_STATUS_DONE']) {
+    const step = { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', status, content: 'All done.\nLUNA_DONE pkg-1', tool_calls: [] };
+    assert.equal(isAgyTurnEndStep(step), true);
+    const msg = findTurnEndMessage(JSON.stringify(step));
+    assert.equal(msg && msg.role, 'assistant');
+    assert.match(msg && msg.content, /LUNA_DONE pkg-1/);
+  }
 });
