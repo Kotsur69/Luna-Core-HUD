@@ -7,7 +7,20 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.33.0 — Ctrl+L Report models pickers for the weekly review and daily.**
+> **Current release: v0.34.0 — Workers multi-select = the run's model pool.**
+> - Workers multi-select = the run's model pool
+> - Antigravity limits as Opus / Gemini / Argon rows, read from agy /usage
+> - show LunaCore's background calls as their own project
+> - add live Antigravity model choices across all roles
+> - show app version in the PTY status line
+> - add Smithsonian 3D, BlenderKit, Lots of Sounds, ComfyUI audio/3D, and
+>   Ctrl+L guide
+> - Fix: end the weekly brief's weekend at Monday 09:00
+> - Fix: show the whole number in the reserve-cap inputs
+> - Fix: count removed God Mode worktrees for their repo
+> - Fix: re-render Briefs card on language change
+>
+> **v0.33.0 — Ctrl+L Report models pickers for the weekly review and daily.**
 > - Ctrl+L Report models pickers for the weekly review and daily brief
 > - weekly review and brief can run on any agy model, stored as {provider,
 >   model}
