@@ -960,6 +960,23 @@
     </div>
   </template>
 
+  <template id="w-memory">
+    <div class="panel__section">
+      <h2 class="panel__title" data-i18n="mem.panel.title">Pamiec</h2>
+      <button
+        type="button"
+        id="memory-open-btn"
+        class="action-btn"
+        data-i18n-title="mem.panel.openHint"
+        title="Otworz panel wspomnien (skrzynka, przeglad, wszystkie, cmentarzysko)"
+      >
+        <span class="action-btn__icon">&#9789;</span>
+        <span class="action-btn__label" data-i18n="mem.panel.open">OTWORZ PAMIEC</span>
+      </button>
+      <p class="hint" data-i18n="mem.panel.hint">Skrzynka, przeglad, wszystkie wspomnienia i cmentarzysko.</p>
+    </div>
+  </template>
+
   <!-- The three list builders from the left panel (A2). Each keeps the
        `--grow` it had as static markup - they're the ones that split the panel's
        free height between themselves. The `.cheats` interior is built by the

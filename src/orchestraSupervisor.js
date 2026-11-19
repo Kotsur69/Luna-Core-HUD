@@ -27,7 +27,7 @@ const { normalizeEffort } = require('./efforts');
 const { CLAUDE_MODELS } = require('./claudeModels');
 const { isAgyModel } = require('./workerModels');
 const { normalizePool, isPoolRun, isPoolKey } = require('./workerPool');
-const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
+const { MAX_LAST_WORDS, MAX_HANDBACK_CHARS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
 const { normalizeSleeps } = require('./orchestraSleep');
 const { normalizePostMerge, normalizeSha } = require('./orchestraPostMergeState');
@@ -276,8 +276,9 @@ function shouldAutoResume(pkg, reason) {
 // What they do lives elsewhere; here they are only stored. Default off.
 const RUN_OPTION_FLAGS = ['sleepOnLimit', 'shutdownWhenDone'];
 // Live switches stored only while on (F5 "Claude review of luna-free/
-// branches", orchestraFreeReview.js): an older run loads exactly as it was.
-const OPT_IN_FLAGS = ['freeReview'];
+// branches", orchestraFreeReview.js; post-run handback scanner,
+// orchestraHandbackScan.js): an older run loads exactly as it was.
+const OPT_IN_FLAGS = ['freeReview', 'scanHandbacks'];
 const LIVE_OPTION_KEYS = [...RUN_OPTION_FLAGS, ...OPT_IN_FLAGS];
 // Fixed when the plan is made, from the God Mode settings (never a live
 // switch) and stored only while on: A/B builds (orchestraVariants.js),
@@ -814,6 +815,7 @@ function normalizePackage(raw) {
     // Report evidence (orchestraDiagnose.js): the worker's last message and
     // the end of a failed verify run. Model / test output - display only.
     lastWords: strOrNull(raw.lastWords, MAX_LAST_WORDS + 3),
+    ...(strOrNull(raw.handback, MAX_HANDBACK_CHARS + 3) ? { handback: strOrNull(raw.handback, MAX_HANDBACK_CHARS + 3) } : {}),
     verifyTail: strOrNull(raw.verifyTail, MAX_TAIL_CHARS),
     // Plan runs: the finish guard's flag must survive a restart (fails closed).
     ...(raw.planRun != null ? { planRun: normalizeStoredPlanRunFlag(raw.planRun) } : {}),
