@@ -377,14 +377,14 @@ function appendRunReport(ctx) {
  * makes one memory-extractor call per run. Fire and forget: nothing here may
  * delay or break the report or its email.
  */
-function captureRun(ctx, self, planId) {
+function captureRun(projectId, ctx, self, planId) {
   if (typeof ctx.onRunReport !== 'function') return;
   try {
     const controller = self();
     const view = controller ? controller.view() : null;
     const repoPath = controller && typeof controller.repoPath === 'function' ? controller.repoPath() : null;
     if (!view || view.id !== planId || typeof repoPath !== 'string' || !repoPath) return;
-    Promise.resolve(ctx.onRunReport({ runId: planId, repoPath, view })).catch((err) => ctx.logError(`[orchestra] run capture failed: ${errText(err)}`));
+    Promise.resolve(ctx.onRunReport({ runId: planId, projectId, repoPath, view })).catch((err) => ctx.logError(`[orchestra] run capture failed: ${errText(err)}`));
   } catch (err) {
     ctx.logError(`[orchestra] run capture failed: ${errText(err)}`);
   }
@@ -396,8 +396,18 @@ function reportDeps(projectId, ctx, self) {
     putSnapshot: (run) => ctx.putSnapshot(run),
     // Called once per report the finalizer writes (orchestraFinalize.js sendReport).
     onReport: (planId, text, summary) => {
-      captureRun(ctx, self, planId);
+      captureRun(projectId, ctx, self, planId);
       return ctx.onReport(planId, text, summary);
+    },
+    // Ticking scanHandbacks after the run already settled triggers the scan now.
+    onHandbackScan: (planId) => {
+      if (typeof ctx.onHandbackScan !== 'function') return;
+      const controller = self();
+      const view = controller ? controller.view() : null;
+      if (!view || view.id !== planId) return;
+      return Promise.resolve(ctx.onHandbackScan({ runId: planId, projectId, view })).catch((err) =>
+        ctx.logError(`[orchestra] handback scan failed: ${errText(err)}`),
+      );
     },
     writeReport: (planId, text) => {
       if (!RUN_ID_RE.test(planId) || !ctx.ensureUserDir()) return null;

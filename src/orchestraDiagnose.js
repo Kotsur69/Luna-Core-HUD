@@ -19,8 +19,10 @@ const fs = require('fs');
 const path = require('path');
 const { findTurnEndMessage, textBlocks } = require('./ttsExtract');
 const { pushBlockKind } = require('./pushSecrets');
+const { scrub } = require('./hostscrub');
 
 const MAX_LAST_WORDS = 500;
+const MAX_HANDBACK_CHARS = 4000;
 const MAX_TAIL_LINES = 12;
 const MAX_TAIL_CHARS = 1500;
 const MAX_QUOTE_CHARS = 200;
@@ -444,6 +446,21 @@ function lastWordsFrom(fragment) {
 }
 
 /**
+ * The worker's full final assistant message (preserved with line breaks, capped)
+ * for post-run handback scanning (src/orchestraHandbackScan.js).
+ * @param {string} fragment
+ * @returns {string} '' when the turn has no text
+ */
+function handbackFrom(fragment) {
+  const message = findTurnEndMessage(fragment);
+  if (!message) return '';
+  // Scrub before slicing so a secret straddling the cap boundary cannot lose its prefix.
+  const text = scrub(textBlocks(message)).trim();
+  if (!text) return '';
+  return text.length > MAX_HANDBACK_CHARS ? `...${text.slice(text.length - MAX_HANDBACK_CHARS)}` : text;
+}
+
+/**
  * The end of a failed verify run, for the report: the last non-empty lines.
  * @param {string} output
  * @returns {string} newline-joined, capped
@@ -464,7 +481,9 @@ module.exports = {
   gitDirExists,
   skipDetailLabel,
   lastWordsFrom,
+  handbackFrom,
   outputTail,
   MAX_LAST_WORDS,
+  MAX_HANDBACK_CHARS,
   MAX_TAIL_CHARS,
 };

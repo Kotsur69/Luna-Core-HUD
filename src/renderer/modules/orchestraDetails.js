@@ -25,8 +25,8 @@ const HINT_CODES = new Set(['depMergeFailed', 'conflict', 'depVerifyFailed', 'la
 const HINT_ALIAS = { conflict: 'depMergeFailed' };
 const STAGES = new Set(['worktree', 'brief', 'tab', 'launch', 'depMerge', 'depVerify']);
 const MAX_FILES_SHOWN = 10;
-// Live run switches (orchestraSupervisor RUN_OPTION_FLAGS).
-const RUN_OPTIONS = ['sleepOnLimit', 'shutdownWhenDone'];
+// Live run switches (orchestraSupervisor RUN_OPTION_FLAGS + scanHandbacks).
+const RUN_OPTIONS = ['sleepOnLimit', 'shutdownWhenDone', 'scanHandbacks'];
 // F5, a free build run only: one Claude review per luna-free/* branch (opt-in).
 const FREE_RUN_OPTIONS = ['freeReview'];
 // canWake() reasons with their own text (orch.wake.<reason>).

@@ -43,6 +43,7 @@ import './modules/telemetry.js';
 
 // -- Action Injector ----------------------------------------------------------
 import './modules/actions.js';
+import './modules/memorypanel.js';
 import './modules/autocompact.js';
 import './modules/autoproceed.js';
 // notify.js is no longer a self-registering widget - its mountNotify() is

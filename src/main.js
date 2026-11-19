@@ -299,6 +299,7 @@ const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
 let memoryRunCapture = null;
+let handbackScanner = null;
 let memoryDecay = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
@@ -307,6 +308,7 @@ let hubApi = null;
 // which a tab's `claude` writes task cards into that tab's project list.
 const { IntakeServer, writeSessionConfig, removeSessionConfig } = require('./intake');
 const { createFollowupChannel, runStoredLedger } = require('./orchestraFollowups');
+const { createHandbackScanner } = require('./orchestraHandbackScan');
 const { writeGodModeConfig, withGodModeMcp } = require('./orchestraFollowupsLaunch');
 const {
   addWorktree,
@@ -1372,10 +1374,11 @@ function memoryRoots() {
 // One intake server for the whole app, started lazily by the first tab that
 // needs it. storeFor() resolves the CURRENT project of the calling tab on
 // every request, so a tab switched to another project writes there.
+const followupLedger = runStoredLedger(() => orchestraRuns, (line) => console.error(line));
 const intakeServer = new IntakeServer({
   version: app.getVersion(),
   // God Mode sessions' scoped to-do tools; what they file is stored with their run.
-  channel: createFollowupChannel({ ledger: runStoredLedger(() => orchestraRuns, (line) => console.error(line)) }),
+  channel: createFollowupChannel({ ledger: followupLedger }),
   storeFor: (sessionId) => {
     const session = sessions.get(sessionId);
     if (!session) return null;
@@ -1637,8 +1640,12 @@ const orchestraCtx = {
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).
   onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
-  // A finished run's lessons, once per run, for projects with memory on (src/memoryruncapture.js).
-  onRunReport: (run) => (memoryRunCapture ? memoryRunCapture.capture(run) : null),
+  // A finished run's lessons (memoryruncapture.js) and opt-in handback To-do scan (orchestraHandbackScan.js).
+  onRunReport: (run) => {
+    if (memoryRunCapture) Promise.resolve(memoryRunCapture.capture(run)).catch((err) => console.error('[memory] run capture failed:', err && err.message));
+    if (handbackScanner) Promise.resolve(handbackScanner.scan(run)).catch((err) => console.error('[orchestra] handback scan failed:', err && err.message));
+  },
+  onHandbackScan: (run) => (handbackScanner ? handbackScanner.scan(run) : null),
   // The phone's live run views (godmodelivepub.js), one per project.
   onLive: (view, projectId) => {
     const key = typeof projectId === 'string' ? projectId : null;
@@ -4583,6 +4590,20 @@ app.whenReady().then(() => {
       onSaved: onMemorySaved,
       // Memories the run made obsolete went on the review list (a log line only: nothing to sync).
       onDisputed: () => send('memory:changed', {}),
+    });
+    // Opt-in God Mode post-run handback scanner (src/orchestraHandbackScan.js).
+    handbackScanner = createHandbackScanner({
+      configDir: userDir(),
+      run: runMemoryExtractor,
+      readTodos,
+      writeTodos,
+      ledger: followupLedger,
+      onTodosChanged: (projectId) => {
+        send('todo:changed', { projectId });
+        if (todoSync) todoSync.soon();
+      },
+      appendReport: appendRunReport,
+      log: (line) => console.error(line),
     });
     // An unused memory loses usefulness and moves to the archive at zero (src/memorydecay.js).
     memoryDecay = createMemoryDecay({

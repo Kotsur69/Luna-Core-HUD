@@ -34,7 +34,7 @@
 
 const path = require('path');
 const { validatePlan, estimatePlan, pickTodos, plannerEffortOf, plannerModelOf, MAX_PARALLEL, MAX_PROMPT_CHARS, PLANNER_MODEL } = require('./orchestraPlan');
-const { lastWordsFrom, outputTail } = require('./orchestraDiagnose');
+const { lastWordsFrom, handbackFrom, outputTail } = require('./orchestraDiagnose');
 const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer, ABORT_FINISH_AFTER_MS, postMergeContext, slugOf } = require('./orchestraFinalize');
@@ -1076,6 +1076,7 @@ function createOrchestra(deps) {
         blockedBy: p.blockedBy || null,
         failure: p.failure || null,
         lastWords: p.lastWords || null,
+        ...(p.handback ? { handback: p.handback } : {}),
         verifyTail: p.verifyTail || null,
         awaitingDeps: p.awaitingDeps === true,
         verifyPhase: p.state === 'finishing' ? p.verifyPhase || null : null,
@@ -2971,7 +2972,10 @@ function createOrchestra(deps) {
     if (!pkg || plan.killed) return;
     // Evidence for the report's "What went wrong": what the worker said last.
     const lastWords = lastWordsFrom(fragment);
-    if (lastWords) patch(pkg.id, { lastWords });
+    const handback = handbackFrom(fragment);
+    if (lastWords || handback) {
+      patch(pkg.id, { ...(lastWords ? { lastWords } : {}), ...(handback ? { handback } : {}) });
+    }
     // LUNA_DONE already came; the verify waits for Resume.
     if (pkg.awaitingDeps) {
       commit();
@@ -3734,6 +3738,16 @@ function createOrchestra(deps) {
     commit();
     // F5 ticked after the run settled: the review starts now.
     if (changes.freeReview === true && !finalizer.isRunning()) freeReviewer.start();
+    // Handback scanner ticked after the run settled: scan now.
+    if (
+      changes.scanHandbacks === true &&
+      !finalizer.isRunning() &&
+      plan.integration &&
+      (plan.integration.state === 'done' || plan.integration.state === 'failed') &&
+      typeof deps.onHandbackScan === 'function'
+    ) {
+      background(deps.onHandbackScan(plan.id), 'handbackScan');
+    }
     background(powerFlow.onOptions(plan.options), 'options');
     return { ok: true, options: { ...plan.options } };
   }
