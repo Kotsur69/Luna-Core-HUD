@@ -49,6 +49,9 @@ const JOB_TIMEOUT_MS = 240000;
 const TICK_MS = 60 * 60 * 1000;
 const FIRST_TICK_MS = 2 * 60 * 1000;
 const WEEKEND_HOUR = 18;
+// The weekend a weekly brief covers ends Monday 09:00, so a brief regenerated
+// later in the week does not count Mon-Thu work as weekend.
+const WEEKEND_END_HOUR = 9;
 const MAX_RANGE_MS = 8 * 24 * 60 * 60 * 1000 - 1;
 const HOUR_MS = 60 * 60 * 1000;
 const THREAD_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -311,7 +314,9 @@ async function gatherInputs(kind, sources, nowMs, lastNews) {
   const review = await safe(() => sources.review());
   const reviewAt = review && !review.error && Number.isFinite(review.at) ? review.at : 0;
   const since = Math.max(weekendStart(today), reviewAt);
-  const until = Math.min(nowMs, since + MAX_RANGE_MS);
+  const monday = parseDay(mondayOf(today));
+  const weekendEnd = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate(), WEEKEND_END_HOUR).getTime();
+  const until = Math.min(nowMs, weekendEnd, since + MAX_RANGE_MS);
   const cal = await safe(() => sources.calendar(nowMs, parseDay(addDays(mondayOf(today), 7)).getTime()));
   return {
     week,

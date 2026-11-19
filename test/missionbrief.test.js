@@ -98,6 +98,22 @@ test('weekly inputs start after the Sunday review when it is later than Fri 18:0
   assert.deepEqual(inputs.review, { week: '2026-W43', at: reviewAt, headline: 'H' });
 });
 
+test('a weekly brief regenerated later in the week keeps the weekend ending Monday 09:00', async () => {
+  const thu = new Date(2026, 9, 29, 15, 30).getTime();
+  const { src, calls } = sources();
+  await gatherInputs('weekly', src, thu, null);
+  assert.equal(calls.range[0].sinceMs, new Date(2026, 9, 23, 18).getTime());
+  assert.equal(calls.range[0].untilMs, MON);
+  assert.deepEqual(calls.commits[0], [new Date(2026, 9, 23, 18).getTime(), MON]);
+});
+
+test('a weekly brief made early on Monday ends its weekend now, not at 09:00', async () => {
+  const early = new Date(2026, 9, 26, 7, 3).getTime();
+  const { src, calls } = sources();
+  await gatherInputs('weekly', src, early, null);
+  assert.equal(calls.range[0].untilMs, early);
+});
+
 test('a failing source is {error}, the brief still gets the rest', async () => {
   const { src } = sources({ calendar: async () => { throw Object.assign(new Error('x'), { reason: 'gcal-not-connected' }); } });
   const inputs = await gatherInputs('daily', src, MON, null);
