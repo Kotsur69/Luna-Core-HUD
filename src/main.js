@@ -109,6 +109,7 @@ const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
 // Per-account 5 h + weekly usage through usage-only logins (src/claudeaccountusage.js).
 const { createAccountUsage } = require('./claudeaccountusage');
 const { reserveLimits } = require('./accountreserve');
+const { createReserveEnforcer } = require('./reserveenforce');
 const { claudePath } = require('./hostchat');
 const { createTabFailover } = require('./claudefailover');
 // Project switcher: session working directories (cwd) from config/projects.json.
@@ -446,6 +447,69 @@ const { failoverTab } = createTabFailover({
   send: (channel, payload) => send(channel, payload),
   isCurrent: (session) => sessions.get(session.id) === session,
   lang: () => readUiPrefs().lang,
+});
+
+/** The terminal line shown when a reserve cap stops a turn and no account is free. */
+function reserveStopNotice(at, lang) {
+  const when = Number.isFinite(at) ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '?';
+  const text = lang === 'pl'
+    ? `[LunaCore] Rezerwa konta osiagnieta i zadne inne konto nie jest wolne - zatrzymano do resetu o ${when}.`
+    : `[LunaCore] Account reserve reached and no other account is free - stopped until the reset at ${when}.`;
+  return `\x1b[2;33m${text}\x1b[0m\r\n`;
+}
+
+/**
+ * One tab's account is out until `at`: the real usage limit (the CLI hit the
+ * wall) or a reached reserve cap (src/reserveenforce.js). Both go the same
+ * way: another free account takes the tab over (--resume + continue), else
+ * the tab waits for the reset and a God Mode run pauses. A reserve hit also
+ * has to stop the turn itself - the CLI is still running, it never saw a wall.
+ * @param {object} session
+ * @param {number|null} at epoch ms of the reset
+ * @param {{reserve?: boolean}} [opts]
+ */
+function handleAccountLimit(session, at, { reserve = false } = {}) {
+  // The God Mode registry remembers the account is out until its reset.
+  if (session.accountId && !session.ownBackend) orchestraRuns.noteAccountLimit(session.accountId, at);
+  // Another Claude account is free: the tab resumes on it, no waiting (and a
+  // God Mode run is not paused). The restart also stops the reserved process.
+  if (failoverTab(session, at)) return;
+  send('godmode:signal', { sessionId: session.id, type: 'usageLimit', resetsAt: at });
+  statusBoard.limit(session.id, at);
+  // A God Mode v2 worker: with every Claude account out, every run waits for
+  // the earliest reset (resume pastes "continue"); otherwise only its own run.
+  orchestraRuns.onUsageLimit(session.id, at, { onAccount: !session.ownBackend });
+  if (reserve) stopReservedTurn(session, at);
+}
+
+/**
+ * Stops a turn the CLI would keep running past a reserve cap: Esc, like the
+ * God Mode kill. Last, so a failed write cannot skip the limit state above.
+ * The Esc's own "[Request interrupted]" entry is dropped as a turn start
+ * (reserveEnforcer.takeEscEcho) - otherwise it would stop the tab twice.
+ */
+function stopReservedTurn(session, at) {
+  send('pty:data', { sessionId: session.id, data: reserveStopNotice(at, readUiPrefs().lang) });
+  if (!session.proc) return;
+  try {
+    reserveEnforcer.noteEscStop(session.id);
+    session.proc.write('\x1b');
+    console.info(`[accounts] reserve reached on ${session.accountId} - stopped tab ${session.id}, no other account free`);
+  } catch (err) {
+    console.warn(`[accounts] reserve reached on ${session.accountId} - could not stop tab ${session.id}: ${(err && err.message) || err}`);
+  }
+}
+
+// A reached reserve stops work already running on that account, like the real
+// limit does (src/reserveenforce.js). Checked after every usage reading and at
+// every turn start.
+const reserveEnforcer = createReserveEnforcer({
+  accounts: () => claudeAccounts.usageTargets(),
+  readings: () => accountUsage.readings(),
+  sessions: () => sessions.values(),
+  isWorking: (session) => (statusBoard.current(session.id) || {}).state === 'working',
+  onReserveHit: (session, until) => handleAccountLimit(session, until, { reserve: true }),
+  log: (line) => console.warn(`[accounts] ${line}`),
 });
 
 // ---- Global state ----------------------------------------------------------
@@ -2128,25 +2192,20 @@ function spawnInto(session, profile, launch = null) {
       // API error, which onApiError above must NOT see as a drop). Carries the
       // parsed reset time so God Mode waits it out instead of stalling.
       onUsageLimit: ({ resetsAt } = {}) => {
-        const at = Number.isFinite(resetsAt) ? resetsAt : null;
-        // The God Mode registry remembers the account is out until its reset.
-        if (session.accountId && !session.ownBackend) orchestraRuns.noteAccountLimit(session.accountId, at);
-        // Another Claude account is free: the tab resumes on it, no waiting
-        // (and a God Mode run is not paused).
-        if (failoverTab(session, at)) return;
-        send('godmode:signal', { sessionId: session.id, type: 'usageLimit', resetsAt: at });
-        statusBoard.limit(session.id, at);
-        // A God Mode v2 worker: with every Claude account out, every run waits
-        // for the earliest reset; otherwise only its own run waits.
-        orchestraRuns.onUsageLimit(session.id, at, { onAccount: !session.ownBackend });
+        handleAccountLimit(session, Number.isFinite(resetsAt) ? resetsAt : null);
       },
       // Same channel/shape as onApiError above - autoproceed.js's proof that an
       // armed "continue" (or Mati's own typing) was actually consumed, so a
       // turn that only thinks or answers in plain text before dying again still
       // counts as recovery even though it calls no tool.
       onTurnStart: ({ at } = {}) => {
+        // The interrupt entry of a reserve stop's Esc is not a new turn: the
+        // tab stays in its limit state, God Mode never reads it as recovery.
+        if (reserveEnforcer.takeEscEcho(session.id)) return;
         send('godmode:signal', { sessionId: session.id, type: 'turnStarted', at });
         statusBoard.turnStart(session.id);
+        // A turn that starts on an account at its reserve is stopped at once.
+        reserveEnforcer.onTurnStart(session);
       },
       onTurnEnd: (turn) => {
         checkTurnEnd(turn);
@@ -2716,6 +2775,8 @@ function startUsageWatcher() {
   usageWatcher = new UsageWatcher((usage) => {
     latestUsage = usage;
     checkUsageThresholds(usage);
+    // A fresh reading may put an account at its reserve: stop its running work.
+    reserveEnforcer.sweep();
     putUsageSnapshot();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('usage:update', usage);
