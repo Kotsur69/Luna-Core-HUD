@@ -316,7 +316,7 @@ const CLAUDE_ENV = { PATH: '/claude/bin', LUNA_MARK: 'claude' };
 test('agy: a read-only headless invocation, never in the default order', () => {
   const spec = S.SECOND_OPINION_CLIS[AGY_MODEL];
   assert.equal(spec.command, 'agy');
-  assert.deepEqual(spec.args, ['--print']);
+  assert.deepEqual(spec.args, []);
   assert.equal(spec.args.includes('accept-edits'), false);
   assert.equal(Object.isFrozen(spec.args), true);
   assert.deepEqual(S.DEFAULT_ORDER, ['codex', 'gemini']);
@@ -334,7 +334,7 @@ test('agy: runs with the agy profile env, never the Claude env, and its text ans
   assert.deepEqual(d.asked, ['agy']);
   assert.equal(r.calls.length, 1);
   assert.equal(r.calls[0].command, 'agy');
-  assert.deepEqual(r.calls[0].args, ['--print']);
+  assert.deepEqual(r.calls[0].args, []);
   assert.equal(r.calls[0].env, AGY_ENV);
   assert.match(r.calls[0].prompt, /READ-ONLY/);
   assert.deepEqual(out.cards.map((c) => c.text), ['Pause menu ignores Escape']);

@@ -170,9 +170,9 @@ test('a stored run keeps agy variants at the run, package and override level acr
 test('runAgyPrint / agyPrintArgs: a checked model id goes to agy as --model <id>; junk never does', async () => {
   const { calls, exec } = fakeExec({ stdout: 'ok' });
   await agy.runAgyPrint({ cwd: '.', env: {}, prompt: 'x', timeout: 1000, edits: true, model: 'gemini-4-argon-medium', execImpl: exec });
-  assert.deepEqual(calls[0].args, ['--print', '--mode', 'accept-edits', '--model', 'gemini-4-argon-medium']);
+  assert.deepEqual(calls[0].args, ['--mode', 'accept-edits', '--model', 'gemini-4-argon-medium']);
   for (const bad of ['--print', '-x', 'a b', '', null, 'agy:gemini-4-argon-medium', 42]) {
-    assert.deepEqual(agy.agyPrintArgs({ model: bad }), ['--print'], String(bad));
+    assert.deepEqual(agy.agyPrintArgs({ model: bad }), [], String(bad));
   }
 });
 
@@ -195,17 +195,20 @@ test('extractJsonObject: bare, fenced or wrapped in prose; junk is null', () => 
   assert.deepEqual(agy.parseAgyJson('nothing'), { ok: false, error: 'badJson' });
 });
 
-test('runAgyPrint: argv is --print (plus accept-edits), prompt on stdin; a missing agy is noAgy', async () => {
+test('runAgyPrint: no --print (agy 1.5.12 takes the prompt as its value), prompt on stdin; a missing agy is noAgy', async () => {
   const { calls, exec } = fakeExec({ stdout: 'ok' });
   const res = await agy.runAgyPrint({ cwd: 'C:/repo', env: { E: '1' }, prompt: 'hello', timeout: 1000, execImpl: exec });
   assert.deepEqual(res, { ok: true, stdout: 'ok' });
   assert.equal(calls[0].file, 'agy');
-  assert.deepEqual(calls[0].args, ['--print']);
+  assert.deepEqual(calls[0].args, []);
   assert.equal(calls[0].stdin, 'hello');
   assert.equal(calls[0].opts.windowsHide, true);
   const edits = fakeExec({ stdout: '' });
   await agy.runAgyPrint({ cwd: 'C:/repo', env: {}, prompt: 'x', timeout: 1000, edits: true, execImpl: edits.exec });
-  assert.deepEqual(edits.calls[0].args, ['--print', '--mode', 'accept-edits']);
+  assert.deepEqual(edits.calls[0].args, ['--mode', 'accept-edits']);
+  for (const opts of [{}, { edits: true }, { model: 'gemini-4-neon-high' }, { edits: true, model: 'gemini-4-neon-high' }]) {
+    assert.equal(agy.agyPrintArgs(opts).includes('--print'), false, JSON.stringify(opts));
+  }
   const missing = fakeExec({ error: Object.assign(new Error('spawn agy ENOENT'), { code: 'ENOENT' }) });
   assert.equal((await agy.runAgyPrint({ cwd: '.', env: {}, prompt: 'x', timeout: 1, execImpl: missing.exec })).error, 'noAgy');
   const killed = fakeExec({ error: Object.assign(new Error('killed'), { killed: true }) });
@@ -223,7 +226,7 @@ test('runPlanner agy: one headless agy call with the JSON contract in the prompt
   assert.deepEqual(res.raw, PLAN_JSON);
   assert.equal(res.costUsd, null);
   assert.equal(calls[0].file, 'agy');
-  assert.deepEqual(calls[0].args, ['--print']);
+  assert.deepEqual(calls[0].args, []);
   assert.deepEqual(calls[0].opts.env, { G: '1' });
   assert.match(calls[0].stdin, /You are the planner for LunaCore God Mode/);
   assert.match(calls[0].stdin, /exactly ONE JSON object/);
@@ -254,7 +257,7 @@ test('runReview cli agy: one agy call with the schema in the prompt, the caller 
   const res = await runReview({ cwd: __dirname, env: { G: '1' }, prompt: 'review this', schema, validate, cli: 'agy', execImpl: ok.exec });
   assert.deepEqual(res, { ok: true, choice: 'a', costUsd: null });
   assert.equal(ok.calls[0].file, 'agy');
-  assert.deepEqual(ok.calls[0].args, ['--print']);
+  assert.deepEqual(ok.calls[0].args, []);
   assert.match(ok.calls[0].stdin, /^review this/);
   assert.ok(ok.calls[0].stdin.includes(JSON.stringify(schema)));
   const bad = fakeExec({ stdout: '{"other":1}' });
@@ -265,13 +268,13 @@ test('runReview cli agy: one agy call with the schema in the prompt, the caller 
   assert.equal(claude.calls[0].file, 'claude');
 });
 
-test('runResolver cli agy: agy --print with accept-edits and the resolver prompt; claude stays the default', async () => {
+test('runResolver cli agy: agy with accept-edits and the resolver prompt; claude stays the default', async () => {
   const { runResolver } = require('../src/orchestraIntegrate.js');
   const agyCall = fakeExec({ stdout: 'done' });
   const res = await runResolver({ cwd: __dirname, env: { G: '1' }, branch: 'luna/x', files: ['a.js'], cli: 'agy' }, agyCall.exec);
   assert.equal(res.ok, true);
   assert.equal(agyCall.calls[0].file, 'agy');
-  assert.deepEqual(agyCall.calls[0].args, ['--print', '--mode', 'accept-edits']);
+  assert.deepEqual(agyCall.calls[0].args, ['--mode', 'accept-edits']);
   assert.match(agyCall.calls[0].stdin, /resolving a git merge conflict/);
   const missing = fakeExec({ error: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) });
   const failed = await runResolver({ cwd: __dirname, env: {}, branch: 'luna/x', files: ['a.js'], cli: 'agy' }, missing.exec);
@@ -302,7 +305,7 @@ test('runTopicSplit agy: Plan only splits on agy with the topics schema in the p
   const res = await runTopicSplit({ cwd: __dirname, env: { G: '1' }, request: 'Plan the login', planner: 'agy', execImpl: split.exec });
   assert.deepEqual(res, { ok: true, raw: { topics: [{ id: 'a' }] }, costUsd: null });
   assert.equal(split.calls[0].file, 'agy');
-  assert.deepEqual(split.calls[0].args, ['--print']);
+  assert.deepEqual(split.calls[0].args, []);
   assert.match(split.calls[0].stdin, /exactly ONE JSON object/);
   const claude = fakeExec({ stdout: JSON.stringify({ structured_output: { topics: [] } }) });
   await runTopicSplit({ cwd: __dirname, env: {}, request: 'x', planner: 'claude', execImpl: claude.exec });

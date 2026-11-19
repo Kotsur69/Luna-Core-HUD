@@ -98,14 +98,14 @@ test('model list: agy is a job choice, never a Claude model, never a --model fla
   assert.equal(argAfter(runner.buildJobArgs({ prompt: 'p', model: 'agy', lean: true }), '--model'), 'haiku');
 });
 
-test('runJob on agy: a lean job runs `agy --print` in the temp dir with the agy env, prompt on stdin', async () => {
+test('runJob on agy: a lean job runs `agy` (no --print) in the temp dir with the agy env, prompt on stdin', async () => {
   const os = require('os');
   const f = fakeExec(() => [null, 'Sure:\n```json\n{"title":"T"}\n```', '']);
   const res = await runner.runJob({ prompt: 'parse this', model: 'agy', lean: true, env: CLAUDE_ENV, agyEnv: AGY_ENV, exec: f.exec, timeoutMs: 1234 });
   assert.deepEqual(res, { ok: true, answer: { title: 'T' }, costUsd: null });
   assert.equal(f.spawns.length, 1);
   assert.equal(f.spawns[0].file, 'agy');
-  assert.deepEqual(f.spawns[0].args, ['--print']);
+  assert.deepEqual(f.spawns[0].args, []);
   assert.equal(f.spawns[0].opts.env, AGY_ENV);
   assert.equal(f.spawns[0].opts.cwd, os.tmpdir());
   assert.equal(f.spawns[0].opts.timeout, 1234);
