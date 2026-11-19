@@ -30,7 +30,9 @@ const { EFFORTS, isEffort } = require('./efforts');
 const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
 const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
-const { normalizePool } = require('./workerPool');
+const { normalizePool, runsOnOf } = require('./workerPool');
+/** The agy planner's model pref: an agy family key ('agy-opus' / 'agy-argon' / 'agy-hydrogen') or null. */
+const agyPlannerModelOf = (v) => (runsOnOf(v) === 'agy' ? v : null);
 const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
 
 // Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
@@ -257,6 +259,9 @@ const DEFAULTS = {
   // Mati picks another alias (src/claudeModels.js); main allow-lists it again
   // when a plan starts (orchestraPlan.js plannerModelOf).
   orchestraPlannerModel: 'opus',
+  // The agy planner's model (an agy family, resolved against the live
+  // `agy models` list when a plan starts). null = agy's own default model.
+  orchestraPlannerAgyModel: null,
   // God Mode "Workers" (F6): 'claude' | 'hybrid' | 'free', picked in the to-do
   // picker. An older prefs file's boolean orchestraFree tick migrates.
   orchestraWorkers: 'claude',
@@ -789,6 +794,7 @@ function readUiPrefs() {
       orchestraPlannerModel: CLAUDE_MODELS.includes(obj.orchestraPlannerModel)
         ? obj.orchestraPlannerModel
         : DEFAULTS.orchestraPlannerModel,
+      orchestraPlannerAgyModel: agyPlannerModelOf(obj.orchestraPlannerAgyModel),
       orchestraWorkers: workersPrefOf(obj),
       orchestraModelPool: modelPoolPrefOf(obj.orchestraModelPool),
       orchestraFollowups: obj.orchestraFollowups === true,
@@ -927,6 +933,11 @@ function writeUiPrefs(partial) {
     }
     if (partial && CLAUDE_MODELS.includes(partial.orchestraPlannerModel)) {
       next.orchestraPlannerModel = partial.orchestraPlannerModel;
+    }
+    // null = agy's default model; anything but an agy family key is ignored.
+    if (partial && Object.prototype.hasOwnProperty.call(partial, 'orchestraPlannerAgyModel')) {
+      if (partial.orchestraPlannerAgyModel === null) next.orchestraPlannerAgyModel = null;
+      else if (agyPlannerModelOf(partial.orchestraPlannerAgyModel)) next.orchestraPlannerAgyModel = partial.orchestraPlannerAgyModel;
     }
     if (partial && normalizeWorkers(partial.orchestraWorkers)) {
       next.orchestraWorkers = partial.orchestraWorkers;
@@ -1083,6 +1094,7 @@ module.exports = {
   MISSION_MODELS,
   ORCHESTRA_WORKER_MODELS,
   modelPoolPrefOf,
+  agyPlannerModelOf,
   checkCommandOf,
   workerEffortOf,
   SUPABASE_APPLY_MODES,

@@ -23,7 +23,7 @@
 const { plannerEffortOf, plannerModelOf, PLANNER_MODEL } = require('./orchestraPlan');
 const { normalizeWorkers } = require('./orchestraWorkers');
 const { normalizePlanner } = require('./orchestraAgy');
-const { normalizePool, isPoolRun } = require('./workerPool');
+const { normalizePool, isPoolRun, runsOnOf } = require('./workerPool');
 
 const keyOf = (projectId) => (typeof projectId === 'string' ? projectId : null);
 
@@ -136,6 +136,9 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
     // The default model passes no key (the makePlan call as before); the free
     // and agy planners have their own model.
     ...(!free && !agy && plannerModel !== PLANNER_MODEL ? { plannerModel } : {}),
+    // The agy planner's model: an agy family of the pool menu ('agy-opus' / 'agy-argon' /
+    // 'agy-hydrogen'), resolved against the live list in makePlan; none = agy's default.
+    ...(agy && runsOnOf(model) === 'agy' ? { plannerAgyModel: model } : {}),
     // F6 "Workers": "Plan with free models in mind" changes planning and
     // "Antigravity (agy)" is kept on the plan; a Claude-only request passes no
     // key (the makePlan call as before).

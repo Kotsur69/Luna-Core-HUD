@@ -99,7 +99,7 @@ const { createContextGuard, contextResumeSection } = require('./orchestraContext
  * it always had; the free planner, plan docs, a follow-up request and a
  * hybrid run add keys - and so does a planner model other than the default.
  */
-function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid, abBuild, pool = null }) {
+function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid, abBuild, pool = null, agyModel = null }) {
   return {
     cwd,
     env,
@@ -113,6 +113,8 @@ function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, ex
     ...(abBuild === true ? { abBuild: true } : {}),
     // A pool run: the planner keys it may name (orchestraPlan.js plannerPool).
     ...(Array.isArray(pool) && pool.length ? { pool } : {}),
+    // The agy planner's --model id (live-checked); none = agy's default model.
+    ...(planner === 'agy' && agyModel ? { agyModel } : {}),
   };
 }
 
@@ -1236,6 +1238,9 @@ function createOrchestra(deps) {
       // after `busy`, since checking agy families against the live list may
       // wait on `agy models`. No pool asked = no await, the call as before.
       const pool = planner !== 'free' && ctx.modelPool ? await poolRun.livePlanPool(ctx.modelPool) : null;
+      // The agy planner's model (Opus / Argon / Hydrogen on agy), resolved
+      // against the live list; none picked = agy's own default, as before.
+      const agyModel = planner === 'agy' && ctx.plannerAgyModel ? await poolRun.agyPlannerModelId(ctx.plannerAgyModel, plannerEffort) : null;
       // F6 "Workers": a free planner is always free-only; hybrid plans with
       // Claude; a pool with a free profile runs hybrid (src/workerPool.js).
       const asked = workersRules.planWorkers(ctx.workers, planner);
@@ -1248,7 +1253,7 @@ function createOrchestra(deps) {
         // The picker's planner effort and model ride in ctx too, so a limit-wait
         // or account-failover replan plans at the same level on the same model.
         const res = await deps.runPlanner(
-          plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid, abBuild, pool: pool ? pool.keys : null }),
+          plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid, abBuild, pool: pool ? pool.keys : null, agyModel }),
         );
         if (res && res.ok && res.usage) plannerUsage.push(res.usage);
         return res;
