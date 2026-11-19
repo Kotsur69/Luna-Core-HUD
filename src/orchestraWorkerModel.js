@@ -16,7 +16,7 @@
 const { ORCHESTRA_WORKER_MODELS } = require('./uiprefs');
 const { claudeModelOf } = require('./orchestraWorkers');
 /** The run model nobody chose: today's default. */
-const { DEFAULT_WORKER_MODEL, isWorkerModel } = require('./workerModels');
+const { DEFAULT_WORKER_MODEL, isWorkerModel, isAgyModel } = require('./workerModels');
 /** A 'plan' run package the planner gave no model runs here. */
 const PLAN_FALLBACK_MODEL = 'opus';
 
@@ -30,9 +30,9 @@ function normalizeWorkerModel(value) {
 }
 
 /**
- * The Claude model a package runs on: an escalation / hand-over override,
- * else for a 'plan' run the planner's pick ('free' -> Sonnet, none -> Opus),
- * else the run's model.
+ * The model a package runs on: an escalation / hand-over override, else for
+ * a 'plan' run (Planner's pick, a worker-model pool) the package's own pick
+ * ('free' -> Sonnet, none -> Opus, an agy pick as is), else the run's model.
  * @param {{modelOverride?:string|null, model?:string|null}|null} pkg
  * @param {string|null|undefined} workerModel the run's (frozen) choice
  * @returns {string}
@@ -40,7 +40,12 @@ function normalizeWorkerModel(value) {
 function packageModelOf(pkg, workerModel) {
   const p = pkg && typeof pkg === 'object' ? pkg : {};
   if (typeof p.modelOverride === 'string' && p.modelOverride) return p.modelOverride;
-  if (workerModel === 'plan') return claudeModelOf(typeof p.model === 'string' && p.model ? p.model : null) || PLAN_FALLBACK_MODEL;
+  if (workerModel === 'plan') {
+    const picked = typeof p.model === 'string' && p.model ? p.model : null;
+    // An agy pick runs on agy (src/orchestraAgy.js packageRunsAgy), never as a Claude --model.
+    if (isAgyModel(picked)) return picked;
+    return claudeModelOf(picked) || PLAN_FALLBACK_MODEL;
+  }
   return typeof workerModel === 'string' && workerModel ? workerModel : DEFAULT_WORKER_MODEL;
 }
 

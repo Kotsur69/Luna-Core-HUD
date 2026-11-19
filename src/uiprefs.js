@@ -11,7 +11,7 @@
 // autoCompactMode, autoCompactEveryTurns, autoCompactAfterMinutes,
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
-// orchestraPlannerEffort, orchestraPlannerModel, orchestraWorkers, orchestraFollowups,
+// orchestraPlannerEffort, orchestraPlannerModel, orchestraWorkers, orchestraModelPool, orchestraFollowups,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
 // motion, effectsStrength, welcomeSeen, welcomeChecked, pwaUrl, hideLife,
 // hideMission, hideGodMode.
@@ -30,6 +30,7 @@ const { EFFORTS, isEffort } = require('./efforts');
 const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
 const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
+const { normalizePool } = require('./workerPool');
 const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
 
 // Per-machine state, so it lives in the WRITABLE root - which in a dev clone is
@@ -112,6 +113,18 @@ const WINDOW_MATERIALS = ['auto', 'mica', 'acrylic', 'tabbed'];
 // checked against the live list (src/agymodels.js) before it is used. The
 // list itself lives in src/workerModels.js.
 const ORCHESTRA_WORKER_MODELS = WORKER_MODELS;
+
+/**
+ * The stored "Workers" pool: its valid entries ([{model, effort}],
+ * src/workerPool.js normalizePool), or null for none / an empty or
+ * off-shape value.
+ * @param {unknown} raw
+ * @returns {{model:string, effort:string}[]|null}
+ */
+function modelPoolPrefOf(raw) {
+  const pool = normalizePool(raw);
+  return pool && pool.length ? pool : null;
+}
 const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // Worker --effort: 'plan' = the planner's per-package pick (medium if none);
 // the others force one level. Never 'low' (src/efforts.js).
@@ -247,6 +260,10 @@ const DEFAULTS = {
   // God Mode "Workers" (F6): 'claude' | 'hybrid' | 'free', picked in the to-do
   // picker. An older prefs file's boolean orchestraFree tick migrates.
   orchestraWorkers: 'claude',
+  // God Mode "Workers" pool (src/workerPool.js): [{model, effort}] ticked in
+  // the to-do picker / on Approve. null = none saved: the pickers open on the
+  // single orchestraWorkerModel above (Opus -> [Opus], today's run).
+  orchestraModelPool: null,
   // God Mode "Sessions may file new to-dos" (orchestraFollowups.js), ticked
   // in the to-do picker: the last choice, fixed into each new plan. Off.
   orchestraFollowups: false,
@@ -773,6 +790,7 @@ function readUiPrefs() {
         ? obj.orchestraPlannerModel
         : DEFAULTS.orchestraPlannerModel,
       orchestraWorkers: workersPrefOf(obj),
+      orchestraModelPool: modelPoolPrefOf(obj.orchestraModelPool),
       orchestraFollowups: obj.orchestraFollowups === true,
       orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
         ? obj.orchestraIntegration
@@ -912,6 +930,12 @@ function writeUiPrefs(partial) {
     }
     if (partial && normalizeWorkers(partial.orchestraWorkers)) {
       next.orchestraWorkers = partial.orchestraWorkers;
+    }
+    // null clears the saved pool (the pickers follow the single model again);
+    // an off-shape pool is ignored, the saved one stays.
+    if (partial && Object.prototype.hasOwnProperty.call(partial, 'orchestraModelPool')) {
+      if (partial.orchestraModelPool === null) next.orchestraModelPool = null;
+      else if (modelPoolPrefOf(partial.orchestraModelPool)) next.orchestraModelPool = modelPoolPrefOf(partial.orchestraModelPool);
     }
     if (partial && ORCHESTRA_INTEGRATION_MODES.includes(partial.orchestraIntegration)) {
       next.orchestraIntegration = partial.orchestraIntegration;
@@ -1058,6 +1082,7 @@ module.exports = {
   cleanCustomLayouts,
   MISSION_MODELS,
   ORCHESTRA_WORKER_MODELS,
+  modelPoolPrefOf,
   checkCommandOf,
   workerEffortOf,
   SUPABASE_APPLY_MODES,

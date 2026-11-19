@@ -12,6 +12,9 @@
 
 import { t } from './util.js';
 import { pickable, manualCount, mergeSelection, missingDeps, withDeps } from './orchestraPickRules.js';
+// The "Workers" pool (the models the planner may give packages): shared with Approve.
+import { loadPool, chosenPool, poolPickerView } from './orchestraPoolPicker.js';
+import { isPoolRun, poolWorkers } from '../../workerPool.js';
 
 // src/efforts.js EFFORTS (the renderer cannot require main-side modules,
 // see EFFORT_OPTIONS in orchestrasettings.js). Never 'low'.
@@ -61,7 +64,7 @@ export async function loadPicker(sessionId) {
   }
   cards = pickable(todos);
   manual = manualCount(todos);
-  await loadPlannerEffort();
+  await Promise.all([loadPlannerEffort(), loadPool()]);
   selected = mergeSelection(cards, selected, seen);
   for (const c of cards) seen.add(c.at);
   return true;
@@ -103,6 +106,21 @@ export function followupsPrefOf(prefs) {
 /** The workers the next plan uses: a free planner always plans a free-only run (D1). */
 export function chosenWorkers() {
   return buildPlanner === 'free' ? 'free' : workers;
+}
+
+/** True when the Workers mode picks its own workers and the pool does not apply. */
+const poolLocked = () => buildPlanner === 'free' || workers === 'free' || workers === 'agy';
+
+/**
+ * The plan request's Workers mode and pool: a pool with a free profile plans
+ * hybrid, a lone free profile "Free only" (src/workerPool.js poolWorkers);
+ * only a pool of 2+ models goes to main - one model plans as before.
+ * @returns {{workers:string, modelPool:{model:string, effort:string}[]|null}}
+ */
+export function planRequestWorkers() {
+  if (poolLocked()) return { workers: chosenWorkers(), modelPool: null };
+  const pool = chosenPool();
+  return { workers: poolWorkers(pool, workers), modelPool: isPoolRun(pool) ? pool : null };
 }
 
 /**
@@ -165,7 +183,7 @@ function plannerSelect(disabled, repaint) {
  * F6 "Workers": replaces the old "Free providers" tick. Chosen before
  * planning because "Plan with free models in mind" changes the planner.
  */
-function workersSelect(disabled) {
+function workersSelect(disabled, repaint) {
   const label = el('label', 'orchestra__pick-effort');
   label.title = t('orch.workerMode.hint');
   label.append(el('span', '', t('orch.workerMode')));
@@ -181,8 +199,20 @@ function workersSelect(disabled) {
     workers = WORKERS.includes(sel.value) ? sel.value : 'claude';
     // Fire-and-forget like the effort pref: a failed write keeps the choice on screen.
     Promise.resolve(window.lunacore.setUiPrefs({ orchestraWorkers: workers })).catch(() => {});
+    // The pool picker follows: Free only and Antigravity pick their own workers.
+    repaint();
   });
   label.append(sel);
+  return label;
+}
+
+/** "Workers model": the pool the planner plans for (orchestraPoolPicker.js). */
+function poolSelect(disabled, repaint) {
+  // A span, not a label: a label would forward every click in the dropdown to its first checkbox.
+  const label = el('span', 'orchestra__pick-effort');
+  label.title = t('orch.pool.hint');
+  label.append(el('span', '', t('orch.workerModel')));
+  label.append(poolPickerView({ disabled, locked: poolLocked(), fallbackLabel: t('orch.pool.settingsModel'), onChange: repaint }));
   return label;
 }
 
@@ -277,7 +307,8 @@ function cardRow(card, missing, disabled, repaint) {
 /**
  * The picker block for #orchestra-body.
  * @param {{disabled:boolean, canCancel:boolean,
- *   onPlan:(ats:number[], effort:string, planner:string, workers:string, model:string, followups:boolean) => void,
+ *   onPlan:(ats:number[], effort:string, planner:string, workers:string, model:string, followups:boolean,
+ *     modelPool:{model:string, effort:string}[]|null) => void,
  *   onCancel:() => void, repaint:() => void}} opts
  * @returns {HTMLElement}
  */
@@ -325,13 +356,17 @@ export function pickerView({ disabled, canCancel, onPlan, onCancel, repaint }) {
   const planDisabled = disabled || !count;
   foot.append(
     plannerSelect(planDisabled, repaint),
-    workersSelect(planDisabled),
+    workersSelect(planDisabled, repaint),
+    poolSelect(planDisabled, repaint),
     effortSelect(planDisabled),
     modelSelect(planDisabled),
     followupsToggle(planDisabled),
     button(
       t('orch.pick.plan', { n: count }),
-      () => onPlan(selectedAts(), plannerEffort, buildPlanner, chosenWorkers(), plannerModel, followups),
+      () => {
+        const req = planRequestWorkers();
+        onPlan(selectedAts(), plannerEffort, buildPlanner, req.workers, plannerModel, followups, req.modelPool);
+      },
       planDisabled,
     ),
   );

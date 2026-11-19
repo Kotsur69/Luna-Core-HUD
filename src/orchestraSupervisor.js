@@ -26,6 +26,7 @@ const { WORKTREE_DIR, BRANCH_PREFIX } = require('./worktrees');
 const { normalizeEffort } = require('./efforts');
 const { CLAUDE_MODELS } = require('./claudeModels');
 const { isAgyModel } = require('./workerModels');
+const { normalizePool, isPoolRun, isPoolKey } = require('./workerPool');
 const { MAX_LAST_WORDS, MAX_TAIL_CHARS } = require('./orchestraDiagnose');
 const { compileOwnership, ownerOf } = require('./ownership');
 const { normalizeSleeps } = require('./orchestraSleep');
@@ -643,6 +644,8 @@ const str = (v, max = 4000) => (typeof v === 'string' ? v.slice(0, max) : '');
 // A stored package / run model: a Claude alias or 'agy:<id>' (src/workerModels.js
 // MAX_AGY_MODEL_ID_CHARS = 80). Long enough never to cut an id into another one.
 const MAX_MODEL_CHARS = 96;
+/** A pool run package's model reason (src/orchestraPlan.js MAX_REASON_CHARS). */
+const MAX_POOL_REASON_CHARS = 200;
 const strOrNull = (v, max = 4000) => (typeof v === 'string' && v ? v.slice(0, max) : null);
 const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
 
@@ -815,6 +818,10 @@ function normalizePackage(raw) {
     ...(raw.splitFailed === true ? { splitFailed: true } : {}),
     // F6 hybrid guard: why a "free" package runs on Sonnet (the board shows it).
     ...(normalizeStoredGuard(raw.hybridGuard) ? { hybridGuard: normalizeStoredGuard(raw.hybridGuard) } : {}),
+    // A "Workers" pool run (src/orchestraPool.js): the ticked model, the planner's reason, the moved-from pick.
+    ...(isPoolKey(raw.poolModel)
+      ? { poolModel: raw.poolModel, modelReason: str(raw.modelReason, MAX_POOL_REASON_CHARS), poolFrom: strOrNull(raw.poolFrom, MAX_MODEL_CHARS) }
+      : {}),
     // F6c/F6d: review result and hand-overs of a hybrid free package (the report shows them).
     ...(normalizeStoredHybrid(raw.hybrid) ? { hybrid: normalizeStoredHybrid(raw.hybrid) } : {}),
     // A/B builds: a group's record, a variant's role and its parked build.
@@ -1003,6 +1010,8 @@ function normalizeStoredPlan(raw) {
     ...(CLAUDE_MODELS.includes(raw.plannerModel) && raw.plannerModel !== 'opus' ? { plannerModel: raw.plannerModel } : {}),
     dirty: Number.isFinite(raw.dirty) ? raw.dirty : null,
     workerModel: strOrNull(raw.workerModel, MAX_MODEL_CHARS),
+    // A pool run's "Workers" pool (2+ models); any other plan carries no key.
+    ...(isPoolRun(normalizePool(raw.modelPool)) ? { modelPool: normalizePool(raw.modelPool) } : {}),
     // 'plan' or one of the four levels; anything else re-freezes from Settings.
     workerEffort: raw.workerEffort === 'plan' ? 'plan' : normalizeEffort(raw.workerEffort),
     permissionMode: strOrNull(raw.permissionMode, 32),
@@ -1016,6 +1025,9 @@ function normalizeStoredPlan(raw) {
     ...(storedWorkers(raw) !== 'claude' ? { workers: storedWorkers(raw) } : {}),
     // F6c: the coding profile a hybrid run's free packages run on (never auto:easy).
     ...(normalizeStoredProfileId(raw.hybridProfileId) ? { hybridProfileId: normalizeStoredProfileId(raw.hybridProfileId) } : {}),
+    // The agy profile fixed at Approve (src/orchestraAgy.js): without it a
+    // resumed agy package (an agy run, a 'plan' / pool pick) reopens on Claude.
+    ...(normalizeStoredProfileId(raw.agyProfileId) ? { agyProfileId: normalizeStoredProfileId(raw.agyProfileId) } : {}),
     // F5: the opt-in review of luna-free/ branches, once it ran.
     ...(normalizeStoredFreeReview(raw.freeReview) ? { freeReview: normalizeStoredFreeReview(raw.freeReview) } : {}),
     integrationMode: raw.freeMode === true || planRun

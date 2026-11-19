@@ -23,6 +23,7 @@
 const { plannerEffortOf, plannerModelOf, PLANNER_MODEL } = require('./orchestraPlan');
 const { normalizeWorkers } = require('./orchestraWorkers');
 const { normalizePlanner } = require('./orchestraAgy');
+const { normalizePool, isPoolRun } = require('./workerPool');
 
 const keyOf = (projectId) => (typeof projectId === 'string' ? projectId : null);
 
@@ -96,7 +97,22 @@ function plannerEnv(ctx, planner) {
   return ctx.toolEnv();
 }
 
-async function runPlan(ctx, session, target, { picked, effort, planner, workers, model, followups }) {
+/**
+ * The "Workers" pool a plan request names, when it makes a pool run: 2+
+ * valid entries, a Claude or agy planner, and Workers neither "Free only" nor
+ * "Antigravity" (those pick their own workers). Else null - the makePlan call
+ * as before; a one-model pool is today's run (src/workerPool.js).
+ * @param {unknown} modelPool
+ * @param {{planner:string, workers:string|null}} choice planChoice()'s answer
+ * @returns {{model:string, effort:string}[]|null}
+ */
+function planPoolOf(modelPool, choice) {
+  const pool = normalizePool(modelPool);
+  if (!isPoolRun(pool) || choice.planner === 'free' || choice.workers === 'free' || choice.workers === 'agy') return null;
+  return pool;
+}
+
+async function runPlan(ctx, session, target, { picked, effort, planner, workers, model, followups, modelPool }) {
   // D1 "Planner": 'free' plans on the coding profile's env, 'agy' on the
   // Antigravity profile's; nothing named is today's Claude planner.
   const choice = planChoice(planner, workers);
@@ -107,6 +123,7 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
   if (!env) return { ok: false, error: agy ? 'noAgyProfile' : 'noFreeProfile' };
   // One of the allow-listed aliases only; anything else plans on the default.
   const plannerModel = plannerModelOf(model);
+  const pool = planPoolOf(modelPool, choice);
   const res = await ctx.registry.ensure(target.projectId).makePlan({
     projectId: session.projectId,
     repoPath: target.repoPath,
@@ -125,9 +142,11 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
     ...(!free && (choice.workers === 'hybrid' || choice.workers === 'agy') ? { workers: choice.workers } : {}),
     // Off by default and then no key at all (the makePlan call as before); the plan keeps it.
     ...(followups === true ? { followups: true } : {}),
+    // A pool run (2+ ticked worker models): the planner plans for exactly those.
+    ...(pool ? { modelPool: pool } : {}),
   });
   if (res.ok) ctx.send('orchestra:changed', { projectId: target.projectId, view: res.plan });
   return res;
 }
 
-module.exports = { todoSelection, planTarget, planChoice, runPlan };
+module.exports = { todoSelection, planTarget, planChoice, planPoolOf, runPlan };

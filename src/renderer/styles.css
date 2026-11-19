@@ -5354,6 +5354,32 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__pick-meta { font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
 .orchestra__pick-warn { grid-column: 2 / -1; font-size: var(--fs-xs); color: var(--warn); }
 .orchestra__optlabel { font-size: var(--fs-xs); color: var(--text-dim); }
+
+/* God Mode "Workers" pool (modules/orchestraPoolPicker.js): a checkbox dropdown
+   that looks like the selects next to it. The list is ours, not the OS's, so
+   it is painted opaque on the panel colour like .profile-select. */
+.orchestra__pool { position: relative; display: inline-block; font-size: var(--fs-xs); }
+.orchestra__pool > summary { list-style: none; cursor: pointer; width: auto; white-space: nowrap; }
+.orchestra__pool > summary::-webkit-details-marker { display: none; }
+.orchestra__pool > summary::after { content: ' \25BE'; color: var(--text-dim); }
+.orchestra__pool[aria-disabled="true"] > summary { opacity: 0.55; cursor: not-allowed; }
+.orchestra__pool-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  min-width: 18rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-6);
+  background: var(--bg-panel-2);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-md);
+}
+.orchestra__pool-row { display: grid; grid-template-columns: auto 1fr; gap: 0 var(--space-4); align-items: baseline; color: var(--text); cursor: pointer; }
+.orchestra__pool-row.is-off { color: var(--text-dim); cursor: not-allowed; }
+.orchestra__pool-hint { grid-column: 2; color: var(--text-dim); }
 .orchestra__time { font: inherit; font-size: var(--fs-xs); }
 .orchestra__link { font-size: var(--fs-xs); color: var(--neon-cyan); word-break: break-all; }
 .orchestra__allowed { font-size: var(--fs-xs); color: var(--text-dim); word-break: break-word; }

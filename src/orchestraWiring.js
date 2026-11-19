@@ -579,7 +579,8 @@ function reviewDeps(ctx) {
   return {
     runReview: (args) => orchestraReview.runReview(args),
     reviewDiff: (input) => orchestraReview.readDiff(input, require('./worktrees').runGit),
-    codingProfileId: () => (ctx.codingProfileId ? ctx.codingProfileId() : null),
+    // preferredId: the free profile a "Workers" pool ticked (main keeps it only when it is a coding profile).
+    codingProfileId: (preferredId = null) => (ctx.codingProfileId ? ctx.codingProfileId(preferredId) : null),
     writeReviewDoc: (repoPath, relPath, text) => writeReviewDoc(ctx, repoPath, relPath, text),
   };
 }
@@ -731,7 +732,8 @@ function powerDeps(projectId, ctx, shared, self) {
     accountFailover: (resetsAt) => ctx.accountFailover(resetsAt),
     freshEnv: () => ctx.toolEnv(),
     // "Free providers" runs: the first profile with a fallback chain (orchestraFree.js).
-    freeProfileId: () => ctx.freeProfileId(),
+    // preferredId: a one-model "Workers" pool's free profile (kept only when it has a chain).
+    freeProfileId: (preferredId = null) => ctx.freeProfileId(preferredId),
     // Antigravity (agy) runs: the agy profile worker tabs open on, and its env
     // for the run's headless helper jobs (src/orchestraAgy.js).
     agyProfileId: () => (ctx.agyProfileId ? ctx.agyProfileId() : null),

@@ -1,0 +1,50 @@
+{
+  "_comment": "Captured from the pre-model-pool code (v0.33.0). Planner Opus + Workers [Opus] must reproduce this byte for byte.",
+  "prompt": "You are the planner for LunaCore God Mode. Split the open to-dos below into work packages.\nEach package is done by a separate Claude Code session in its own git worktree, in parallel with the others.\n\nRules:\n- Read the code only as much as you need to name the files each package touches. Do not change anything.\n- Group to-dos that touch the same files into ONE package - file overlap between parallel packages causes merge conflicts.\n- Cover every open to-do exactly once (todoAts holds the to-dos' \"at\" values).\n- \"prompt\" must be self-contained: the worker has no other context. State what to change, where, and end with a concrete definition of done.\n- Tell the worker to run the verify command, fix until it passes, and commit its work on the current branch. It must not push, merge or switch branches.\n- \"dependsOn\" lists other package ids that must be finished first. Mark real dependencies only.\n- \"verify\" is the command that proves the package works (e.g. \"npm test\"); use the to-do's own verify when it has one.\n- \"model\": \"opus\" for hard or cross-cutting work, \"sonnet\" otherwise.\n- \"effort\": the to-do's own effort when it has one; otherwise \"medium\" for routine work, \"high\" or \"xhigh\" for hard or cross-cutting work, \"max\" only for the heaviest.\n- \"id\": short kebab-case, unique. \"notes\": one short paragraph on why you grouped it this way.\n\nOpen to-dos (JSON):\n[\n  {\n    \"at\": 1,\n    \"text\": \"Fix the badge colour\",\n    \"size\": \"S\"\n  },\n  {\n    \"at\": 2,\n    \"text\": \"Route IPC payloads through the validator\",\n    \"details\": \"main.js + preload\",\n    \"effort\": \"high\"\n  }\n]",
+  "schema": "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"packages\",\"notes\"],\"properties\":{\"packages\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":12,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"id\",\"title\",\"todoAts\",\"prompt\",\"files\",\"dependsOn\",\"verify\",\"model\",\"effort\"],\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^[a-z0-9][a-z0-9-]{0,23}$\"},\"title\":{\"type\":\"string\",\"maxLength\":120},\"todoAts\":{\"type\":\"array\",\"items\":{\"type\":\"number\"}},\"prompt\":{\"type\":\"string\",\"maxLength\":8000},\"files\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"dependsOn\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"verify\":{\"type\":\"string\"},\"model\":{\"type\":\"string\",\"enum\":[\"sonnet\",\"opus\"]},\"effort\":{\"type\":\"string\",\"enum\":[\"medium\",\"high\",\"xhigh\",\"max\"]}}}},\"notes\":{\"type\":\"string\"}}}",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"packages\",\"notes\"],\"properties\":{\"packages\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":12,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"id\",\"title\",\"todoAts\",\"prompt\",\"files\",\"dependsOn\",\"verify\",\"model\",\"effort\"],\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^[a-z0-9][a-z0-9-]{0,23}$\"},\"title\":{\"type\":\"string\",\"maxLength\":120},\"todoAts\":{\"type\":\"array\",\"items\":{\"type\":\"number\"}},\"prompt\":{\"type\":\"string\",\"maxLength\":8000},\"files\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"dependsOn\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"verify\":{\"type\":\"string\"},\"model\":{\"type\":\"string\",\"enum\":[\"sonnet\",\"opus\"]},\"effort\":{\"type\":\"string\",\"enum\":[\"medium\",\"high\",\"xhigh\",\"max\"]}}}},\"notes\":{\"type\":\"string\"}}}",
+    "--model",
+    "opus",
+    "--effort",
+    "high",
+    "--tools",
+    "Read,Grep,Glob",
+    "--max-budget-usd",
+    "6",
+    "--no-session-persistence"
+  ],
+  "argsHigh": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"packages\",\"notes\"],\"properties\":{\"packages\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":12,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"id\",\"title\",\"todoAts\",\"prompt\",\"files\",\"dependsOn\",\"verify\",\"model\",\"effort\"],\"properties\":{\"id\":{\"type\":\"string\",\"pattern\":\"^[a-z0-9][a-z0-9-]{0,23}$\"},\"title\":{\"type\":\"string\",\"maxLength\":120},\"todoAts\":{\"type\":\"array\",\"items\":{\"type\":\"number\"}},\"prompt\":{\"type\":\"string\",\"maxLength\":8000},\"files\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"dependsOn\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"verify\":{\"type\":\"string\"},\"model\":{\"type\":\"string\",\"enum\":[\"sonnet\",\"opus\"]},\"effort\":{\"type\":\"string\",\"enum\":[\"medium\",\"high\",\"xhigh\",\"max\"]}}}},\"notes\":{\"type\":\"string\"}}}",
+    "--model",
+    "opus",
+    "--effort",
+    "high",
+    "--tools",
+    "Read,Grep,Glob",
+    "--max-budget-usd",
+    "6",
+    "--no-session-persistence"
+  ],
+  "todos": [
+    {
+      "at": 1,
+      "text": "Fix the badge colour",
+      "size": "S"
+    },
+    {
+      "at": 2,
+      "text": "Route IPC payloads through the validator",
+      "details": "main.js + preload",
+      "effort": "high"
+    }
+  ]
+}

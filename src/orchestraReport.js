@@ -32,6 +32,8 @@ const { sleepSummary } = require('./orchestraSleep');
 const { recoveryEntries } = require('./orchestraRecover');
 const { planRunResult, planRunReportLines } = require('./orchestraPlanRunView');
 const { hybridReportLines, hybridReportRows } = require('./orchestraHybrid');
+// A "Workers" pool run: the model and the reason per package.
+const { poolReportLines, poolReportRows } = require('./orchestraPool');
 const { resumeReportLines } = require('./orchestraResume');
 // A/B builds: per group the winner, how it was picked and the kept loser branch.
 const { abReportLines } = require('./orchestraVariantRun');
@@ -623,6 +625,7 @@ function buildReport(view, extra) {
     ...(needs.length ? needs.map((l) => `- ${l}`) : ['Nothing - all done']),
     ...planRunReportLines(view),
     ...hybridReportLines(view),
+    ...poolReportLines(view),
     ...abReportLines(view),
     ...tailLines(integ.selfCheck),
     // Cards the run's sessions filed (run option "Sessions may file new to-dos"); none = no section.
@@ -797,6 +800,14 @@ function hybridHtml(view) {
   );
 }
 
+/** A "Workers" pool run: per package - its pool model, what it runs on, why. */
+function poolHtml(view) {
+  const rows = poolReportRows(view);
+  if (!rows) return '';
+  const cells = rows.map((r) => r.map((c, i) => (i === 0 ? `<code>${h.escapeHtml(c)}</code>` : h.escapeHtml(oneLine(c)))));
+  return h.section('Worker models (pool run)', h.table(['Package', 'Model', 'Runs on', 'Why'], cells, 'No packages'));
+}
+
 function detailSections(integ, suggestions) {
   const groupTitle = (kind) => (MANUAL_GROUPS.find(([k]) => k === kind) || [kind, 'Other'])[1];
   const plain = (v, max) => `"${oneLine(v, max)}"`;
@@ -831,6 +842,7 @@ function renderRunReportHtml(view, extra = {}) {
     runCharts(v, packages, integ, now),
     packageTable(v, packages, now),
     hybridHtml(v),
+    poolHtml(v),
     detailSections(integ, extra.suggestions),
   ].join('\n');
   return h.page({

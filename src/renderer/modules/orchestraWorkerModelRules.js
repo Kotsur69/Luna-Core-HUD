@@ -26,8 +26,8 @@ export function normalizeWorkerModel(value) {
 
 /**
  * The model a package will run on: an escalation / hand-over override, else
- * for a 'plan' run the planner's pick ('free' -> Sonnet, none -> Opus), else
- * the run's model.
+ * for a 'plan' run (Planner's pick, a worker-model pool) the package's own
+ * pick ('free' -> Sonnet, none -> Opus, an agy pick as is), else the run's model.
  * @param {{modelOverride?:string|null, model?:string|null}|null} pkg
  * @param {string|null|undefined} workerModel
  * @returns {string}
@@ -37,6 +37,8 @@ export function packageModelOf(pkg, workerModel) {
   if (typeof p.modelOverride === 'string' && p.modelOverride) return p.modelOverride;
   if (workerModel === 'plan') {
     const picked = typeof p.model === 'string' && p.model ? p.model : null;
+    // An agy pick runs on agy (main: src/orchestraAgy.js packageRunsAgy).
+    if (isAgyModel(picked)) return picked;
     return (picked === 'free' ? FREE_PACKAGE_CLAUDE_MODEL : picked) || PLAN_FALLBACK_MODEL;
   }
   return typeof workerModel === 'string' && workerModel ? workerModel : DEFAULT_WORKER_MODEL;

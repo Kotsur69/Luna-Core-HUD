@@ -1,28 +1,34 @@
 // ============================================================================
 // LunaCore - God Mode "Workers model" on the Approve screen
 // ----------------------------------------------------------------------------
-// A select next to Workers / Integration: Opus (default), Sonnet, Fable or
-// Planner's pick, plus Antigravity and its live models (`agy models`, read
-// again in main each time the select gets focus). It opens on the saved ui pref orchestraWorkerModel (the same
-// one as the Settings select) and a change saves it right away; Approve sends
-// it as launchOrchestra's workerModel, where main freezes it for the run.
+// The "Workers" pool picker (orchestraPoolPicker.js) next to Workers /
+// Integration: the models the run may use. Nothing ticked or one Claude
+// model is today's single worker model (Opus by default, or the Settings
+// select's Fable / Planner's pick / agy variant); two or more make a pool
+// run, where each package runs on the model the planner gave it.
+// Approve sends {workerModel} or {modelPool} (launchModelFields); main
+// validates both and freezes them for the run.
 // Also the labels of the run line and each package card's model badge.
-// Rules live in orchestraWorkerModelRules.js; text goes in via textContent only.
+// Rules live in orchestraWorkerModelRules.js and src/workerPool.js; text goes
+// in via textContent only.
 // ============================================================================
 
 'use strict';
 
 import { t } from './util.js';
-import { normalizeWorkerModel, badgeModelOf, modelName, runWorkerModel, workerModelChoices, agyBadgeText } from './orchestraWorkerModelRules.js';
-import { agyChoiceName, agyVariantIds, refreshAgyModels } from './agyModelChoices.js';
+import { normalizeWorkerModel, badgeModelOf, modelName, runWorkerModel, agyBadgeText } from './orchestraWorkerModelRules.js';
+import { agyChoiceName, refreshAgyModels } from './agyModelChoices.js';
+import { loadPool, chosenPool, poolPickerView, poolText, agyDefaultVariant } from './orchestraPoolPicker.js';
+import { isPoolRun, singleClaudeModel, poolWorkers, poolKeys, strongestKey, poolModelName, poolKeyOf, runsOnOf, POOL_FREE_KEY } from '../../workerPool.js';
 
-/** The choice on screen (= the saved pref), or null before it was read. */
+/** The saved single worker model (the Settings select), or null before it was read. */
 let picked = null;
 
-/** Reads the saved pref; an unreadable one keeps the choice already on screen. */
+/** Reads the saved prefs; an unreadable one keeps the choice already on screen. */
 export async function loadWorkerModel() {
   // The live agy names for badges and the picker, before any picker opens (never throws).
   refreshAgyModels();
+  await loadPool();
   try {
     const prefs = await window.lunacore.getUiPrefs();
     const saved = normalizeWorkerModel(prefs && prefs.orchestraWorkerModel);
@@ -32,13 +38,8 @@ export async function loadWorkerModel() {
   }
 }
 
-/** The run model the board shows and Approve sends (see runWorkerModel). */
-export const chosenWorkerModel = (plan) => runWorkerModel(plan, picked);
-
-/** 'Opus' / 'Sonnet' / 'Fable', an agy model's live name, or "Planner's pick" for 'plan'. */
-export function workerModelLabel(model) {
-  return model === 'plan' ? t('orchset.model.plan') : agyChoiceName(model) || modelName(model);
-}
+/** A started (or scheduled) run: its models are frozen in main. */
+const frozen = (plan) => Boolean(plan && (plan.started || plan.scheduledAt));
 
 /**
  * Whether the run takes the Approve screen's model. A plan run keeps its own
@@ -46,10 +47,78 @@ export function workerModelLabel(model) {
  */
 export const takesWorkerModel = (plan) => Boolean(plan) && !plan.planRun;
 
-/** The run line's model: a plan run's pool as main holds it, else the label. */
+/**
+ * The single worker-model value a pool on screen stands for: 'plan' for a
+ * pool run, the model of a one-model pool (an agy family's live default
+ * variant), null for none or a lone free profile ("Free only").
+ */
+function poolWorkerModel(list) {
+  if (isPoolRun(list)) return 'plan';
+  if (list.length !== 1) return null;
+  const key = poolKeyOf(list[0].model);
+  if (runsOnOf(key) === 'claude') return key;
+  if (runsOnOf(key) === 'agy') return agyDefaultVariant(key) || 'agy';
+  return null;
+}
+
+/** The run model the board shows: frozen in main once started, else the pool on screen, else the Settings model. */
+export function chosenWorkerModel(plan) {
+  if (!takesWorkerModel(plan) || frozen(plan)) return runWorkerModel(plan, picked);
+  return poolWorkerModel(chosenPool()) || runWorkerModel(plan, picked);
+}
+
+/**
+ * The Workers mode the board's badges use: a pool with a free profile runs
+ * hybrid, a lone free profile "Free only" (src/workerPool.js poolWorkers).
+ * @param {object} plan the plan view
+ * @param {string} workers the Workers select
+ */
+export function chosenRunWorkers(plan, workers) {
+  if (!takesWorkerModel(plan) || frozen(plan)) return workers;
+  return poolWorkers(chosenPool(), workers);
+}
+
+/**
+ * Approve's model fields: nothing ticked (or the Antigravity mode) = the
+ * Settings model, one Claude model = that model - both exactly the payload
+ * of before the pool - anything else the pool itself.
+ * @param {object} plan the plan view
+ * @param {string} workers the Workers select
+ * @returns {{workerModel:string}|{modelPool:{model:string, effort:string}[]}}
+ */
+export function launchModelFields(plan, workers) {
+  const list = chosenPool();
+  if (workers === 'agy' || !list.length) return { workerModel: runWorkerModel(plan, picked) };
+  const single = singleClaudeModel(list);
+  return single ? { workerModel: single } : { modelPool: list };
+}
+
+/** 'Opus' / 'Sonnet' / 'Fable', an agy model's live name, or "Planner's pick" for 'plan'. */
+export function workerModelLabel(model) {
+  return model === 'plan' ? t('orchset.model.plan') : agyChoiceName(model) || modelName(model);
+}
+
+/** The run line's model: a plan run's pool as main holds it, a model pool, else the label. */
 export function runModelLabel(plan) {
   if (!takesWorkerModel(plan)) return String((plan && plan.workerModel) || '');
+  if (frozen(plan) && Array.isArray(plan.modelPool) && plan.modelPool.length) return poolText(plan.modelPool);
+  if (!frozen(plan) && isPoolRun(chosenPool())) return poolText(chosenPool());
   return workerModelLabel(chosenWorkerModel(plan));
+}
+
+/**
+ * Before Approve: a package planned on a model the pool on screen no longer
+ * ticks will run on the strongest ticked one (main moves it at Approve).
+ * The badge says so already; null when nothing moves.
+ */
+function movedBadge(pkg, plan) {
+  if (frozen(plan) || !pkg || typeof pkg.poolModel !== 'string' || pkg.modelOverride) return null;
+  const list = chosenPool();
+  if (!isPoolRun(list)) return null;
+  const keys = poolKeys(list);
+  if (keys.includes(pkg.poolModel)) return null;
+  const to = strongestKey(keys);
+  return to === POOL_FREE_KEY ? t('orch.pkgModel.free') : poolModelName(to);
 }
 
 /**
@@ -57,10 +126,12 @@ export function runModelLabel(plan) {
  * for a hybrid package a free worker takes, null for a Free-only run.
  * @param {object} pkg a plan view package
  * @param {object} plan the plan view
- * @param {string} workers the run's "Workers" choice
+ * @param {string} workers the run's "Workers" choice (chosenRunWorkers before a start)
  */
 export function packageModelBadge(pkg, plan, workers) {
   if (!takesWorkerModel(plan)) return pkg && pkg.model ? String(pkg.model) : null;
+  const moved = workers === 'free' ? null : movedBadge(pkg, plan);
+  if (moved) return moved;
   const model = badgeModelOf(pkg, chosenWorkerModel(plan), workers);
   if (!model) return null;
   if (model === 'free') return t('orch.pkgModel.free');
@@ -69,68 +140,24 @@ export function packageModelBadge(pkg, plan, workers) {
 }
 
 /**
- * Fills a worker-model select: the shared list, the live agy variants after
- * plain 'agy', and `current` kept selected.
- * @param {HTMLSelectElement} sel
- * @param {string} current
- */
-function fillModelOptions(sel, current) {
-  sel.replaceChildren(
-    ...workerModelChoices(agyVariantIds(), current).map((model) => {
-      const opt = document.createElement('option');
-      opt.value = model;
-      opt.textContent = workerModelLabel(model);
-      return opt;
-    }),
-  );
-  sel.value = current;
-}
-
-/**
- * The label + select. A change saves the pref (fire-and-forget like the
- * planner selects: a failed write keeps the choice on screen) and repaints.
+ * The label + pool picker. A change saves the pool pref (the picker does it)
+ * and repaints the board.
  * @param {object} plan the plan view
  * @param {boolean} disabled
  * @param {() => void} onChange
+ * @param {string} [workers] the Workers select: 'agy' picks its own workers (the picker is locked)
  * @returns {HTMLElement[]}
  */
-export function workerModelControls(plan, disabled, onChange) {
+export function workerModelControls(plan, disabled, onChange, workers = 'claude') {
   const label = document.createElement('span');
   label.className = 'orchestra__optlabel';
   label.textContent = t('orch.workerModel');
-  label.title = t('orch.workerModel.hint');
-  const sel = document.createElement('select');
-  sel.className = 'profile-select';
-  sel.setAttribute('aria-label', t('orch.workerModel'));
-  fillModelOptions(sel, chosenWorkerModel(plan));
-  sel.disabled = disabled;
-  // The picker opens: read `agy models` again (main) and offer what it lists now.
-  let reading = false;
-  sel.addEventListener('focus', () => {
-    if (reading) return;
-    reading = true;
-    const before = agyVariantIds().join('\n');
-    refreshAgyModels()
-      .then((ids) => {
-        // Unchanged list: leave an open dropdown alone.
-        if (sel.isConnected && ids.join('\n') !== before) fillModelOptions(sel, normalizeWorkerModel(sel.value) || chosenWorkerModel(plan));
-      })
-      .finally(() => {
-        reading = false;
-      });
+  label.title = t('orch.pool.hint');
+  const picker = poolPickerView({
+    disabled,
+    locked: workers === 'agy',
+    fallbackLabel: workerModelLabel(runWorkerModel(plan, picked)),
+    onChange,
   });
-  sel.addEventListener('change', () => {
-    const next = normalizeWorkerModel(sel.value);
-    if (!next) return;
-    picked = next;
-    onChange();
-    // Main validates again; a failed save only loses the remembered model
-    // (Approve still sends the choice on screen).
-    try {
-      Promise.resolve(window.lunacore.setUiPrefs({ orchestraWorkerModel: next })).catch(() => {});
-    } catch {
-      /* bridge unavailable: same as a failed save */
-    }
-  });
-  return [label, sel];
+  return [label, picker];
 }

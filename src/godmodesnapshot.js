@@ -53,6 +53,7 @@ const { needsFromReport } = require('./godmodeneeds');
 const { publicDecisions } = require('./lunasworkDecisions');
 const { publicFeedback } = require('./lunasworkFeedback');
 const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
+const { normalizePool, isPoolRun } = require('./workerPool');
 
 const VERSION = 2;
 /** Row versions a reader accepts: v1 rows (no hub lines) still parse. */
@@ -403,6 +404,8 @@ function cleanPlan(p) {
     todos: (Array.isArray(p.todos) ? p.todos : []).slice(0, MAX_LINES).map((t) => clean(scrubPaths(t), MAX_TITLE)).filter(Boolean),
     // A known choice or a well-formed 'agy:<id>': the phone keeps it rather than sending Opus back.
     workerModel: isWorkerModel(p.workerModel) ? p.workerModel : null,
+    // A pool plan's "Workers" pool ([{model, effort}], 2+ valid entries), read-only; no key otherwise.
+    ...(isPoolRun(normalizePool(p.modelPool)) ? { modelPool: normalizePool(p.modelPool) } : {}),
   };
 }
 
