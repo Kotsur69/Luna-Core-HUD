@@ -252,6 +252,7 @@ function resumeReportLines(view) {
  */
 function createShutdownResume(deps) {
   let timer = null;
+  let resuming = false;
   const log = deps.log || (() => {});
 
   function clear() {
@@ -326,7 +327,20 @@ function createShutdownResume(deps) {
       if (!manual || Number.isFinite(plan.interrupted.resumeAt)) arm(Math.max(deps.now() + RESUME_RECHECK_MS, plan.interrupted.resumeAt || 0));
       return { ok: false, error: why };
     }
+    if (resuming) return { ok: false, error: 'busy' };
     clear();
+    const pre = deps.beforeResume();
+    if (pre && typeof pre.then === 'function') {
+      resuming = true;
+      try {
+        await pre;
+      } finally {
+        resuming = false;
+      }
+      if (deps.getPlan() !== plan || !plan.interrupted || plan.killed || plan.pausedUntil || plan.hold) {
+        return { ok: false, error: 'aborted' };
+      }
+    }
     const picks = packagesToResume(plan.packages, {
       planRun: !!plan.planRun,
       sessionAlive: deps.sessionAlive,
@@ -338,7 +352,6 @@ function createShutdownResume(deps) {
     plan.settled = false;
     plan.started = true;
     if (!plan.runStartedAt) plan.runStartedAt = deps.now();
-    deps.beforeResume();
     const done = picks.map((pick) => safeResumeOne(plan, pick));
     const resumed = done.filter((d) => d.ok);
     deps.onRunEvent('resumedAfterShutdown', {
@@ -429,6 +442,7 @@ function createShutdownResume(deps) {
     if (plan.pausedUntil && plan.pauseStartedAt) plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, nowMs - plan.pauseStartedAt);
     plan.pausedUntil = null;
     plan.pauseStartedAt = null;
+    plan.pauseScope = null;
     plan.packages = markPausedForShutdown(plan.packages, { stop, requeue: stopped.requeue, nowMs });
     plan.interrupted = { at: nowMs, by: 'pause', resetAt, resumeAt: null, waiting: null };
     deps.onRunEvent('pausedForShutdown', { stopped: stop.size });
@@ -457,7 +471,7 @@ function createShutdownResume(deps) {
     };
   }
 
-  return { onRestore, resume, cancel, drop, pause, poke, onWake, view, dispose: clear };
+  return { onRestore, resume, cancel, drop, pause, poke, onWake, view, isResuming: () => resuming, dispose: clear };
 }
 
 module.exports = {

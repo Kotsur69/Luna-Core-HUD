@@ -67,7 +67,7 @@ const { ensureFallbackProxy, stopAllFallbackProxies, onRoute: onFreeRoute } = re
 const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
 // The Antigravity (agy) profile and env for worker tabs and headless jobs.
-const { agyProfileId, agyEnv } = require('./agyprofile');
+const { agyProfileId, agyEnv, isAgyProfile } = require('./agyprofile');
 const { createAgyModels, setSharedAgyModels } = require('./agymodels');
 const { createAgyIntake } = require('./agyintake');
 const { pickCodingProfileId, isCodingProfile } = require('./orchestraHybrid');
@@ -104,7 +104,7 @@ const {
 } = require('./launch');
 // Claude account failover (src/claudeaccounts.js): several subscriptions, one
 // harness. The active account's token rides in every plain Claude launch.
-const { createClaudeAccounts, failoverEligible, ACCOUNT_ENV } = require('./claudeaccounts');
+const { createClaudeAccounts, failoverEligible, usesOwnBackend, ACCOUNT_ENV } = require('./claudeaccounts');
 const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
 // Per-account 5 h + weekly usage through usage-only logins (src/claudeaccountusage.js).
 const { createAccountUsage } = require('./claudeaccountusage');
@@ -1903,18 +1903,23 @@ function spawnInto(session, profile, launch = null) {
     ),
   );
 
-  // Which Claude account this process runs on (null: its own backend, or no
-  // accounts set up) - the tab's limit handler reads it (failoverTab).
-  // The `claude setup-token` tab mints a token for whichever account the
-  // browser is signed in to - it must not run under another account's token.
-  if (session.commandOverride) {
-    delete env.CLAUDE_CODE_OAUTH_TOKEN;
-    delete env[ACCOUNT_ENV];
+  // Which Claude account this process runs on (null: its own backend, a
+  // non-Claude CLI like agy/codex/gemini, or no accounts set up) - the tab's
+  // limit handler reads it (failoverTab). `claude setup-token` also must not
+  // run under another account's token.
+  const nonClaudeCli = Boolean(profile.command) && !isClaudeCommand(profile.command);
+  if (session.commandOverride || nonClaudeCli) {
+    // Strip Claude account tokens/markers case-insensitively on Windows so non-Claude CLIs never inherit them.
+    for (const k of Object.keys(env)) {
+      const upper = k.toUpperCase();
+      if (upper === 'CLAUDE_CODE_OAUTH_TOKEN' || upper === ACCOUNT_ENV) delete env[k];
+    }
   }
   session.accountId = env[ACCOUNT_ENV] || null;
   // Not usesOwnBackend(env): the account layer's own token would count and
-  // switch failover off for every account-steered tab.
-  session.ownBackend = !failoverEligible(env);
+  // switch failover off for every account-steered tab. Non-Claude CLIs always
+  // own their backend so Claude account exhaustion never pauses agy runs.
+  session.ownBackend = nonClaudeCli || !failoverEligible(env);
 
   session.cwd = cwd;
   session.profileId = profile.id;
@@ -2172,6 +2177,16 @@ function spawnInto(session, profile, launch = null) {
         statusBoard.activity(session.id);
         send('metrics:tools', { sessionId: session.id, events });
       },
+      onTurnStart: ({ at } = {}) => {
+        send('godmode:signal', { sessionId: session.id, type: 'turnStarted', at });
+        statusBoard.turnStart(session.id);
+      },
+      onTurnEnd: (turn) => {
+        checkTurnEnd(turn);
+        statusBoard.turnEnd(session.id, isViewed(session.id));
+        send('metrics:turnend', { sessionId: session.id, turn });
+        orchestraRuns.onTurnEnd(session.id, turn.text);
+      },
     },
   );
   if (session.agyWatcher) session.agyWatcher.start();
@@ -2326,9 +2341,17 @@ function launchSession(session, rawProfile) {
  * @returns {Session|null}
  */
 function createSession(opts = {}) {
-  const profile =
-    getProfile(profiles, opts.profileId || activeProfileId) || profiles[0];
+  const profile = opts.strictProfile
+    ? (opts.profileId ? getProfile(profiles, opts.profileId) : null)
+    : getProfile(profiles, opts.profileId || activeProfileId) || profiles[0];
   if (!profile) return null;
+  if (opts.strictProfile && opts.strictBackend === 'agy' && !isAgyProfile(profile)) return null;
+  if (opts.strictProfile && opts.strictBackend === 'free') {
+    if (isAgyProfile(profile)) return null;
+    if (isClaudeCommand(profile.command || '') && !usesOwnBackend(profile.env) && !resolveProfileChain(profile, loadProviders().providers, loadChains())) {
+      return null;
+    }
+  }
 
   const project = getProject(projects, opts.projectId || activeProjectId);
   const session = {
@@ -2351,6 +2374,7 @@ function createSession(opts = {}) {
     resumeMessage: typeof opts.resumeMessage === 'string' ? opts.resumeMessage : null,
     size: { ...lastSize },
     watcher: null,
+    agyWatcher: null,
     gitWatcher: null,
     // Phase 5b: this tab's OWN LocalModelWatcher (src/lmstudio.js), lazily
     // created by spawnInto. Deliberately NOT reset in teardownSession - it

@@ -526,8 +526,21 @@ function createOrchestra(deps) {
     removeBrief: (file) => (typeof deps.removeBrief === 'function' ? deps.removeBrief(file) : false),
     closeSession: (id) => closeSession(id),
     sessionAlive: (id) => sessionAlive(id),
+    profileId: () => {
+      if (!plan) return null;
+      if (!plan.planRun && agyRules.runUsesAgy(plan)) return plan.agyProfileId || (deps.agyProfileId ? deps.agyProfileId() : null);
+      return plan.profileId;
+    },
+    strictProfile: () => !!plan && !plan.planRun && (agyRules.runUsesAgy(plan) || plan.freeMode === true),
+    strictBackend: () => {
+      if (!plan || plan.planRun) return null;
+      if (agyRules.runUsesAgy(plan)) return 'agy';
+      if (plan.freeMode === true) return 'free';
+      return null;
+    },
     // The run's (frozen) worker model and permission mode; 'plan' has no single model -> CLI default.
     model: () => {
+      if (plan && !plan.planRun && agyRules.runUsesAgy(plan)) return agyRules.packageRunsAgy(plan, {}) ? taskModelFor({}) : agyRules.AGY;
       const m = (plan && plan.workerModel) || workerSettings().model;
       return m && m !== 'plan' ? m : null;
     },
@@ -583,7 +596,6 @@ function createOrchestra(deps) {
     // (orchestraFinalize.js POST_MERGE_STEPS, built by orchestraPostMerge.js).
     postMerge: deps.postMerge || null,
   });
-  const isBusy = () => busy || pumping || finalizer.isRunning();
   // The process-wide battery guard (orchestraPower.js createBatteryGuard):
   // low on battery, no new worker or verify starts until the PC is plugged in.
   const battery = deps.battery || null;
@@ -708,7 +720,8 @@ function createOrchestra(deps) {
 
   // The three opt-in evolutions, each on only when its plan option is.
   const planOption = (key) => !!plan && sup.normalizeOptions(plan.options)[key] === true;
-  const runLive = () => !!plan && !plan.killed && !plan.pausedUntil;
+  const allPaused = () => !!plan && !!plan.pausedUntil && !plan.pauseScope;
+  const runLive = (id) => !!plan && !plan.killed && (!id ? !allPaused() : !isPackagePaused(findPkg(id)));
   /** One more entry on a package's history (report evidence); the caller commits. */
   const recordEntry = (id, entry) => {
     const p = findPkg(id);
@@ -723,7 +736,13 @@ function createOrchestra(deps) {
     record: recordEntry,
     commit: () => commit(),
     // The worktree's own install (orchestraDeps.js), never a link to another checkout.
-    installDeps: (root) => installDeps(root, { fresh: true }),
+    // Warm the live agy model list before resuming a matching agy:<id> package after deps heal.
+    installDeps: async (root) => {
+      const res = await installDeps(root, { fresh: true });
+      const matching = res && res.ok && plan ? plan.packages.filter((p) => p.root === root) : [];
+      if (matching.length) await agyModelsReady(matching);
+      return res;
+    },
     resume: (id, section) => healResume(id, section),
     giveUp: (id, reason, detail) => afterStall(id, reason, detail),
     onEvent: (kind, data) => onRunEvent(kind, data),
@@ -782,7 +801,7 @@ function createOrchestra(deps) {
       plan
         ? {
             planId: plan.id,
-            pausedUntil: plan.pausedUntil,
+            pausedUntil: effectivePausedUntil(),
             killed: plan.killed,
             approvalsPending: approvalsPending(),
             options: sup.normalizeOptions(plan.options),
@@ -824,7 +843,12 @@ function createOrchestra(deps) {
     reopenChat: (pkg, text) => heldOnDeps(pkg, reopenChat(pkg, text)),
     reopenFresh: (pkg) => heldOnDeps(pkg, reopenInWorktree(pkg, runBrief(pkg, pkg.branch, { resume: true }))),
     requeue: (pkg) => patch(pkg.id, { state: 'pending', error: null, detail: null }),
-    beforeResume: () => freezeSettings(),
+    beforeResume: () => {
+      freezeSettings();
+      if (!plan) return undefined;
+      const needsAgy = plan.packages.some((p) => agyRules.packageRunsAgy(plan, p) && agyRules.packageAgyModel(plan, p) !== agyRules.AGY);
+      return needsAgy ? agyModelsReady(plan.packages) : undefined;
+    },
     stopForPause: () => stopForPause(),
     escWorker: (sessionId) => writePty(sessionId, ESC),
     afterPause: () => {
@@ -835,6 +859,24 @@ function createOrchestra(deps) {
     graceMs: RESUME_GRACE_MS,
     log,
   });
+  const isBusy = () => busy || pumping || finalizer.isRunning() || shutdownResume.isResuming();
+
+  function launchableReady() {
+    if (!plan || allPaused()) return [];
+    const max = maxParallelFor(plan, MAX_PARALLEL);
+    if (!plan.pausedUntil) return sup.readyToLaunch(plan.packages, max);
+    // Mask paused pending packages so they do not fill slots ahead of unpaused backends,
+    // while active paused packages keep their parallel slots.
+    const masked = plan.packages.map((p) => (p.state === 'pending' && isPackagePaused(p) ? { ...p, state: 'paused_skip' } : p));
+    return sup.readyToLaunch(masked, max);
+  }
+
+  function effectivePausedUntil() {
+    if (!plan || !plan.pausedUntil) return null;
+    if (!plan.pauseScope) return plan.pausedUntil;
+    const unpausedRunning = plan.packages.some((p) => sup.isActive(p) && !isPackagePaused(p));
+    return unpausedRunning || launchableReady().length > 0 ? null : plan.pausedUntil;
+  }
   // Set when a run settles on its own; only such a run may shut the PC down.
   let settledFinalize = false;
   // Luna's Work hook: makePlan's optional ctx.onRunSettled, bound to the plan
@@ -871,7 +913,7 @@ function createOrchestra(deps) {
     // Folders saved on another PC / under another user name re-homed here.
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
-    plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, settled: false };
+    plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, pauseScope: null, settled: false };
     // Restart recovery: no session of this run keeps an intake token (matched by run id, never by session id).
     if (deps.revokeRunFollowups) revokeQuietly(() => deps.revokeRunFollowups(plan.id));
     // Tokens are not stored with the run: the book starts empty and counts what runs from here on.
@@ -966,8 +1008,8 @@ function createOrchestra(deps) {
       followups: plan.followups === true,
       followupsFiled: normalizeFollowupEntries(plan.followupsFiled, plan.id),
       freeMode: plan.freeMode === true,
-      // D1: who planned this build run ('claude' for every older plan).
-      buildPlanner: plan.buildPlanner === 'free' ? 'free' : 'claude',
+      // D1 / agy: who planned this build run ('claude' for every older plan).
+      buildPlanner: plan.buildPlanner === 'free' || plan.buildPlanner === 'agy' ? plan.buildPlanner : 'claude',
       // F6 "Workers": claude / hybrid / free (older plans migrate from the tick).
       workers: workersRules.storedWorkers(plan),
       // F5: the opt-in review of a free run's branches (null = none ran).
@@ -1583,8 +1625,41 @@ function createOrchestra(deps) {
     return false;
   }
 
+  const isHybridFreePackage = (pkg) =>
+    !!plan && !plan.planRun && hybridRules.isHybridPlan(plan) && !!pkg && pkg.model === 'free' && !pkg.modelOverride;
+
+  const packageRunsClaude = (pkg) =>
+    !!plan && !plan.freeMode && !plan.planRun && !agyRules.packageRunsAgy(plan, pkg) && !isHybridFreePackage(pkg);
+
+  /** Profile id for a package's worker tab; null refuses a launch instead of falling back to Claude. */
+  function profileForPackage(pkg) {
+    if (!plan.planRun && agyRules.packageRunsAgy(plan, pkg)) {
+      const agyId = plan.agyProfileId || (deps.agyProfileId ? deps.agyProfileId() : null);
+      if (!agyId) log(`[orchestra] ${pkg.id} runs on agy but no agy profile is set; refusing to fall back to Claude`);
+      return agyId || null;
+    }
+    if (!plan.planRun && plan.freeMode) {
+      const freeId = plan.profileId || (deps.freeProfileId ? deps.freeProfileId() : null);
+      if (!freeId) log(`[orchestra] ${pkg.id} runs on a free profile but none is set; refusing to fall back to Claude`);
+      return freeId || null;
+    }
+    if (isHybridFreePackage(pkg)) {
+      // Match hybridRules.runsFree: refuse to launch unless the plan itself carries a valid coding profile.
+      const codingId = hybridRules.isCodingProfileId(plan.hybridProfileId) ? plan.hybridProfileId : null;
+      if (!codingId) log(`[orchestra] ${pkg.id} runs free in a hybrid run but plan.hybridProfileId is missing or invalid; refusing to fall back to Claude`);
+      return codingId;
+    }
+    return plan.profileId;
+  }
+
   /** @param {{resumeId?:string, resumeMessage?:string}} [resume] reopen this conversation instead (main-only opts) */
   function openTab(pkg, cwd, branch, briefPath, resume = {}) {
+    const profileId = profileForPackage(pkg);
+    if (!profileId) return null;
+    const runsAgy = !plan.planRun && agyRules.packageRunsAgy(plan, pkg);
+    const runsFree = !plan.planRun && (plan.freeMode === true || isHybridFreePackage(pkg));
+    const strict = runsAgy || runsFree;
+    const strictBackend = runsAgy ? 'agy' : runsFree ? 'free' : null;
     const task = plan.planRun
       ? planLaunch.planWorkerTask({
           briefPath,
@@ -1594,9 +1669,9 @@ function createOrchestra(deps) {
       : withKit(pkg, { briefPath, model: taskModelFor(pkg), effort: effortFor(pkg), permissionMode: plan.permissionMode, allowedTools: plan.allowedTools || [] });
     return deps.createSession({
       ...resume,
-      // An agy package runs on the agy profile fixed at Approve (orchestraAgy.js);
-      // a hybrid free package runs on the coding profile (never auto:easy).
-      profileId: agyRules.packageRunsAgy(plan, pkg) && plan.agyProfileId ? plan.agyProfileId : hybridRun.profileFor(pkg, plan.profileId),
+      ...(strict ? { strictProfile: true } : {}),
+      ...(strictBackend ? { strictBackend } : {}),
+      profileId,
       projectId: plan.projectId,
       cwd,
       branch,
@@ -1934,8 +2009,9 @@ function createOrchestra(deps) {
     if (resumeGate.waitMs() > 0) await settleAfterResume();
     const stamp = now().toString(36).slice(-5);
     for (const pkg of chosen) {
-      // Kill / pause / hold / low battery while an earlier launch was awaiting git: stop here.
-      if (plan.killed || plan.pausedUntil || plan.hold || plan.interrupted || batteryHeld()) break;
+      // Kill / whole-run pause / hold / low battery while an earlier launch was awaiting git: stop here.
+      if (plan.killed || allPaused() || plan.hold || plan.interrupted || batteryHeld()) break;
+      if (isPackagePaused(pkg)) continue;
       cancelAutoRetry(pkg.id);
       const before = findPkg(pkg.id) || pkg;
       const { retryable, held, ...result } = await launchOne(before, stamp);
@@ -2129,15 +2205,15 @@ function createOrchestra(deps) {
   async function pump() {
     // On battery while the run goes: one warning per battery period.
     if (battery && plan && plan.started && !plan.killed && !plan.settled) battery.onRunStart();
-    if (!plan || !plan.started || plan.killed || plan.pausedUntil || plan.hold || plan.interrupted || pumping || batteryHeld()) return;
+    if (!plan || !plan.started || plan.killed || allPaused() || plan.hold || plan.interrupted || pumping || batteryHeld()) return;
     pumping = true;
     try {
       // A/B groups whose variants are done get decided (a restart or a kill may have left one).
       variantRun.evaluateAll();
-      let ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
-      while (ready.length && !plan.killed && !plan.pausedUntil && !plan.hold && !plan.interrupted && !batteryHeld()) {
+      let ready = launchableReady();
+      while (ready.length && !plan.killed && !allPaused() && !plan.hold && !plan.interrupted && !batteryHeld()) {
         await launchPackages(ready);
-        ready = sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL));
+        ready = launchableReady();
       }
       // Again before settling: a variant may have finished while the launches ran.
       variantRun.evaluateAll();
@@ -2170,7 +2246,7 @@ function createOrchestra(deps) {
     if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
     if (plan.errors.length) return { ok: false, error: 'planErrors' };
     if (isBusy()) return { ok: false, error: 'busy' };
-    if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    if (allPaused()) return { ok: false, error: 'paused' };
     if (plan.hold) return { ok: false, error: plan.hold.reason };
     // Approve still starts a held run (it launches once plugged in); a
     // launch by hand would start a worker now.
@@ -2184,11 +2260,12 @@ function createOrchestra(deps) {
     }
 
     const edits = o.prompts && typeof o.prompts === 'object' ? o.prompts : {};
-    plan.packages = plan.packages.map((p) => {
-      const edited = typeof edits[p.id] === 'string' ? edits[p.id].trim().slice(0, MAX_PROMPT_CHARS) : '';
-      // An undecided A/B group runs no worker: its variants carry the prompts.
-      return p.state === 'pending' && edited && !variantRules.isUndecidedGroup(p) ? { ...p, prompt: edited } : p;
-    });
+    const applyPromptEdits = (pkgs) =>
+      pkgs.map((p) => {
+        const edited = typeof edits[p.id] === 'string' ? edits[p.id].trim().slice(0, MAX_PROMPT_CHARS) : '';
+        // An undecided A/B group runs no worker: its variants carry the prompts.
+        return p.state === 'pending' && edited && !variantRules.isUndecidedGroup(p) ? { ...p, prompt: edited } : p;
+      });
 
     const chosen = Array.isArray(o.ids)
       ? plan.packages.filter(
@@ -2196,9 +2273,11 @@ function createOrchestra(deps) {
           (p) => (p.state === 'pending' || p.state === 'failed') && o.ids.includes(p.id) && !variantRules.isUndecidedGroup(p),
         )
       : null;
-    if (chosen ? !chosen.length : !sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL)).length) {
-      return { ok: false, error: 'nothingToLaunch' };
+    if (chosen ? !chosen.length : !launchableReady().length) {
+      const blockedByPause = !chosen && sup.readyToLaunch(plan.packages, maxParallelFor(plan, MAX_PARALLEL)).length > 0;
+      return { ok: false, error: blockedByPause ? 'paused' : 'nothingToLaunch' };
     }
+    if (chosen && chosen.every(isPackagePaused)) return { ok: false, error: 'paused' };
 
     // "Workers" (F6; "Free only" = orchestraFree.js): chosen at Approve, fixed
     // for the run. A free-planned run is always a free run (D1: "Free only").
@@ -2216,7 +2295,9 @@ function createOrchestra(deps) {
     const pendingPool = poolRun.approvePool(o, approved);
     const poolChoice = pendingPool instanceof Promise ? await pendingPool : pendingPool;
     // The `agy models` read let other calls in: a replaced, started or busy plan is not this Approve's.
-    if (pendingPool instanceof Promise && (plan !== planAtApprove || plan.started || isBusy())) return { ok: false, error: 'busy' };
+    if (pendingPool instanceof Promise && (plan !== planAtApprove || plan.started || plan.killed || isBusy() || allPaused() || plan.hold)) {
+      return { ok: false, error: 'busy' };
+    }
     if (poolChoice.kind === 'error') return { ok: false, error: poolChoice.error };
     const workers = poolChoice.workers || approved;
     // The run model Approve asks for: a pool run's 'plan', a one-model pool's value, else the select's.
@@ -2224,22 +2305,34 @@ function createOrchestra(deps) {
     // A/B variants (orchestraVariants.js) are built and judged on Claude only:
     // a plan that has them is refused as a free run (replan without A/B for that).
     if (!plan.started && workers === 'free' && variantRules.hasGroups(plan.packages)) return { ok: false, error: 'abNeedsClaude' };
-    // In place, like freeMode below: the run's plan object stays the same one.
-    if (!plan.started && !plan.planRun) {
-      if (workers === 'claude') delete plan.workers;
-      else plan.workers = workers;
-    }
-    // Hybrid (F6c): the coding profile its free packages run on, fixed for the run.
-    if (!plan.started && !plan.planRun) {
-      // A pool run's packages are only STAGED here: the checks read them,
-      // the plan takes them after the last refusal below.
-      const staged = poolChoice.packages ? { ...plan, packages: poolChoice.packages } : plan;
+
+    // Stage Approve settings without mutating `plan` until every check and prompt resolves.
+    const stageConfig = !plan.started && !plan.planRun;
+    let hasNextWorkers = false;
+    let nextWorkers = plan.workers;
+    let hasNextHybridProfileId = false;
+    let nextHybridProfileId = plan.hybridProfileId;
+    let hasNextAgyProfileId = false;
+    let nextAgyProfileId = plan.agyProfileId;
+    let stagedPackages = null;
+    let nextFree = null;
+
+    if (stageConfig) {
+      hasNextWorkers = true;
+      nextWorkers = workers === 'claude' ? undefined : workers;
+      const sourcePackages = applyPromptEdits(poolChoice.packages || plan.packages);
+      stagedPackages = sourcePackages.map((p) => ({ ...p }));
+      const staged = { ...plan, packages: stagedPackages };
+      if (nextWorkers === undefined) delete staged.workers;
+      else staged.workers = nextWorkers;
+
       const coding = workers === 'hybrid'
         ? hybridRules.approveProfile(staged, deps.codingProfileId ? poolRun.codingProfileFor(poolChoice.freeProfileId) : null)
         : { ok: true, profileId: null };
       if (!coding.ok) return { ok: false, error: coding.error };
-      if (coding.profileId) plan.hybridProfileId = coding.profileId;
-      else delete plan.hybridProfileId;
+      hasNextHybridProfileId = true;
+      nextHybridProfileId = coding.profileId || undefined;
+
       // Antigravity (agy): the agy profile its packages run on, fixed for the
       // run - refused with a clear reason when none is configured.
       // The model the run will freeze: Approve's pick, else the plan's, else Settings (Ctrl+L).
@@ -2255,6 +2348,9 @@ function createOrchestra(deps) {
       if (variants.length) {
         if (!deps.agyModels) return { ok: false, error: 'badAgyModel' };
         await deps.agyModels.ensure();
+        if (plan !== planAtApprove || plan.started || plan.killed || isBusy() || allPaused() || plan.hold) {
+          return { ok: false, error: 'busy' };
+        }
         // A planner's per-package pick the list does not hold (Mati has no
         // per-package picker to fix it): plain agy, logged by resolveModelId.
         for (const p of staged.packages) {
@@ -2264,36 +2360,66 @@ function createOrchestra(deps) {
         const left = agyRules.runAgyVariants(staged, { workers, workerModel: runModel });
         if (left.some((v) => !deps.agyModels.isKnownId(agyModelIdOf(v)))) return { ok: false, error: 'badAgyModel' };
       }
-      if (agy.profileId) plan.agyProfileId = agy.profileId;
-      else delete plan.agyProfileId;
+      hasNextAgyProfileId = true;
+      nextAgyProfileId = agy.profileId || undefined;
     }
+
     const wantsFree = workers === 'free';
     if (wantsFree && !plan.started && !plan.freeMode && !plan.planRun) {
       // A one-model pool's free profile is preferred (kept only when it has a chain).
       const free = freeRunSettings({ freeProfileId: deps.freeProfileId ? poolRun.freeProfileFor(poolChoice.freeProfileId) : null });
       if (!free.ok) return { ok: false, error: free.error };
-      plan.freeMode = true;
-      plan.profileId = free.profileId;
-      plan.integrationMode = free.integrationMode;
+      nextFree = { freeMode: true, profileId: free.profileId, integrationMode: free.integrationMode };
     }
-    const wanted = planLaunch.planIntegrationFor(plan, integrationFor(plan, mode));
+
+    const previewPlan = nextFree || hasNextWorkers
+      ? { ...plan, ...(nextFree || {}), ...(hasNextWorkers && nextWorkers !== undefined ? { workers: nextWorkers } : {}) }
+      : plan;
+    if (hasNextWorkers && nextWorkers === undefined) delete previewPlan.workers;
+
+    const wanted = planLaunch.planIntegrationFor(previewPlan, integrationFor(previewPlan, mode));
     // "Create a new release after finish": merge runs only, set at Approve
     // (confirmed natively with the merge), stored as options.releaseAfter.
     const release = o.releaseAfter === true && wanted === 'merge' && !plan.started;
-    if (wanted === 'merge' && !plan.started && !mergeConfirmed && !(await confirmMerge({ release }))) return { ok: false, error: 'mergeDeclined' };
+    if (wanted === 'merge' && !plan.started && !mergeConfirmed) {
+      const okMerge = await confirmMerge({ release });
+      if (!okMerge) return { ok: false, error: 'mergeDeclined' };
+      if (plan !== planAtApprove || plan.started || plan.killed || isBusy() || allPaused() || plan.hold) {
+        return { ok: false, error: 'busy' };
+      }
+    }
+
+    // After every refusal above: a refused or declined launch saves nothing.
+    if (hasNextWorkers) {
+      if (nextWorkers === undefined) delete plan.workers;
+      else plan.workers = nextWorkers;
+    }
+    if (hasNextHybridProfileId) {
+      if (nextHybridProfileId === undefined) delete plan.hybridProfileId;
+      else plan.hybridProfileId = nextHybridProfileId;
+    }
+    if (hasNextAgyProfileId) {
+      if (nextAgyProfileId === undefined) delete plan.agyProfileId;
+      else plan.agyProfileId = nextAgyProfileId;
+    }
+    if (nextFree) {
+      plan.freeMode = nextFree.freeMode;
+      plan.profileId = nextFree.profileId;
+      plan.integrationMode = nextFree.integrationMode;
+    }
     if (wanted && !plan.started) plan.integrationMode = wanted;
     if (!plan.started) {
       const { releaseAfter: _previous, ...rest } = plan.options || {};
       plan.options = sup.normalizeOptions(release ? { ...rest, releaseAfter: true } : rest);
     }
-    // After every refusal above: a refused or declined launch saves nothing.
     // A pool run is frozen as worker model 'plan' + plan.modelPool and saves
     // no single-model pref; anything else is the single model as before.
     if (poolChoice.kind === 'pool') {
-      plan.packages = poolChoice.packages;
+      plan.packages = stagedPackages || applyPromptEdits(poolChoice.packages);
       plan.workerModel = 'plan';
       plan.modelPool = poolChoice.pool;
     } else {
+      plan.packages = stagedPackages || applyPromptEdits(plan.packages);
       if (!plan.started && !plan.scheduledAt && !plan.planRun) delete plan.modelPool;
       applyWorkerModel(askedModel, workers);
     }
@@ -2317,14 +2443,15 @@ function createOrchestra(deps) {
       plan.started = true;
       if (!plan.runStartedAt) plan.runStartedAt = now();
       if (chosen) {
+        const launchChosen = chosen.map((p) => findPkg(p.id)).filter((p) => p && !isPackagePaused(p));
         // A launch by hand starts the automatic ladder afresh.
-        for (const p of chosen) {
+        for (const p of launchChosen) {
           cancelAutoRetry(p.id);
           transientRetries.delete(p.id);
           patch(p.id, { autoRetries: 0, terminal: false });
         }
         plan.packages = sup.withBlockedBy(plan.packages);
-        await launchPackages(chosen);
+        await launchPackages(launchChosen.map((p) => findPkg(p.id)).filter(Boolean));
       }
     } finally {
       busy = false;
@@ -2384,7 +2511,7 @@ function createOrchestra(deps) {
     patch(id, { state: 'stalled', error: reason, detail, stalls, stallHistory, stalledAt: now() });
     // Self-heal (opt-in): a known environment error gets one bounded fix and
     // one resume first; the ladder below runs when that is not possible.
-    if (!plan.killed && !plan.pausedUntil && !plan.hold && !plan.planRun && healer.tryHeal(findPkg(id), reason, detail)) {
+    if (!plan.killed && !isPackagePaused(findPkg(id)) && !plan.hold && !plan.planRun && healer.tryHeal(findPkg(id), reason, detail)) {
       commit();
       return;
     }
@@ -2399,7 +2526,7 @@ function createOrchestra(deps) {
   function afterStall(id, reason, detail) {
     const pkg = findPkg(id);
     if (!plan || !pkg) return;
-    const live = !plan.killed && !plan.pausedUntil;
+    const live = !plan.killed && !isPackagePaused(pkg);
     // Q8: a free-planned run splits a package that stalled twice; Claude
     // runs never get here (shouldAutoSplit) and escalate as before.
     if (live && autoSplit.shouldAutoSplit(plan, pkg, reason) && startAutoSplit(pkg, reason, detail)) {
@@ -2416,7 +2543,7 @@ function createOrchestra(deps) {
       kick();
       return;
     }
-    const wantsEscalate = live && sup.shouldEscalate(pkg, modelFor(pkg), reason);
+    const wantsEscalate = live && packageRunsClaude(pkg) && sup.shouldEscalate(pkg, modelFor(pkg), reason);
     const wantsResume = live && sup.shouldAutoResume(pkg, reason);
     if (wantsEscalate && escalate(pkg, reason, detail)) {
       commit();
@@ -2582,7 +2709,7 @@ function createOrchestra(deps) {
   function sendNudge(id) {
     nudgeTimers.delete(id);
     const pkg = plan ? findPkg(id) : null;
-    if (!pkg || pkg.state !== 'launched' || pkg.awaitingDeps || plan.pausedUntil || plan.killed || hybridRun.isWaiting(pkg)) return;
+    if (!pkg || pkg.state !== 'launched' || pkg.awaitingDeps || isPackagePaused(pkg) || plan.killed || hybridRun.isWaiting(pkg)) return;
     const action = sup.turnEndAction(pkg, null);
     if (action.type === 'stall') {
       stall(id, action.reason);
@@ -2795,6 +2922,7 @@ function createOrchestra(deps) {
   /** A verified, pushed package lands: to-dos ticked, dependants may launch. */
   function landPushed(id) {
     const pkg = findPkg(id);
+    if (!pkg || pkg.state === 'pushed') return;
     patch(id, { state: 'pushed', terminal: false });
     // The package is finished: its brief goes. Every later reopen writes a fresh one.
     dropBrief(pkg);
@@ -2860,7 +2988,7 @@ function createOrchestra(deps) {
     const action = sup.turnEndAction(pkg, marker);
     if (action.type === 'finish') finish(pkg.id);
     else if (action.type === 'stall' && action.reason === 'blocked') stall(pkg.id, action.reason, action.detail || null);
-    else if (!plan.pausedUntil && !hybridRun.isWaiting(pkg)) {
+    else if (!isPackagePaused(pkg) && !hybridRun.isWaiting(pkg)) {
       cancelNudge(pkg.id);
       if (background.length) {
         // The turn ended on a background process of the worker's own (a test
@@ -2889,7 +3017,7 @@ function createOrchestra(deps) {
     const t = now();
     const pauseStartedAt = plan.pausedUntil ? plan.pauseStartedAt : null;
     for (const p of plan.packages.filter(sup.isActive)) {
-      const credit = sleepCredit(sleep, p, { now: t, pauseStartedAt });
+      const credit = sleepCredit(sleep, p, { now: t, pauseStartedAt: isPackagePaused(p) ? pauseStartedAt : null });
       if (credit > 0) patch(p.id, { pausedMs: (p.pausedMs || 0) + credit });
     }
     // Only a sleep during the run is the run's (a later report counts them).
@@ -2937,6 +3065,25 @@ function createOrchestra(deps) {
     contextGuard.forget(sessionId);
   }
 
+  function isPackagePaused(pkg) {
+    return Boolean(plan && plan.pausedUntil && matchesPauseScope(pkg, plan.pauseScope || null));
+  }
+
+  function matchesPauseScope(pkg, scope) {
+    if (!scope) return true;
+    if (scope === 'claude') return packageRunsClaude(pkg);
+    if (scope === 'agy') return !plan.planRun && agyRules.packageRunsAgy(plan, pkg);
+    if (scope === 'free') return !plan.planRun && (plan.freeMode === true || hybridRules.runsFree(plan, pkg) || isHybridFreePackage(pkg));
+    return true;
+  }
+
+  function cancelScopedNudges(scope) {
+    for (const id of [...nudgeTimers.keys()]) {
+      const p = findPkg(id);
+      if (!p || matchesPauseScope(p, scope)) cancelNudge(id);
+    }
+  }
+
   function resume() {
     resumeTimer = null;
     if (!plan || !plan.pausedUntil) return;
@@ -2944,10 +3091,13 @@ function createOrchestra(deps) {
     // sleep is credited first, while the pause is still open.
     catchUpSleep();
     const pausedFor = now() - (plan.pauseStartedAt || now());
+    const scope = plan.pauseScope || null;
     plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, pausedFor);
     plan.pausedUntil = null;
     plan.pauseStartedAt = null;
+    plan.pauseScope = null;
     for (const p of plan.packages.filter(sup.isActive)) {
+      if (!matchesPauseScope(p, scope)) continue;
       // Never credit more pause than the package has been running.
       const credit = Math.max(0, Math.min(pausedFor, now() - (p.startedAt || now())));
       patch(p.id, { pausedMs: p.pausedMs + credit });
@@ -3003,32 +3153,57 @@ function createOrchestra(deps) {
     if (!pkg || !sup.isActive(pkg) || plan.killed) return;
     // Q9: a hybrid free package waits alone; Claude packages keep going.
     if (hybridRun.onUsageLimit(pkg, resetsAt)) return;
+    const scope = !plan.planRun && agyRules.packageRunsAgy(plan, pkg)
+      ? 'agy'
+      : !plan.planRun && (plan.freeMode || isHybridFreePackage(pkg))
+        ? 'free'
+        : 'claude';
     const until = Number.isFinite(resetsAt) && resetsAt > now() ? resetsAt : now() + DEFAULT_PAUSE_MS;
-    if (plan.pausedUntil && plan.pausedUntil >= until) return;
-    // Another stored account first; none -> pause until the reset, resume on its own.
-    if (recover.onUsageLimit(pkg, until) === 'failover') return;
-    pauseUntil(until);
+    if (plan.pausedUntil && plan.pausedUntil >= until) {
+      // Widen pauseScope if a second backend also hits its limit during the same pause.
+      if (plan.pauseScope && plan.pauseScope !== scope) {
+        plan.pauseScope = null;
+        cancelScopedNudges(null);
+        commit();
+        background(powerFlow.onPaused(), 'sleep');
+      }
+      return;
+    }
+    // Another stored Claude account first; none -> pause until the reset, resume on its own.
+    if (scope === 'claude' && recover.onUsageLimit(pkg, until) === 'failover') return;
+    pauseUntil(until, scope);
   }
 
   /**
    * Multi God Mode A3: every Claude account is out, so the registry pauses
-   * every run with live workers until the earliest reset - this run too,
-   * whichever worker hit the wall.
+   * runs that have live Claude workers until the earliest reset - never pure
+   * agy or free runs.
    * @param {number|null} resetsAt epoch ms
    * @returns {boolean} the run is paused now
    */
   function pauseExternal(resetsAt) {
-    if (!plan || !plan.started || plan.killed || !plan.packages.some(sup.isActive)) return false;
-    pauseUntil(resetsAt);
+    if (!plan || !plan.started || plan.killed) return false;
+    if (!plan.packages.some((p) => sup.isActive(p) && packageRunsClaude(p))) return false;
+    pauseUntil(resetsAt, 'claude');
     return true;
   }
 
   /** Pauses the run until `resetsAt` (+ grace); a longer pause already set wins. */
-  function pauseUntil(resetsAt) {
+  function pauseUntil(resetsAt, scope = null) {
     const until = Number.isFinite(resetsAt) && resetsAt > now() ? resetsAt : now() + DEFAULT_PAUSE_MS;
-    if (plan.pausedUntil && plan.pausedUntil >= until) return;
-    for (const id of [...nudgeTimers.keys()]) cancelNudge(id);
+    const nextScope = plan.pausedUntil ? (plan.pauseScope === (scope || null) ? plan.pauseScope : null) : (scope || null);
+    if (plan.pausedUntil && plan.pausedUntil >= until) {
+      if (nextScope !== plan.pauseScope) {
+        plan.pauseScope = nextScope;
+        cancelScopedNudges(nextScope);
+        commit();
+        background(powerFlow.onPaused(), 'sleep');
+      }
+      return;
+    }
+    cancelScopedNudges(nextScope);
     if (!plan.pausedUntil) plan.pauseStartedAt = now();
+    plan.pauseScope = nextScope;
     plan.pausedUntil = until;
     if (resumeTimer) clearTimer(resumeTimer);
     resumeTimer = setTimer(resume, until - now() + RESUME_GRACE_MS);
@@ -3130,7 +3305,7 @@ function createOrchestra(deps) {
     const fresh = sup
       .ownershipViolations(pkg, pkg.touched, plan.ownership, plan.packages)
       .filter((v) => !ownershipNudged.has(`${pkg.id}|${v.file}`));
-    if (!fresh.length || pkg.state !== 'launched' || plan.pausedUntil || plan.killed) return;
+    if (!fresh.length || pkg.state !== 'launched' || isPackagePaused(pkg) || plan.killed) return;
     for (const v of fresh) ownershipNudged.add(`${pkg.id}|${v.file}`);
     const sent = writePty(pkg.sessionId, sup.ownershipText(pkg.id, fresh), { paste: true });
     onRunEvent('ownership', { id: pkg.id, files: fresh, nudged: sent === true });
@@ -3148,10 +3323,23 @@ function createOrchestra(deps) {
     if (isBusy()) return { ok: false, error: 'busy' };
     if (plan.packages.some(sup.isActive)) return { ok: false, error: 'runActive' };
     if (!plan.packages.some((p) => p.state !== 'pending')) return { ok: false, error: 'nothingToLaunch' };
+    const planAtFinish = plan;
+    let nextIntegration = plan.integrationMode;
     if (sup.INTEGRATION_MODES.includes(o.integration) && integrationFor(plan, o.integration) !== plan.integrationMode) {
       if (o.integration === 'merge' && !(await confirmMerge())) return { ok: false, error: 'mergeDeclined' };
-      plan.integrationMode = o.integration;
+      if (plan !== planAtFinish || isBusy() || plan.packages.some(sup.isActive)) return { ok: false, error: 'busy' };
+      nextIntegration = o.integration;
     }
+    if (!plan.planRun && agyRules.runUsesAgy(plan)) {
+      busy = true;
+      try {
+        await agyModelsReady([...plan.packages, {}]);
+      } finally {
+        busy = false;
+      }
+      if (plan !== planAtFinish || isBusy() || plan.packages.some(sup.isActive)) return { ok: false, error: 'busy' };
+    }
+    plan.integrationMode = nextIntegration;
     freezeSettings();
     clearSchedule();
     plan.scheduledAt = null;
@@ -3186,9 +3374,9 @@ function createOrchestra(deps) {
     // A sleep only the tick gap revealed ('resume' never came): same as a resume.
     if (catchUpSleep()) interruptFinalize();
     recover.tick();
-    if (!plan || plan.pausedUntil || plan.killed) return;
+    if (!plan || allPaused() || plan.killed) return;
     for (const p of plan.packages) {
-      if (p.state === 'launched' && !p.awaitingDeps && !hybridRun.isWaiting(p) && sup.timedOut(p, now())) stall(p.id, 'timeout');
+      if (p.state === 'launched' && !p.awaitingDeps && !hybridRun.isWaiting(p) && !isPackagePaused(p) && sup.timedOut(p, now())) stall(p.id, 'timeout');
     }
     expireApprovals();
   }
@@ -3204,7 +3392,7 @@ function createOrchestra(deps) {
     if (!limit) return;
     let changed = false;
     for (const p of plan.packages) {
-      if (!sup.approvalExpired(p, now(), limit) || !p.sessionId || !sessionAlive(p.sessionId)) continue;
+      if (isPackagePaused(p) || !sup.approvalExpired(p, now(), limit) || !p.sessionId || !sessionAlive(p.sessionId)) continue;
       const sid = p.sessionId;
       // detail keeps the logged rule (onApproval put it there).
       patch(p.id, { error: 'approvalTimeout' });
@@ -3236,6 +3424,7 @@ function createOrchestra(deps) {
     fixup.abort();
     plan.pausedUntil = null;
     plan.pauseStartedAt = null;
+    plan.pauseScope = null;
     for (const p of plan.packages.filter((x) => x.state === 'launched')) {
       writePty(p.sessionId, ESC);
       patch(p.id, { state: 'killed' });
@@ -3272,16 +3461,19 @@ function createOrchestra(deps) {
   async function retry(payload) {
     const o = payload && typeof payload === 'object' ? payload : {};
     if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
+    const isRetryablePkg = (p) =>
+      !!p &&
+      (sup.RETRYABLE_STATES.has(p.state) || p.state === 'failed') &&
+      p.splitting !== true &&
+      !(Array.isArray(p.splitInto) && p.splitInto.length);
     const pkg = typeof o.id === 'string' ? findPkg(o.id) : null;
-    if (!pkg || !(sup.RETRYABLE_STATES.has(pkg.state) || pkg.state === 'failed')) return { ok: false, error: 'notRetryable' };
-    // Replaced by (or being replaced by) an auto-split: its work lives on in the split packages.
-    if (pkg.splitting === true || (Array.isArray(pkg.splitInto) && pkg.splitInto.length)) return { ok: false, error: 'notRetryable' };
+    if (!isRetryablePkg(pkg)) return { ok: false, error: 'notRetryable' };
     // A/B (orchestraVariants.js): an undecided group has no worker of its own,
     // and a built variant keeps its build - it parks again, no new worker.
     const abAction = variantRules.retryAction(pkg, plan.packages);
     if (abAction && abAction.refuse) return { ok: false, error: abAction.refuse };
     if (isBusy()) return { ok: false, error: 'busy' };
-    if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    if (isPackagePaused(pkg)) return { ok: false, error: 'paused' };
     if (plan.hold) return { ok: false, error: plan.hold.reason };
     // A settled package's tab lost its scoped intake token (commit ->
     // revokeFollowups) and a running claude cannot pick up a new one, so a
@@ -3294,6 +3486,8 @@ function createOrchestra(deps) {
     // A self-heal still under way is replaced by this Retry.
     healer.cancel(pkg.id);
 
+    const planAtRetry = plan;
+    const killedBefore = plan.killed;
     freezeSettings();
     if (abAction && abAction.keep) {
       // Parked again with its verified build; the pump decides the group once its twin is done.
@@ -3308,6 +3502,26 @@ function createOrchestra(deps) {
       // it was: no install (one would also race the old tab's processes).
       // reopenInWorktree closes the old tab once the new one is open; a
       // failure leaves the old tab and the stall untouched.
+      if (!plan.planRun && agyRules.packageRunsAgy(plan, pkg) && agyRules.packageAgyModel(plan, pkg) !== agyRules.AGY) {
+        busy = true;
+        try {
+          await agyModelsReady([pkg]);
+        } finally {
+          busy = false;
+        }
+        const afterWarm = plan ? findPkg(pkg.id) : null;
+        if (plan !== planAtRetry || (plan.killed && !killedBefore) || !isRetryablePkg(afterWarm) || isPackagePaused(afterWarm) || plan.hold) {
+          if (plan) commit();
+          return {
+            ok: false,
+            error: !plan || plan !== planAtRetry || (plan.killed && !killedBefore) || !isRetryablePkg(afterWarm)
+              ? 'notRetryable'
+              : isPackagePaused(afterWarm)
+                ? 'paused'
+                : plan.hold.reason,
+          };
+        }
+      }
       const current = findPkg(pkg.id);
       const reopened = reopenInWorktree(current, resumeBrief(current));
       if (!reopened.ok) {
@@ -3318,15 +3532,22 @@ function createOrchestra(deps) {
     } else if (pkg.root && pkg.branch) {
       // A new worker in the old worktree: install what is missing first
       // (an earlier install failed, or an older build never installed).
-      const killedBefore = plan.killed;
       const installed = await installForRetry(pkg);
       if (!installed.ok) return installed;
-      // The install can take minutes: a kill, pause or hold that landed meanwhile wins.
-      if ((plan.killed && !killedBefore) || plan.pausedUntil || plan.hold) {
-        commit();
-        return { ok: false, error: plan.killed ? 'notRetryable' : plan.pausedUntil ? 'paused' : plan.hold.reason };
+      const current = plan ? findPkg(pkg.id) : null;
+      // The install / model warm can take minutes: a kill, pause, hold or state change that landed meanwhile wins.
+      if (plan !== planAtRetry || (plan.killed && !killedBefore) || !isRetryablePkg(current) || isPackagePaused(current) || plan.hold) {
+        if (plan) commit();
+        return {
+          ok: false,
+          error: !plan || plan !== planAtRetry || (plan.killed && !killedBefore) || !isRetryablePkg(current)
+            ? 'notRetryable'
+            : isPackagePaused(current)
+              ? 'paused'
+              : plan.hold.reason,
+        };
       }
-      const reopened = reopenInWorktree(findPkg(pkg.id), resumeBrief(pkg));
+      const reopened = reopenInWorktree(current, resumeBrief(current));
       if (!reopened.ok) {
         // Held for node_modules: Resume reopens it, no second Retry needed.
         if (reopened.error === 'noNodeModules') patch(pkg.id, { heldRetry: true });
@@ -3365,15 +3586,21 @@ function createOrchestra(deps) {
    */
   async function installForRetry(pkg) {
     busy = true;
+    const planAtInstall = plan;
     let installed;
     try {
       // After a failed install a partial node_modules would make the
       // install a no-op: start from scratch.
       installed = await installDeps(pkg.root, { fresh: pkg.error === 'installFailed' });
+      const current = plan && plan === planAtInstall ? findPkg(pkg.id) : null;
+      if (installed.ok && current && !plan.planRun && agyRules.packageRunsAgy(plan, current) && agyRules.packageAgyModel(plan, current) !== agyRules.AGY) {
+        await agyModelsReady([current]);
+      }
     } finally {
       busy = false;
     }
     if (installed.ok) return { ok: true };
+    if (!plan || plan !== planAtInstall) return { ok: false, error: 'installFailed' };
     patch(pkg.id, { ...installFailedFields(installed.output), terminal: true });
     plan.packages = sup.withBlockedBy(plan.packages);
     onRunEvent('stalled', { id: pkg.id, reason: 'installFailed' });
@@ -3392,9 +3619,9 @@ function createOrchestra(deps) {
     const o = payload && typeof payload === 'object' ? payload : {};
     if (!plan || o.planId !== plan.id) return { ok: false, error: 'noPlan' };
     if (!plan.hold || plan.killed) return { ok: false, error: 'notHeld' };
-    if (plan.pausedUntil) return { ok: false, error: 'paused' };
+    const initialWaiting = plan.packages.filter(isHeld);
+    if (allPaused() || initialWaiting.some(isPackagePaused)) return { ok: false, error: 'paused' };
     if (isBusy()) return { ok: false, error: 'busy' };
-    const waiting = plan.packages.filter(isHeld);
     for (const dir of heldDirs()) {
       const res = checkDeps(dir);
       if (!res.ok) {
@@ -3405,8 +3632,19 @@ function createOrchestra(deps) {
         return { ok: false, error: 'noNodeModules', plan: view() };
       }
     }
+    const planAtResume = plan;
     // A held launch starts its worker below: an agy variant needs the live list first.
-    await agyModelsReady(waiting);
+    busy = true;
+    try {
+      await agyModelsReady(initialWaiting);
+    } finally {
+      busy = false;
+    }
+    if (!plan || plan !== planAtResume) return { ok: false, error: 'noPlan' };
+    if (!plan.hold || plan.killed) return { ok: false, error: 'notHeld' };
+    const waiting = plan.packages.filter(isHeld);
+    if (allPaused() || waiting.some(isPackagePaused)) return { ok: false, error: 'paused' };
+    if (isBusy()) return { ok: false, error: 'busy' };
     plan.hold = null;
     holdWatch.cancel();
     onRunEvent('resumed', { reason: 'noNodeModules' });
@@ -3457,7 +3695,7 @@ function createOrchestra(deps) {
       patch(id, { heldResume: null });
       const pkg = findPkg(id);
       const restarted =
-        (sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) ||
+        (packageRunsClaude(pkg) && sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) ||
         (sup.shouldAutoResume(pkg, reason) && autoResume(pkg, reason, detail));
       // Held again: the next Resume restarts it; otherwise it has had its chance.
       if (!restarted && plan.hold) patch(id, { heldResume: { reason, detail } });
@@ -3549,7 +3787,7 @@ function createOrchestra(deps) {
       planId: plan.id,
       live: working || (plan.started === true && !plan.killed && !plan.settled),
       settled: plan.settled === true,
-      pausedUntil: plan.pausedUntil || null,
+      pausedUntil: effectivePausedUntil(),
       killed: plan.killed === true,
       approvalsPending: approvalsPending(),
       options: sup.normalizeOptions(plan.options),

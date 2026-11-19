@@ -166,7 +166,7 @@ function createHealer(opts) {
     inFlight.delete(id);
     const pkg = opts.getPkg(id);
     if (!pkg || pkg.state !== 'stalled') return;
-    const resumed = ok && opts.live() && opts.resume(id, healBriefSection(entry));
+    const resumed = ok && opts.live(id) && opts.resume(id, healBriefSection(entry));
     const outcome = resumed ? 'resumed' : ok ? 'not resumed' : `fix failed - ${clip(what, 100)}`;
     opts.record(id, { at: opts.now(), kind: 'heal', reason: entry.reason, detail: `${entry.kind}: ${outcome}` });
     log(`[heal] ${id}: ${entry.kind} ${outcome}`);

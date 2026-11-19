@@ -110,6 +110,16 @@ function turnEndAction(pkg, marker) {
 const BG_START_RE = /Command running in background with ID: ([A-Za-z0-9_-]{1,64})/g;
 const BG_END_RE = /<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>[\s\S]{0,2000}?<status>([a-z_]{1,24})<\/status>/g;
 const MAX_OPEN_BACKGROUND = 20;
+// Own/user prose steps (Claude + agy) must not register a background process
+// when merely quoting its launch phrase.
+const IGNORED_BG_TYPES = new Set([
+  '',
+  'assistant',
+  'PLANNER_RESPONSE',
+  'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+  'USER_INPUT',
+  'CORTEX_STEP_TYPE_USER_INPUT',
+]);
 
 /** One JSONL line's `type`, or '' for a line that is not a JSON object. */
 function lineType(line) {
@@ -136,7 +146,7 @@ function openBackgroundTasks(fragment, open = []) {
     .split(/\r?\n/)
     .filter((l) => {
       const type = l.trim() ? lineType(l) : '';
-      return type !== '' && type !== 'assistant';
+      return !IGNORED_BG_TYPES.has(type);
     });
   for (const row of rows) {
     for (const m of row.matchAll(BG_START_RE)) ids.add(m[1]);
@@ -1018,8 +1028,8 @@ function normalizeStoredPlan(raw) {
     allowedTools: strList(raw.allowedTools).filter(isAllowRule).slice(0, 50),
     // A free run (orchestraFree.js) stays branches-only after a restart too.
     freeMode: raw.freeMode === true,
-    // D1: a free-planned build run keeps its planner (auto-split, Q8).
-    ...(raw.buildPlanner === 'free' ? { buildPlanner: 'free' } : {}),
+    // D1 / agy: keep non-Claude planner choice across restarts (auto-split, helper routing).
+    ...(raw.buildPlanner === 'free' || raw.buildPlanner === 'agy' ? { buildPlanner: raw.buildPlanner } : {}),
     // F6 "Workers"; a plan stored with only the old "Free providers" tick
     // (freeMode) migrates to 'free'. Claude-only carries no key, as before.
     ...(storedWorkers(raw) !== 'claude' ? { workers: storedWorkers(raw) } : {}),
