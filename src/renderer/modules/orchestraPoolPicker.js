@@ -80,6 +80,14 @@ export function poolText(list) {
   return poolLabel(list, (model) => (freeProfileIdOf(model) ? t('orch.pool.free', { name: freeName(model) || freeProfileIdOf(model) }) : null));
 }
 
+/**
+ * The agy families of the live menu: [{model, available}] in menu order
+ * ('agy-opus' / 'agy-argon' / 'agy-hydrogen'); [] before the first read.
+ */
+export function agyFamilyOptions() {
+  return options ? options.models.filter((m) => m.model.startsWith('agy-')).map((m) => ({ model: m.model, available: m.available })) : [];
+}
+
 /** The 'agy:<id>' a one-model agy pool runs on (main's pick), else null. */
 export function agyDefaultVariant(model) {
   const hit = options && options.models.find((m) => m.model === model);

@@ -22,7 +22,8 @@
 'use strict';
 
 const poolRules = require('./orchestraPool');
-const { normalizePool, poolKeys, poolWorkers, isPoolRun } = require('./workerPool');
+const { normalizePool, poolKeys, poolWorkers, isPoolRun, runsOnOf } = require('./workerPool');
+const { agyModelIdOf } = require('./workerModels');
 const { DEFAULT_EFFORT, normalizeEffort } = require('./efforts');
 
 /**
@@ -121,6 +122,23 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
     return { ...choice, workers: poolWorkers(choice.pool, workers), workerModel: 'plan', packages: applied.packages };
   }
 
+  /**
+   * The agy planner's `--model` id: the live variant of an agy family key
+   * ('agy-opus' / 'agy-argon' / 'agy-hydrogen') nearest the planner effort.
+   * Null for anything else, or a family the live list lacks (logged): agy
+   * then plans on its own default model, as before the choice existed.
+   * @param {unknown} key
+   * @param {string|null} effort the planner effort
+   * @returns {Promise<string|null>}
+   */
+  async function agyPlannerModelId(key, effort) {
+    if (runsOnOf(key) !== 'agy') return null;
+    const agyList = await agyListFor([{ model: key }]);
+    const id = agyModelIdOf(poolRules.concreteModel(key, effort, agyList));
+    if (!id) log(`[orchestra] agy planner model ${key} is not in the live \`agy models\` list; agy plans on its default model`);
+    return id;
+  }
+
   /** The profile main picked for a pool's ticked one; a different one is logged. */
   function preferred(kind, wanted, got) {
     if (wanted && got && got !== wanted) log(`[orchestra] the Workers pool ticked free profile ${wanted}; ${kind} runs on ${got} (the ticked one ${kind === 'hybrid' ? 'is no coding profile' : 'has no chain'})`);
@@ -132,7 +150,7 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
   /** The profile a Free-only run uses: a one-model pool's ticked one when it has a chain. */
   const freeProfileFor = (wanted) => preferred('Free only', wanted, wanted ? deps.freeProfileId(wanted) : deps.freeProfileId());
 
-  return { livePlanPool, applyPlanPool, approvePool, codingProfileFor, freeProfileFor };
+  return { livePlanPool, applyPlanPool, approvePool, codingProfileFor, freeProfileFor, agyPlannerModelId };
 }
 
 module.exports = { createPoolWiring };

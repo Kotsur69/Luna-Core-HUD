@@ -320,6 +320,64 @@ test('a plan discarded while Approve reads `agy models` is not launched', async 
   assert.equal(log.sessions.length, 0);
 });
 
+// ---- the agy planner's model -------------------------------------------------------
+
+test('agy planner: runPlan forwards an agy family, never a Claude alias', async () => {
+  const calls = [];
+  const runCtx = {
+    registry: { ensure: () => ({ makePlan: async (args) => { calls.push(args); return { ok: false, error: 'stop' }; } }) },
+    toolEnv: () => ({}),
+    agyPlannerEnv: () => ({ AGY: 1 }),
+    send: () => {},
+  };
+  const session = { projectId: 'p1', profileId: 'claude-cloud' };
+  const target = { projectId: 'p1', repoPath: '/repo' };
+  const plan = (model) => runPlan(runCtx, session, target, { picked: null, effort: 'high', planner: 'agy', workers: 'claude', model, followups: false });
+  await plan('agy-argon');
+  await plan('opus');
+  await plan('agy:gemini-4-argon-high');
+  assert.equal(calls[0].plannerAgyModel, 'agy-argon');
+  assert.equal(calls[0].planner, 'agy');
+  assert.equal('plannerAgyModel' in calls[1], false);
+  assert.equal('plannerAgyModel' in calls[2], false);
+});
+
+test('agy planner: makePlan resolves the family to the live variant nearest the planner effort', async () => {
+  const { orch, log } = setup({ extraDeps: { agyModels: fakeAgyModels() } });
+  await orch.makePlan({ ...ctx, planner: 'agy', plannerAgyModel: 'agy-argon', plannerEffort: 'medium' });
+  assert.equal(log.planner[0].agyModel, 'gemini-4-argon-medium');
+  assert.equal(log.planner[0].planner, 'agy');
+  // A family the live list lacks: agy's default model, logged.
+  const missing = setup({ extraDeps: { agyModels: fakeAgyModels(LIVE.filter((m) => !m.id.includes('hydrogen'))) } });
+  await missing.orch.makePlan({ ...ctx, planner: 'agy', plannerAgyModel: 'agy-hydrogen' });
+  assert.equal('agyModel' in missing.log.planner[0], false);
+  assert.ok(missing.log.lines.some((l) => /agy planner model agy-hydrogen is not in the live/.test(l)));
+  // The Claude planner never gets an agy model.
+  const claude = setup({ extraDeps: { agyModels: fakeAgyModels() } });
+  await claude.orch.makePlan({ ...ctx, plannerAgyModel: 'agy-argon' });
+  assert.equal('agyModel' in claude.log.planner[0], false);
+});
+
+test('agy planner: runPlanner hands agy the --model id; none = no flag', async () => {
+  const argvs = [];
+  const execImpl = (bin, args, opts, cb) => {
+    argvs.push([bin, ...args]);
+    setImmediate(() => cb(null, JSON.stringify({ packages: [], notes: '' }), ''));
+    return { stdin: { on: () => {}, end: () => {} } };
+  };
+  const base = { cwd: __dirname, env: {}, openTodos: [{ at: 1, text: 'x' }], planner: 'agy', execImpl };
+  await planner.runPlanner({ ...base, agyModel: 'gemini-4-argon-high' });
+  await planner.runPlanner(base);
+  assert.deepEqual(argvs[0].slice(-2), ['--model', 'gemini-4-argon-high']);
+  assert.equal(argvs[1].includes('--model'), false);
+});
+
+test('agy planner pref: an agy family or null', () => {
+  const { agyPlannerModelOf } = require('../src/uiprefs');
+  assert.equal(agyPlannerModelOf('agy-hydrogen'), 'agy-hydrogen');
+  for (const bad of ['opus', 'agy', 'agy:gemini-4-argon-high', null, 7]) assert.equal(agyPlannerModelOf(bad), null);
+});
+
 test('Approve refuses an off-shape pool', async () => {
   const { orch, log } = setup();
   const made = await orch.makePlan(ctx);

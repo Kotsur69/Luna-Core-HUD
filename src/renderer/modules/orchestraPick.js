@@ -13,8 +13,8 @@
 import { t } from './util.js';
 import { pickable, manualCount, mergeSelection, missingDeps, withDeps } from './orchestraPickRules.js';
 // The "Workers" pool (the models the planner may give packages): shared with Approve.
-import { loadPool, chosenPool, poolPickerView } from './orchestraPoolPicker.js';
-import { isPoolRun, poolWorkers } from '../../workerPool.js';
+import { loadPool, chosenPool, poolPickerView, agyFamilyOptions, refreshPoolOptions } from './orchestraPoolPicker.js';
+import { isPoolRun, poolWorkers, runsOnOf, poolModelName } from '../../workerPool.js';
 
 // src/efforts.js EFFORTS (the renderer cannot require main-side modules,
 // see EFFORT_OPTIONS in orchestrasettings.js). Never 'low'.
@@ -32,6 +32,12 @@ let cards = null;
 let plannerEffort = DEFAULT_PLANNER_EFFORT;
 /** The Claude planner's --model chosen next to it (ui pref orchestraPlannerModel). */
 let plannerModel = DEFAULT_PLANNER_MODEL;
+/**
+ * The agy planner's model (ui pref orchestraPlannerAgyModel): an agy family
+ * of the live menu ('agy-opus' / 'agy-argon' / 'agy-hydrogen'), or '' = agy's
+ * own default model. Main resolves it against `agy models` again.
+ */
+let agyPlannerModel = '';
 /** D1 "Planner: Claude / Free" for a Build run; Claude unless Mati picks Free. */
 // Mirrors src/orchestraAgy.js PLANNERS; 'agy' plans on the Antigravity profile.
 const BUILD_PLANNERS = ['claude', 'agy', 'free'];
@@ -77,6 +83,7 @@ async function loadPlannerEffort() {
     const saved = prefs && prefs.orchestraPlannerEffort;
     plannerEffort = PLANNER_EFFORTS.includes(saved) ? saved : DEFAULT_PLANNER_EFFORT;
     plannerModel = plannerModelPrefOf(prefs);
+    agyPlannerModel = agyPlannerModelPrefOf(prefs);
     workers = workersPrefOf(prefs);
     followups = followupsPrefOf(prefs);
   } catch {
@@ -130,6 +137,20 @@ export function planRequestWorkers() {
 export function plannerModelPrefOf(prefs) {
   const saved = prefs && typeof prefs === 'object' ? prefs.orchestraPlannerModel : null;
   return PLANNER_MODELS.includes(saved) ? saved : DEFAULT_PLANNER_MODEL;
+}
+
+/**
+ * The saved agy planner model: an agy family key, else '' (agy's default).
+ * @param {{orchestraPlannerAgyModel?:unknown}|null} prefs
+ */
+export function agyPlannerModelPrefOf(prefs) {
+  const saved = prefs && typeof prefs === 'object' ? prefs.orchestraPlannerAgyModel : null;
+  return runsOnOf(saved) === 'agy' ? saved : '';
+}
+
+/** The planner model the next plan sends: an agy family for the agy planner, else the Claude alias. */
+export function chosenPlannerModel() {
+  return buildPlanner === 'agy' ? agyPlannerModel : plannerModel;
 }
 
 /** The planner effort the next plan uses. */
@@ -242,7 +263,8 @@ function effortSelect(disabled) {
  * "Planner model" label + select, next to the effort; a change is saved as
  * the ui pref. The free planner has its own model, so the select is off then.
  */
-function modelSelect(disabled) {
+function modelSelect(disabled, repaint) {
+  if (buildPlanner === 'agy') return agyModelSelect(disabled, repaint);
   const label = el('label', 'orchestra__pick-effort');
   label.title = t('orch.pick.model.hint');
   label.append(el('span', '', t('orch.pick.model')));
@@ -259,6 +281,46 @@ function modelSelect(disabled) {
     plannerModel = sel.value;
     // Main validates again; a failed save only loses the remembered model.
     Promise.resolve(window.lunacore.setUiPrefs({ orchestraPlannerModel: plannerModel })).catch(() => {});
+  });
+  label.append(sel);
+  return label;
+}
+
+/**
+ * "Planner model" for the agy planner: agy's own default, then Opus / Argon /
+ * Hydrogen from the live `agy models` list (one entry per family; a family the
+ * list lacks is disabled). Main picks the family's variant nearest the planner
+ * effort and checks it against the live list again.
+ */
+function agyModelSelect(disabled, repaint) {
+  const label = el('label', 'orchestra__pick-effort');
+  label.title = t('orch.pick.model.agyHint');
+  label.append(el('span', '', t('orch.pick.model')));
+  const sel = el('select', 'profile-select');
+  const def = el('option', '', t('orch.pick.model.agyDefault'));
+  def.value = '';
+  sel.append(def);
+  const families = agyFamilyOptions();
+  for (const f of families) {
+    const opt = el('option', '', poolModelName(f.model) || f.model);
+    opt.value = f.model;
+    // A saved family that left the list stays selectable, so it can be changed.
+    opt.disabled = !f.available && f.model !== agyPlannerModel;
+    if (!f.available) opt.textContent = `${opt.textContent} - ${t('orch.pool.agyMissing')}`;
+    sel.append(opt);
+  }
+  if (!families.length) {
+    // The live list is not in yet: read it, then show the families.
+    refreshPoolOptions().then(() => {
+      if (sel.isConnected && agyFamilyOptions().length) repaint();
+    });
+  }
+  sel.value = families.some((f) => f.model === agyPlannerModel) ? agyPlannerModel : '';
+  sel.disabled = disabled;
+  sel.addEventListener('change', () => {
+    agyPlannerModel = runsOnOf(sel.value) === 'agy' ? sel.value : '';
+    // Main validates again; a failed save only loses the remembered model.
+    Promise.resolve(window.lunacore.setUiPrefs({ orchestraPlannerAgyModel: agyPlannerModel || null })).catch(() => {});
   });
   label.append(sel);
   return label;
@@ -359,13 +421,13 @@ export function pickerView({ disabled, canCancel, onPlan, onCancel, repaint }) {
     workersSelect(planDisabled, repaint),
     poolSelect(planDisabled, repaint),
     effortSelect(planDisabled),
-    modelSelect(planDisabled),
+    modelSelect(planDisabled, repaint),
     followupsToggle(planDisabled),
     button(
       t('orch.pick.plan', { n: count }),
       () => {
         const req = planRequestWorkers();
-        onPlan(selectedAts(), plannerEffort, buildPlanner, req.workers, plannerModel, followups, req.modelPool);
+        onPlan(selectedAts(), plannerEffort, buildPlanner, req.workers, chosenPlannerModel(), followups, req.modelPool);
       },
       planDisabled,
     ),

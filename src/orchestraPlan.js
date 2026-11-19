@@ -654,6 +654,7 @@ function estimatePlan(packages, todos, maxParallel = MAX_PARALLEL) {
  *   model: the planner's --model, one of PLANNER_MODELS (invalid/missing -> opus).
  *   planner: 'free' runs the same call on model auto:coding (the caller
  *   passes the coding profile's env); planDocs / extraPrompt extend the prompt.
+ *   agyModel: the agy planner's `--model` id (checked against the live list by the caller); none = agy's default.
  * @returns {Promise<{ok:true, raw:unknown, costUsd:number|null, durationMs:number}
  *   | {ok:false, error:'noClaude'|'timeout'|'failed'|'budget'|'badJson', detail?:string}>}
  */
@@ -672,6 +673,7 @@ function runPlanner({
   hybrid = false,
   abBuild = false,
   pool = null,
+  agyModel = null,
 }) {
   // Hybrid (F6) only with the Claude planner: the free planner plans free-only runs.
   const hybridRun = hybrid === true && planner !== 'free';
@@ -686,7 +688,11 @@ function runPlanner({
   // folder, not a missing `claude`.
   if (!checkCwd(cwd, isDirImpl).ok) return Promise.resolve({ ok: false, error: 'noRepo', detail: String(cwd || '') });
   const started = Date.now();
-  if (planner === 'agy') return runAgyPlanner({ cwd, env, timeout, execImpl, started, prompt: buildPlannerPrompt(openTodos, { planDocs, extraPrompt, ...extraOpts }), extraOpts });
+  if (planner === 'agy') {
+    // agyModel: an id main checked against the live `agy models` list; none = agy's own default.
+    const prompt = buildPlannerPrompt(openTodos, { planDocs, extraPrompt, ...extraOpts });
+    return runAgyPlanner({ cwd, env, timeout, execImpl, started, prompt, extraOpts, model: agyModel });
+  }
   return new Promise((resolve) => {
     const child = execImpl(
       'claude',
@@ -724,9 +730,9 @@ function runPlanner({
  * parsed from agy's text. validatePlan() checks it like any Claude answer.
  * No dollar cap and no effort flag: agy has neither.
  */
-async function runAgyPlanner({ cwd, env, timeout, execImpl, started, prompt, extraOpts }) {
+async function runAgyPlanner({ cwd, env, timeout, execImpl, started, prompt, extraOpts, model = null }) {
   const schema = planSchemaFor(extraOpts.hybrid === true, extraOpts.abBuild === true, extraOpts.pool || null);
-  const res = await runAgyPrint({ cwd, env, timeout, execImpl, prompt: agyJsonPrompt(prompt, schema) });
+  const res = await runAgyPrint({ cwd, env, timeout, execImpl, prompt: agyJsonPrompt(prompt, schema), ...(model ? { model } : {}) });
   if (!res.ok) return res;
   const parsed = parseAgyJson(res.stdout);
   return parsed.ok ? { ...parsed, durationMs: Date.now() - started } : parsed;
