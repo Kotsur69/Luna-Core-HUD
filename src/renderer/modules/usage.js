@@ -590,8 +590,11 @@ function modelRowLabel(limit) {
   return prefix && label.startsWith(prefix) ? label.slice(prefix.length) : label;
 }
 
-/** agy model families in name-column order; Argon is the one always listed. */
-const AGY_MODEL_ORDER = ['Opus', 'Gemini', 'Argon'];
+/**
+ * agy model families in name-column order; Argon is the one always listed.
+ * Neon (Argon's replacement) shows only when agy reports it.
+ */
+const AGY_MODEL_ORDER = ['Opus', 'Gemini', 'Neon', 'Argon'];
 const AGY_ARGON = 'Argon';
 
 /**

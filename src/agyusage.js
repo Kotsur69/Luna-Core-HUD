@@ -58,7 +58,8 @@ const AGY_QUOTA_PATH = '/v1internal:retrieveUserQuotaSummary';
 // (shared by every gemini-* model) is only here. Verified live 2026-11-18.
 const AGY_MODEL_QUOTA_PATH = '/v1internal:retrieveUserQuota';
 /** Model families the summary does not cover, taken from the per-model quota. */
-const AGY_MODEL_FAMILIES = new Set(['Gemini', 'Argon']);
+// Neon (Argon's replacement) counts apart from Gemini once a neon bucket shows up.
+const AGY_MODEL_FAMILIES = new Set(['Gemini', 'Neon', 'Argon']);
 const HOUR_MS = 60 * 60 * 1000;
 /** Slack on a reset distance, so a window that just started still fits it. */
 const WINDOW_SLACK_MS = 5 * 60 * 1000;

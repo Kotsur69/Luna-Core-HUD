@@ -34,7 +34,7 @@ let plannerEffort = DEFAULT_PLANNER_EFFORT;
 let plannerModel = DEFAULT_PLANNER_MODEL;
 /**
  * The agy planner's model (ui pref orchestraPlannerAgyModel): an agy family
- * of the live menu ('agy-opus' / 'agy-argon' / 'agy-hydrogen'), or '' = agy's
+ * of the live menu ('agy-opus' / 'agy-neon' / 'agy-argon' / 'agy-hydrogen'), or '' = agy's
  * own default model. Main resolves it against `agy models` again.
  */
 let agyPlannerModel = '';

@@ -1238,7 +1238,7 @@ function createOrchestra(deps) {
       // after `busy`, since checking agy families against the live list may
       // wait on `agy models`. No pool asked = no await, the call as before.
       const pool = planner !== 'free' && ctx.modelPool ? await poolRun.livePlanPool(ctx.modelPool) : null;
-      // The agy planner's model (Opus / Argon / Hydrogen on agy), resolved
+      // The agy planner's model (Opus / Neon / Argon / Hydrogen on agy), resolved
       // against the live list; none picked = agy's own default, as before.
       const agyModel = planner === 'agy' && ctx.plannerAgyModel ? await poolRun.agyPlannerModelId(ctx.plannerAgyModel, plannerEffort) : null;
       // F6 "Workers": a free planner is always free-only; hybrid plans with

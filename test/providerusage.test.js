@@ -465,6 +465,9 @@ test('agyModelName: short family names for the usage tile', () => {
   assert.equal(parse.agyModelName('gemini-3-flash'), 'Gemini');
   assert.equal(parse.agyModelName('Gemini 4 Argon'), 'Argon');
   assert.equal(parse.agyModelName('gemini-pro-orchestrator-argon'), 'Argon');
+  // Neon (Argon's replacement) is its own family, never folded into Gemini.
+  assert.equal(parse.agyModelName('gemini-4-neon-high'), 'Neon');
+  assert.equal(parse.agyModelName('Gemini 4 Neon'), 'Neon');
   assert.equal(parse.agyModelName('', 'chat_20706'), 'chat_20706');
   assert.equal(parse.agyModelName(), 'Antigravity');
   const summary = parse.parseAgyQuotaSummary(AGY_SUMMARY);

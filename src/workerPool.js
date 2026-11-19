@@ -12,7 +12,7 @@
 //   planner key    what the planner names: the pool id, 'free' for a free
 //                  profile (a run has at most one free profile).
 //   tiers          easy (Sonnet, Hydrogen, a free profile) / hard (Opus, Opus
-//                  on agy, Argon); "strongest" = first in STRENGTH_ORDER.
+//                  on agy, Neon, Argon); "strongest" = first in STRENGTH_ORDER.
 //
 // A pool of 0 or 1 models changes nothing: it maps onto today's single
 // worker-model value (src/orchestraPool.js). Only 2+ models make a pool run.
@@ -32,6 +32,8 @@ export const POOL_MODEL_LIST = Object.freeze([
   Object.freeze({ id: 'opus', name: 'Opus', runsOn: 'claude', tier: 'hard', family: null }),
   Object.freeze({ id: 'sonnet', name: 'Sonnet', runsOn: 'claude', tier: 'easy', family: null }),
   Object.freeze({ id: 'agy-opus', name: 'Opus (agy)', runsOn: 'agy', tier: 'hard', family: 'opus' }),
+  // Neon replaces Argon on Google's side; both stay while agy lists both.
+  Object.freeze({ id: 'agy-neon', name: 'Neon (agy)', runsOn: 'agy', tier: 'hard', family: 'neon' }),
   Object.freeze({ id: 'agy-argon', name: 'Argon (agy)', runsOn: 'agy', tier: 'hard', family: 'argon' }),
   Object.freeze({ id: 'agy-hydrogen', name: 'Hydrogen (agy)', runsOn: 'agy', tier: 'easy', family: 'hydrogen' }),
 ]);
@@ -41,7 +43,7 @@ export const POOL_MODELS = Object.freeze(POOL_MODEL_LIST.map((m) => m.id));
 /** The planner key of a free provider profile. */
 export const POOL_FREE_KEY = 'free';
 /** Strongest first: "if unsure, the strongest ticked model", and the out-of-pool fallback. */
-export const STRENGTH_ORDER = Object.freeze(['opus', 'agy-opus', 'agy-argon', 'sonnet', 'agy-hydrogen', POOL_FREE_KEY]);
+export const STRENGTH_ORDER = Object.freeze(['opus', 'agy-opus', 'agy-neon', 'agy-argon', 'sonnet', 'agy-hydrogen', POOL_FREE_KEY]);
 /** 'plan' + src/efforts.js EFFORTS (kept in line by test/worker-pool.test.js). */
 export const POOL_EFFORTS = Object.freeze(['plan', 'medium', 'high', 'xhigh', 'max']);
 /** The pool nobody chose: Opus only, today's run. */
@@ -99,7 +101,7 @@ export function runsOnOf(key) {
   return m ? m.runsOn : null;
 }
 
-/** The agy family ('opus' / 'argon' / 'hydrogen') of an agy key, else null. */
+/** The agy family ('opus' / 'neon' / 'argon' / 'hydrogen') of an agy key, else null. */
 export function agyFamilyOf(key) {
   const m = byId(key);
   return m ? m.family : null;
@@ -224,7 +226,7 @@ const levelOf = (id, name) => {
 /**
  * The variants of one agy family in a live model list, in the list's order.
  * @param {{id:string, name:string}[]} list the `agy models` list (src/agymodels.js)
- * @param {string} family 'opus' | 'argon' | 'hydrogen'
+ * @param {string} family 'opus' | 'neon' | 'argon' | 'hydrogen'
  * @returns {{id:string, name:string, level:string|null}[]}
  */
 export function agyFamilyVariants(list, family) {
