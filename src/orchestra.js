@@ -89,6 +89,8 @@ const { poolUsageReadings } = require('./orchestraPoolUsage');
 // Pool rescue (src/orchestraRescue.js): escalation ladder, limit moves, emergency Opus.
 const { createRescueWiring } = require('./orchestraRescueWiring');
 const rescueRules = require('./orchestraRescue');
+// Per-kind parallel caps of a mixed pool run (agy counted over every run).
+const kindCapRules = require('./orchestraKindCaps');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -881,14 +883,53 @@ function createOrchestra(deps) {
   });
   const isBusy = () => busy || pumping || finalizer.isRunning() || shutdownResume.isResuming();
 
+  /** Ready packages whose kind was full at the last look (the tick retries them). */
+  let kindHeld = false;
+
   function launchableReady() {
+    kindHeld = false;
     if (!plan || allPaused()) return [];
     const max = maxParallelFor(plan, MAX_PARALLEL);
-    if (!pauseRules.hasPauses(pauseRules.pausesOf(plan))) return sup.readyToLaunch(plan.packages, max);
     // Mask paused pending packages so they do not fill slots ahead of unpaused backends,
     // while active paused packages keep their parallel slots.
-    const masked = plan.packages.map((p) => (p.state === 'pending' && isPackagePaused(p) ? { ...p, state: 'paused_skip' } : p));
-    return sup.readyToLaunch(masked, max);
+    const masked = pauseRules.hasPauses(pauseRules.pausesOf(plan))
+      ? plan.packages.map((p) => (p.state === 'pending' && isPackagePaused(p) ? { ...p, state: 'paused_skip' } : p))
+      : plan.packages;
+    // Every run but a pool run launches exactly as before: the global cap only.
+    if (!kindCapRules.usesKindCaps(plan)) return sup.readyToLaunch(masked, max);
+    const capped = kindCapRules.capReady(masked, {
+      readyOf: (pkgs) => sup.readyToLaunch(pkgs, max),
+      isActive: sup.isActive,
+      kindOf: packageKind,
+      caps: kindCapRules.kindCaps(workerSettings()),
+      elsewhere: { agy: agyWorkersElsewhere() },
+    });
+    kindHeld = capped.held.length > 0;
+    return capped.ready;
+  }
+
+  /** The kind of worker a package runs on: 'agy', 'free' (a hybrid free package) or 'claude'. */
+  function packageKind(pkg) {
+    if (agyRules.packageRunsAgy(plan, pkg)) return kindCapRules.KIND_AGY;
+    return isHybridFreePackage(pkg) ? kindCapRules.KIND_FREE : kindCapRules.KIND_CLAUDE;
+  }
+
+  /** agy workers running in the other God Mode runs (multi God Mode); 0 when unknown. */
+  function agyWorkersElsewhere() {
+    if (typeof deps.agyWorkersElsewhere !== 'function') return 0;
+    try {
+      const n = deps.agyWorkersElsewhere();
+      return Number.isInteger(n) && n > 0 ? n : 0;
+    } catch (err) {
+      log(`[orchestra] counting other runs' agy workers failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
+  /** agy workers this run has going now (any run kind): the other runs' agy cap counts them. */
+  function activeAgyWorkers() {
+    if (!plan || plan.killed) return 0;
+    return plan.packages.filter((p) => sup.isActive(p) && agyRules.packageRunsAgy(plan, p)).length;
   }
 
   /**
@@ -3554,6 +3595,9 @@ function createOrchestra(deps) {
       if (p.state === 'launched' && !p.awaitingDeps && !hybridRun.isWaiting(p) && !isPackagePaused(p) && sup.timedOut(p, now())) stall(p.id, 'timeout');
     }
     expireApprovals();
+    // A pool package waiting for its kind's cap: another run's agy worker may
+    // have finished meanwhile (this run hears nothing of it), so look again.
+    if (kindHeld && plan.started && !pumping) kick();
   }
 
   /**
@@ -4068,6 +4112,8 @@ function createOrchestra(deps) {
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,
     isRunning: () => !!plan && plan.started && !plan.killed && plan.packages.some(sup.isActive),
+    // Multi God Mode: this run's agy workers, for the other runs' agy cap.
+    activeAgyWorkers,
     verifyStats: () => verifySemaphore.stats(),
     // Multi God Mode's same-repo guard (orchestraRegistry.repoBusy).
     repoPath: () => (plan ? plan.repoPath : null),

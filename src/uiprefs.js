@@ -12,7 +12,7 @@
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
 // orchestraPlannerEffort, orchestraPlannerModel, orchestraWorkers, orchestraModelPool, orchestraFollowups,
-// orchestraEmergencyEffort,
+// orchestraEmergencyEffort, orchestraAgyMaxParallel, orchestraFreeMaxParallel,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
 // motion, effectsStrength, welcomeSeen, welcomeChecked, pwaUrl, hideLife,
 // hideMission, hideGodMode.
@@ -33,6 +33,7 @@ const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
 const { normalizePool, runsOnOf } = require('./workerPool');
 const { EMERGENCY_EFFORTS, EMERGENCY_STEP } = require('./orchestraRescue');
+const { kindCapOf, DEFAULT_AGY_CAP, DEFAULT_FREE_CAP } = require('./orchestraKindCaps');
 /** The agy planner's model pref: an agy family key ('agy-opus' / 'agy-neon' / 'agy-argon' / 'agy-hydrogen') or null. */
 const agyPlannerModelOf = (v) => (runsOnOf(v) === 'agy' ? v : null);
 const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
@@ -283,6 +284,11 @@ const DEFAULTS = {
   // Opus runs at when it takes over a pool package not planned for it.
   // 'step' = one step up from the package's effort (today's escalation rule).
   orchestraEmergencyEffort: EMERGENCY_STEP,
+  // Per-kind caps of a mixed pool run (src/orchestraKindCaps.js): agy workers
+  // at once across EVERY run, and a run's free workers at once. Claude keeps
+  // the run-wide cap only.
+  orchestraAgyMaxParallel: DEFAULT_AGY_CAP,
+  orchestraFreeMaxParallel: DEFAULT_FREE_CAP,
   orchestraIntegration: 'pr',
   orchestraAllowedTools: [],
   orchestraCheckCommand: 'npm test',
@@ -810,6 +816,8 @@ function readUiPrefs() {
       orchestraModelPool: modelPoolPrefOf(obj.orchestraModelPool),
       orchestraFollowups: obj.orchestraFollowups === true,
       orchestraEmergencyEffort: emergencyEffortOf(obj.orchestraEmergencyEffort) || DEFAULTS.orchestraEmergencyEffort,
+      orchestraAgyMaxParallel: kindCapOf(obj.orchestraAgyMaxParallel) || DEFAULTS.orchestraAgyMaxParallel,
+      orchestraFreeMaxParallel: kindCapOf(obj.orchestraFreeMaxParallel) || DEFAULTS.orchestraFreeMaxParallel,
       orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
         ? obj.orchestraIntegration
         : DEFAULTS.orchestraIntegration,
@@ -939,6 +947,10 @@ function writeUiPrefs(partial) {
     }
     if (partial && emergencyEffortOf(partial.orchestraEmergencyEffort)) {
       next.orchestraEmergencyEffort = partial.orchestraEmergencyEffort;
+    }
+    // Per-kind caps: an integer in range or the old value stays.
+    for (const key of ['orchestraAgyMaxParallel', 'orchestraFreeMaxParallel']) {
+      if (partial && kindCapOf(partial[key])) next[key] = partial[key];
     }
     if (partial && workerEffortOf(partial.orchestraWorkerEffort)) {
       next.orchestraWorkerEffort = partial.orchestraWorkerEffort;
