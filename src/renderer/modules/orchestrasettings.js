@@ -167,7 +167,16 @@ export function mountOrchestraSettings(root, prefs) {
     emergency.addEventListener('change', () => {
       if (!EMERGENCY_OPTIONS.includes(emergency.value)) return;
       sfx.modeToggle();
-      window.lunacore.setUiPrefs({ orchestraEmergencyEffort: emergency.value });
+      const asked = emergency.value;
+      Promise.resolve(window.lunacore.setUiPrefs({ orchestraEmergencyEffort: asked }))
+        .then((next) => {
+          // Whatever main stored wins.
+          if (next && EMERGENCY_OPTIONS.includes(next.orchestraEmergencyEffort)) emergency.value = next.orchestraEmergencyEffort;
+        })
+        .catch((err) => {
+          console.warn('[orchestrasettings] saving orchestraEmergencyEffort failed:', err);
+          emergency.value = EMERGENCY_OPTIONS.includes(prefs.orchestraEmergencyEffort) ? prefs.orchestraEmergencyEffort : 'step';
+        });
     });
   }
 

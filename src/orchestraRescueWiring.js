@@ -129,7 +129,7 @@ function createRescueWiring(opts) {
     const res = moveFields(pkg, 'escalate', from, target, reason, ctx);
     if (!res) return null;
     const ladder = target.key === rules.OPUS ? {} : { stalls: 0, autoResumed: false };
-    log(`[orchestra] package ${pkg.id}: ${res.text}`);
+    // Logged by the caller once the new tab is open (src/orchestra.js escalate).
     return { fields: { ...res.fields, ...ladder }, text: res.text };
   }
 

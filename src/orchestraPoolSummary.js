@@ -21,8 +21,8 @@
 
 'use strict';
 
-const { normalizePool, isPoolRun, poolKeys } = require('./workerPool');
-const { OPUS, keyLabel, rescueText } = require('./orchestraRescue');
+const { normalizePool, poolKeys } = require('./workerPool');
+const { OPUS, keyLabel, rescueText, isPoolPlan } = require('./orchestraRescue');
 
 /** The emergency row's key: Opus on Claude, not ticked. */
 const EMERGENCY_ROW = 'opus-emergency';
@@ -56,8 +56,9 @@ const emptyRow = (key, name) => ({ key, name, planned: 0, landed: 0, stalled: 0,
  *   escalated:number, emergency:number, limitMoves:number, wallMs:number}[]|null}
  */
 function poolModelSummary(view, now = Date.now()) {
-  const pool = isObj(view) ? normalizePool(view.modelPool) : null;
-  if (!isPoolRun(pool)) return null;
+  // A pool run proper (worker model 'plan'): a plan run keeps its own pool and gets no rows.
+  if (!isPoolPlan(view)) return null;
+  const pool = normalizePool(view.modelPool);
   const rows = new Map(poolKeys(pool).map((k) => [k, emptyRow(k, keyLabel(k))]));
   const packages = list(view.packages);
   const rowOf = (key) => {

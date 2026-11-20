@@ -148,7 +148,9 @@ function nextStrongerTicked(from, available) {
   const r = rank(from);
   const list = Array.isArray(available) ? available : [];
   const stronger = STRENGTH_ORDER.filter((k) => list.includes(k) && (r < 0 || rank(k) < r));
-  return stronger.length ? stronger[stronger.length - 1] : null;
+  if (!stronger.length) return null;
+  // An unknown key has no rank: the strongest usable model, never the weakest.
+  return r < 0 ? stronger[0] : stronger[stronger.length - 1];
 }
 
 /** Opus on Claude as a target: an emergency unless Opus is ticked. */

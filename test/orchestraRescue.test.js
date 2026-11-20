@@ -60,6 +60,7 @@ test('nextStrongerTicked follows Hydrogen / free < Sonnet < Argon < Neon < Opus 
   assert.equal(r.nextStrongerTicked('agy-opus', all), 'opus');
   assert.equal(r.nextStrongerTicked('opus', all), null);
   assert.equal(r.nextStrongerTicked('sonnet', ['agy-hydrogen', 'sonnet']), null);
+  assert.equal(r.nextStrongerTicked(null, ['agy-hydrogen', 'agy-argon']), 'agy-argon', 'no key: the strongest, never the weakest');
 });
 
 test('escalationTarget: next stronger ticked, else Opus (emergency unless ticked), none from Opus', () => {
@@ -177,8 +178,10 @@ test('a stored run keeps its rescues and Emergency Opus effort across a restart;
   assert.deepEqual([a.rescueKey, a.emergency, a.modelOverride, a.effortOverride], ['opus', true, 'opus', 'xhigh']);
   assert.deepEqual(a.rescues, [{ kind: 'escalate', from: 'agy-argon', to: 'opus', emergency: true, effort: 'xhigh', at: 7, reason: 'blocked' }]);
   assert.deepEqual([b.rescueKey, b.rescues], [undefined, undefined]);
-  // 'step' (the default) carries no key, like an older run.
-  assert.equal(sup.normalizeStoredPlan({ ...raw, emergencyEffort: 'step' }).emergencyEffort, undefined);
+  // 'step' is kept too (a restart must not pick up a changed setting); an older run carries no key.
+  assert.equal(sup.normalizeStoredPlan({ ...raw, emergencyEffort: 'step' }).emergencyEffort, 'step');
+  assert.equal(sup.normalizeStoredPlan({ ...raw, emergencyEffort: undefined }).emergencyEffort, undefined);
+  assert.equal(sup.normalizeStoredPlan({ ...raw, emergencyEffort: 'bogus' }).emergencyEffort, undefined);
 });
 
 // ---- 5. per-model summary, report, phone ----------------------------------------------------
@@ -228,6 +231,7 @@ test('poolModelSummary: planned / landed / stalled / escalated / emergency / lim
     { key: EMERGENCY_ROW, name: 'Opus (emergency)', planned: 0, landed: 1, stalled: 0, escalated: 0, emergency: 1, limitMoves: 0, wallMs: 20 * MIN },
   ]);
   assert.equal(poolModelSummary({ modelPool: [e('opus')], packages: [] }), null, 'no pool run, no summary');
+  assert.equal(poolModelSummary({ ...summaryView(), workerModel: 'opus' }), null, 'a pool that is not the run model (a plan run) has no rows');
   assert.deepEqual(poolMoves(summaryView()).map((m) => [m.id, m.text]), [
     ['c', 'Argon (agy) limit -> Sonnet'],
     ['b', 'escalated: Argon (agy) -> Opus (emergency, xhigh)'],

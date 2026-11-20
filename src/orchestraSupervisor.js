@@ -42,7 +42,7 @@ const { normalizeStoredAb, isParked, isUndecidedGroup } = require('./orchestraVa
 const { normalizeHeals } = require('./orchestraHeal');
 const { normalizeContextResume } = require('./orchestraContextGuard');
 // Pool rescue (escalation ladder, limit moves, emergency Opus): its fields survive a restart.
-const { normalizeStoredRescue, normalizeEmergencyEffort, EMERGENCY_STEP } = require('./orchestraRescue');
+const { normalizeStoredRescue, EMERGENCY_EFFORTS } = require('./orchestraRescue');
 
 const MAX_NUDGES = 3;
 const MAX_VERIFY_ROUNDS = 2;
@@ -1030,8 +1030,9 @@ function normalizeStoredPlan(raw) {
     ...(isPoolRun(normalizePool(raw.modelPool)) ? { modelPool: normalizePool(raw.modelPool) } : {}),
     // 'plan' or one of the four levels; anything else re-freezes from Settings.
     workerEffort: raw.workerEffort === 'plan' ? 'plan' : normalizeEffort(raw.workerEffort),
-    // The Emergency Opus effort frozen at the start ('step' carries no key).
-    ...(normalizeEmergencyEffort(raw.emergencyEffort) !== EMERGENCY_STEP ? { emergencyEffort: normalizeEmergencyEffort(raw.emergencyEffort) } : {}),
+    // The Emergency Opus effort frozen at the start, 'step' too: a restart
+    // must not pick up a setting changed since. Older runs carry no key.
+    ...(EMERGENCY_EFFORTS.includes(raw.emergencyEffort) ? { emergencyEffort: raw.emergencyEffort } : {}),
     permissionMode: strOrNull(raw.permissionMode, 32),
     allowedTools: strList(raw.allowedTools).filter(isAllowRule).slice(0, 50),
     // A free run (orchestraFree.js) stays branches-only after a restart too.

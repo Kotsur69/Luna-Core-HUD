@@ -2815,6 +2815,7 @@ function createOrchestra(deps) {
       ...spentAbBuild(pkg),
     });
     if (old && sessionAlive(old)) closeSession(old);
+    if (pooled) log(`[orchestra] package ${pkg.id}: ${pooled.text}`);
     onRunEvent('escalated', { id: pkg.id, reason, ...(pooled ? { text: pooled.text } : {}) });
     return true;
   }
