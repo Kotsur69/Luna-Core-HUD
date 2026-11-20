@@ -250,3 +250,142 @@ test('readAllRepos: concurrent callers share one pass', async () => {
   assert.notEqual(third, first, 'a finished pass is not reused');
   await third;
 });
+
+// ---------------------------------------------------------------------------
+// Lanes: slow calls (network, worktree add/remove, log --all, long timeouts)
+// have their own slots, so they can never starve the fast status polls.
+// ---------------------------------------------------------------------------
+
+const { laneOf, MAX_SLOW_GIT, gitPoolLaneStats } = require('../src/gitpool.js');
+const worktrees = require('../src/worktrees.js');
+
+const killed = () => Object.assign(new Error('killed'), { killed: true });
+
+test('laneOf: network, whole-checkout, whole-history and long-timeout calls are slow', () => {
+  assert.equal(laneOf(['status', '--porcelain=v2', '-z'], 8000), 'fast');
+  assert.equal(laneOf(['log', '-1', '--format=%h'], 10000), 'fast');
+  assert.equal(laneOf(['rev-parse', '--show-toplevel'], 30000), 'fast', 'worktrees probes at 30s stay fast');
+  assert.equal(laneOf(['worktree', 'list', '--porcelain'], 30000), 'fast');
+  assert.equal(laneOf(['fetch', '--all', '--prune'], 30000), 'slow');
+  assert.equal(laneOf(['push'], 30000), 'slow');
+  assert.equal(laneOf(['-c', 'core.quotepath=false', 'log', '--all', '--no-merges'], 30000), 'slow');
+  assert.equal(laneOf(['worktree', 'add', '-b', 'luna/x', '/wt', 'main'], 300000), 'slow');
+  assert.equal(laneOf(['worktree', 'remove', '--', '/wt'], 600000), 'slow');
+  assert.equal(laneOf(['merge', '--ff-only', 'origin/main'], 60000), 'slow', 'a timeout over 30s is slow');
+  assert.equal(laneOf([], undefined), 'fast');
+});
+
+test('four hung slow calls fill the slow lane only: status polls still run and answer', async () => {
+  const sp = fakeSpawner();
+  const pool = createGitPool({ execFileImpl: sp.execFileImpl });
+  const hung = [
+    pool.run('/a', ['fetch', '--all', '--prune'], { timeout: 30000 }),
+    pool.run('/b', ['fetch', '--all', '--prune'], { timeout: 30000 }),
+    pool.run('/c', ['log', '--all', '--no-merges'], { timeout: 30000 }),
+    pool.run('/d', ['push'], { timeout: 30000 }),
+  ];
+  const fifthSlow = pool.run('/e', ['fetch', '--all', '--prune'], { timeout: 30000 });
+  assert.equal(sp.calls.length, MAX_SLOW_GIT, 'the slow lane is full');
+  assert.deepEqual(pool.laneStats().slow, { active: MAX_SLOW_GIT, queued: 1 });
+
+  const polls = Array.from({ length: MAX_CONCURRENT_GIT }, (_, i) => pool.run(`/wt/${i}`, ['status', '--porcelain=v2', '-z']));
+  assert.equal(sp.calls.length, MAX_SLOW_GIT + MAX_CONCURRENT_GIT, 'every status poll started at once');
+  assert.deepEqual(pool.laneStats().fast, { active: MAX_CONCURRENT_GIT, queued: 0 });
+  for (const c of sp.calls.slice(MAX_SLOW_GIT)) c.answer(null, 'clean');
+  const answered = await Promise.all(polls);
+  assert.ok(answered.every((r) => r.ok && r.stdout === 'clean'), 'polls answered while the slow calls hang');
+
+  // The queued slow call takes the first slow slot that frees up.
+  sp.calls[0].answer(killed());
+  assert.equal((await hung[0]).ok, false);
+  await tick();
+  assert.deepEqual(sp.calls.at(-1).args, ['-C', '/e', 'fetch', '--all', '--prune']);
+  for (const c of sp.calls.slice(1, MAX_SLOW_GIT)) c.answer(null, '');
+  sp.calls.at(-1).answer(null, '');
+  await Promise.all([...hung, fifthSlow]);
+  assert.ok(sp.peak() <= MAX_CONCURRENT_GIT + MAX_SLOW_GIT);
+  assert.deepEqual(pool.stats(), { active: 0, queued: 0 });
+});
+
+test('an explicit lane overrides the classifier, and withSlot frees its slot on a failed task', async () => {
+  const sp = fakeSpawner();
+  const pool = createGitPool({ execFileImpl: sp.execFileImpl, maxConcurrent: 1, maxSlow: 1 });
+  const slowStatus = pool.run('/a', ['status'], { lane: 'slow' });
+  assert.equal(pool.laneStats().slow.active, 1);
+  sp.calls[0].answer(null, 'x');
+  await slowStatus;
+  await assert.rejects(pool.withSlot('fast', () => Promise.reject(new Error('boom'))), /boom/);
+  await assert.rejects(
+    pool.withSlot('fast', () => {
+      throw new Error('sync boom');
+    }),
+    /sync boom/,
+  );
+  assert.equal(await pool.withSlot('fast', () => 'next'), 'next', 'the slot was freed');
+  assert.deepEqual(pool.stats(), { active: 0, queued: 0 });
+});
+
+test('worktrees.runGit: N parallel rev-parse probes are capped at the fast lane', async () => {
+  const sp = fakeSpawner();
+  const pool = createGitPool();
+  const N = 25;
+  const probes = Array.from({ length: N }, (_, i) =>
+    worktrees.runGit(`/repo/${i}`, ['rev-parse', '--show-toplevel'], sp.execFileImpl, { withSlot: pool.withSlot }),
+  );
+  assert.equal(sp.calls.length, MAX_CONCURRENT_GIT, 'only the cap starts');
+  assert.deepEqual(pool.laneStats().fast, { active: MAX_CONCURRENT_GIT, queued: N - MAX_CONCURRENT_GIT });
+  let answered = 0;
+  while (answered < N) {
+    sp.calls[answered].answer(null, `/repo/${answered}\n`);
+    answered += 1;
+    await tick();
+    assert.ok(sp.live() <= MAX_CONCURRENT_GIT);
+  }
+  const results = await Promise.all(probes);
+  assert.equal(sp.peak(), MAX_CONCURRENT_GIT);
+  assert.equal(results[7].stdout, '/repo/7\n');
+  assert.equal(results[7].timeoutMs, worktrees.GIT_TIMEOUT_MS, 'the diagnostic fields survive the pool');
+  assert.equal(results[7].code, 0);
+});
+
+test('worktrees.runGit: hung worktree add/remove use the slow lane and never block probes or status polls', async () => {
+  const sp = fakeSpawner();
+  const pool = createGitPool({ execFileImpl: sp.execFileImpl });
+  const via = { withSlot: pool.withSlot };
+  const add = (b) =>
+    worktrees.runGit('/repo', ['worktree', 'add', '-b', `luna/${b}`, `/wt/${b}`, 'main'], sp.execFileImpl, {
+      ...via,
+      timeoutMs: worktrees.ADD_TIMEOUT_MS,
+    });
+  const remove = (b) =>
+    worktrees.runGit('/repo', ['worktree', 'remove', '--', `/wt/${b}`], sp.execFileImpl, {
+      ...via,
+      timeoutMs: worktrees.REMOVE_TIMEOUT_MS,
+    });
+  const long = [add('a'), add('b'), remove('c'), remove('d')];
+  assert.equal(pool.laneStats().slow.active, MAX_SLOW_GIT);
+  const probe = worktrees.runGit('/repo', ['rev-parse', '--show-toplevel'], sp.execFileImpl, via);
+  const poll = pool.run('/wt/x', ['status', '--porcelain=v2', '-z']);
+  assert.equal(sp.calls.length, MAX_SLOW_GIT + 2, 'probe and poll started despite four hung slow calls');
+  assert.equal(sp.calls[MAX_SLOW_GIT].opts.timeout, worktrees.GIT_TIMEOUT_MS);
+  sp.calls[MAX_SLOW_GIT].answer(null, '/repo\n');
+  sp.calls[MAX_SLOW_GIT + 1].answer(null, 'clean');
+  assert.equal((await probe).stdout, '/repo\n');
+  assert.equal((await poll).stdout, 'clean');
+  for (const c of sp.calls.slice(0, MAX_SLOW_GIT)) c.answer(killed());
+  const ended = await Promise.all(long);
+  assert.ok(ended.every((r) => r.timedOut), 'timeouts are still reported');
+  assert.deepEqual(pool.stats(), { active: 0, queued: 0 });
+});
+
+test('worktrees.runGit uses the shared HUD pool by default', async () => {
+  const sp = fakeSpawner();
+  const probe = worktrees.runGit('/repo', ['rev-parse', '--show-toplevel'], sp.execFileImpl);
+  const remove = worktrees.runGit('/repo', ['worktree', 'remove', '--', '/wt'], sp.execFileImpl, {
+    timeoutMs: worktrees.REMOVE_TIMEOUT_MS,
+  });
+  assert.deepEqual(gitPoolLaneStats(), { fast: { active: 1, queued: 0 }, slow: { active: 1, queued: 0 } });
+  for (const c of sp.calls) c.answer(null, '');
+  await Promise.all([probe, remove]);
+  assert.deepEqual(gitPoolLaneStats(), { fast: { active: 0, queued: 0 }, slow: { active: 0, queued: 0 } });
+});
