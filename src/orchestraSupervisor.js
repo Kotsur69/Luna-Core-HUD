@@ -1051,6 +1051,12 @@ function normalizeStoredPlan(raw) {
     // time it waited on usage limits.
     runStartedAt: Number.isFinite(raw.runStartedAt) && raw.runStartedAt > 0 ? raw.runStartedAt : null,
     pausedTotalMs: Number.isFinite(raw.pausedTotalMs) && raw.pausedTotalMs > 0 ? raw.pausedTotalMs : 0,
+    // A restored run starts unpaused: neither plan.pauses (one per backend) nor the
+    // legacy single pauseScope / pausedUntil / pauseStartedAt carry over. The reset a
+    // shutdown resume waits for is read from the raw file (orchestraResume.js).
+    pauses: {},
+    pausedUntil: null,
+    pauseStartedAt: null,
     approvalLog: (Array.isArray(raw.approvalLog) ? raw.approvalLog : [])
       .filter((e) => e && typeof e.pkgId === 'string' && SLUG_RE.test(e.pkgId))
       .map((e) => ({ pkgId: e.pkgId, rule: isAllowRule(e.rule) ? e.rule : null, example: cleanExample(e.example) }))

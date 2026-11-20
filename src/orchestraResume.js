@@ -29,6 +29,7 @@
 'use strict';
 
 const { withHistoryEntry, isActive } = require('./orchestraSupervisor');
+const pauseRules = require('./orchestraPauses');
 
 const RESUME_COUNTDOWN_MS = 60 * 1000;
 // A blocked automatic resume (busy, low battery, Luna's Work, a deps hold)
@@ -77,7 +78,12 @@ function interruptedOnRestore(raw, nowMs) {
   if (!stored && raw.started !== true) return null;
   if (!stored && raw.settled === true && !integrationCut) return null;
   // The usage-limit pause the run sat in: resumed at its reset, not before.
-  const resets = [futureOrNull(raw.pausedUntil, nowMs), futureOrNull(stored && stored.resetAt, nowMs)].filter(Boolean);
+  // Per-backend pauses (orchestraPauses.js): the run resumes as one, so it waits for the latest reset.
+  const resets = [
+    futureOrNull(raw.pausedUntil, nowMs),
+    futureOrNull(pauseRules.latestUntil(raw.pauses), nowMs),
+    futureOrNull(stored && stored.resetAt, nowMs),
+  ].filter(Boolean);
   const resetAt = resets.length ? Math.max(...resets) : null;
   return { ...(stored || { at: nowMs, by: 'shutdown' }), resetAt };
 }
@@ -437,12 +443,10 @@ function createShutdownResume(deps) {
     const stopped = deps.stopForPause();
     const stop = new Set([...idsToStop(plan.packages), ...stopped.stop]);
     for (const p of plan.packages) if (stop.has(p.id) && p.state === 'launched' && p.sessionId) deps.escWorker(p.sessionId);
-    // A usage-limit pause in progress: the resume waits for its reset.
-    const resetAt = futureOrNull(plan.pausedUntil, nowMs);
-    if (plan.pausedUntil && plan.pauseStartedAt) plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, nowMs - plan.pauseStartedAt);
-    plan.pausedUntil = null;
-    plan.pauseStartedAt = null;
-    plan.pauseScope = null;
+    // Usage-limit pauses in progress: the run resumes as one, so it waits for the latest reset.
+    const resetAt = futureOrNull(pauseRules.latestUntil(plan.pauses) || plan.pausedUntil, nowMs);
+    // Every pause ends here (counted on pausedTotalMs); the banner's resume takes over.
+    Object.assign(plan, pauseRules.withRunPauses(plan, {}, nowMs));
     plan.packages = markPausedForShutdown(plan.packages, { stop, requeue: stopped.requeue, nowMs });
     plan.interrupted = { at: nowMs, by: 'pause', resetAt, resumeAt: null, waiting: null };
     deps.onRunEvent('pausedForShutdown', { stopped: stop.size });
