@@ -84,6 +84,30 @@ test('missingDeps flags ticked cards leaning on unticked open ones; withDeps add
   assert.deepEqual([...rules.withDeps(cards, new Set([3]))].sort(), [1, 2, 3]);
 });
 
+test('tagCounts lists every tag once per card, sorted with numbers in order', () => {
+  const cards = [
+    todo(1, 'a', { tags: ['godmode10', 'models'] }),
+    todo(2, 'b', { tags: ['godmode2', 'godmode2'] }),
+    todo(3, 'c', { tags: ['godmode2', 'models'] }),
+    todo(4, 'd'),
+    todo(5, 'e', { tags: 'not-an-array' }),
+  ];
+  assert.deepEqual(rules.tagCounts(cards), [
+    { tag: 'godmode2', n: 2 },
+    { tag: 'godmode10', n: 1 },
+    { tag: 'models', n: 2 },
+  ]);
+  assert.deepEqual(rules.tagCounts([todo(1, 'a')]), []);
+  assert.deepEqual(rules.tagCounts(null), []);
+});
+
+test('withTag ticks exactly the cards carrying the tag', () => {
+  const cards = [todo(1, 'a', { tags: ['godmode1'] }), todo(2, 'b', { tags: ['godmode2', 'x'] }), todo(3, 'c')];
+  assert.deepEqual([...rules.withTag(cards, 'godmode2')], [2]);
+  assert.deepEqual([...rules.withTag(cards, 'missing')], []);
+  assert.deepEqual([...rules.withTag(null, 'godmode1')], []);
+});
+
 // ---- diagnosis -------------------------------------------------------------------
 
 test('every package code gets what / why / fix; unknown codes still explain themselves', () => {
