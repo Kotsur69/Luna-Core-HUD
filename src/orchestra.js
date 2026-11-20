@@ -583,6 +583,7 @@ function createOrchestra(deps) {
     notify: deps.notify,
     putSnapshot: deps.putSnapshot,
     onReport: deps.onReport,
+    onHandbackScan: deps.onHandbackScan,
     sleep: deps.sleep,
     onIdle: () => afterFinalize(),
     // The integrate watchdog (default: orchestraFinalize integrateTimeoutFor)
@@ -1531,6 +1532,20 @@ function createOrchestra(deps) {
   }
 
   /**
+   * The agy "Plan only" planner's `--model` id: the saved family resolved
+   * against the live `agy models` list, the same way makePlan does (a plan
+   * run has no planner effort, so the default level picks the variant). No
+   * pick, or a family the live list lacks: null, logged - agy's default model.
+   * @param {unknown} key ctx.plannerAgyModel
+   * @returns {Promise<string|null>}
+   */
+  async function planRunAgyModel(key) {
+    const id = key ? await poolRun.agyPlannerModelId(key, null) : null;
+    if (!id) log('[orchestra] Plan only: the agy planner runs on agy\'s default model');
+    return id;
+  }
+
+  /**
    * Free God Mode v2 plan run (orchestraPlanRunStart.js): ONE topic split,
    * then the topic -> critique -> synthesis packages start right away (Q6),
    * locked down on the plan profile (orchestraPlanRunLaunch.js).
@@ -1552,8 +1567,9 @@ function createOrchestra(deps) {
     busy = true;
     planningRepo = ctx.repoPath;
     try {
+      const agyModel = ctx.planner === 'agy' ? await planRunAgyModel(ctx.plannerAgyModel) : null;
       const [res, dirty, baseBranch] = await Promise.all([
-        deps.runTopicSplit({ cwd: ctx.repoPath, env: ctx.env, request: ctx.request, planner: ctx.planner }),
+        deps.runTopicSplit({ cwd: ctx.repoPath, env: ctx.env, request: ctx.request, planner: ctx.planner, ...(agyModel ? { model: agyModel } : {}) }),
         deps.dirtyCount(ctx.repoPath),
         deps.baseBranchOf ? deps.baseBranchOf(ctx.repoPath) : null,
       ]);
@@ -3738,15 +3754,27 @@ function createOrchestra(deps) {
     commit();
     // F5 ticked after the run settled: the review starts now.
     if (changes.freeReview === true && !finalizer.isRunning()) freeReviewer.start();
-    // Handback scanner ticked after the run settled: scan now.
+    // Handback scanner ticked after the run settled: scan now and refresh the report if cards were filed.
+    // Skip if a retried package is active (finalize will run the scan once it settles).
     if (
       changes.scanHandbacks === true &&
+      !isBusy() &&
       !finalizer.isRunning() &&
+      !plan.packages.some(sup.isActive) &&
       plan.integration &&
       (plan.integration.state === 'done' || plan.integration.state === 'failed') &&
       typeof deps.onHandbackScan === 'function'
     ) {
-      background(deps.onHandbackScan(plan.id), 'handbackScan');
+      const runId = plan.id;
+      const reportText = finalizer.draftReport(runId);
+      background(
+        Promise.resolve()
+          .then(() => deps.onHandbackScan(runId, reportText))
+          .then((res) => {
+            if (res && res.filed > 0) finalizer.refreshReport(runId);
+          }),
+        'handbackScan',
+      );
     }
     background(powerFlow.onOptions(plan.options), 'options');
     return { ok: true, options: { ...plan.options } };

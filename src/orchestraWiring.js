@@ -384,7 +384,7 @@ function captureRun(projectId, ctx, self, planId) {
     const view = controller ? controller.view() : null;
     const repoPath = controller && typeof controller.repoPath === 'function' ? controller.repoPath() : null;
     if (!view || view.id !== planId || typeof repoPath !== 'string' || !repoPath) return;
-    Promise.resolve(ctx.onRunReport({ runId: planId, projectId, repoPath, view })).catch((err) => ctx.logError(`[orchestra] run capture failed: ${errText(err)}`));
+    Promise.resolve(ctx.onRunReport({ runId: planId, repoPath, view })).catch((err) => ctx.logError(`[orchestra] run capture failed: ${errText(err)}`));
   } catch (err) {
     ctx.logError(`[orchestra] run capture failed: ${errText(err)}`);
   }
@@ -399,18 +399,21 @@ function reportDeps(projectId, ctx, self) {
       captureRun(projectId, ctx, self, planId);
       return ctx.onReport(planId, text, summary);
     },
-    // Ticking scanHandbacks after the run already settled triggers the scan now.
-    onHandbackScan: (planId) => {
-      if (typeof ctx.onHandbackScan !== 'function') return;
+    // Opt-in post-run handback scanner (orchestraFinalize.js before report, or late toggle).
+    onHandbackScan: (planId, reportText = '') => {
+      if (typeof ctx.onHandbackScan !== 'function') return null;
       const controller = self();
       const view = controller ? controller.view() : null;
-      if (!view || view.id !== planId) return;
-      return Promise.resolve(ctx.onHandbackScan({ runId: planId, projectId, view })).catch((err) =>
-        ctx.logError(`[orchestra] handback scan failed: ${errText(err)}`),
-      );
+      if (!view || view.id !== planId) return null;
+      return Promise.resolve()
+        .then(() => ctx.onHandbackScan({ runId: planId, projectId, view, reportText }))
+        .catch((err) => {
+          ctx.logError(`[orchestra] handback scan failed: ${errText(err)}`);
+          return null;
+        });
     },
     writeReport: (planId, text) => {
-      if (!RUN_ID_RE.test(planId) || !ctx.ensureUserDir()) return null;
+      if (typeof planId !== 'string' || !RUN_ID_RE.test(planId) || !ctx.ensureUserDir()) return null;
       try {
         const dir = ctx.runsDir();
         fs.mkdirSync(dir, { recursive: true });
@@ -420,7 +423,8 @@ function reportDeps(projectId, ctx, self) {
         try {
           const view = self().view() || {};
           const repoPath = repoPathOf(text);
-          const html = renderRunReportHtml(view, { now: Date.now(), suggestions: view.suggestions, repoPath, gitDirExists: gitDirExists(repoPath) });
+          const finishedAt = view.integration && Number.isFinite(view.integration.at) ? view.integration.at : Date.now();
+          const html = renderRunReportHtml(view, { now: finishedAt, suggestions: view.suggestions, repoPath, gitDirExists: gitDirExists(repoPath) });
           fs.writeFileSync(path.join(dir, `${planId}.html`), html, { encoding: 'utf8', mode: 0o600 });
         } catch (err) {
           ctx.logError(`[orchestra] html report failed: ${errText(err)}`);

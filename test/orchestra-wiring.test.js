@@ -255,3 +255,27 @@ test('a report for a run that is no longer on the board is not captured', () => 
   makeOrchestraDeps('alpha', ctx).onReport('p1', '', {});
   assert.deepEqual(runs, []);
 });
+
+test('onHandbackScan forwards runId, projectId, view and reportText and logs rejections', async () => {
+  const calls = [];
+  const view = { id: 'p1', options: { scanHandbacks: true }, packages: [] };
+  const { ctx, out } = reportCtx(view, {
+    onHandbackScan: async (run) => {
+      calls.push(run);
+      return { scanned: true, reason: 'filed', filed: 1 };
+    },
+  });
+  const deps = makeOrchestraDeps('alpha', ctx);
+  assert.deepEqual(await deps.onHandbackScan('p1', '# Run report'), { scanned: true, reason: 'filed', filed: 1 });
+  assert.deepEqual(calls, [{ runId: 'p1', projectId: 'alpha', view, reportText: '# Run report' }]);
+  assert.equal(await deps.onHandbackScan('p-other', '# Run report'), null);
+  assert.deepEqual(out.errors, []);
+
+  const failing = reportCtx(view, { onHandbackScan: () => Promise.reject(new Error('scan boom')) });
+  assert.equal(await makeOrchestraDeps('alpha', failing.ctx).onHandbackScan('p1', '# report'), null);
+  assert.match(failing.out.errors[0], /handback scan failed: scan boom/);
+
+  const throwing = reportCtx(view, { onHandbackScan: () => { throw new Error('sync boom'); } });
+  assert.equal(await makeOrchestraDeps('alpha', throwing.ctx).onHandbackScan('p1', '# report'), null);
+  assert.match(throwing.out.errors[0], /handback scan failed: sync boom/);
+});

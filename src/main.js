@@ -1640,10 +1640,9 @@ const orchestraCtx = {
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).
   onReport: (planId, text, summary) => reportMail.runMail.report(planId, text, summary),
-  // A finished run's lessons (memoryruncapture.js) and opt-in handback To-do scan (orchestraHandbackScan.js).
+  // A finished run's lessons (memoryruncapture.js).
   onRunReport: (run) => {
     if (memoryRunCapture) Promise.resolve(memoryRunCapture.capture(run)).catch((err) => console.error('[memory] run capture failed:', err && err.message));
-    if (handbackScanner) Promise.resolve(handbackScanner.scan(run)).catch((err) => console.error('[orchestra] handback scan failed:', err && err.message));
   },
   onHandbackScan: (run) => (handbackScanner ? handbackScanner.scan(run) : null),
   // The phone's live run views (godmodelivepub.js), one per project.
@@ -4602,7 +4601,6 @@ app.whenReady().then(() => {
         send('todo:changed', { projectId });
         if (todoSync) todoSync.soon();
       },
-      appendReport: appendRunReport,
       log: (line) => console.error(line),
     });
     // An unused memory loses usefulness and moves to the archive at zero (src/memorydecay.js).

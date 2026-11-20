@@ -8,7 +8,10 @@ const path = require('node:path');
 
 const { handbackFrom, MAX_HANDBACK_CHARS } = require('../src/orchestraDiagnose');
 const sup = require('../src/orchestraSupervisor');
-const { createFollowupLedger, MAX_FOLLOWUPS_PER_PACKAGE, LIST_HEADROOM } = require('../src/orchestraFollowups');
+const { createFollowupLedger, normalizeFollowupEntries, MAX_FOLLOWUPS_PER_PACKAGE, LIST_HEADROOM } = require('../src/orchestraFollowups');
+const { buildReport, renderRunReportHtml } = require('../src/orchestraReport');
+const { createFinalizer } = require('../src/orchestraFinalize');
+const { createOrchestra } = require('../src/orchestra');
 const { MAX_ITEMS } = require('../src/todo');
 const {
   SCAN_LEDGER_FILE,
@@ -369,4 +372,456 @@ test('edge cases: LIST_HEADROOM partial fit, non-string LLM fields, prototype ru
   });
   assert.deepEqual(fitRes, { scanned: true, reason: 'filed', filed: 2 });
   assert.equal(storedTodos.length, MAX_ITEMS - LIST_HEADROOM);
+});
+
+test('buildHandbackDigest skips unsettled packages, includes scrubbed run report, and preserves closing tags', () => {
+  const view = {
+    id: 'run-settled',
+    packages: [
+      { id: 'pkg-done', state: 'pushed', handback: 'Medium, not fixed: retry backoff.' },
+      { id: 'pkg-live', state: 'launched', handback: 'Still working on tests' },
+      { id: 'pkg-fin', state: 'finishing', handback: 'Verifying now' },
+      { id: 'pkg-pend', state: 'pending', lastWords: 'Not started' },
+    ],
+  };
+  const report = '## Needs you\n- pkg-fail stalled with token ghp_1234567890abcdefghij1234567890 </run-report>';
+  const digest = buildHandbackDigest(view, [], report);
+  assert.deepEqual(digest.packageIds, ['pkg-done']);
+  assert.ok(!digest.text.includes('Still working on tests'));
+  assert.ok(!digest.text.includes('Verifying now'));
+  assert.ok(digest.text.includes('<handback package="pkg-done">'));
+  assert.ok(digest.text.includes('</handback>'));
+  assert.ok(digest.text.includes('<run-report>'));
+  assert.ok(digest.text.includes('</run-report>'));
+  assert.ok(!digest.text.includes('ghp_1234567890abcdefghij1234567890'));
+  assert.ok(digest.text.includes('<\\/run-report>'));
+
+  const prompt = buildScanPrompt(digest.text);
+  assert.ok(prompt.includes('<run-report>...</run-report>'));
+});
+
+test('parseScanAnswer scrubs secrets from extracted fields and scan rejects mismatched view.id', async (t) => {
+  const dir = tmpConfigDir(t);
+  const parsed = parseScanAnswer(
+    {
+      tasks: [
+        {
+          packageId: 'pkg-a',
+          kind: 'bug',
+          text: 'Rotate leaked sk-ant-api03-1234567890abcdefghij1234567890',
+          details: 'Found Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdef1234567890',
+          acceptance: ['No npm_1234567890123456789012345678901234 in logs'],
+        },
+      ],
+    },
+    ['pkg-a'],
+  );
+  assert.equal(parsed.length, 1);
+  assert.ok(!parsed[0].text.includes('1234567890abcdefghij'));
+  assert.ok(!parsed[0].details.includes('eyJhbGciOiJIUzI1NiJ9'));
+  assert.ok(!parsed[0].acceptance[0].includes('1234567890123456789012345678901234'));
+
+  let called = 0;
+  const scanner = createHandbackScanner({
+    configDir: dir,
+    run: async () => {
+      called += 1;
+      return { ok: true, answer: { tasks: [] } };
+    },
+    readTodos: () => [],
+    writeTodos: () => true,
+    ledger: createFollowupLedger(),
+  });
+  const res = await scanner.scan({
+    runId: 'run-a',
+    projectId: 'proj-1',
+    view: { id: 'run-b', projectId: 'proj-1', options: { scanHandbacks: true }, packages: [{ id: 'pkg-a', handback: 'gap' }] },
+  });
+  assert.deepEqual(res, { scanned: false, reason: 'disabled', filed: 0 });
+  assert.equal(called, 0);
+});
+
+test('run report lists scanner-filed cards alongside worker-filed follow-ups in markdown and HTML', () => {
+  const entries = normalizeFollowupEntries(
+    [
+      { packageId: 'git-pool', kind: 'bug', title: 'Worker-filed race condition', at: 101 },
+      { packageId: 'git-pool', kind: 'bug', title: 'Scanner-filed slow call starvation', at: 102, source: 'scan' },
+      { packageId: 'handback-scan', kind: 'gap', title: 'Cap worktrees.runGit', at: 103, source: 'scan' },
+    ],
+    'run-rep',
+  );
+  assert.equal(entries[0].source, undefined);
+  assert.equal(entries[1].source, 'scan');
+
+  const view = {
+    id: 'run-rep',
+    repoPath: '/repo',
+    workerModel: 'sonnet',
+    permissionMode: 'bypassPermissions',
+    packages: [],
+    integration: {},
+    followupsFiled: entries,
+  };
+  const md = buildReport(view, { now: 1_800_000_000_000, suggestions: [] });
+  assert.ok(md.includes('  - Worker-filed race condition (to-do at 101)'));
+  assert.ok(md.includes('  - Scanner-filed slow call starvation (to-do at 102, handback scan)'));
+  assert.ok(md.includes('  - Cap worktrees.runGit (to-do at 103, handback scan)'));
+
+  const html = renderRunReportHtml(view, { now: 1_800_000_000_000 });
+  assert.ok(html.includes('Worker-filed race condition (to-do at 101)'));
+  assert.ok(html.includes('Scanner-filed slow call starvation (to-do at 102, handback scan)'));
+});
+
+test('createFinalizer runs handback scan before writing report so report and toast include scanner cards once', async (t) => {
+  const dir = tmpConfigDir(t);
+  let todos = [];
+  let modelCalls = 0;
+  let capturedPrompt = '';
+  const reports = [];
+  const notices = [];
+  const plan = {
+    id: 'runfin1',
+    projectId: 'proj-1',
+    repoPath: '/repo',
+    baseBranch: 'main',
+    integrationMode: 'branches',
+    integration: { state: 'idle' },
+    options: { scanHandbacks: true },
+    approvalLog: [],
+    followupsFiled: [{ runId: 'runfin1', packageId: 'pkg-a', kind: 'idea', title: 'Worker idea', at: 50 }],
+    packages: [{ id: 'pkg-a', title: 'Pkg A', state: 'pushed', branch: 'luna/pkg-a', dependsOn: [], handback: 'Not handled: edge case X' }],
+  };
+  const ledger = createFollowupLedger({
+    load: () => plan.followupsFiled,
+    persist: (_id, entries) => {
+      plan.followupsFiled = entries;
+      return true;
+    },
+  });
+  const scanner = createHandbackScanner({
+    configDir: dir,
+    run: async ({ prompt }) => {
+      modelCalls += 1;
+      capturedPrompt = prompt;
+      return {
+        ok: true,
+        answer: { tasks: [{ packageId: 'pkg-a', kind: 'gap', text: 'Handle edge case X', details: 'Left unhandled in pkg-a' }] },
+      };
+    },
+    readTodos: () => todos,
+    writeTodos: (_pid, next) => {
+      todos = next;
+      return true;
+    },
+    ledger,
+    now: () => 2000,
+  });
+  const viewOf = () => ({
+    id: plan.id,
+    projectId: plan.projectId,
+    repoPath: plan.repoPath,
+    options: plan.options,
+    packages: plan.packages,
+    integration: plan.integration,
+    followupsFiled: plan.followupsFiled,
+    overlaps: [],
+  });
+  const fin = createFinalizer({
+    getPlan: () => plan,
+    patch: (id, fields) => {
+      plan.packages = plan.packages.map((p) => (p.id === id ? { ...p, ...fields } : p));
+    },
+    commit: () => {},
+    view: viewOf,
+    onRunEvent: () => {},
+    now: () => 2000,
+    sleep: async () => {},
+    writeReport: (id, text) => {
+      reports.push({ id, text });
+      return `/runs/${id}.md`;
+    },
+    notify: (summary) => notices.push(summary),
+    onHandbackScan: (runId, reportText) => scanner.scan({ runId, projectId: plan.projectId, view: viewOf(), reportText }),
+  });
+
+  await fin.finalize();
+  assert.equal(modelCalls, 1);
+  assert.ok(capturedPrompt.includes('<run-report>'));
+  assert.ok(capturedPrompt.includes('Not handled: edge case X'));
+  assert.equal(reports.length, 1);
+  assert.ok(reports[0].text.includes('Worker idea (to-do at 50)'));
+  assert.ok(reports[0].text.includes('Handle edge case X (to-do at 2000, handback scan)'));
+  assert.deepEqual(notices[0].followups, { gap: 1, idea: 1 });
+
+  // A second finalize pass never re-scans or double-files.
+  await fin.finalize();
+  assert.equal(modelCalls, 1);
+  assert.equal(todos.length, 1);
+});
+
+test('late scanHandbacks toggle after settlement scans once and refreshes the run report', async (t) => {
+  const dir = tmpConfigDir(t);
+  let todos = [];
+  const writtenReports = [];
+  const ledger = createFollowupLedger({
+    load: (runId) => orch.followupsFiled(runId),
+    persist: (runId, entries) => orch.noteFollowups(runId, entries),
+  });
+  const scanner = createHandbackScanner({
+    configDir: dir,
+    run: async () => ({
+      ok: true,
+      answer: { tasks: [{ packageId: 'pkg-a', kind: 'bug', text: 'Fix late-discovered leak' }] },
+    }),
+    readTodos: () => todos,
+    writeTodos: (_pid, next) => {
+      todos = next;
+      return true;
+    },
+    ledger,
+    now: () => 3000,
+  });
+  const orch = createOrchestra({
+    now: () => 1_700_000_000_000,
+    readTodos: () => [{ at: 1, text: 'Build feature', done: false }],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({
+      ok: true,
+      raw: { packages: [{ id: 'pkg-a', title: 'Pkg A', prompt: 'do a', files: [], todoAts: [1], dependsOn: [], model: 'sonnet' }], notes: '' },
+      costUsd: 0,
+    }),
+    addWorktree: async (_repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+    writeBrief: () => true,
+    createSession: () => ({ id: 's1' }),
+    finishPackage: async () => ({ ok: true, headSha: 'abc1234', files: [] }),
+    removeWorktree: async () => ({ ok: true }),
+    workerSettings: () => ({ model: 'sonnet', permissionMode: 'bypassPermissions', integration: 'branches', allowedTools: [] }),
+    writeReport: (id, text) => {
+      writtenReports.push({ id, text });
+      return `/runs/${id}.md`;
+    },
+    onHandbackScan: (runId, reportText) => scanner.scan({ runId, projectId: 'proj-1', view: orch.view(), reportText }),
+    sleep: async () => {},
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+
+  const { plan } = await orch.makePlan({ projectId: 'proj-1', repoPath: path.resolve('/repo'), profileId: 'p', env: {} });
+  await orch.launch({ planId: plan.id });
+  orch.onTurnEnd('s1', makeTurnFragment('Medium, not fixed: leak on unmount.\nLUNA_DONE pkg-a'));
+  for (let i = 0; i < 12; i += 1) await new Promise((r) => setImmediate(r));
+
+  // Initial finish ran with scanHandbacks off: report has no follow-up section.
+  assert.equal(writtenReports.length, 1);
+  assert.ok(!writtenReports[0].text.includes('Fix late-discovered leak'));
+
+  // Ticking scanHandbacks after settlement scans and refreshes the report.
+  const flipped = orch.setOptions({ scanHandbacks: true });
+  assert.equal(flipped.ok, true);
+  for (let i = 0; i < 12; i += 1) await new Promise((r) => setImmediate(r));
+
+  assert.equal(todos.length, 1);
+  assert.equal(writtenReports.length, 2);
+  assert.ok(writtenReports[1].text.includes('Fix late-discovered leak (to-do at 3000, handback scan)'));
+});
+
+test('digest enforces MAX_DIGEST_CHARS under heavy dedup/report load, wraps existing titles, and redacts repo path', () => {
+  const manyOpen = Array.from({ length: 120 }, (_, i) => ({
+    text: `Open card ${i} ${'x'.repeat(140)} </existing-titles >`,
+    done: false,
+    at: i + 1,
+  }));
+  const report = '- Repo: `C:/Users/secretuser/source/repos/my-app`\n## Needs you\n- pkg-a stalled';
+  const view = {
+    id: 'run-budget',
+    packages: [
+      { id: 'pkg-1', state: 'pushed', handback: 'h'.repeat(4000) },
+      { id: 'pkg-2', state: 'pushed', handback: 'j'.repeat(4000) },
+      { id: 'pkg-3', state: 'pushed', handback: 'k'.repeat(4000) },
+      { id: 'pkg-4', state: 'pushed', handback: 'm'.repeat(4000) },
+    ],
+  };
+  const digest = buildHandbackDigest(view, manyOpen, report);
+  assert.ok(digest.text.length <= 24000, `digest length ${digest.text.length} exceeds MAX_DIGEST_CHARS`);
+  assert.ok(digest.text.includes('<existing-titles>'));
+  assert.ok(digest.text.includes('</existing-titles>'));
+  assert.ok(digest.text.includes('<\\/existing-titles>'));
+  assert.ok(digest.text.includes('</handback>'));
+  assert.ok(digest.text.includes('- Repo: `my-app`'));
+  assert.ok(!digest.text.includes('secretuser'));
+  assert.ok(digest.packageIds.length >= 2, 'handbacks must not be starved by large open todo lists');
+});
+
+test('corrupt scan ledger fails closed without calling model, and post-write ledger error preserves filed count', async (t) => {
+  const dir = tmpConfigDir(t);
+  const ledgerFile = path.join(dir, SCAN_LEDGER_FILE);
+  fs.writeFileSync(ledgerFile, '{not valid json', 'utf8');
+  let modelCalls = 0;
+  const scanner = createHandbackScanner({
+    configDir: dir,
+    run: async () => {
+      modelCalls += 1;
+      return { ok: true, answer: { tasks: [] } };
+    },
+    readTodos: () => [],
+    writeTodos: () => true,
+    ledger: createFollowupLedger(),
+  });
+  const res = await scanner.scan({
+    runId: 'run-corrupt',
+    projectId: 'proj-1',
+    view: { id: 'run-corrupt', projectId: 'proj-1', options: { scanHandbacks: true }, packages: [{ id: 'pkg-a', state: 'pushed', handback: 'gap' }] },
+  });
+  assert.deepEqual(res, { scanned: false, reason: 'ledger-unreadable', filed: 0 });
+  assert.equal(modelCalls, 0);
+  // Corrupt file was not silently wiped.
+  assert.equal(fs.readFileSync(ledgerFile, 'utf8'), '{not valid json');
+
+  // Post-write ledger corruption after initial 'started' write still notifies onTodosChanged and returns filed count.
+  const dir2 = tmpConfigDir(t);
+  const ledgerFile2 = path.join(dir2, SCAN_LEDGER_FILE);
+  let todos = [];
+  const changed = [];
+  const scanner2 = createHandbackScanner({
+    configDir: dir2,
+    run: async () => {
+      // Simulate ledger becoming unreadable while model call is in flight.
+      fs.writeFileSync(ledgerFile2, '{broken', 'utf8');
+      return { ok: true, answer: { tasks: [{ packageId: 'pkg-a', kind: 'bug', text: 'Real bug found' }] } };
+    },
+    readTodos: () => todos,
+    writeTodos: (_pid, next) => {
+      todos = next;
+      return true;
+    },
+    ledger: createFollowupLedger(),
+    onTodosChanged: (pid, n) => changed.push([pid, n]),
+    now: () => 4000,
+  });
+  const res2 = await scanner2.scan({
+    runId: 'run-post-err',
+    projectId: 'proj-1',
+    view: { id: 'run-post-err', projectId: 'proj-1', options: { scanHandbacks: true }, packages: [{ id: 'pkg-a', state: 'pushed', handback: 'bug' }] },
+  });
+  assert.deepEqual(res2, { scanned: true, reason: 'filed', filed: 1 });
+  assert.deepEqual(changed, [['proj-1', 1]]);
+  assert.equal(todos.length, 1);
+});
+
+test('createFinalizer handles scanHandbacks throw and plan discard during scan cleanly', async () => {
+  // 1. Throwing onHandbackScan logs an error event and still writes the report.
+  const events = [];
+  const reports = [];
+  let currentPlan = {
+    id: 'runthrow',
+    projectId: 'proj-1',
+    repoPath: '/repo',
+    baseBranch: 'main',
+    integrationMode: 'branches',
+    integration: { state: 'idle' },
+    options: { scanHandbacks: true },
+    approvalLog: [],
+    packages: [{ id: 'pkg-a', title: 'A', state: 'pushed', branch: 'luna/a', dependsOn: [], handback: 'gap' }],
+  };
+  const fin1 = createFinalizer({
+    getPlan: () => currentPlan,
+    patch: () => {},
+    commit: () => {},
+    view: () => ({ id: currentPlan.id, packages: currentPlan.packages, integration: currentPlan.integration, overlaps: [] }),
+    onRunEvent: (k, d) => events.push([k, d]),
+    now: () => 5000,
+    sleep: async () => {},
+    writeReport: (id, text) => {
+      reports.push({ id, text });
+      return `/runs/${id}.md`;
+    },
+    onHandbackScan: async () => {
+      throw new Error('scan exploded');
+    },
+  });
+  await fin1.finalize();
+  assert.ok(events.some(([k, d]) => k === 'error' && d.where === 'handbackScan'));
+  assert.equal(reports.length, 1);
+
+  // 2. Plan discarded while onHandbackScan is awaited: report() and notify() are skipped.
+  const reports2 = [];
+  const notices2 = [];
+  let plan2 = { ...currentPlan, id: 'rundisc', integration: { state: 'idle' } };
+  const fin2 = createFinalizer({
+    getPlan: () => plan2,
+    patch: () => {},
+    commit: () => {},
+    view: () => ({ id: plan2.id, packages: plan2.packages, integration: plan2.integration, overlaps: [] }),
+    onRunEvent: () => {},
+    now: () => 5000,
+    sleep: async () => {},
+    writeReport: (id, text) => reports2.push({ id, text }),
+    notify: (s) => notices2.push(s),
+    onHandbackScan: async () => {
+      plan2 = null;
+      return { scanned: true, reason: 'nothing', filed: 0 };
+    },
+  });
+  assert.equal(await fin2.finalize(), false);
+  assert.equal(reports2.length, 0);
+  assert.equal(notices2.length, 0);
+});
+
+test('late scanHandbacks toggle does not fire while a retried package is active and skips refresh when filed === 0', async () => {
+  let scanCalls = 0;
+  let seq = 0;
+  const reports = [];
+  const orch = createOrchestra({
+    now: () => 1_700_000_000_000,
+    readTodos: () => [{ at: 1, text: 'Task A', done: false }, { at: 2, text: 'Task B', done: false }],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({
+      ok: true,
+      raw: {
+        packages: [
+          { id: 'pkg-a', title: 'A', prompt: 'do a', files: [], todoAts: [1], dependsOn: [], model: 'sonnet' },
+          { id: 'pkg-b', title: 'B', prompt: 'do b', files: [], todoAts: [2], dependsOn: [], model: 'sonnet' },
+        ],
+        notes: '',
+      },
+      costUsd: 0,
+    }),
+    addWorktree: async (_repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+    writeBrief: () => true,
+    createSession: () => ({ id: `s${++seq}` }),
+    finishPackage: async () => ({ ok: true, headSha: 'abc1234', files: [] }),
+    removeWorktree: async () => ({ ok: true }),
+    workerSettings: () => ({ model: 'sonnet', permissionMode: 'bypassPermissions', integration: 'branches', allowedTools: [] }),
+    writeReport: (id, text) => {
+      reports.push({ id, text });
+      return `/runs/${id}.md`;
+    },
+    onHandbackScan: async () => {
+      scanCalls += 1;
+      return { scanned: true, reason: 'nothing', filed: 0 };
+    },
+    sleep: async () => {},
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+
+  const { plan } = await orch.makePlan({ projectId: 'proj-1', repoPath: path.resolve('/repo'), profileId: 'p', env: {} });
+  await orch.launch({ planId: plan.id });
+  orch.onTurnEnd('s1', makeTurnFragment('Done A\nLUNA_DONE pkg-a'));
+  orch.onSessionClosed('s2');
+  for (let i = 0; i < 12; i += 1) await new Promise((r) => setImmediate(r));
+  assert.equal(reports.length, 1);
+
+  // Retry pkg-b: it is now active (launched) while integration.state is still 'done'.
+  const retried = await orch.retry({ planId: plan.id, id: 'pkg-b' });
+  assert.equal(retried.ok, true);
+  assert.equal(orch.setOptions({ scanHandbacks: true }).ok, true);
+  for (let i = 0; i < 6; i += 1) await new Promise((r) => setImmediate(r));
+  assert.equal(scanCalls, 0, 'must not trigger late scan while a retried package is still active');
+
+  // Once pkg-b finishes, finalize runs the scan once; filed === 0 does not cause extra refreshes.
+  orch.onTurnEnd('s3', makeTurnFragment('Done B\nLUNA_DONE pkg-b'));
+  for (let i = 0; i < 12; i += 1) await new Promise((r) => setImmediate(r));
+  assert.equal(scanCalls, 1);
+  assert.equal(reports.length, 2);
 });
