@@ -64,7 +64,8 @@ test('a ready plan without an id or packages reads as failed', () => {
 
 test('planDraft: fresh draft ticks every package; the same plan keeps its draft', () => {
   const fresh = planDraft(readyPlan, null);
-  assert.deepEqual(fresh, { planId: 'pabc123', ticked: ['a', 'b'], integration: 'pr', free: false, workerModel: 'opus', releaseAfter: false });
+  // pool: the phone's Workers pool picker (none ticked for a plan without a pool).
+  assert.deepEqual(fresh, { planId: 'pabc123', ticked: ['a', 'b'], integration: 'pr', free: false, workerModel: 'opus', releaseAfter: false, pool: [] });
   const edited = { ...togglePackage(fresh, 'a'), integration: 'merge', free: true, releaseAfter: true };
   assert.deepEqual(planDraft(readyPlan, edited), { ...edited });
   // A package gone from the plan drops out of the ticks.

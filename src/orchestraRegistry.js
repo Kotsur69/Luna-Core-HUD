@@ -189,6 +189,26 @@ function createOrchestraRegistry(deps) {
    * @param {Array<string|null>} projectIds
    * @returns {Array<string|null>} the projects whose run came back
    */
+  /**
+   * agy workers running in every run but this project's: one agy quota is
+   * shared, so a pool run's agy cap counts them all (src/orchestraKindCaps.js).
+   * A controller that throws counts as 0 and is logged.
+   */
+  function agyWorkersElsewhere(projectId) {
+    const own = keyOf(projectId);
+    let total = 0;
+    for (const [key, controller] of runs) {
+      if (key === own || typeof controller.activeAgyWorkers !== 'function') continue;
+      try {
+        const n = controller.activeAgyWorkers();
+        if (Number.isInteger(n) && n > 0) total += n;
+      } catch (err) {
+        log(`[orchestra] ${label(key)}: counting agy workers failed: ${errText(err)}`);
+      }
+    }
+    return total;
+  }
+
   function restoreAll(projectIds) {
     const restored = [];
     for (const projectId of new Set((Array.isArray(projectIds) ? projectIds : []).map(keyOf))) {
@@ -348,6 +368,7 @@ function createOrchestraRegistry(deps) {
     anyLive: () => [...runs.values()].some(isLive),
     othersActive,
     repoBusy,
+    agyWorkersElsewhere,
     tick: () => each((c) => c.tick(), 'tick'),
     // powerMonitor 'suspend': the start of a sleep that is not worker time.
     onSystemSuspend: () => each((c) => c.onSystemSuspend(), 'suspend'),

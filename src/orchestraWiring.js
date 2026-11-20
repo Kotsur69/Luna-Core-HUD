@@ -769,6 +769,8 @@ function powerDeps(projectId, ctx, shared, self) {
     otherRunsActive: () => ctx.registry().othersActive(projectId),
     // The same repo twice is refused (makePlan -> 'repoBusy').
     repoBusy: (repoPath) => ctx.registry().repoBusy(projectId, repoPath),
+    // agy workers of every OTHER run: the agy cap counts them all (src/orchestraKindCaps.js).
+    agyWorkersElsewhere: () => ctx.registry().agyWorkersElsewhere(projectId),
     // A controller without the shared flow (orchestra.js builds its own)
     // notifies through this one, named by repo: which run asked for it.
     notifyPower: (kind) => {
@@ -826,6 +828,9 @@ function builderDeps(projectId, ctx, self) {
         effort: prefs.orchestraWorkerEffort,
         // The Emergency Opus effort of a pool run (src/orchestraRescue.js), frozen at the start.
         emergencyEffort: prefs.orchestraEmergencyEffort,
+        // Per-kind caps of a mixed pool run (src/orchestraKindCaps.js validates them again).
+        agyMaxParallel: prefs.orchestraAgyMaxParallel,
+        freeMaxParallel: prefs.orchestraFreeMaxParallel,
         integration: prefs.orchestraIntegration,
         allowedTools: prefs.orchestraAllowedTools,
         checkCommand: prefs.orchestraCheckCommand,

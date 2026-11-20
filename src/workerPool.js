@@ -201,6 +201,32 @@ export function normalizePool(raw) {
   return out;
 }
 
+/** The only keys a sent pool entry may carry. */
+const POOL_ENTRY_KEYS = Object.freeze(['model', 'effort']);
+
+/**
+ * A pool sent over a trust boundary (the phone's godmode.launch), checked
+ * strictly: the same rules as normalizePool (known models, efforts, one free
+ * profile, the size cap), but nothing is dropped or coerced - an unknown key,
+ * a non-string value, an oversized or empty array, a duplicate or an effort
+ * the model does not take refuses the whole pool. The agy variants' ids are
+ * checked against the live list in main afterwards.
+ * @param {unknown} raw
+ * @returns {{model:string, effort:string}[]|null}
+ */
+export function strictPool(raw) {
+  if (!Array.isArray(raw) || !raw.length || raw.length > MAX_POOL_ENTRIES) return null;
+  for (const entry of raw) {
+    if (!isObj(entry) || Object.getPrototypeOf(entry) !== Object.prototype) return null;
+    if (Object.keys(entry).some((k) => !POOL_ENTRY_KEYS.includes(k))) return null;
+    if (typeof entry.model !== 'string' || (entry.effort !== undefined && typeof entry.effort !== 'string')) return null;
+  }
+  const pool = normalizePool(raw);
+  if (!pool || pool.length !== raw.length) return null;
+  const same = pool.every((e, i) => e.model === raw[i].model && e.effort === (raw[i].effort === undefined ? POOL_EFFORT_PLAN : raw[i].effort));
+  return same ? pool : null;
+}
+
 /** The planner keys of a pool, strongest first, each once. */
 export function poolKeys(pool) {
   const keys = new Set((Array.isArray(pool) ? pool : []).map((e) => poolKeyOf(e && e.model)).filter(Boolean));

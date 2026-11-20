@@ -1860,6 +1860,10 @@ const phoneGodmode = createHostGodmode({
   maxTodoItems: MAX_TODO_ITEMS,
   openTab: (projectId) => createSession({ projectId }),
   readTodos,
+  // A phone launch without a pool or a model runs the saved "Workers" pool;
+  // a sent pool's agy families / variants are checked against the live list.
+  savedPool: () => readUiPrefs().orchestraModelPool,
+  agyModels,
   onChange: pokeGodmodeLive,
 });
 

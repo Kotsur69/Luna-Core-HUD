@@ -2346,6 +2346,23 @@
                   <option value="max">Max</option>
                 </select>
               </label>
+              <!-- Per-kind caps of a mixed Workers pool run (src/orchestraKindCaps.js; main validates 1..3 again). -->
+              <label class="ui-field" data-i18n-title="orchset.agyCap.hint" title="Ile workerow agy pracuje naraz w puli Workerow, liczac wszystkie biegi God Mode (wspolny limit agy). Claude ma tylko ogolny limit biegu.">
+                <span class="ui-field__label" data-i18n="orchset.agyCap">Workerzy agy naraz</span>
+                <select id="orchestra-agy-cap" class="profile-select">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                </select>
+              </label>
+              <label class="ui-field" data-i18n-title="orchset.freeCap.hint" title="Ile darmowych workerow pracuje naraz w puli Workerow tego biegu (wspolne okno bramki darmowych modeli).">
+                <span class="ui-field__label" data-i18n="orchset.freeCap">Darmowi workerzy naraz</span>
+                <select id="orchestra-free-cap" class="profile-select">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                </select>
+              </label>
               <label class="ui-field" data-i18n-title="orchset.perm.hint" title="Tryb uprawnien workerow. Bypass: zadnych pytan - worker ma pelny Bash na Twoim koncie; worktree chroni tylko git, nie pliki.">
                 <span class="ui-field__label" data-i18n="orchset.perm">Uprawnienia workerow</span>
                 <select id="orchestra-permission-mode" class="profile-select">

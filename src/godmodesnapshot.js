@@ -53,7 +53,7 @@ const { needsFromReport } = require('./godmodeneeds');
 const { publicDecisions } = require('./lunasworkDecisions');
 const { publicFeedback } = require('./lunasworkFeedback');
 const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
-const { normalizePool, isPoolRun } = require('./workerPool');
+const { normalizePool, isPoolRun, cleanPoolOptions } = require('./workerPool');
 // A pool run's per-model summary (planned / landed / stalled / escalated / emergency Opus / limit moves).
 const { poolModelSummary } = require('./orchestraPoolSummary');
 
@@ -441,7 +441,18 @@ function cleanPlan(p) {
     workerModel: isWorkerModel(p.workerModel) ? p.workerModel : null,
     // A pool plan's "Workers" pool ([{model, effort}], 2+ valid entries), read-only; no key otherwise.
     ...(isPoolRun(normalizePool(p.modelPool)) ? { modelPool: normalizePool(p.modelPool) } : {}),
+    // The phone's pool picker menu: pool models with their live agy variants (no free profiles); no key without one.
+    ...(isObject(p.poolOptions) ? { poolOptions: cleanPlanPoolOptions(p.poolOptions) } : {}),
   };
+}
+
+/** Live agy variants one pool model offers the phone at most. */
+const MAX_POOL_VARIANTS = 10;
+
+/** A plan's pool menu, shape-checked (src/workerPool.js cleanPoolOptions), variants capped, free profiles left out. */
+function cleanPlanPoolOptions(raw) {
+  const { models } = cleanPoolOptions(raw);
+  return { models: models.map((m) => ({ ...m, variants: m.variants.slice(0, MAX_POOL_VARIANTS) })) };
 }
 
 /** The `plans` list: one per project (the first wins), at most MAX_LIVES. */

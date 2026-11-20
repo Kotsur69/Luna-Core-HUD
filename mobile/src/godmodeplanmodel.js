@@ -14,7 +14,21 @@ export const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 /** The mode a new draft starts on: no merge without Mati picking it. */
 export const DEFAULT_INTEGRATION = 'pr';
 import { WORKER_MODELS, WORKER_MODEL_NAMES, DEFAULT_WORKER_MODEL, AGY_MODEL, isWorkerModel, agyModelIdOf } from '../../src/workerModels.js';
-import { normalizePool, isPoolRun, poolLabel, poolModelName, poolFreeProfileId, poolEffortLevel, POOL_FREE_KEY } from '../../src/workerPool.js';
+import {
+  normalizePool,
+  isPoolRun,
+  poolLabel,
+  poolModelName,
+  poolFreeProfileId,
+  poolEffortLevel,
+  POOL_FREE_KEY,
+  POOL_MODEL_LIST,
+  POOL_EFFORT_PLAN,
+  claudePoolLevels,
+  cleanPoolOptions,
+  togglePoolModel,
+  freeProfileIdOf,
+} from '../../src/workerPool.js';
 import { poolEntryOfKey } from '../../src/poolEffort.js';
 
 /**
@@ -43,8 +57,10 @@ const ids = (plan) => (plan && Array.isArray(plan.packages) ? plan.packages.map(
 /**
  * The draft for `plan`: `prev` kept while it belongs to the same plan (ticks
  * of packages that are gone are dropped), else a fresh one with every package
- * ticked and the worker model the PC's snapshot names (its saved pref).
- * @returns {{planId: string|null, ticked: string[], integration: string, free: boolean, workerModel: string, releaseAfter: boolean}}
+ * ticked, the worker model the PC's snapshot names (its saved pref) and the
+ * plan's own "Workers" pool (none for a plan without one).
+ * @returns {{planId: string|null, ticked: string[], integration: string, free: boolean, workerModel: string, releaseAfter: boolean,
+ *   pool: {model: string, effort: string}[]}}
  */
 export function planDraft(plan, prev) {
   const all = ids(plan);
@@ -58,9 +74,10 @@ export function planDraft(plan, prev) {
       free: prev.free === true,
       workerModel: workerModelOf(prev.workerModel) || snapModel,
       releaseAfter: prev.releaseAfter === true,
+      pool: normalizePool(prev.pool) || [],
     };
   }
-  return { planId, ticked: all, integration: DEFAULT_INTEGRATION, free: false, workerModel: snapModel, releaseAfter: false };
+  return { planId, ticked: all, integration: DEFAULT_INTEGRATION, free: false, workerModel: snapModel, releaseAfter: false, pool: planPool(plan) || [] };
 }
 
 /** `draft` with package `id` ticked or unticked. */
@@ -88,19 +105,74 @@ export function launchPayload(plan, draft) {
   const integration = INTEGRATION_MODES.includes(draft.integration) ? draft.integration : DEFAULT_INTEGRATION;
   const free = draft.free === true;
   const workerModel = workerModelOf(draft.workerModel);
+  // A changed "Workers" pool replaces the single model (the PC checks it again,
+  // strictly); the plan's own pool untouched goes out as before (workerModel).
+  const pool = free ? [] : changedPool(plan, draft.pool);
   return {
     projectId: plan.projectId,
     planId: plan.planId,
     ...(ticked.length < all.length ? { ids: ticked } : {}),
     integration,
     free,
-    ...(!free && workerModel ? { workerModel } : {}),
+    ...(pool.length ? { modelPool: pool } : !free && workerModel ? { workerModel } : {}),
     ...(integration === 'merge' ? { releaseAfter: draft.releaseAfter === true } : {}),
   };
 }
 
 /** The godmode.discard payload of a plan. */
 export const discardPayload = (plan) => ({ projectId: plan.projectId });
+
+// ---- The "Workers" pool picker ---------------------------------------------------
+// The phone ticks pool models and an effort per model before Launch. The menu
+// is the PC's (the plan's snapshot `poolOptions`: agy families with their live
+// variants); without one only the Claude models are offered. Free profiles
+// stay on the PC. The PC refuses a pool it cannot run as sent.
+
+/** The menu rows: [{model, name, available, efforts}] in menu order. */
+export function poolMenu(plan) {
+  const menu = plan && plan.poolOptions ? cleanPoolOptions(plan.poolOptions).models : [];
+  return POOL_MODEL_LIST.map((m) => {
+    if (m.runsOn === 'claude') return { model: m.id, name: m.name, available: true, efforts: [POOL_EFFORT_PLAN, ...claudePoolLevels(m.id)] };
+    const opt = menu.find((o) => o.model === m.id);
+    const available = !!(opt && opt.available);
+    return { model: m.id, name: m.name, available, efforts: [POOL_EFFORT_PLAN, ...(available ? opt.variants.map((v) => v.id) : [])] };
+  });
+}
+
+/** An effort choice's text: 'plan' -> null (the UI says "Per plan"), an agy variant -> its level or id. */
+export function poolEffortText(model, effort) {
+  if (effort === POOL_EFFORT_PLAN) return null;
+  return poolEffortLevel({ model, effort }) || effort;
+}
+
+/** The draft with a pool model ticked or unticked (only an available menu model can be ticked). */
+export function togglePoolEntry(plan, draft, model) {
+  const row = poolMenu(plan).find((r) => r.model === model);
+  const list = normalizePool(draft.pool) || [];
+  const on = !list.some((e) => e.model === model);
+  if (!row || freeProfileIdOf(model) || (on && !row.available)) return draft;
+  return { ...draft, pool: togglePoolModel(list, model, on) };
+}
+
+/** The draft with a ticked model's effort set (only one its menu row offers). */
+export function setPoolEntryEffort(plan, draft, model, effort) {
+  const row = poolMenu(plan).find((r) => r.model === model);
+  if (!row || !row.efforts.includes(effort)) return draft;
+  const list = normalizePool(draft.pool) || [];
+  return { ...draft, pool: list.map((e) => (e.model === model ? { model, effort } : e)) };
+}
+
+const samePool = (a, b) => a.length === b.length && a.every((e, i) => e.model === b[i].model && e.effort === b[i].effort);
+
+/**
+ * The pool a launch sends: [] when nothing is ticked or the plan's own pool
+ * is untouched; else the ticked entries (a plan's free profile stays in it -
+ * the phone can neither add nor drop one).
+ */
+function changedPool(plan, pool) {
+  const list = (normalizePool(pool) || []).map((e) => ({ model: e.model, effort: e.effort }));
+  return samePool(list, planPool(plan) || []) ? [] : list;
+}
 
 // ---- Read-only "Workers" pool (a pool plan only) ------------------------------
 

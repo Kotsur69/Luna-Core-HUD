@@ -89,6 +89,10 @@ const { poolUsageReadings } = require('./orchestraPoolUsage');
 // Pool rescue (src/orchestraRescue.js): escalation ladder, limit moves, emergency Opus.
 const { createRescueWiring } = require('./orchestraRescueWiring');
 const rescueRules = require('./orchestraRescue');
+// Per-kind parallel caps of a mixed pool run (agy counted over every run).
+const kindCapRules = require('./orchestraKindCaps');
+// A package's model + effort picked on the Approve board (pool runs).
+const packageModelRules = require('./orchestraPackageModel');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -387,8 +391,9 @@ function runPackage(p) {
     stalls: 0,
     stallHistory: [],
     escalated: false,
-    modelOverride: null,
-    effortOverride: null,
+    // A weak-model guard move (src/orchestraWeakGuard.js) is planned as an override; nothing else is.
+    modelOverride: p.weakGuard ? p.modelOverride || null : null,
+    effortOverride: p.weakGuard ? p.effortOverride || null : null,
     touched: [],
     prUrl: null,
     merged: false,
@@ -881,14 +886,53 @@ function createOrchestra(deps) {
   });
   const isBusy = () => busy || pumping || finalizer.isRunning() || shutdownResume.isResuming();
 
+  /** Ready packages whose kind was full at the last look (the tick retries them). */
+  let kindHeld = false;
+
   function launchableReady() {
+    kindHeld = false;
     if (!plan || allPaused()) return [];
     const max = maxParallelFor(plan, MAX_PARALLEL);
-    if (!pauseRules.hasPauses(pauseRules.pausesOf(plan))) return sup.readyToLaunch(plan.packages, max);
     // Mask paused pending packages so they do not fill slots ahead of unpaused backends,
     // while active paused packages keep their parallel slots.
-    const masked = plan.packages.map((p) => (p.state === 'pending' && isPackagePaused(p) ? { ...p, state: 'paused_skip' } : p));
-    return sup.readyToLaunch(masked, max);
+    const masked = pauseRules.hasPauses(pauseRules.pausesOf(plan))
+      ? plan.packages.map((p) => (p.state === 'pending' && isPackagePaused(p) ? { ...p, state: 'paused_skip' } : p))
+      : plan.packages;
+    // Every run but a pool run launches exactly as before: the global cap only.
+    if (!kindCapRules.usesKindCaps(plan)) return sup.readyToLaunch(masked, max);
+    const capped = kindCapRules.capReady(masked, {
+      readyOf: (pkgs) => sup.readyToLaunch(pkgs, max),
+      isActive: sup.isActive,
+      kindOf: packageKind,
+      caps: kindCapRules.kindCaps(workerSettings()),
+      elsewhere: { agy: agyWorkersElsewhere() },
+    });
+    kindHeld = capped.held.length > 0;
+    return capped.ready;
+  }
+
+  /** The kind of worker a package runs on: 'agy', 'free' (a hybrid free package) or 'claude'. */
+  function packageKind(pkg) {
+    if (agyRules.packageRunsAgy(plan, pkg)) return kindCapRules.KIND_AGY;
+    return isHybridFreePackage(pkg) ? kindCapRules.KIND_FREE : kindCapRules.KIND_CLAUDE;
+  }
+
+  /** agy workers running in the other God Mode runs (multi God Mode); 0 when unknown. */
+  function agyWorkersElsewhere() {
+    if (typeof deps.agyWorkersElsewhere !== 'function') return 0;
+    try {
+      const n = deps.agyWorkersElsewhere();
+      return Number.isInteger(n) && n > 0 ? n : 0;
+    } catch (err) {
+      log(`[orchestra] counting other runs' agy workers failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
+  /** agy workers this run has going now (any run kind): the other runs' agy cap counts them. */
+  function activeAgyWorkers() {
+    if (!plan || plan.killed) return 0;
+    return plan.packages.filter((p) => sup.isActive(p) && agyRules.packageRunsAgy(plan, p)).length;
   }
 
   /**
@@ -1070,6 +1114,10 @@ function createOrchestra(deps) {
         ...(p.poolModel ? { poolModel: p.poolModel, modelReason: p.modelReason || '', poolFrom: p.poolFrom || null } : {}),
         // F6 guard: why a "free" package was upgraded to Sonnet (null = it was not).
         hybridGuard: p.hybridGuard || null,
+        // Weak-model guard: why a package planned on the easiest agy tier moved up (none = it did not).
+        ...(p.weakGuard ? { weakGuard: p.weakGuard } : {}),
+        // The model + effort Mati picked on Approve (none = the planner's / pool's).
+        ...(p.modelPick ? { modelPick: p.modelPick } : {}),
         // F6c/F6d: free worker, review, hand-overs, free wait (null outside hybrid runs).
         hybrid: hybridRun.view(p),
         effort: p.effortOverride || p.effort || null,
@@ -1257,7 +1305,7 @@ function createOrchestra(deps) {
     }
   }
   // "Workers" pools (src/orchestraPoolWiring.js): planned for, then routed per package.
-  const poolRun = createPoolWiring({ planOf: () => plan, deps, log, workerSettings });
+  const poolRun = createPoolWiring({ planOf: () => plan, deps, log, workerSettings, now, guardRules: (repoPath) => protectedRules(repoPath) });
   // Pool rescue: escalation up the ticked models, limit moves, emergency Opus.
   const rescue = createRescueWiring({
     planOf: () => plan,
@@ -1497,7 +1545,8 @@ function createOrchestra(deps) {
     const guarded = hybrid ? hybridGuard.applyHybridGuard(linked, protectedRules(repoPath)) : linked;
     // A pool run: each package on the model its worker runs on (after the
     // guard, so a free package it upgraded stays on a ticked Claude model).
-    const pooled = pool ? poolRun.applyPlanPool(guarded, pool) : null;
+    // The weak-model guard runs there too (src/orchestraWeakGuard.js).
+    const pooled = pool ? poolRun.applyPlanPool(guarded, pool, protectedRules(repoPath)) : null;
     const packages = pooled ? pooled.packages : guarded;
     if (pooled && pooled.warnings.length) checked = { ...checked, warnings: [...checked.warnings, ...pooled.warnings] };
     // A/B builds: a package with two variants becomes its group plus one package per variant.
@@ -2347,6 +2396,32 @@ function createOrchestra(deps) {
    *   Face ID-signed godmode.launch IS the confirmation), so the native
    *   dialog is skipped. orchestra:launch (renderer IPC) never passes it.
    */
+  /** The worker effort a picked agy family's variant aims at (as the pool wiring's effortOf). */
+  const pickEffortOf = (p) => normalizeEffort(workerSettings().effort) || normalizeEffort(p.effort) || DEFAULT_EFFORT;
+
+  /**
+   * Approve's per-package model picks (o.packageModels), checked in main:
+   * only before the start, only for a pool run, each one within the ticked
+   * pool plus Opus (src/orchestraPackageModel.js). An agy pick is checked
+   * against the live `agy models` list.
+   * @returns {Promise<{ok:true, picks:object|null, agyList:object[]}|{ok:false, error:string}>}
+   */
+  async function checkedPackagePicks(o, poolChoice, planAtApprove) {
+    if (o.packageModels === undefined || o.packageModels === null) return { ok: true, picks: null, agyList: [] };
+    if (plan.started || plan.scheduledAt || plan.planRun || poolChoice.kind !== 'pool') return { ok: false, error: 'badPackageModel' };
+    let agyList = [];
+    if (packageModelRules.picksNeedAgy(o.packageModels)) {
+      if (!deps.agyModels) return { ok: false, error: 'badPackageModel' };
+      await deps.agyModels.ensure();
+      if (plan !== planAtApprove || plan.started || plan.killed || isBusy() || allPaused() || plan.hold) return { ok: false, error: 'busy' };
+      agyList = deps.agyModels.list();
+    }
+    const checked = packageModelRules.checkPackagePicks(o.packageModels, { packages: poolChoice.packages, pool: poolChoice.pool, agyList });
+    if (!checked.ok) return checked;
+    if (Object.keys(checked.picks).length) log(`[orchestra] Approve: per-package models ${Object.entries(checked.picks).map(([id, v]) => `${id}=${v.model}/${v.effort}`).join(', ')}`);
+    return { ok: true, picks: checked.picks, agyList };
+  }
+
   async function launch(payload, trusted = {}) {
     const o = payload && typeof payload === 'object' ? payload : {};
     const mergeConfirmed = Boolean(trusted) && trusted.mergeConfirmed === true;
@@ -2406,6 +2481,15 @@ function createOrchestra(deps) {
       return { ok: false, error: 'busy' };
     }
     if (poolChoice.kind === 'error') return { ok: false, error: poolChoice.error };
+    // Awaited only when picks were sent: today's Approve keeps its synchronous
+    // start, so a Kill right after Approve still finds the run starting.
+    const sentPicks = o.packageModels !== undefined && o.packageModels !== null;
+    const packagePicks = sentPicks ? await checkedPackagePicks(o, poolChoice, planAtApprove) : { ok: true, picks: null, agyList: [] };
+    if (!packagePicks.ok) return packagePicks;
+    // The await let other calls in: a replaced, started or killed plan is not this Approve's.
+    if (sentPicks && (plan !== planAtApprove || plan.started || plan.killed || isBusy() || allPaused() || plan.hold)) {
+      return { ok: false, error: 'busy' };
+    }
     const workers = poolChoice.workers || approved;
     // The run model Approve asks for: a pool run's 'plan', a one-model pool's value, else the select's.
     const askedModel = poolChoice.workerModel || o.workerModel;
@@ -2428,7 +2512,11 @@ function createOrchestra(deps) {
       hasNextWorkers = true;
       nextWorkers = workers === 'claude' ? undefined : workers;
       const sourcePackages = applyPromptEdits(poolChoice.packages || plan.packages);
-      stagedPackages = sourcePackages.map((p) => ({ ...p }));
+      // Mati's per-package picks from the Approve board become the planned models.
+      const picked = packagePicks.picks
+        ? packageModelRules.applyPackagePicks(sourcePackages, packagePicks.picks, { agyList: packagePicks.agyList, effortOf: pickEffortOf })
+        : sourcePackages;
+      stagedPackages = picked.map((p) => ({ ...p }));
       const staged = { ...plan, packages: stagedPackages };
       if (nextWorkers === undefined) delete staged.workers;
       else staged.workers = nextWorkers;
@@ -3554,6 +3642,9 @@ function createOrchestra(deps) {
       if (p.state === 'launched' && !p.awaitingDeps && !hybridRun.isWaiting(p) && !isPackagePaused(p) && sup.timedOut(p, now())) stall(p.id, 'timeout');
     }
     expireApprovals();
+    // A pool package waiting for its kind's cap: another run's agy worker may
+    // have finished meanwhile (this run hears nothing of it), so look again.
+    if (kindHeld && plan.started && !pumping) kick();
   }
 
   /**
@@ -4068,6 +4159,8 @@ function createOrchestra(deps) {
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,
     isRunning: () => !!plan && plan.started && !plan.killed && plan.packages.some(sup.isActive),
+    // Multi God Mode: this run's agy workers, for the other runs' agy cap.
+    activeAgyWorkers,
     verifyStats: () => verifySemaphore.stats(),
     // Multi God Mode's same-repo guard (orchestraRegistry.repoBusy).
     repoPath: () => (plan ? plan.repoPath : null),

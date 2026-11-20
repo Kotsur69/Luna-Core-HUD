@@ -11,6 +11,10 @@
 //              ticked. A package already on Opus (Claude) stalls as before.
 //   handOver   a hybrid free package (src/orchestraHybrid.js): Sonnet when
 //              ticked, else the next stronger ticked model, else emergency Opus.
+//   guard      at plan time / Approve: a package on the easiest agy tier
+//              (Hydrogen) that breaks the weak-model guard
+//              (src/orchestraWeakGuard.js): the next stronger ticked model,
+//              else emergency Opus.
 //   limit      a package that has not started yet whose model is out (its
 //              backend is paused, or its own quota reads 100%): the nearest
 //              stronger ticked model, else one of the same tier, else
@@ -45,7 +49,11 @@ const {
   poolModelName,
   clampClaudeEffort,
 } = require('./workerPool');
-const { nextEffort } = require('./efforts');
+const { nextEffort, normalizeEffort } = require('./efforts');
+const { concreteModel } = require('./orchestraPool');
+const { entryModel } = require('./orchestraPoolEffort');
+const { poolEntryOfKey } = require('./poolEffort');
+const { poolEffortLevel } = require('./workerPool');
 
 /** The Emergency Opus effort setting: one step up (today's escalation rule). */
 const EMERGENCY_STEP = 'step';
@@ -54,7 +62,7 @@ const EMERGENCY_EFFORTS = Object.freeze([EMERGENCY_STEP, 'low', 'medium', 'high'
 /** The Claude model every emergency runs on. */
 const OPUS = 'opus';
 /** Rescue kinds a package's log keeps. */
-const RESCUE_KINDS = Object.freeze(['escalate', 'handOver', 'limit']);
+const RESCUE_KINDS = Object.freeze(['escalate', 'handOver', 'limit', 'guard']);
 /** A package keeps this many rescue entries (a ladder has at most six rungs). */
 const MAX_RESCUES = 8;
 /** A quota reading at or above this is out. */
@@ -253,6 +261,7 @@ function rescueText(entry) {
   const to = targetLabel(entry);
   if (entry.kind === 'limit') return `${keyLabel(entry.from)} limit -> ${to}`;
   if (entry.kind === 'handOver') return `handed over: ${keyLabel(entry.from)} -> ${to}`;
+  if (entry.kind === 'guard') return `guard: ${keyLabel(entry.from)} -> ${to}`;
   return `escalated: ${keyLabel(entry.from)} -> ${to}`;
 }
 
@@ -283,6 +292,27 @@ function rescueFields(pkg, move) {
     emergency: entry.emergency,
     rescues: [...prev, entry].slice(-MAX_RESCUES),
   };
+}
+
+/**
+ * The model and --effort a package runs on at a target key. Opus taking over
+ * a package not planned for it runs at the Emergency Opus effort; Sonnet at
+ * its pool entry's level; an agy family on its entry's variant, else the
+ * live variant nearest the package's effort. Null for a free key.
+ * @param {{pkg:object, key:string, pool:unknown, agyList:object[], effort:string|null, emergencySetting:unknown}} input
+ *   effort: the package's worker effort now (src/orchestra.js effortFor)
+ * @returns {{model:string|null, effort:string|null}|null}
+ */
+function resolveTarget({ pkg, key, pool, agyList, effort, emergencySetting }) {
+  const entry = poolEntryOfKey(normalizePool(pool), key);
+  const on = runsOnOf(key);
+  if (key === OPUS) {
+    const planned = isObj(pkg) && pkg.poolModel === OPUS;
+    return { model: OPUS, effort: planned ? effort : emergencyEffort(emergencySetting, effort) };
+  }
+  if (on === 'claude') return { model: key, effort: normalizeEffort(poolEffortLevel(entry)) };
+  if (on === 'agy') return { model: entryModel(entry, agyList) || concreteModel(key, effort, agyList), effort: null };
+  return null;
 }
 
 /** One stored rescue entry, checked; null when off-shape. */
@@ -320,6 +350,7 @@ module.exports = {
   MAX_RESCUES,
   normalizeEmergencyEffort,
   emergencyEffort,
+  resolveTarget,
   isPoolPlan,
   tickedKeys,
   poolHasClaude,

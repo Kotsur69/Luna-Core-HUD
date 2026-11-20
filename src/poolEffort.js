@@ -113,6 +113,13 @@ export function poolEntryOfKey(pool, key) {
  */
 export function packagePoolEffort(pool, pkg) {
   if (!isObj(pkg) || pkg.modelOverride) return null;
+  // An Approve pick (src/orchestraPackageModel.js) carries its own effort: the
+  // pool entry's fixed level never replaces it, and a "Per plan" pick has none.
+  const pick = pkg.modelPick;
+  if (isObj(pick) && pick.model === pkg.poolModel) {
+    if (runsOnOf(pick.model) === 'agy' && pkg.model !== pick.effort) return null;
+    return poolEffortLevel(pick);
+  }
   const entry = poolEntryOfKey(pool, pkg.poolModel);
   if (!entry || entry.effort === POOL_EFFORT_PLAN) return null;
   const on = runsOnOf(pkg.poolModel);

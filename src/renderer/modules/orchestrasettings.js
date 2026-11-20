@@ -26,6 +26,13 @@ const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 const EFFORT_OPTIONS = ['plan', 'medium', 'high', 'xhigh', 'max'];
 // src/orchestraRescue.js EMERGENCY_EFFORTS: the Emergency Opus effort (main validates it again).
 export const EMERGENCY_OPTIONS = ['step', 'low', 'medium', 'high', 'xhigh', 'max'];
+// src/orchestraKindCaps.js MIN_KIND_CAP..MAX_KIND_CAP: per-kind caps of a mixed pool run (main validates again).
+const KIND_CAP_OPTIONS = [1, 2, 3];
+// [select id, ui pref key, default]: agy workers across every run, free workers of one run.
+const KIND_CAP_SELECTS = [
+  ['orchestra-agy-cap', 'orchestraAgyMaxParallel', 2],
+  ['orchestra-free-cap', 'orchestraFreeMaxParallel', 3],
+];
 // src/uiprefs.js SUPABASE_APPLY_MODES (main validates the value again).
 const SUPABASE_APPLY_MODES = ['off', 'ask', 'automatic'];
 // Opt-in God Mode evolutions: [switch id, ui pref key]. Main fixes them into
@@ -36,6 +43,28 @@ const EVOLUTION_TOGGLES = [
   ['orchestra-heal-toggle', 'orchestraSelfHeal'],
   ['orchestra-context-toggle', 'orchestraContextGuard'],
 ];
+
+/** The per-kind cap selects: shown from prefs, saved on change, re-shown from what main stored. */
+function mountKindCaps(root, prefs) {
+  for (const [id, key, fallback] of KIND_CAP_SELECTS) {
+    const select = root.querySelector(`#${id}`);
+    if (!select) continue;
+    const shown = (v) => String(KIND_CAP_OPTIONS.includes(v) ? v : fallback);
+    select.value = shown(prefs[key]);
+    select.addEventListener('change', async () => {
+      const asked = Number(select.value);
+      if (!KIND_CAP_OPTIONS.includes(asked)) return;
+      sfx.modeToggle();
+      try {
+        const next = await window.lunacore.setUiPrefs({ [key]: asked });
+        if (next) select.value = shown(next[key]);
+      } catch (err) {
+        console.warn(`[orchestrasettings] saving ${key} failed:`, err);
+        select.value = shown(prefs[key]);
+      }
+    });
+  }
+}
 
 /** The three opt-in switches: shown from prefs, saved on change, re-shown from what main stored. */
 function mountEvolutionToggles(root, prefs) {
@@ -135,6 +164,8 @@ export function mountOrchestraSettings(root, prefs) {
   mountRunEmailToggle(root);
   // A/B builds, self-healing workers, context guard: off by default.
   mountEvolutionToggles(root, prefs);
+  // Per-kind caps of a mixed Workers pool run.
+  mountKindCaps(root, prefs);
 
   model.addEventListener('change', () => {
     if (!isWorkerModel(model.value)) return;

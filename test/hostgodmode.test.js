@@ -82,7 +82,7 @@ const planView = (id = 'pabc123', extra = {}) => ({
   ...extra,
 });
 
-function setup({ blocked = [], todos } = {}) {
+function setup({ blocked = [], todos, extra = {} } = {}) {
   const controllers = {};
   const registry = createOrchestraRegistry({
     makeController: (projectId) => {
@@ -127,6 +127,7 @@ function setup({ blocked = [], todos } = {}) {
     },
     log: (line) => logs.push(line),
     seq: () => 'r1',
+    ...extra,
   });
   gm.attach((kind, info) => pushes.push([kind, info]));
   /** A controller with a ready plan on `projectId`. */
@@ -604,4 +605,136 @@ test('live publisher: a plan changing state goes out at once', () => {
   section = { ...section, plans: [{ projectId: 'alpha', planId: 'pabc123', state: 'ready' }] };
   pub.poke();
   assert.equal(sent.length, before + 2, 'urgent despite the throttle window');
+});
+
+// ---- the phone's "Workers" pool on launch ---------------------------------------------
+
+const AGY_LIVE = [
+  { id: 'gemini-4-argon-medium', name: 'Gemini 4 Argon (Medium)' },
+  { id: 'gemini-4-hydrogen-medium', name: 'Gemini 4 Hydrogen (Medium)' },
+];
+const fakeAgy = (list = AGY_LIVE) => {
+  const reads = { ensure: 0 };
+  return { reads, ensure: async () => { reads.ensure += 1; }, list: () => list.map((m) => ({ ...m })) };
+};
+const launchArgs = (c) => c.calls.find((x) => x[0] === 'launch')[1];
+
+test('launch with a valid pool: checked strictly, agy checked live, reaches the controller as sent', async () => {
+  const agy = fakeAgy();
+  const s = setup({ extra: { agyModels: agy, savedPool: () => [{ model: 'sonnet', effort: 'plan' }] } });
+  const c = s.withPlan();
+  const pool = [{ model: 'opus', effort: 'xhigh' }, { model: 'agy-argon', effort: 'agy:gemini-4-argon-medium' }, { model: 'agy-hydrogen' }];
+  const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: pool });
+  assert.equal(res.status, 'launched');
+  assert.deepEqual(launchArgs(c), {
+    planId: 'pabc123',
+    modelPool: [{ model: 'opus', effort: 'xhigh' }, { model: 'agy-argon', effort: 'agy:gemini-4-argon-medium' }, { model: 'agy-hydrogen', effort: 'plan' }],
+  });
+  assert.equal(agy.reads.ensure, 1, 'the live agy list is read before a pool naming agy launches');
+});
+
+test('launch with an invalid pool is refused before the controller sees it', async () => {
+  const big = Array.from({ length: 13 }, () => ({ model: 'opus', effort: 'plan' }));
+  const bad = [
+    'opus',
+    [],
+    big,
+    [{ model: 'opus', effort: 'plan', extra: 1 }],
+    [{ model: 'opus', effort: 5 }],
+    [{ model: 7 }],
+    [{ model: 'gpt-9', effort: 'plan' }],
+    [{ model: 'opus', effort: 'low' }],
+    [{ model: 'opus', effort: 'turbo' }],
+    [{ model: 'opus' }, { model: 'opus' }],
+    [{ model: 'agy-argon', effort: 'xhigh' }],
+    [{ model: 'free:a' }, { model: 'free:b' }],
+    [['opus', 'plan']],
+    [{ model: 'agy-neon', effort: 'plan' }],
+    [{ model: 'agy-argon', effort: 'agy:gemini-4-argon-ultra' }],
+    [{ model: 'agy-hydrogen', effort: 'agy:gemini-4-argon-medium' }],
+  ];
+  for (const modelPool of bad) {
+    const s = setup({ extra: { agyModels: fakeAgy() } });
+    const c = s.withPlan();
+    const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool });
+    assert.deepEqual(res, { status: 'refused', error: 'badModelPool' }, JSON.stringify(modelPool));
+    assert.equal(c.calls.some((x) => x[0] === 'launch'), false);
+  }
+  // A pool naming agy with no live list on this PC is refused, never trusted.
+  const s = setup();
+  s.withPlan();
+  const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: [{ model: 'agy-argon', effort: 'plan' }] });
+  assert.deepEqual(res, { status: 'refused', error: 'badModelPool' });
+});
+
+test('launch without a pool or a model: the saved pool pref, else today\'s run (Opus by default)', async () => {
+  const saved = [{ model: 'opus', effort: 'plan' }, { model: 'sonnet', effort: 'high' }];
+  const s = setup({ extra: { savedPool: () => saved } });
+  const c = s.withPlan();
+  await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123' });
+  assert.deepEqual(launchArgs(c), { planId: 'pabc123', modelPool: saved });
+  // A named model or own workers win over the saved pool, as before.
+  for (const extraFields of [{ workerModel: 'sonnet' }, { free: true }, { workers: 'agy' }]) {
+    const t2 = setup({ extra: { savedPool: () => saved } });
+    const c2 = t2.withPlan();
+    await t2.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', ...extraFields });
+    assert.equal('modelPool' in launchArgs(c2), false, JSON.stringify(extraFields));
+  }
+  // No saved pool (or a broken one): no pool field - the PC's Settings model, Opus by default.
+  for (const savedPool of [() => null, () => 'junk', () => { throw new Error('unreadable'); }]) {
+    const t3 = setup({ extra: { savedPool } });
+    const c3 = t3.withPlan();
+    await t3.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123' });
+    assert.deepEqual(launchArgs(c3), { planId: 'pabc123' });
+  }
+});
+
+test('launch: a pool with a model or own workers it would silently drop is refused', async () => {
+  const pool = [{ model: 'opus', effort: 'plan' }, { model: 'sonnet', effort: 'plan' }];
+  for (const extraFields of [{ workerModel: 'sonnet' }, { free: true }, { workers: 'agy' }, { workers: 'free' }]) {
+    const s = setup();
+    const c = s.withPlan();
+    const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: pool, ...extraFields });
+    assert.deepEqual(res, { status: 'refused', error: 'badModelPool' }, JSON.stringify(extraFields));
+    assert.equal(c.calls.some((x) => x[0] === 'launch'), false);
+  }
+  // What the phone sends with a pool (free: false, Claude workers) still launches.
+  const s = setup();
+  const c = s.withPlan();
+  const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: pool, free: false, workers: 'claude' });
+  assert.equal(res.status, 'launched');
+  assert.deepEqual(launchArgs(c).modelPool, pool);
+});
+
+test('launch without a pool: a plan made with its own pool keeps it, the saved pref never replaces it', async () => {
+  const own = [{ model: 'opus', effort: 'plan' }, { model: 'agy-argon', effort: 'plan' }];
+  const s = setup({ extra: { savedPool: () => [{ model: 'sonnet', effort: 'plan' }, { model: 'opus', effort: 'high' }] } });
+  const c = s.withPlan('alpha', planView('pabc123', { modelPool: own }));
+  await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123' });
+  assert.deepEqual(launchArgs(c), { planId: 'pabc123' });
+});
+
+test('launch: Luna\'s Work taking the project during the live agy check refuses the launch', async () => {
+  let checks = 0;
+  const godModeBlock = () => {
+    checks += 1;
+    return checks > 1 ? { ok: false, error: 'lunasWorkActive', message: 'Luna\'s Work runs here' } : null;
+  };
+  const s = setup({ extra: { agyModels: fakeAgy(), godModeBlock } });
+  const c = s.withPlan();
+  const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: [{ model: 'opus' }, { model: 'agy-argon' }] });
+  assert.equal(res.status, 'refused');
+  assert.equal(res.error, 'lunasWorkActive');
+  assert.equal(checks, 2);
+  assert.equal(c.calls.some((x) => x[0] === 'launch'), false);
+});
+
+test('the plan snapshot carries the PC\'s pool menu (live agy variants, no free profiles)', () => {
+  const s = setup({ extra: { agyModels: fakeAgy() } });
+  s.withPlan();
+  const [entry] = s.gm.plans();
+  const argon = entry.poolOptions.models.find((m) => m.model === 'agy-argon');
+  assert.deepEqual([argon.available, argon.variants.map((v) => v.id)], [true, ['agy:gemini-4-argon-medium']]);
+  assert.equal(entry.poolOptions.models.find((m) => m.model === 'agy-neon').available, false);
+  assert.equal('free' in entry.poolOptions, false);
 });

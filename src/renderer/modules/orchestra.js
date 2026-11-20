@@ -37,7 +37,9 @@ import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetr
 import { loadPicker, pickerView } from './orchestraPick.js';
 import { loadWorkerModel, takesWorkerModel, runModelLabel, packageModelBadge, workerModelControls, chosenRunWorkers, launchModelFields } from './orchestraWorkerModel.js';
 import { poolModelName } from '../../workerPool.js';
-import { rescueLines } from './orchestraRescueLines.js';
+import { chosenPool, agyVariantOptions } from './orchestraPoolPicker.js';
+import { canPick, packagePickView, packageModelsField, clearPicks } from './orchestraPackagePick.js';
+import { rescueLines, weakGuardLine } from './orchestraRescueLines.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
@@ -382,8 +384,11 @@ function pkgCard(pkg) {
   if (pkg.files.length) meta.push(t('orch.files', { n: pkg.files.length }));
   if (pkg.verify) meta.push(t('orch.verify', { cmd: pkg.verify }));
   // The model it WILL run on (override, planner's pick or the run's choice).
-  const badge = packageModelBadge(pkg, plan, plan.started || plan.scheduledAt ? plan.workers : chosenRunWorkers(plan, chosenWorkers()));
-  if (badge) meta.push(badge);
+  const runWorkers = plan.started || plan.scheduledAt ? plan.workers : chosenRunWorkers(plan, chosenWorkers());
+  const badge = packageModelBadge(pkg, plan, runWorkers);
+  // Before Approve in a pool run the badge is a button: pick this package's model + effort.
+  const pickable = takesWorkerModel(plan) && canPick(plan, pkg, chosenPool(), runWorkers);
+  if (badge && !pickable) meta.push(badge);
   // The Claude account the worker is on (claude-accounts failover), when main says.
   if (typeof pkg.account === 'string' && pkg.account) meta.push(t('orch.account.on', { account: pkg.account }));
   if (pkg.branch) meta.push(pkg.branch);
@@ -394,6 +399,9 @@ function pkgCard(pkg) {
     if (tip.length) line.title = tip.join('\n');
     card.append(line);
   }
+  if (pickable) {
+    card.append(packagePickView({ plan, pkg, pool: chosenPool(), variantsOf: agyVariantOptions, badge, t, onChange: render, disabled: phase !== 'idle' }));
+  }
   // A pool run: the planner named a model the pool does not tick; it runs on the strongest one.
   if (pkg.poolFrom && pkg.poolModel) {
     card.append(msg(t('orch.pool.moved', { from: pkg.poolFrom, to: poolModelName(pkg.poolModel) || pkg.poolModel }), 'is-warn'));
@@ -401,6 +409,9 @@ function pkgCard(pkg) {
   // F6 guard: the planner marked it "free", the rules moved it to Sonnet.
   const guard = hybridGuardText(pkg.hybridGuard);
   if (guard) card.append(msg(guard, 'is-warn'));
+  // Weak-model guard: planned on the easiest agy tier, the rules moved it up.
+  const weak = weakGuardLine(pkg, t);
+  if (weak) card.append(msg(weak, 'is-warn'));
   // F6c/F6d: runs free, the Claude review, limit waits, hand-overs to Sonnet.
   for (const line of hybridLines(pkg)) card.append(msg(line.text, line.cls));
   // Opt-in evolutions: A/B builds, self-heal, context guard.
@@ -930,6 +941,8 @@ async function launch(ids) {
   const releaseAfter = integration === 'merge' && releaseAfterChoice(plan.projectId);
   // The Approve screen's "Workers model" pool ({workerModel} or {modelPool}); a Free-only run has none.
   const modelFields = approve && !free && takesWorkerModel(plan) ? launchModelFields(plan, workers) : {};
+  // Per-package picks (pool runs only; main checks each one against the pool + Opus).
+  const packageModels = modelFields.modelPool ? packageModelsField(plan, modelFields.modelPool, agyVariantOptions) : null;
   const scope = board.project();
   phase = 'launching';
   busyPkg = Array.isArray(ids) && ids.length === 1 ? ids[0] : null;
@@ -938,7 +951,7 @@ async function launch(ids) {
   let res;
   try {
     res = await window.lunacore.launchOrchestra({
-      planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), ...modelFields, releaseAfter, projectId: scope,
+      planId: plan.id, ids, prompts, schedule, integration, free, ...(workers ? { workers } : {}), ...modelFields, ...(packageModels ? { packageModels } : {}), releaseAfter, projectId: scope,
     });
   } catch {
     res = { ok: false, error: 'failed' };
@@ -985,6 +998,7 @@ async function dropRun() {
   board.apply(null, scope);
   plan = board.view();
   for (const key of [...drafts.keys()]) if (key.startsWith(`${planId}:`)) drafts.delete(key);
+  clearPicks(planId);
   if (boardOfFinished === planId) boardOfFinished = null;
   return true;
 }

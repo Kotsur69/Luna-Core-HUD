@@ -254,7 +254,18 @@ function applyHybridGuard(packages, rules) {
  */
 function normalizeStoredGuard(raw) {
   if (!raw || typeof raw !== 'object' || raw.from !== 'free' || !Array.isArray(raw.reasons)) return null;
-  const reasons = raw.reasons
+  const reasons = normalizeGuardReasons(raw.reasons);
+  return reasons.length ? { from: 'free', reasons } : null;
+}
+
+/**
+ * Stored guard reasons (state file) back to their shape; off-shape ones dropped.
+ * Shared with the weak-model guard (src/orchestraWeakGuard.js).
+ * @param {unknown} list
+ * @returns {Array<object>}
+ */
+function normalizeGuardReasons(list) {
+  return (Array.isArray(list) ? list : [])
     .filter((r) => r && typeof r === 'object')
     .map((r) => {
       if (r.code === 'noFiles' || r.code === 'noVerify') return { code: r.code };
@@ -266,7 +277,6 @@ function normalizeStoredGuard(raw) {
     })
     .filter(Boolean)
     .slice(0, MAX_REASONS);
-  return reasons.length ? { from: 'free', reasons } : null;
 }
 
 module.exports = {
@@ -284,4 +294,5 @@ module.exports = {
   guardReasons,
   applyHybridGuard,
   normalizeStoredGuard,
+  normalizeGuardReasons,
 };
