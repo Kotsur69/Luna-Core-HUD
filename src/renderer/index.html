@@ -2334,6 +2334,18 @@
                   <option value="max">Max</option>
                 </select>
               </label>
+              <!-- Values: src/orchestraRescue.js EMERGENCY_EFFORTS (main validates the pref again). -->
+              <label class="ui-field" data-i18n-title="orchset.emergency.hint" title="Wysilek Opusa, gdy w puli przejmuje pakiet nie planowany dla niego (eskalacja, limit, przekazanie). O krok w gore = dzisiejsza regula. Low dziala jako medium.">
+                <span class="ui-field__label" data-i18n="orchset.emergency">Wysilek awaryjnego Opusa</span>
+                <select id="orchestra-emergency-effort" class="profile-select">
+                  <option value="step" data-i18n="orchset.emergency.step">O krok w gore</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">XHigh</option>
+                  <option value="max">Max</option>
+                </select>
+              </label>
               <label class="ui-field" data-i18n-title="orchset.perm.hint" title="Tryb uprawnien workerow. Bypass: zadnych pytan - worker ma pelny Bash na Twoim koncie; worktree chroni tylko git, nie pliki.">
                 <span class="ui-field__label" data-i18n="orchset.perm">Uprawnienia workerow</span>
                 <select id="orchestra-permission-mode" class="profile-select">

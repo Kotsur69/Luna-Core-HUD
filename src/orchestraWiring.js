@@ -824,6 +824,8 @@ function builderDeps(projectId, ctx, self) {
         model: prefs.orchestraWorkerModel,
         permissionMode: prefs.orchestraPermissionMode,
         effort: prefs.orchestraWorkerEffort,
+        // The Emergency Opus effort of a pool run (src/orchestraRescue.js), frozen at the start.
+        emergencyEffort: prefs.orchestraEmergencyEffort,
         integration: prefs.orchestraIntegration,
         allowedTools: prefs.orchestraAllowedTools,
         checkCommand: prefs.orchestraCheckCommand,

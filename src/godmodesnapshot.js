@@ -54,6 +54,8 @@ const { publicDecisions } = require('./lunasworkDecisions');
 const { publicFeedback } = require('./lunasworkFeedback');
 const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 const { normalizePool, isPoolRun } = require('./workerPool');
+// A pool run's per-model summary (planned / landed / stalled / escalated / emergency Opus / limit moves).
+const { poolModelSummary } = require('./orchestraPoolSummary');
 
 const VERSION = 2;
 /** Row versions a reader accepts: v1 rows (no hub lines) still parse. */
@@ -158,6 +160,37 @@ function scrubPaths(text, roots = []) {
     .replace(/(^|[\s"'(=])~?\/(?:[^\s/"'`]+\/)+([^\s/"'`]*)/g, (_, pre, last) => `${pre}${last}`);
 }
 
+/** Rows of a pool run's per-model summary the phone shows at most. */
+const MAX_POOL_ROWS = 12;
+/** A per-model row's key: a pool key ('agy-argon') or the emergency row. */
+const POOL_ROW_KEY_RE = /^[a-z][a-z-]{0,31}$/;
+const POOL_ROW_COUNTS = ['planned', 'landed', 'stalled', 'escalated', 'emergency', 'limitMoves'];
+
+/**
+ * A pool run's per-model rows (src/orchestraPoolSummary.js), writer or
+ * reader side; null for none or an off-shape list.
+ */
+function cleanPoolModels(list) {
+  if (!Array.isArray(list)) return null;
+  const rows = list
+    .slice(0, MAX_POOL_ROWS)
+    .filter((r) => isObject(r) && typeof r.key === 'string' && POOL_ROW_KEY_RE.test(r.key))
+    .map((r) => {
+      const row = { key: r.key, name: clean(r.name, MAX_NAME) || r.key };
+      for (const k of POOL_ROW_COUNTS) row[k] = count(r[k]);
+      const wall = typeof r.wallMs === 'number' && Number.isFinite(r.wallMs) ? Math.round(r.wallMs) : 0;
+      row.wallMs = Math.min(MAX_ELAPSED_MS * MAX_PACKAGES, Math.max(0, wall));
+      return row;
+    });
+  return rows.length ? rows : null;
+}
+
+/** The poolModels key of a cleaned entry: present only for a pool run. */
+const poolModelsField = (list) => {
+  const rows = cleanPoolModels(list);
+  return rows ? { poolModels: rows } : {};
+};
+
 /** One live package, writer or reader side, or null to drop it. */
 function cleanLivePackage(p) {
   if (!isObject(p)) return null;
@@ -196,6 +229,7 @@ function cleanLive(l, now) {
     pausedUntil: l.state === 'paused' && isTime(l.pausedUntil) ? l.pausedUntil : null,
     options: { sleepOnLimit: opts.sleepOnLimit === true, shutdownWhenDone: opts.shutdownWhenDone === true },
     packages: (Array.isArray(l.packages) ? l.packages : []).slice(0, MAX_PACKAGES).map(cleanLivePackage).filter(Boolean),
+    ...poolModelsField(l.poolModels),
   };
 }
 
@@ -272,6 +306,7 @@ function liveEntry(view, { now = Date.now(), tabState = () => null } = {}) {
       state: liveRunState(view),
       pausedUntil: view.pausedUntil,
       options: view.options,
+      poolModels: poolModelSummary(view, now),
       packages: view.packages.map((p) => {
         if (!isObject(p)) return null;
         const state = livePackageState(p, p.sessionId ? tabState(p.sessionId) : null);
@@ -463,6 +498,7 @@ function cleanRun(r, now) {
     ...(Array.isArray(r.needsYou) || Array.isArray(r.manualActionLines)
       ? { needsYou: hubLines(r.needsYou), manualActionLines: hubLines(r.manualActionLines) }
       : {}),
+    ...poolModelsField(r.poolModels),
   };
 }
 
@@ -514,6 +550,7 @@ function runEntry(view, { now = Date.now(), suggestions = [], report = '' } = {}
       blocked: view.packages.filter((p) => p && p.state === 'pending' && p.blockedBy).length,
       manualActions: Array.isArray(integ.manualActions) ? integ.manualActions.length : 0,
       selfCheck: selfCheckState(integ.selfCheck),
+      poolModels: poolModelSummary(view, now),
       packages: view.packages.map((p) =>
         isObject(p)
           ? {
@@ -767,6 +804,7 @@ function runsFrom(rows, now = Date.now()) {
 }
 
 module.exports = {
+  cleanPoolModels,
   runEntry,
   addRun,
   addSeen,

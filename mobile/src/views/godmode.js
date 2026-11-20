@@ -23,6 +23,7 @@
 // ============================================================================
 
 import { h, icon, ICONS } from '../dom.js';
+import { poolModelsBlock } from './godmodepool.js';
 import { t, tf } from '../i18n.js';
 import { godmodeRunsFrom } from '../snapmodel.js';
 import { mountSnapshots, when } from './snapshotview.js';
@@ -88,7 +89,7 @@ function runCard(run, now) {
     'details',
     { class: 'card run' },
     head,
-    h('div', { class: 'stack-sm run-body' }, run.packages.length ? h('ul', { class: 'rows' }, run.packages.map(packageRow)) : h('p', { class: 'hint' }, t('godmodeNoPackages')), extra),
+    h('div', { class: 'stack-sm run-body' }, run.packages.length ? h('ul', { class: 'rows' }, run.packages.map(packageRow)) : h('p', { class: 'hint' }, t('godmodeNoPackages')), poolModelsBlock(run), extra),
   );
 }
 

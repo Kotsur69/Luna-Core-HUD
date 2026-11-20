@@ -39,6 +39,8 @@ const { execFile } = require('child_process');
 const { storedWorkers } = require('./orchestraWorkers');
 const { AGY_MODEL } = require('./claudeModels');
 const { isAgyModel, isAgyModelId } = require('./workerModels');
+const { runsOnOf } = require('./workerPool');
+const { tickedKeys } = require('./orchestraRescue');
 
 /** The agy name, as a planner, a Workers choice and a package / worker model. */
 const AGY = AGY_MODEL;
@@ -115,13 +117,31 @@ function packageAgyModel(plan, pkg) {
 }
 
 /**
- * True when the run's own headless helper jobs run on agy: its workers or
- * its planner is agy.
+ * Where a pool run's helper jobs run: 'claude' whenever the pool ticks a
+ * Claude model, 'agy' when it ticks agy models but no Claude one, null for
+ * any other run (and a pool of free models only). A free model never
+ * reviews, resolves or fixes up.
+ * @param {object|null} plan
+ * @returns {'claude'|'agy'|null}
+ */
+function poolSideJobs(plan) {
+  const ons = tickedKeys(plan).map(runsOnOf);
+  if (ons.includes('claude')) return 'claude';
+  return ons.includes('agy') ? 'agy' : null;
+}
+
+/**
+ * True when the run's own headless helper jobs (reviews, the integration /
+ * merge-conflict worker, the post-DONE fix-up) run on agy: a pool run on
+ * agy only when it ticks no Claude model (poolSideJobs); any other run when
+ * its workers or its planner is agy.
  * @param {object|null} plan
  * @returns {boolean}
  */
 function runUsesAgy(plan) {
   if (!isObj(plan) || plan.freeMode === true) return false;
+  const pool = poolSideJobs(plan);
+  if (pool) return pool === AGY;
   return storedWorkers(plan) === AGY || plan.buildPlanner === AGY || isAgyModel(plan.workerModel);
 }
 
@@ -269,6 +289,7 @@ module.exports = {
   packageRunsAgy,
   packageAgyModel,
   runUsesAgy,
+  poolSideJobs,
   approveAgyProfile,
   runAgyVariants,
   agyPrintArgs,

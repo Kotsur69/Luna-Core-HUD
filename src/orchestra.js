@@ -86,6 +86,9 @@ const { poolWorkers } = require('./workerPool');
 // Per-model efforts of a pool (src/orchestraPoolEffort.js) and its usage line's numbers.
 const poolEffortRules = require('./orchestraPoolEffort');
 const { poolUsageReadings } = require('./orchestraPoolUsage');
+// Pool rescue (src/orchestraRescue.js): escalation ladder, limit moves, emergency Opus.
+const { createRescueWiring } = require('./orchestraRescueWiring');
+const rescueRules = require('./orchestraRescue');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -711,6 +714,8 @@ function createOrchestra(deps) {
     reviewDiff: deps.reviewDiff || null,
     reviewEnv: () => (deps.freshEnv ? deps.freshEnv() : null),
     usageLimits: () => (deps.usageLimits ? deps.usageLimits() : []),
+    // A pool run hands over to Sonnet when ticked, else up the pool (src/orchestraRescue.js).
+    handOverTarget: (pkg, kind) => rescue.handOver(pkg, kind),
   });
   // F5: Claude review of a settled free run's luna-free/ branches, opt-in.
   const freeReviewer = createFreeReviewer({
@@ -1084,6 +1089,10 @@ function createOrchestra(deps) {
         stalls: p.stalls,
         stallHistory: p.stallHistory || [],
         escalated: p.escalated,
+        // A pool run's rescues (src/orchestraRescue.js): escalations, limit moves, hand-overs.
+        ...(Array.isArray(p.rescues) && p.rescues.length
+          ? { rescueKey: p.rescueKey || null, emergency: p.emergency === true, rescues: p.rescues.map((r) => ({ ...r, text: rescueRules.rescueText(r) })) }
+          : {}),
         prUrl: p.prUrl,
         merged: p.merged,
         // Repo-relative paths the package changed (Luna's Work's bug-test rule).
@@ -1222,6 +1231,7 @@ function createOrchestra(deps) {
     plan.permissionMode = plan.permissionMode || s.permissionMode;
     plan.integrationMode = plan.integrationMode || s.integration || 'pr';
     if (!plan.allowedTools) plan.allowedTools = (s.allowedTools || []).filter(sup.isAllowRule);
+    plan.emergencyEffort = rescueRules.normalizeEmergencyEffort(plan.emergencyEffort || s.emergencyEffort);
   }
 
   // A hybrid "free" package runs on Sonnet until free workers take them (F6);
@@ -1248,6 +1258,30 @@ function createOrchestra(deps) {
   }
   // "Workers" pools (src/orchestraPoolWiring.js): planned for, then routed per package.
   const poolRun = createPoolWiring({ planOf: () => plan, deps, log, workerSettings });
+  // Pool rescue: escalation up the ticked models, limit moves, emergency Opus.
+  const rescue = createRescueWiring({
+    planOf: () => plan,
+    deps,
+    now,
+    effortFor: (pkg) => effortFor(pkg),
+    emergencySetting: () => (plan && plan.emergencyEffort) || workerSettings().emergencyEffort,
+    freeWaiting: () => !!plan && plan.packages.some((p) => sup.isActive(p) && hybridRun.isWaiting(p)),
+    isHybridFree: (pkg) => isHybridFreePackage(pkg),
+    stallReasons: sup.ESCALATE_REASONS,
+    escalateAfterStalls: sup.ESCALATE_AFTER_STALLS,
+    patch: (id, fields) => patch(id, fields),
+    onRunEvent: (...args) => onRunEvent(...args),
+    log,
+  });
+  /**
+   * Does this stall escalate? A pool run asks its rescue rules; any other run
+   * keeps today's rule (a Sonnet worker, twice stalled, once to Opus).
+   */
+  const wantsEscalation = (pkg, reason) => {
+    const pooled = rescue.wantsEscalation(pkg, reason);
+    if (pooled !== null) return pooled;
+    return packageRunsClaude(pkg) && sup.shouldEscalate(pkg, modelFor(pkg), reason);
+  };
 
   /**
    * Escalation override, then the level a pool's Claude model fixes, then a
@@ -2280,9 +2314,12 @@ function createOrchestra(deps) {
     try {
       // A/B groups whose variants are done get decided (a restart or a kill may have left one).
       variantRun.evaluateAll();
+      // A pool run: not-started packages whose model is out move first (src/orchestraRescue.js).
+      rescue.moveOffLimits();
       let ready = launchableReady();
       while (ready.length && !plan.killed && !allPaused() && !plan.hold && !plan.interrupted && !batteryHeld()) {
         await launchPackages(ready);
+        rescue.moveOffLimits();
         ready = launchableReady();
       }
       // Again before settling: a variant may have finished while the launches ran.
@@ -2617,7 +2654,7 @@ function createOrchestra(deps) {
       kick();
       return;
     }
-    const wantsEscalate = live && packageRunsClaude(pkg) && sup.shouldEscalate(pkg, modelFor(pkg), reason);
+    const wantsEscalate = live && wantsEscalation(pkg, reason);
     const wantsResume = live && sup.shouldAutoResume(pkg, reason);
     if (wantsEscalate && escalate(pkg, reason, detail)) {
       commit();
@@ -2743,20 +2780,26 @@ function createOrchestra(deps) {
 
   /**
    * Idea #6: the stalled Sonnet worker's tab is closed and the package
-   * restarts once on Opus in the same worktree, told why.
+   * restarts once on Opus in the same worktree, told why. In a pool run it
+   * restarts on the next stronger ticked model instead (Opus as an
+   * emergency when nothing stronger is ticked; src/orchestraRescue.js).
    * @returns {boolean} false when the new tab could not be opened (stays stalled)
    */
   function escalate(pkg, reason, detail) {
     if (!depsReady(pkg)) return false;
+    const poolRunning = rescueRules.isPoolPlan(plan);
+    const pooled = poolRunning ? rescue.escalation(pkg, reason) : null;
+    if (poolRunning && !pooled) return false;
     const briefPath = briefPathFor(pkg.cwd, pkg.root);
     const text = resumeBrief(pkg, { escalation: { reason, detail } });
     if (!briefPath || !deps.writeBrief(briefPath, text)) return false;
     const old = pkg.sessionId;
     // New tab first: closing the old one first could leave main opening an
     // empty replacement tab when it was the last one.
-    // One effort step up as well, capped at max.
-    const effortOverride = nextEffort(effortFor(pkg));
-    const session = safeOpenTab({ ...pkg, modelOverride: 'opus', effortOverride }, pkg.cwd || pkg.root, pkg.branch, briefPath);
+    // One effort step up as well, capped at max (a pool run: the rescue's effort).
+    const modelOverride = pooled ? pooled.fields.modelOverride : 'opus';
+    const effortOverride = pooled ? pooled.fields.effortOverride : nextEffort(effortFor(pkg));
+    const session = safeOpenTab({ ...pkg, modelOverride, effortOverride }, pkg.cwd || pkg.root, pkg.branch, briefPath);
     if (!session) return false;
     // Re-pointed before the close, so the old tab's close is not read as this package's.
     patch(pkg.id, {
@@ -2764,14 +2807,16 @@ function createOrchestra(deps) {
       state: 'launched',
       sessionId: session.id,
       briefPath,
-      modelOverride: 'opus',
+      ...(pooled ? pooled.fields : {}),
+      modelOverride,
       effortOverride,
       escalated: true,
       ...spentContextMark(pkg),
       ...spentAbBuild(pkg),
     });
     if (old && sessionAlive(old)) closeSession(old);
-    onRunEvent('escalated', { id: pkg.id, reason });
+    if (pooled) log(`[orchestra] package ${pkg.id}: ${pooled.text}`);
+    onRunEvent('escalated', { id: pkg.id, reason, ...(pooled ? { text: pooled.text } : {}) });
     return true;
   }
 
@@ -3334,7 +3379,11 @@ function createOrchestra(deps) {
     Object.assign(plan, pauseRules.withRunPauses(plan, next.pauses, now()));
     armResume(key, until);
     onRunEvent('paused', { until, scope: key });
+    // A pool run moves its not-started packages off the paused backend now
+    // and launches them where they went (src/orchestraRescue.js limitMoves).
+    const moved = rescue.moveOffLimits();
     commit();
+    if (moved.length) kick();
     background(powerFlow.onPaused(), 'sleep');
   }
 
@@ -3818,7 +3867,7 @@ function createOrchestra(deps) {
       patch(id, { heldResume: null });
       const pkg = findPkg(id);
       const restarted =
-        (packageRunsClaude(pkg) && sup.shouldEscalate(pkg, modelFor(pkg), reason) && escalate(pkg, reason, detail)) ||
+        (wantsEscalation(pkg, reason) && escalate(pkg, reason, detail)) ||
         (sup.shouldAutoResume(pkg, reason) && autoResume(pkg, reason, detail));
       // Held again: the next Resume restarts it; otherwise it has had its chance.
       if (!restarted && plan.hold) patch(id, { heldResume: { reason, detail } });

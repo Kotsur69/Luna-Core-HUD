@@ -16,6 +16,7 @@ import { h, icon, ICONS } from '../dom.js';
 import { t, tf, locale } from '../i18n.js';
 import { godmodeLivesFrom, godmodeTabsFrom, godmodeLiveCounts } from '../snapmodel.js';
 import { when } from './snapshotview.js';
+import { poolModelsBlock } from './godmodepool.js';
 
 /** A finished (settled / killed) live run stays on top this long, then the history has it. */
 const FINISHED_SHOWN_MS = 6 * 60 * 60 * 1000;
@@ -240,6 +241,8 @@ export function liveCard(live, now, index = 0, controls = null) {
     optionTags(live),
     controls,
     counters(live),
+    // A pool run: planned / landed / stalled / escalated / emergency Opus / limit moves per model.
+    poolModelsBlock(live),
     live.packages.length ? groups(live) : h('p', { class: 'hint' }, t('godmodeNoPackages')),
   );
 }
