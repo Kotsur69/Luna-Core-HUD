@@ -48,6 +48,7 @@ import { t, loc } from './util.js';
 import { onLangChange, onUsageUpdate, onActiveProfile, onUsageVisibility } from './bus.js';
 import { defineWidget } from './registry.js';
 import { usageTabKind, googleUsageEntry, visibleUsageSources } from './usagevisibility.js';
+import { agyUsageRowOrder, agyAlwaysListedUsageRows } from '../../agyFamilies.js';
 
 /** How often the "resets in ..." labels are recomputed (locally, no request). */
 const COUNTDOWN_MS = 30000;
@@ -591,11 +592,12 @@ function modelRowLabel(limit) {
 }
 
 /**
- * agy model families in name-column order; Argon is the one always listed.
- * Neon (Argon's replacement) shows only when agy reports it.
+ * agy usage rows in name-column order (src/agyFamilies.js): Opus, Gemini,
+ * Neon, Argon. Only the usageAlwaysListed rows (Argon) show without a
+ * reading; any other family (Neon) shows only when agy reports it.
  */
-const AGY_MODEL_ORDER = ['Opus', 'Gemini', 'Neon', 'Argon'];
-const AGY_ARGON = 'Argon';
+const AGY_MODEL_ORDER = Object.freeze(agyUsageRowOrder());
+const AGY_ALWAYS_LISTED = Object.freeze(agyAlwaysListedUsageRows());
 
 /**
  * agy rows regrouped like Claude's accounts: one "account" per model family
@@ -615,7 +617,9 @@ export function modelSources(limits) {
     if (!byModel.has(model)) byModel.set(model, []);
     byModel.get(model).push(plain);
   }
-  if (!byModel.has(AGY_ARGON)) byModel.set(AGY_ARGON, []);
+  for (const row of AGY_ALWAYS_LISTED) {
+    if (!byModel.has(row)) byModel.set(row, []);
+  }
   const rank = (m) => {
     const i = AGY_MODEL_ORDER.indexOf(m);
     return i === -1 ? AGY_MODEL_ORDER.length : i;
