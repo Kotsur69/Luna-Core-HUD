@@ -543,10 +543,9 @@ function createFinalizer(deps) {
     const summary = runSummary(plan, view, extra);
     const failed = (reason, pending) => {
       if (deps.getPlan() !== plan) return;
-      setIntegration(plan, { emailError: String(reason).slice(0, 80), emailPending: pending === true });
-      if (deps.writeReport) deps.writeReport(plan.id, `${text}
-- Email failed: ${String(reason).slice(0, 80)}
-`);
+      const msg = String(reason).slice(0, 80);
+      setIntegration(plan, { emailError: msg, emailPending: pending === true });
+      if (deps.writeReport) deps.writeReport(plan.id, reportTextFor(plan, { settledNow: true }).text);
       deps.commit();
     };
     setIntegration(plan, { emailError: null, emailPending: false });
@@ -589,10 +588,59 @@ function createFinalizer(deps) {
     return true;
   }
 
-  function report(plan) {
+  function reportTextFor(plan, { settledNow = false } = {}) {
     const view = { ...deps.view(), repoPath: plan.repoPath };
-    const extra = { now: deps.now(), suggestions: sup.allowSuggestions(plan.approvalLog) };
-    const text = buildReport(view, { ...extra, ...repoFacts(plan) });
+    const at = settledNow && plan.integration && Number.isFinite(plan.integration.at) ? plan.integration.at : deps.now();
+    const extra = { now: at, suggestions: sup.allowSuggestions(plan.approvalLog) };
+    let text = buildReport(view, { ...extra, ...repoFacts(plan) });
+    const emailErr = plan.integration && typeof plan.integration.emailError === 'string' && plan.integration.emailError ? plan.integration.emailError : null;
+    if (emailErr) text = `${text}\n- Email failed: ${emailErr}\n`;
+    return { view, extra, text };
+  }
+
+  /** Pre-scan report markdown for `planId` (or ''), without writing to disk. */
+  function draftReport(planId) {
+    const plan = deps.getPlan();
+    if (!plan || plan.id !== planId) return '';
+    return reportTextFor(plan, { settledNow: true }).text;
+  }
+
+  /**
+   * Re-renders and rewrites the report (.md + .html) for `planId` without
+   * re-sending the email or firing notifications (used after a post-settle
+   * handback scan adds new follow-up cards to the run).
+   */
+  function refreshReport(planId) {
+    const plan = deps.getPlan();
+    if (!plan || plan.id !== planId || !deps.writeReport) return null;
+    const { text } = reportTextFor(plan, { settledNow: true });
+    const file = deps.writeReport(plan.id, text);
+    if (file) {
+      setIntegration(plan, { reportPath: file });
+      deps.commit();
+    }
+    return file;
+  }
+
+  /**
+   * Opt-in post-run handback scanner (src/orchestraHandbackScan.js): runs once
+   * before report() so scanner-filed cards appear in the run report, HTML page,
+   * toast and email alongside worker-filed follow-ups. Never throws.
+   */
+  async function scanHandbacks(plan) {
+    if (typeof deps.onHandbackScan !== 'function') return null;
+    if (!sup.normalizeOptions(plan.options).scanHandbacks) return null;
+    try {
+      const { text } = reportTextFor(plan);
+      return await deps.onHandbackScan(plan.id, text);
+    } catch (err) {
+      deps.onRunEvent('error', { where: 'handbackScan', message: errText(err) });
+      return null;
+    }
+  }
+
+  function report(plan) {
+    const { view, extra, text } = reportTextFor(plan);
     const file = deps.writeReport ? deps.writeReport(plan.id, text) : null;
     const pushed = plan.packages.filter((p) => p.state === 'pushed').length;
     if (deps.notify) {
@@ -663,6 +711,8 @@ function createFinalizer(deps) {
       await runPostMerge(plan, res);
       if (deps.getPlan() !== plan) return false;
       leaveNotes(plan);
+      await scanHandbacks(plan);
+      if (deps.getPlan() !== plan) return false;
       setIntegration(plan, { reportPath: report(plan) });
     } catch (err) {
       deps.onRunEvent('error', { where: 'finalize', message: err instanceof Error ? err.message : String(err) });
@@ -713,7 +763,7 @@ function createFinalizer(deps) {
     return true;
   }
 
-  return { finalize, abort, interrupt, isRunning: () => running, emailSummary, emailResult, recordPostMerge };
+  return { finalize, abort, interrupt, isRunning: () => running, emailSummary, emailResult, recordPostMerge, draftReport, refreshReport };
 }
 
 module.exports = {

@@ -48,8 +48,8 @@ function entriesOf(view) {
 /**
  * Cards grouped by kind (FOLLOWUP_KINDS order), then by package (first-filed
  * order), each card in filing order. Empty kinds are left out.
- * @param {Array<{packageId:string, kind:string, title:string, at:number}>} entries
- * @returns {Array<{kind:string, count:number, packages:Array<{packageId:string, cards:Array<{title:string, at:number}>}>}>}
+ * @param {Array<{packageId:string, kind:string, title:string, at:number, source?:'scan'}>} entries
+ * @returns {Array<{kind:string, count:number, packages:Array<{packageId:string, cards:Array<{title:string, at:number, source?:'scan'}>}>}>}
  */
 function groupFollowups(entries) {
   const list = Array.isArray(entries) ? entries : [];
@@ -58,7 +58,11 @@ function groupFollowups(entries) {
     const ids = [...new Set(ofKind.map((e) => e.packageId))];
     const packages = ids.map((packageId) => ({
       packageId,
-      cards: ofKind.filter((e) => e.packageId === packageId).map((e) => ({ title: oneLine(e.title, MAX_TITLE_CHARS), at: e.at })),
+      cards: ofKind.filter((e) => e.packageId === packageId).map((e) => ({
+        title: oneLine(e.title, MAX_TITLE_CHARS),
+        at: e.at,
+        ...(e.source === 'scan' ? { source: 'scan' } : {}),
+      })),
     }));
     return { kind, count: ofKind.length, packages };
   }).filter((g) => g.count > 0);
@@ -77,7 +81,10 @@ function followupReportLines(view) {
     lines.push('', `### ${KIND_TITLES[g.kind]} (${g.count})`, '');
     for (const p of g.packages) {
       lines.push(`- \`${p.packageId}\``);
-      for (const c of p.cards) lines.push(`  - ${mdText(c.title)} (to-do at ${c.at})`);
+      for (const c of p.cards) {
+        const origin = c.source === 'scan' ? ', handback scan' : '';
+        lines.push(`  - ${mdText(c.title)} (to-do at ${c.at}${origin})`);
+      }
     }
   }
   return lines;
@@ -94,7 +101,10 @@ function followupReportHtml(view, h) {
   if (!groups.length) return '';
   const blocks = groups.map((g) => {
     const items = g.packages.map((p) => {
-      const cards = p.cards.map((c) => `<li>${h.escapeHtml(c.title)} (to-do at ${h.escapeHtml(c.at)})</li>`);
+      const cards = p.cards.map((c) => {
+        const origin = c.source === 'scan' ? ', handback scan' : '';
+        return `<li>${h.escapeHtml(c.title)} (to-do at ${h.escapeHtml(c.at)}${origin})</li>`;
+      });
       return `<li><code>${h.escapeHtml(p.packageId)}</code><ul class="plain">${cards.join('')}</ul></li>`;
     });
     return `<h3>${h.escapeHtml(`${KIND_TITLES[g.kind]} (${g.count})`)}</h3><ul class="plain">${items.join('')}</ul>`;

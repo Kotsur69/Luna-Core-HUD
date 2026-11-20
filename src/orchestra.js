@@ -583,6 +583,7 @@ function createOrchestra(deps) {
     notify: deps.notify,
     putSnapshot: deps.putSnapshot,
     onReport: deps.onReport,
+    onHandbackScan: deps.onHandbackScan,
     sleep: deps.sleep,
     onIdle: () => afterFinalize(),
     // The integrate watchdog (default: orchestraFinalize integrateTimeoutFor)
@@ -3738,15 +3739,27 @@ function createOrchestra(deps) {
     commit();
     // F5 ticked after the run settled: the review starts now.
     if (changes.freeReview === true && !finalizer.isRunning()) freeReviewer.start();
-    // Handback scanner ticked after the run settled: scan now.
+    // Handback scanner ticked after the run settled: scan now and refresh the report if cards were filed.
+    // Skip if a retried package is active (finalize will run the scan once it settles).
     if (
       changes.scanHandbacks === true &&
+      !isBusy() &&
       !finalizer.isRunning() &&
+      !plan.packages.some(sup.isActive) &&
       plan.integration &&
       (plan.integration.state === 'done' || plan.integration.state === 'failed') &&
       typeof deps.onHandbackScan === 'function'
     ) {
-      background(deps.onHandbackScan(plan.id), 'handbackScan');
+      const runId = plan.id;
+      const reportText = finalizer.draftReport(runId);
+      background(
+        Promise.resolve()
+          .then(() => deps.onHandbackScan(runId, reportText))
+          .then((res) => {
+            if (res && res.filed > 0) finalizer.refreshReport(runId);
+          }),
+        'handbackScan',
+      );
     }
     background(powerFlow.onOptions(plan.options), 'options');
     return { ok: true, options: { ...plan.options } };

@@ -194,14 +194,21 @@ function prepareFollowups(list, tasks, scope, filed = {}) {
  * One run's record, validated (a stored run is read back through this too).
  * @param {unknown} raw
  * @param {string} runId
- * @returns {Array<{runId:string, packageId:string, kind:string, title:string, at:number}>}
+ * @returns {Array<{runId:string, packageId:string, kind:string, title:string, at:number, source?:'scan'}>}
  */
 function normalizeFollowupEntries(raw, runId) {
   if (!Array.isArray(raw) || typeof runId !== 'string' || !RUN_ID_RE.test(runId)) return [];
   return raw
     .filter((e) => isObj(e) && typeof e.packageId === 'string' && PACKAGE_ID_RE.test(e.packageId))
     .filter((e) => FOLLOWUP_KINDS.includes(e.kind) && typeof e.title === 'string' && e.title && Number.isFinite(e.at))
-    .map((e) => ({ runId, packageId: e.packageId, kind: e.kind, title: e.title.slice(0, MAX_LEDGER_TITLE_CHARS), at: e.at }))
+    .map((e) => ({
+      runId,
+      packageId: e.packageId,
+      kind: e.kind,
+      title: e.title.slice(0, MAX_LEDGER_TITLE_CHARS),
+      at: e.at,
+      ...(e.source === 'scan' ? { source: 'scan' } : {}),
+    }))
     .slice(-MAX_LEDGER_ENTRIES);
 }
 
