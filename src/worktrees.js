@@ -43,6 +43,7 @@ const path = require('path');
 // Walks of node_modules use the non-asar fs (src/plainFs.js).
 const { plainFs } = require('./plainFs');
 const { execFile, exec } = require('child_process');
+const { withGitSlot, forgetPooledReads, laneOf, isShareable } = require('./gitpool');
 
 const WORKTREE_DIR = '.luna-worktrees';
 const BRANCH_PREFIX = 'luna/';
@@ -163,26 +164,43 @@ function exitCode(err) {
  * Runs git without a shell; never rejects. Resolves
  * {ok, stdout, stderr, broke, timedOut, code, cwd, args, timeoutMs} - enough
  * for gitDetail() to say exactly what happened.
- * @param {{timeoutMs?: number, maxBuffer?: number}} [opts]
+ *
+ * Holds a slot of the shared git pool (src/gitpool.js) while git runs, so
+ * probes like `rev-parse --show-toplevel` cannot pile up unbounded, and a
+ * long `worktree add` / `worktree remove` / fetch waits in the slow lane
+ * instead of taking a slot a status poll needs. The timeout counts from the
+ * moment git starts, not from when the call was queued.
+ * @param {{timeoutMs?: number, maxBuffer?: number,
+ *   withSlot?: (lane:string, task:() => Promise<any>) => Promise<any>}} [opts]
+ *   withSlot: the limiter to hold a slot of (tests inject their own pool's)
  */
 function runGit(cwd, args, execImpl = execFile, opts = {}) {
   const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : GIT_TIMEOUT_MS;
-  return new Promise((resolve) => {
-    const execOpts = { windowsHide: true, timeout: timeoutMs };
-    if (Number.isFinite(opts.maxBuffer) && opts.maxBuffer > 0) execOpts.maxBuffer = opts.maxBuffer;
-    execImpl('git', ['-C', cwd, ...args], execOpts, (err, stdout, stderr) =>
-      resolve({
-        ok: !err,
-        stdout: String(stdout || ''),
-        stderr: String(stderr || ''),
-        broke: gitBroke(err, timeoutMs),
-        timedOut: isTimeout(err),
-        code: exitCode(err),
-        cwd,
-        args,
-        timeoutMs,
-      }),
-    );
+  const withSlot = typeof opts.withSlot === 'function' ? opts.withSlot : withGitSlot;
+  const write = !isShareable(args);
+  // A write here must not let a poller share a read answered before it.
+  if (write) forgetPooledReads(cwd);
+  const spawn = () =>
+    new Promise((resolve) => {
+      const execOpts = { windowsHide: true, timeout: timeoutMs };
+      if (Number.isFinite(opts.maxBuffer) && opts.maxBuffer > 0) execOpts.maxBuffer = opts.maxBuffer;
+      execImpl('git', ['-C', cwd, ...args], execOpts, (err, stdout, stderr) =>
+        resolve({
+          ok: !err,
+          stdout: String(stdout || ''),
+          stderr: String(stderr || ''),
+          broke: gitBroke(err, timeoutMs),
+          timedOut: isTimeout(err),
+          code: exitCode(err),
+          cwd,
+          args,
+          timeoutMs,
+        }),
+      );
+    });
+  return withSlot(laneOf(args, timeoutMs), spawn).then((res) => {
+    if (write) forgetPooledReads(cwd);
+    return res;
   });
 }
 
