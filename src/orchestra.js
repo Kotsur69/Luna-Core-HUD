@@ -93,6 +93,7 @@ const variantRules = require('./orchestraVariants');
 const { createVariantRunner } = require('./orchestraVariantRun');
 const { createHealer } = require('./orchestraHeal');
 const { createContextGuard, contextResumeSection } = require('./orchestraContextGuard');
+const { createVerifySemaphore, DEFAULT_VERIFY_CONCURRENCY } = require('./worktrees');
 
 /**
  * The runPlanner args. A Claude plan without plan docs gets exactly the args
@@ -453,6 +454,10 @@ function createOrchestra(deps) {
   const setTimer = deps.setTimer || setTimeout;
   const clearTimer = deps.clearTimer || clearTimeout;
   const log = deps.log || noop;
+  // Bounded concurrency semaphore for post-DONE verification suites across parallel
+  // worktrees (default 1 heavy test suite at a time). Production wiring shares one
+  // process-wide semaphore across projects and end-of-run self-checks.
+  const verifySemaphore = deps.verifySemaphore || createVerifySemaphore({ maxConcurrency: deps.verifyConcurrency });
   // Package worktree dependencies (orchestraDeps.js): install after
   // addWorktree, check before a worker starts and before the post-DONE verify.
   const rawInstallDeps = deps.installDeps || (async () => ({ ok: true, output: '' }));
@@ -1832,7 +1837,11 @@ function createOrchestra(deps) {
     const pushedDeps = pkg.dependsOn.map(findPkg).filter((d) => d && d.state === 'pushed' && d.branch);
     const baseDep = pushedDeps.find((d) => d.headSha) || null;
     made.depBranch = baseDep ? baseDep.branch : null;
-    const wt = await deps.addWorktree(plan.repoPath, `${pkg.id}-${stamp}`, {
+    const createWorktree =
+      deps.worktreePool && typeof deps.worktreePool.acquire === 'function'
+        ? (repo, name, opts) => deps.worktreePool.acquire(repo, name, { ...opts, linkNodeModules: false })
+        : deps.addWorktree;
+    const wt = await createWorktree(plan.repoPath, `${pkg.id}-${stamp}`, {
       base: baseDep ? baseDep.headSha : undefined,
       ...(plan.freeMode ? { branchPrefix: FREE_BRANCH_PREFIX } : {}),
       ...(plan.planRun ? { branchPrefix: planLaunch.PLAN_BRANCH_PREFIX } : {}),
@@ -2852,21 +2861,55 @@ function createOrchestra(deps) {
     let res;
     try {
       const before = findPkg(id);
+      const needsVerify = typeof before.verify === 'string' && before.verify.trim().length > 0;
       // Under the wake watchdog: a step that never settles is aborted (stepHung).
-      res = await recover.guardStep(id, (step) => {
-        const hooks = verifyHooks(plan.id, id);
-        return finishPackage(
-          {
-            ...before,
-            pushOnVerifyFail: plan.freeMode === true,
-            // Once per package: after its fix-up round, GitHub's own check decides.
-            scanSecrets: !before.scanFixup && !before.pushFixup,
-            // An A/B variant is verified, never pushed: only the critic's pick is.
-            ...(before.abOf ? { skipPush: true } : {}),
-          },
-          { ...hooks, isCancelled: () => step.isAborted() || hooks.isCancelled() },
-        );
-      });
+      // Track the acquired slot outside guardStep so an early abort releases it
+      // immediately instead of permanently leaking the semaphore slot.
+      let activeSlot = null;
+      try {
+        res = await recover.guardStep(id, async (step) => {
+          const hooks = verifyHooks(plan.id, id);
+          const cancelled = () => step.isAborted() || hooks.isCancelled();
+          const runFinish = () =>
+            finishPackage(
+              {
+                ...before,
+                pushOnVerifyFail: plan.freeMode === true,
+                // Once per package: after its fix-up round, GitHub's own check decides.
+                scanSecrets: !before.scanFixup && !before.pushFixup,
+                // An A/B variant is verified, never pushed: only the critic's pick is.
+                ...(before.abOf ? { skipPush: true } : {}),
+              },
+              { ...hooks, isCancelled: cancelled },
+            );
+          if (!needsVerify) return runFinish();
+          const slot = await verifySemaphore.acquire({
+            onQueued: (info) => hooks.onQueued(info),
+            onStart: (info) => {
+              if (info && info.waited) hooks.onStart(info);
+            },
+            isCancelled: cancelled,
+          });
+          if (!slot.acquired) {
+            return { ok: false, stage: 'verifyCancelled', detail: 'the run was stopped before this verify started' };
+          }
+          activeSlot = slot;
+          try {
+            if (cancelled()) {
+              return { ok: false, stage: 'verifyCancelled', detail: 'the run was stopped before this verify started' };
+            }
+            return await runFinish();
+          } finally {
+            slot.release();
+            if (activeSlot === slot) activeSlot = null;
+          }
+        });
+      } finally {
+        if (activeSlot) {
+          activeSlot.release();
+          activeSlot = null;
+        }
+      }
     } catch (err) {
       res = { ok: false, stage: 'push', detail: err instanceof Error ? err.message : 'finish failed' };
     }
@@ -3916,6 +3959,7 @@ function createOrchestra(deps) {
     cancelPlanWait: () => planWaiter.cancel(),
     isBusy,
     isRunning: () => !!plan && plan.started && !plan.killed && plan.packages.some(sup.isActive),
+    verifyStats: () => verifySemaphore.stats(),
     // Multi God Mode's same-repo guard (orchestraRegistry.repoBusy).
     repoPath: () => (plan ? plan.repoPath : null),
     planningRepo: () => planningRepo,
@@ -3932,4 +3976,5 @@ module.exports = {
   RESUME_GRACE_MS,
   AUTO_RETRY_DELAY_MS,
   MAX_AUTO_RETRIES: sup.MAX_AUTO_RETRIES,
+  DEFAULT_VERIFY_CONCURRENCY,
 };

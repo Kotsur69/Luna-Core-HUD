@@ -28,6 +28,13 @@ const {
   GIT_TIMEOUT_MS,
   REMOVE_TIMEOUT_MS,
   ADD_TIMEOUT_MS,
+  createVerifySemaphore,
+  sharedVerifySemaphore,
+  DEFAULT_VERIFY_CONCURRENCY,
+  checkMainNodeModules,
+  linkNodeModules,
+  createWorktreePool,
+  DEFAULT_WARM_POOL_SIZE,
 } = require('../src/worktrees.js');
 
 // ---- rev-parse failure classification (fake git) ------------------------------
@@ -406,4 +413,399 @@ junctionTest('removeWorktree: REAL junctions are unlinked first - their targets 
     }
     await removeTree(parent);
   }
+});
+
+// ---- verification concurrency semaphore --------------------------------------
+
+test('createVerifySemaphore serializes work by default (maxConcurrency = 1) in FIFO order', async () => {
+  assert.equal(DEFAULT_VERIFY_CONCURRENCY, 1);
+  let clock = 1000;
+  const sem = createVerifySemaphore({ now: () => clock });
+  assert.deepEqual(sem.stats(), { active: 0, queued: 0, maxConcurrency: 1 });
+
+  let running = 0;
+  let maxRunning = 0;
+  const order = [];
+  const queuedEvents = [];
+  const gates = [];
+
+  const job = (name) =>
+    sem.run(
+      async ({ waited, waitedMs }) => {
+        running += 1;
+        maxRunning = Math.max(maxRunning, running);
+        order.push(`start:${name}:${waited ? `waited:${waitedMs}` : 'now'}`);
+        await new Promise((resolve) => gates.push(resolve));
+        order.push(`end:${name}`);
+        running -= 1;
+        return name;
+      },
+      { onQueued: (info) => queuedEvents.push([name, info.ahead]) },
+    );
+
+  const p1 = job('a');
+  const p2 = job('b');
+  const p3 = job('c');
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(running, 1);
+  assert.deepEqual(sem.stats(), { active: 1, queued: 2, maxConcurrency: 1 });
+  assert.deepEqual(queuedEvents, [
+    ['b', 1],
+    ['c', 2],
+  ]);
+
+  clock = 1500;
+  gates.shift()();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(running, 1);
+  assert.deepEqual(sem.stats(), { active: 1, queued: 1, maxConcurrency: 1 });
+
+  clock = 2200;
+  gates.shift()();
+  await new Promise((r) => setImmediate(r));
+  gates.shift()();
+
+  assert.deepEqual(await Promise.all([p1, p2, p3]), ['a', 'b', 'c']);
+  assert.equal(maxRunning, 1);
+  assert.deepEqual(sem.stats(), { active: 0, queued: 0, maxConcurrency: 1 });
+  assert.deepEqual(order, [
+    'start:a:now',
+    'end:a',
+    'start:b:waited:500',
+    'end:b',
+    'start:c:waited:1200',
+    'end:c',
+  ]);
+});
+
+test('createVerifySemaphore enforces bounded concurrency > 1, releases on errors, and skips cancelled waiters', async () => {
+  const sem = createVerifySemaphore({ maxConcurrency: 2 });
+  assert.equal(sem.maxConcurrency, 2);
+  let active = 0;
+  let peak = 0;
+  const resolvers = [];
+
+  const task = (id, shouldFail = false) =>
+    sem.run(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((r) => resolvers.push(r));
+      active -= 1;
+      if (shouldFail) throw new Error(`boom:${id}`);
+      return id;
+    });
+
+  let cancelled = false;
+  let skippedRan = false;
+  const p1 = task('one', true);
+  const p2 = task('two');
+  const pSkip = sem.run(
+    async () => {
+      skippedRan = true;
+      return 'should-not-run';
+    },
+    { isCancelled: () => cancelled, cancelledValue: { cancelled: true } },
+  );
+  const p3 = task('three');
+  await new Promise((r) => setImmediate(r));
+
+  assert.deepEqual(sem.stats(), { active: 2, queued: 2, maxConcurrency: 2 });
+  cancelled = true;
+  resolvers.shift()();
+  await assert.rejects(p1, /boom:one/);
+  assert.deepEqual(await pSkip, { cancelled: true });
+  assert.equal(skippedRan, false);
+
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(sem.stats(), { active: 2, queued: 0, maxConcurrency: 2 });
+  resolvers.shift()();
+  resolvers.shift()();
+  assert.deepEqual(await Promise.all([p2, p3]), ['two', 'three']);
+  assert.equal(peak, 2);
+  assert.deepEqual(sem.stats(), { active: 0, queued: 0, maxConcurrency: 2 });
+
+  // Already-cancelled caller never enters the queue even while the semaphore is busy.
+  const holdSlot = await sem.acquire();
+  const preCancelled = await sem.run(() => 'never', { isCancelled: () => true, cancelledValue: 'pre-cancelled' });
+  assert.equal(preCancelled, 'pre-cancelled');
+  assert.deepEqual(sem.stats(), { active: 1, queued: 0, maxConcurrency: 2 });
+  holdSlot.release();
+
+  // Double-release on acquire() is a no-op and does not corrupt active count.
+  const slot = await sem.acquire();
+  assert.equal(sem.stats().active, 1);
+  slot.release();
+  slot.release();
+  assert.equal(sem.stats().active, 0);
+
+  // Singleton check.
+  assert.equal(sharedVerifySemaphore(), sharedVerifySemaphore());
+  assert.equal(sharedVerifySemaphore().maxConcurrency, DEFAULT_VERIFY_CONCURRENCY);
+});
+
+// ---- main checkout node_modules pre-check & validated junctions --------------
+
+test('checkMainNodeModules rejects missing, dot-only, and non-directory node_modules and passes populated ones', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-nm-check-'));
+  try {
+    assert.equal(checkMainNodeModules('').reason, 'badPath');
+    assert.equal(checkMainNodeModules(tmp).reason, 'missing');
+
+    const nm = path.join(tmp, 'node_modules');
+    fs.mkdirSync(nm);
+    assert.equal(checkMainNodeModules(tmp).reason, 'empty');
+
+    fs.mkdirSync(path.join(nm, '.bin'));
+    fs.writeFileSync(path.join(nm, '.package-lock.json'), '{}');
+    assert.equal(checkMainNodeModules(tmp).reason, 'empty', 'npm bookkeeping alone is empty');
+
+    fs.mkdirSync(path.join(nm, 'pngjs'));
+    const ok = checkMainNodeModules(tmp);
+    assert.equal(ok.ok, true);
+    assert.equal(ok.dir, nm);
+    assert.equal(ok.entries, 1);
+
+    // linkNodeModules refuses to overwrite an existing node_modules in the target.
+    const wt = path.join(tmp, 'wt');
+    fs.mkdirSync(path.join(wt, 'node_modules'), { recursive: true });
+    assert.equal(linkNodeModules(tmp, wt).error, 'targetExists');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('addWorktree with linkNodeModules refuses when main node_modules is missing or empty before creating worktree', async () => {
+  const { parent, repo, cleanup } = makeRepo();
+  try {
+    const missing = await addWorktree(repo, 'no-nm', { ...PATIENT, linkNodeModules: true });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.error, 'emptyNodeModules');
+    assert.equal(missing.reason, 'missing');
+    assert.equal(fs.existsSync(path.join(parent, WORKTREE_DIR, 'app', 'no-nm')), false, 'no worktree created');
+
+    fs.mkdirSync(path.join(repo, 'node_modules', '.bin'), { recursive: true });
+    const empty = await addWorktree(repo, 'empty-nm', { ...PATIENT, linkNodeModules: true });
+    assert.equal(empty.ok, false);
+    assert.equal(empty.error, 'emptyNodeModules');
+    assert.equal(empty.reason, 'empty');
+    assert.equal(fs.existsSync(path.join(parent, WORKTREE_DIR, 'app', 'empty-nm')), false, 'no worktree created');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('addWorktree with linkNodeModules validates main node_modules, links junction, and removeWorktree unlinks before git remove', async () => {
+  const root = path.resolve('/repo');
+  const target = worktreePathFor(root, 'validated');
+  const mainNm = path.join(root, 'node_modules');
+  const wtNm = path.join(target, 'node_modules');
+  const ops = [];
+  const symlinks = new Map();
+  const fakeFs = {
+    existsSync: (p) => p === target && ops.includes('git:worktree-add'),
+    statSync: (p) => {
+      if (p === mainNm) return { isDirectory: () => true };
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+    lstatSync: (p) => {
+      if (symlinks.has(p)) return { isSymbolicLink: () => true, isDirectory: () => false };
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+    readdirSync: (p) => {
+      if (p === mainNm) return ['.bin', 'pngjs'];
+      return [];
+    },
+    symlinkSync: (src, dst, type) => {
+      ops.push(`symlink:${type}`);
+      symlinks.set(dst, src);
+    },
+    unlinkSync: (p) => {
+      ops.push('unlink');
+      symlinks.delete(p);
+    },
+  };
+  const fakeExec = (_cmd, args, _opts, cb) => {
+    const sub = args.slice(2);
+    if (sub[0] === 'rev-parse' && sub[1] === '--show-toplevel') return cb(null, `${root}\n`, '');
+    if (sub[0] === 'rev-parse') return cb(null, 'abc1234\n', '');
+    if (sub[0] === 'worktree' && sub[1] === 'add') {
+      ops.push('git:worktree-add');
+      return cb(null, '', '');
+    }
+    if (sub[0] === 'status') return cb(null, '', '');
+    if (sub[0] === 'worktree' && sub[1] === 'remove') {
+      ops.push('git:worktree-remove');
+      assert.equal(symlinks.has(wtNm), false, 'junction is unlinked before git worktree remove runs');
+      return cb(null, '', '');
+    }
+    return cb(null, '', '');
+  };
+
+  const wt = await addWorktree(root, 'validated', { execImpl: fakeExec, fsImpl: fakeFs, linkNodeModules: true });
+  assert.equal(wt.ok, true, JSON.stringify(wt));
+  assert.equal(wt.nodeModulesLinked, true);
+  assert.equal(symlinks.get(wtNm), mainNm);
+
+  const removed = await removeWorktree(root, wt.root, { execImpl: fakeExec, fsImpl: fakeFs });
+  assert.deepEqual(removed, { ok: true });
+  assert.ok(ops.indexOf('unlink') < ops.indexOf('git:worktree-remove'), 'junction unlinked before git worktree remove');
+});
+
+junctionTest('addWorktree with linkNodeModules links populated main node_modules and removeWorktree preserves main target', async (t) => {
+  const { repo, cleanup } = makeRepo();
+  const mainNm = path.join(repo, 'node_modules');
+  fs.mkdirSync(path.join(mainNm, 'sample-pkg'), { recursive: true });
+  fs.writeFileSync(path.join(mainNm, 'sample-pkg', 'index.js'), 'module.exports = 42;');
+  let wt = null;
+  try {
+    wt = await addWorktree(repo, 'linked-ok', { ...PATIENT, linkNodeModules: true });
+    if (!wt.ok && wt.error === 'linkFailed' && /EPERM/i.test(String(wt.detail || ''))) {
+      t.skip('cannot create a junction here');
+      return;
+    }
+    assert.equal(wt.ok, true, JSON.stringify(wt));
+    assert.equal(wt.nodeModulesLinked, true);
+    const linkPath = path.join(wt.root, 'node_modules');
+    assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.join(linkPath, 'sample-pkg', 'index.js'), 'utf8'), 'module.exports = 42;');
+
+    const removed = await removeWorktree(repo, wt.root, PATIENT);
+    assert.deepEqual(removed, { ok: true });
+    assert.equal(fs.existsSync(wt.root), false);
+    assert.equal(
+      fs.readFileSync(path.join(mainNm, 'sample-pkg', 'index.js'), 'utf8'),
+      'module.exports = 42;',
+      'main checkout node_modules keeps every file after worktree removal',
+    );
+  } finally {
+    if (wt && wt.root && fs.existsSync(path.join(wt.root, 'node_modules'))) {
+      try {
+        fs.unlinkSync(path.join(wt.root, 'node_modules'));
+      } catch {
+        /* already removed */
+      }
+    }
+    await cleanup();
+  }
+});
+
+// ---- optional warm worktree pool ---------------------------------------------
+
+test('createWorktreePool warms up to maxSize, validates main node_modules, claims at latest HEAD, and drains cleanly', async () => {
+  const { repo, cleanup } = makeRepo();
+  const pool = createWorktreePool({ maxSize: 2, execImpl: PATIENT.execImpl });
+  assert.equal(DEFAULT_WARM_POOL_SIZE, 2);
+  try {
+    // Refuses to warm with linkNodeModules when main node_modules is missing.
+    const badWarm = await pool.warm(repo, { linkNodeModules: true });
+    assert.equal(badWarm.ok, false);
+    assert.equal(badWarm.error, 'emptyNodeModules');
+    assert.deepEqual(pool.stats(repo), { size: 0, maxSize: 2 });
+
+    // Warm up to maxSize (2); a 3rd warm is a no-op.
+    const w1 = await pool.warm(repo);
+    const w2 = await pool.warm(repo);
+    const w3 = await pool.warm(repo);
+    assert.deepEqual([w1.ok, w1.warmed, w1.size], [true, true, 1]);
+    assert.deepEqual([w2.ok, w2.warmed, w2.size], [true, true, 2]);
+    assert.deepEqual([w3.ok, w3.warmed, w3.size], [true, false, 2]);
+
+    // Advance main HEAD after warming: acquired worktree must reflect the new commit.
+    fs.writeFileSync(path.join(repo, 'pkg', 'fresh.js'), 'module.exports = 2;');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'advance main');
+    const latestHead = git(repo, 'rev-parse', 'HEAD');
+
+    const claimed = await pool.acquire(repo, 'Feature Alpha');
+    assert.equal(claimed.ok, true, JSON.stringify(claimed));
+    assert.equal(claimed.fromPool, true);
+    assert.equal(claimed.branch, 'luna/feature-alpha');
+    assert.equal(git(claimed.root, 'rev-parse', 'HEAD'), latestHead, 'warm worktree advances to latest HEAD');
+    assert.equal(git(claimed.root, 'rev-parse', '--abbrev-ref', 'HEAD'), 'luna/feature-alpha');
+    assert.deepEqual(pool.stats(repo), { size: 1, maxSize: 2 });
+
+    // Drain removes the remaining unused standby worktree cleanly.
+    const drained = await pool.drain(repo);
+    assert.equal(drained.ok, true, JSON.stringify(drained));
+    assert.equal(drained.removed, 1);
+    assert.deepEqual(pool.stats(repo), { size: 0, maxSize: 2 });
+
+    // Acquiring from an empty pool falls back transparently to addWorktree.
+    const fallback = await pool.acquire(repo, 'Fallback Beta');
+    assert.equal(fallback.ok, true, JSON.stringify(fallback));
+    assert.equal(fallback.fromPool, undefined);
+    assert.equal(fallback.branch, 'luna/fallback-beta');
+
+    assert.deepEqual(await removeWorktree(repo, claimed.root, PATIENT), { ok: true });
+    assert.deepEqual(await removeWorktree(repo, fallback.root, PATIENT), { ok: true });
+  } finally {
+    await pool.drain();
+    await cleanup();
+  }
+});
+
+test('createWorktreePool handles concurrent drain during warm and unlinks junction when acquire requests linkNodeModules: false', async () => {
+  const removed = [];
+  const unlinked = [];
+  let finishAdd;
+  const fakeAdd = async (repo, name, opts) => {
+    await new Promise((r) => {
+      finishAdd = r;
+    });
+    return {
+      ok: true,
+      root: path.resolve('/wt', name),
+      cwd: path.resolve('/wt', name),
+      branch: `luna/${name}`,
+      envCopied: 0,
+      ...(opts.linkNodeModules ? { nodeModulesLinked: true } : {}),
+    };
+  };
+  const fakeRemove = async (_repo, root) => {
+    removed.push(root);
+    return { ok: true };
+  };
+  const fakeRunGit = async (_cwd, args) => {
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { ok: true, stdout: `${path.resolve('/repo')}\n`, stderr: '' };
+    if (args[0] === 'rev-parse') return { ok: true, stdout: 'abc1234\n', stderr: '' };
+    return { ok: true, stdout: '', stderr: '' };
+  };
+  const fakeFs = { existsSync: () => true };
+
+  // 1. drain() while warm() is in flight discards the late worktree cleanly.
+  const pool = createWorktreePool({
+    maxSize: 2,
+    addWorktree: fakeAdd,
+    removeWorktree: fakeRemove,
+    unlinkDependencyLinks: (root) => {
+      unlinked.push(root);
+      return { ok: true, unlinked: [path.join(root, 'node_modules')] };
+    },
+    runGit: fakeRunGit,
+    copyEnvFiles: () => 0,
+    fsImpl: fakeFs,
+  });
+  const warming = pool.warm('/repo');
+  await new Promise((r) => setImmediate(r));
+  await pool.drain('/repo');
+  finishAdd();
+  const warmRes = await warming;
+  assert.deepEqual(warmRes, { ok: true, warmed: false, size: 0 });
+  assert.equal(removed.length, 1, 'late warm worktree discarded after drain');
+  assert.deepEqual(pool.stats('/repo'), { size: 0, maxSize: 2 });
+
+  // 2. Entry warmed with linkNodeModules: true has its junction unlinked when acquire asks for linkNodeModules: false.
+  const warm2 = pool.warm('/repo', { linkNodeModules: true });
+  await new Promise((r) => setImmediate(r));
+  finishAdd();
+  const w2 = await warm2;
+  assert.equal(w2.ok, true);
+  assert.equal(w2.nodeModulesLinked, true);
+
+  const claimed = await pool.acquire('/repo', 'plain-worker', { linkNodeModules: false });
+  assert.equal(claimed.ok, true);
+  assert.equal(claimed.fromPool, true);
+  assert.equal(claimed.nodeModulesLinked, undefined, 'junction stripped when caller requested linkNodeModules: false');
+  assert.deepEqual(unlinked, [w2.root]);
 });

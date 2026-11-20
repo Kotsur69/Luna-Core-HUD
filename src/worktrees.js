@@ -44,6 +44,14 @@ const path = require('path');
 const { plainFs } = require('./plainFs');
 const { execFile, exec } = require('child_process');
 const { withGitSlot, forgetPooledReads, laneOf, isShareable } = require('./gitpool');
+const { createVerifySemaphore, sharedVerifySemaphore, DEFAULT_VERIFY_CONCURRENCY } = require('./verifySemaphore');
+const {
+  checkMainNodeModules,
+  linkNodeModules,
+  createWorktreePool: createRawWorktreePool,
+  DEFAULT_WARM_POOL_SIZE,
+  MAX_WARM_POOL_SIZE,
+} = require('./worktreePool');
 
 const WORKTREE_DIR = '.luna-worktrees';
 const BRANCH_PREFIX = 'luna/';
@@ -284,15 +292,16 @@ function topLevelFailure(top) {
  *
  * @param {string} repoPath the project's folder
  * @param {unknown} name tab / branch name as typed
- * @param {{execImpl?: Function, fsImpl?: typeof fs, base?: string, branchPrefix?: string}} [deps]
+ * @param {{execImpl?: Function, fsImpl?: typeof fs, base?: string, branchPrefix?: string, linkNodeModules?: boolean}} [deps]
  *   base: commit sha to branch from instead of HEAD
  *   branchPrefix: 'luna/' (default), 'luna-free/' or 'luna-plan/' - anything else is ignored
+ *   linkNodeModules: opt-in junction to main's node_modules (validated non-empty before creation)
  * A failure that may clear up on its own (git hung, did not start, a lock)
  * carries `retryable: true`. A failure after git already created the folder
  * carries its `root` and `branch`, so the caller can clean it up.
- * @returns {Promise<{ok:true, cwd:string, root:string, branch:string, envCopied:number}
- *   | {ok:false, error:'badName'|'notRepo'|'noCommits'|'exists'|'gitFailed', detail?:string,
- *      retryable?:boolean, root?:string, branch?:string}>}
+ * @returns {Promise<{ok:true, cwd:string, root:string, branch:string, envCopied:number, nodeModulesLinked?:true}
+ *   | {ok:false, error:'badName'|'notRepo'|'noCommits'|'exists'|'emptyNodeModules'|'targetExists'|'linkFailed'|'gitFailed', detail?:string,
+ *      reason?:string, retryable?:boolean, root?:string, branch?:string}>}
  */
 async function addWorktree(repoPath, name, deps = {}) {
   const execImpl = deps.execImpl || execFile;
@@ -314,6 +323,16 @@ async function addWorktree(repoPath, name, deps = {}) {
   const target = worktreePathFor(root, slug);
   if (fsImpl.existsSync(target)) return { ok: false, error: 'exists', detail: target };
 
+  // When a caller opts into a node_modules junction, validate that the main
+  // checkout's node_modules is populated BEFORE creating the worktree or link.
+  const linkFs = deps.fsImpl || plainFs();
+  if (deps.linkNodeModules === true) {
+    const nmCheck = checkMainNodeModules(root, linkFs);
+    if (!nmCheck.ok) {
+      return { ok: false, error: 'emptyNodeModules', reason: nmCheck.reason, detail: nmCheck.detail };
+    }
+  }
+
   const branch = branchFor(slug, deps.branchPrefix);
   const base =typeof deps.base === 'string' && BASE_SHA_RE.test(deps.base) ? deps.base : 'HEAD';
   const add = await runGit(root, ['worktree', 'add', '-b', branch, target, base], execImpl, { timeoutMs: ADD_TIMEOUT_MS });
@@ -329,13 +348,22 @@ async function addWorktree(repoPath, name, deps = {}) {
     return fsImpl.existsSync(target) ? { ...failed, root: target, branch } : failed;
   }
 
+  let nodeModulesLinked = false;
+  if (deps.linkNodeModules === true) {
+    const linked = linkNodeModules(root, target, linkFs);
+    if (!linked.ok) {
+      return { ok: false, error: linked.error, detail: linked.detail, root: target, branch };
+    }
+    nodeModulesLinked = true;
+  }
+
   const envCopied = copyEnvFiles(root, target, fsImpl);
 
   const rel = path.relative(root, path.resolve(repoPath));
   const sub = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? path.join(target, rel) : target;
   const cwd = fsImpl.existsSync(sub) ? sub : target;
 
-  return { ok: true, cwd, root: target, branch, envCopied };
+  return { ok: true, cwd, root: target, branch, envCopied, ...(nodeModulesLinked ? { nodeModulesLinked: true } : {}) };
 }
 
 /**
@@ -759,6 +787,25 @@ async function updateLocalBase(repoPath, base, deps = {}) {
   return result({ updated: true, from, to, install });
 }
 
+/**
+ * Creates a bounded warm worktree pool pre-wired with worktrees.js helpers.
+ * @param {object} [opts]
+ */
+function createWorktreePool(opts = {}) {
+  return createRawWorktreePool({
+    addWorktree,
+    removeWorktree,
+    unlinkDependencyLinks,
+    runGit,
+    copyEnvFiles,
+    slugify,
+    branchFor,
+    gitError,
+    firstLine,
+    ...opts,
+  });
+}
+
 module.exports = {
   removeWorktree,
   unlinkDependencyLinks,
@@ -793,4 +840,12 @@ module.exports = {
   runGit,
   firstLine,
   gitError,
+  createVerifySemaphore,
+  sharedVerifySemaphore,
+  DEFAULT_VERIFY_CONCURRENCY,
+  checkMainNodeModules,
+  linkNodeModules,
+  createWorktreePool,
+  DEFAULT_WARM_POOL_SIZE,
+  MAX_WARM_POOL_SIZE,
 };

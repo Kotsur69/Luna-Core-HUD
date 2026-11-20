@@ -10,8 +10,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
-const { createOrchestra, briefText } = require('../src/orchestra.js');
+const { createOrchestra, briefText, DEFAULT_VERIFY_CONCURRENCY } = require('../src/orchestra.js');
 const { withTaskBrief, isClaudeCommand } = require('../src/launch.js');
+const { createVerifySemaphore } = require('../src/worktrees.js');
+const { runSelfCheck } = require('../src/orchestraSelfCheck.js');
 
 const todo = (at, text) => ({ at, text, done: false });
 const pkg = (id, todoAts, extra = {}) => ({
@@ -170,4 +172,244 @@ test('isClaudeCommand recognises the CLI under its shims only', () => {
   assert.equal(isClaudeCommand('"C:\\bin\\claude.exe" --x'), true);
   assert.equal(isClaudeCommand('claude-router'), false);
   assert.equal(isClaudeCommand(''), false);
+});
+
+// ---- post-DONE verification semaphore & warm worktree pool -------------------
+
+const turnDone = (id) =>
+  JSON.stringify({ type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: `LUNA_DONE ${id}` }] } });
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('parallel worktrees serialize post-DONE verification via bounded semaphore (default concurrency 1)', async () => {
+  assert.equal(DEFAULT_VERIFY_CONCURRENCY, 1);
+  let active = 0;
+  let maxActive = 0;
+  const started = [];
+  const gates = new Map();
+  const alive = new Set();
+  let seq = 0;
+
+  const orch = createOrchestra({
+    now: () => 1700000000000,
+    readTodos: () => [todo(1, 'one'), todo(2, 'two')],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({ ok: true, raw: { packages: [pkg('a', [1]), pkg('b', [2])], notes: '' }, costUsd: 0 }),
+    addWorktree: async (_repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+    headSha: async () => 'base123',
+    writeBrief: () => true,
+    createSession: () => {
+      seq += 1;
+      const id = `s${seq}`;
+      alive.add(id);
+      return { id };
+    },
+    sessionAlive: (id) => alive.has(id),
+    closeSession: (id) => alive.delete(id),
+    finishPackage: async (p) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      started.push(p.id);
+      await new Promise((resolve) => gates.set(p.id, resolve));
+      active -= 1;
+      return { ok: true, headSha: `head-${p.id}`, files: [] };
+    },
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+
+  const { plan } = await orch.makePlan({ projectId: 'p1', repoPath: '/repo', profileId: 'claude-cloud', env: {} });
+  await orch.launch({ planId: plan.id });
+
+  // Both parallel workers finish at the exact same time.
+  orch.onTurnEnd('s1', turnDone('a'));
+  orch.onTurnEnd('s2', turnDone('b'));
+  await tick();
+  await tick();
+
+  assert.deepEqual(started, ['a'], 'second worktree waits behind the first');
+  assert.deepEqual(orch.verifyStats(), { active: 1, queued: 1, maxConcurrency: 1 });
+  const byId = (id) => orch.view().packages.find((p) => p.id === id);
+  assert.equal(byId('a').state, 'finishing');
+  assert.equal(byId('b').state, 'finishing');
+  assert.equal(byId('b').verifyPhase, 'queued');
+
+  gates.get('a')();
+  for (let i = 0; i < 6; i += 1) await tick();
+  assert.deepEqual(started, ['a', 'b'], 'b starts once a releases the semaphore');
+  assert.equal(byId('a').state, 'pushed');
+  assert.equal(byId('b').verifyPhase, 'running');
+
+  gates.get('b')();
+  for (let i = 0; i < 6; i += 1) await tick();
+  assert.equal(maxActive, 1);
+  assert.equal(byId('b').state, 'pushed');
+  assert.deepEqual(orch.verifyStats(), { active: 0, queued: 0, maxConcurrency: 1 });
+});
+
+test('verifyConcurrency bounds parallel post-DONE verifications and kill skips queued verifies', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const started = [];
+  const gates = new Map();
+  const alive = new Set();
+  let seq = 0;
+
+  const orch = createOrchestra({
+    now: () => 1700000000000,
+    verifyConcurrency: 2,
+    readTodos: () => [todo(1, 'one'), todo(2, 'two'), todo(3, 'three')],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({
+      ok: true,
+      raw: { packages: [pkg('a', [1]), pkg('b', [2]), pkg('c', [3])], notes: '' },
+      costUsd: 0,
+    }),
+    addWorktree: async (_repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+    headSha: async () => 'base123',
+    writeBrief: () => true,
+    createSession: () => {
+      seq += 1;
+      const id = `s${seq}`;
+      alive.add(id);
+      return { id };
+    },
+    sessionAlive: (id) => alive.has(id),
+    closeSession: (id) => alive.delete(id),
+    finishPackage: async (p) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      started.push(p.id);
+      await new Promise((resolve) => gates.set(p.id, resolve));
+      active -= 1;
+      return { ok: true, headSha: `head-${p.id}`, files: [] };
+    },
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+
+  const { plan } = await orch.makePlan({ projectId: 'p1', repoPath: '/repo', profileId: 'claude-cloud', env: {} });
+  await orch.launch({ planId: plan.id });
+
+  orch.onTurnEnd('s1', turnDone('a'));
+  orch.onTurnEnd('s2', turnDone('b'));
+  orch.onTurnEnd('s3', turnDone('c'));
+  await tick();
+  await tick();
+
+  assert.deepEqual(started, ['a', 'b']);
+  assert.deepEqual(orch.verifyStats(), { active: 2, queued: 1, maxConcurrency: 2 });
+
+  // Killing the run while c waits in the queue skips c when a finishes.
+  orch.kill();
+  gates.get('a')();
+  gates.get('b')();
+  for (let i = 0; i < 6; i += 1) await tick();
+
+  assert.deepEqual(started, ['a', 'b'], 'queued verify for c never ran after kill');
+  assert.equal(maxActive, 2);
+  assert.equal(orch.view().packages.find((p) => p.id === 'c').state, 'killed');
+  assert.deepEqual(orch.verifyStats(), { active: 0, queued: 0, maxConcurrency: 2 });
+});
+
+test('shared verification semaphore serializes orchestra post-DONE verify with orchestraSelfCheck.runSelfCheck', async () => {
+  const sharedSem = createVerifySemaphore({ maxConcurrency: 1 });
+  let running = 0;
+  let peak = 0;
+  let releaseWorker;
+  const order = [];
+  const alive = new Set(['s1']);
+
+  const orch = createOrchestra({
+    now: () => 1700000000000,
+    verifySemaphore: sharedSem,
+    readTodos: () => [todo(1, 'one')],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({ ok: true, raw: { packages: [pkg('a', [1])], notes: '' }, costUsd: 0 }),
+    addWorktree: async (_repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+    headSha: async () => 'base123',
+    writeBrief: () => true,
+    createSession: () => ({ id: 's1' }),
+    sessionAlive: (id) => alive.has(id),
+    finishPackage: async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      order.push('worker:start');
+      await new Promise((r) => {
+        releaseWorker = r;
+      });
+      order.push('worker:end');
+      running -= 1;
+      return { ok: true, headSha: 'head-a', files: [] };
+    },
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+
+  const { plan } = await orch.makePlan({ projectId: 'p1', repoPath: '/repo', profileId: 'claude-cloud', env: {} });
+  await orch.launch({ planId: plan.id });
+
+  orch.onTurnEnd('s1', turnDone('a'));
+  await tick();
+  await tick();
+
+  const selfCheckPromise = runSelfCheck(
+    { root: __dirname, baseSha: null, checkCommand: 'npm test' },
+    {
+      verifySemaphore: sharedSem,
+      verifyImpl: async () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        order.push('selfcheck:start');
+        await tick();
+        order.push('selfcheck:end');
+        running -= 1;
+        return { ok: true, output: '' };
+      },
+    },
+  );
+  await tick();
+  assert.deepEqual(order, ['worker:start'], 'self-check waits while worker verification holds the shared semaphore');
+  assert.deepEqual(sharedSem.stats(), { active: 1, queued: 1, maxConcurrency: 1 });
+
+  releaseWorker();
+  const scRes = await selfCheckPromise;
+  for (let i = 0; i < 6; i += 1) await tick();
+  assert.equal(scRes.tests, 'ok');
+  assert.equal(peak, 1);
+  assert.deepEqual(order, ['worker:start', 'worker:end', 'selfcheck:start', 'selfcheck:end']);
+  assert.deepEqual(sharedSem.stats(), { active: 0, queued: 0, maxConcurrency: 1 });
+});
+
+test('createOrchestra claims pre-warmed worktrees when deps.worktreePool is provided', async () => {
+  const acquired = [];
+  let addCalls = 0;
+  let seq = 0;
+  const orch = createOrchestra({
+    now: () => 1700000000000,
+    readTodos: () => [todo(1, 'one')],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({ ok: true, raw: { packages: [pkg('a', [1])], notes: '' }, costUsd: 0 }),
+    addWorktree: async () => {
+      addCalls += 1;
+      return { ok: true, root: '/wt/fallback', cwd: '/wt/fallback', branch: 'luna/fallback' };
+    },
+    worktreePool: {
+      acquire: async (repo, name, opts) => {
+        acquired.push({ repo, name, opts });
+        return { ok: true, root: `/wt/warm-${name}`, cwd: `/wt/warm-${name}`, branch: `luna/${name}`, fromPool: true };
+      },
+    },
+    writeBrief: () => true,
+    createSession: () => ({ id: `s${++seq}` }),
+  });
+
+  const { plan } = await orch.makePlan({ projectId: 'p1', repoPath: '/repo', profileId: 'claude-cloud', env: {} });
+  const res = await orch.launch({ planId: plan.id });
+  assert.equal(res.ok, true);
+  assert.equal(addCalls, 0, 'pool.acquire used instead of cold addWorktree');
+  assert.equal(acquired.length, 1);
+  assert.equal(acquired[0].repo, '/repo');
+  assert.match(acquired[0].name, /^a-/);
+  assert.equal(acquired[0].opts.linkNodeModules, false, 'God Mode worktrees use own installDeps, never a junction');
 });

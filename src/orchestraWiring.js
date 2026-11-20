@@ -39,6 +39,7 @@ const { runPlanner } = require('./orchestraPlan');
 const { loadProtected } = require('./orchestraHybridGuard');
 const { finishPackage, headSha, runVerify } = require('./orchestraFinish');
 const { sharedVerifyQueue } = require('./verifyQueue');
+const { sharedVerifySemaphore } = require('./worktrees');
 const orchestraIntegrate = require('./orchestraIntegrate');
 const orchestraDeps = require('./orchestraDeps');
 const { renderRunReportHtml, repoPathOf } = require('./orchestraReport');
@@ -235,7 +236,9 @@ function sessionDeps(ctx) {
     checkDeps: (root) => orchestraDeps.checkNodeModules(root),
     depsBusy: (root) => orchestraDeps.installInFlight(root),
     // Slice 4 supervisor. Package verifies of every project's run share one
-    // serial queue (verifyQueue.js); hooks feed the board's "waiting to verify".
+    // serial queue (verifyQueue.js) and the process-wide verification semaphore
+    // (shared with orchestraSelfCheck.js); hooks feed the board's "waiting to verify".
+    verifySemaphore: sharedVerifySemaphore(),
     finishPackage: (pkg, hooks) =>
       finishPackage(pkg, { verifyImpl: (command, cwd) => sharedVerifyQueue().run(command, cwd, hooks || {}) }),
     headSha,

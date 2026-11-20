@@ -30,7 +30,7 @@
 const fsDefault = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const { runGit, firstLine } = require('./worktrees');
+const { runGit, firstLine, sharedVerifySemaphore } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
 
 const TAIL_LINES = 40;
@@ -104,11 +104,13 @@ const lines = (text) =>
 
 // ---- tests ------------------------------------------------------------------
 
-async function runTests(root, checkCommand, verifyImpl) {
+async function runTests(root, checkCommand, verifyImpl, verifySemaphore = null, isCancelled = null) {
   const cmd = typeof checkCommand === 'string' ? checkCommand.trim() : '';
   if (!cmd) return { state: 'skipped', output: '' };
+  const execVerify = () => verifyImpl(cmd, root);
   try {
-    const res = await verifyImpl(cmd, root);
+    const hooks = typeof isCancelled === 'function' ? { isCancelled } : undefined;
+    const res = verifySemaphore && typeof verifySemaphore.run === 'function' ? await verifySemaphore.run(execVerify, hooks) : await execVerify();
     return { state: res && res.ok ? 'ok' : 'failed', output: String((res && res.output) || '') };
   } catch (err) {
     return { state: 'failed', output: `check command threw: ${errText(err)}` };
@@ -315,7 +317,8 @@ function dedupe(actions) {
 
 /**
  * @param {{root:string, baseSha:string|null, checkCommand:string}} args
- * @param {{execImpl?:Function, verifyImpl?:Function, fs?:object, sleep?:Function, smokeRetryDelayMs?:number}} [io]
+ * @param {{execImpl?:Function, verifyImpl?:Function, verifySemaphore?:object|null, isCancelled?:()=>boolean,
+ *   fs?:object, sleep?:Function, smokeRetryDelayMs?:number}} [io]
  * @returns {Promise<{tests:string, syntax:string, smoke:string, smokeRetried?:true,
  *   manualActions:Array<{kind:string, what:string, from?:string}>, tail:string}>}
  */
@@ -323,6 +326,7 @@ async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
   const execImpl = io.execImpl || execFile;
   const verifyImpl = io.verifyImpl || runVerify;
   const fsImpl = io.fs || fsDefault;
+  const verifySemaphore = io.verifySemaphore === null ? null : io.verifySemaphore || sharedVerifySemaphore();
   let rootOk = false;
   try {
     rootOk = typeof root === 'string' && fsImpl.statSync(root).isDirectory();
@@ -333,7 +337,7 @@ async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
     return { tests: 'failed', syntax: 'skipped', smoke: 'skipped', manualActions: [], tail: `working folder missing: ${root || ''}` };
   }
 
-  const tests = await runTests(root, checkCommand, verifyImpl);
+  const tests = await runTests(root, checkCommand, verifyImpl, verifySemaphore, io.isCancelled);
   const base = typeof baseSha === 'string' && SHA_RE.test(baseSha) ? baseSha : null;
   const changed = base ? await changedFiles(root, base, 'AM', execImpl) : null;
   const syntax = changed ? await runSyntax(root, changed, execImpl) : { state: 'skipped', output: '' };
