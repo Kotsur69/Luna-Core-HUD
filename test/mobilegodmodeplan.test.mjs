@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { godmodePlansFrom, snapRows } from '../mobile/src/snapmodel.js';
-import { planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload, INTEGRATION_MODES, WORKER_MODELS } from '../mobile/src/godmodeplanmodel.js';
+import { planDraft, togglePackage, poolLine, packageModelLine, needsMergeConfirm, launchPayload, discardPayload, INTEGRATION_MODES, WORKER_MODELS } from '../mobile/src/godmodeplanmodel.js';
 
 const require = createRequire(import.meta.url);
 const { withLive, parseGodmodePeer } = require('../src/godmodesnapshot.js');
@@ -139,4 +139,28 @@ test('a live run carries its projectId for Kill / Retry / Finish; an off-shape o
   assert.equal('projectId' in snap.lives[1], false);
   const peer = parseGodmodePeer({ machine: 'KT-PC', data: snap }, NOW);
   assert.equal(peer.lives[0].projectId, 'p-luna');
+});
+
+test('a pool plan shows its Workers pool and pool model names per package', () => {
+  const pool = [{ model: 'opus', effort: 'plan' }, { model: 'sonnet', effort: 'plan' }, { model: 'agy-argon', effort: 'plan' }];
+  const rows = snapRows([row('KT-PC', { plans: [{ ...readyPlan, modelPool: pool, packages: [...readyPlan.packages, { id: 'c', title: 'Third', deps: [], model: 'agy-argon' }] }] })], NOW);
+  const [plan] = godmodePlansFrom(rows, NOW);
+  assert.equal(poolLine(plan), 'Opus + Sonnet + Argon (agy)');
+  assert.deepEqual(plan.packages.map((p) => packageModelLine(plan, p)), ['Sonnet', 'Opus', 'Argon (agy)']);
+});
+
+test('a pool with a free profile names it for a free package', () => {
+  const plan = { ...readyPlan, modelPool: [{ model: 'opus', effort: 'plan' }, { model: 'free:coder', effort: 'plan' }] };
+  assert.equal(poolLine(plan), 'Opus + coder');
+  assert.equal(packageModelLine(plan, { id: 'x', model: 'free' }), 'coder');
+});
+
+test('a plan without a pool has no Workers line and keeps raw package models', () => {
+  const rows = snapRows([row('KT-PC', { plans: [readyPlan] })], NOW);
+  const [plan] = godmodePlansFrom(rows, NOW);
+  assert.equal(poolLine(plan), null);
+  assert.equal(poolLine({ ...readyPlan, modelPool: [{ model: 'opus', effort: 'plan' }] }), null);
+  assert.equal(poolLine(null), null);
+  assert.deepEqual(plan.packages.map((p) => packageModelLine(plan, p)), ['sonnet', 'opus']);
+  assert.equal(packageModelLine(plan, { id: 'y' }), '');
 });
