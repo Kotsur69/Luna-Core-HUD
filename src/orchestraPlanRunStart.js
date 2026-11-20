@@ -268,6 +268,7 @@ function planRunState(a) {
     started: false,
     killed: false,
     settled: false,
+    pauses: {},
     pausedUntil: null,
     pauseStartedAt: null,
     hold: null,
