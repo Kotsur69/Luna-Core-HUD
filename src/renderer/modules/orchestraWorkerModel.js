@@ -18,8 +18,9 @@
 import { t } from './util.js';
 import { normalizeWorkerModel, badgeModelOf, modelName, runWorkerModel, agyBadgeText } from './orchestraWorkerModelRules.js';
 import { agyChoiceName, refreshAgyModels } from './agyModelChoices.js';
-import { loadPool, chosenPool, poolPickerView, poolText, agyDefaultVariant } from './orchestraPoolPicker.js';
-import { isPoolRun, singleClaudeModel, poolWorkers, poolKeys, strongestKey, poolModelName, poolKeyOf, runsOnOf, POOL_FREE_KEY } from '../../workerPool.js';
+import { loadPool, chosenPool, poolPickerView, poolText, agyEntryModel } from './orchestraPoolPicker.js';
+import { isPoolRun, singleClaudeModel, poolWorkers, poolKeys, strongestKey, poolModelName, poolKeyOf, runsOnOf, poolEffortLevel, POOL_FREE_KEY, POOL_EFFORT_PLAN } from '../../workerPool.js';
+import { poolEntryOfKey, packagePoolEffort } from '../../poolEffort.js';
 
 /** The saved single worker model (the Settings select), or null before it was read. */
 let picked = null;
@@ -49,15 +50,15 @@ export const takesWorkerModel = (plan) => Boolean(plan) && !plan.planRun;
 
 /**
  * The single worker-model value a pool on screen stands for: 'plan' for a
- * pool run, the model of a one-model pool (an agy family's live default
- * variant), null for none or a lone free profile ("Free only").
+ * pool run, the model of a one-model pool (an agy family's chosen live
+ * variant, else its default one), null for none or a lone free profile ("Free only").
  */
 function poolWorkerModel(list) {
   if (isPoolRun(list)) return 'plan';
   if (list.length !== 1) return null;
   const key = poolKeyOf(list[0].model);
   if (runsOnOf(key) === 'claude') return key;
-  if (runsOnOf(key) === 'agy') return agyDefaultVariant(key) || 'agy';
+  if (runsOnOf(key) === 'agy') return agyEntryModel(list[0]) || 'agy';
   return null;
 }
 
@@ -80,8 +81,9 @@ export function chosenRunWorkers(plan, workers) {
 
 /**
  * Approve's model fields: nothing ticked (or the Antigravity mode) = the
- * Settings model, one Claude model = that model - both exactly the payload
- * of before the pool - anything else the pool itself.
+ * Settings model, one Claude model "Per plan" = that model - both exactly
+ * the payload of before the pool - anything else the pool itself (a lone
+ * Claude model with a level becomes the run's effort in main).
  * @param {object} plan the plan view
  * @param {string} workers the Workers select
  * @returns {{workerModel:string}|{modelPool:{model:string, effort:string}[]}}
@@ -90,7 +92,7 @@ export function launchModelFields(plan, workers) {
   const list = chosenPool();
   if (workers === 'agy' || !list.length) return { workerModel: runWorkerModel(plan, picked) };
   const single = singleClaudeModel(list);
-  return single ? { workerModel: single } : { modelPool: list };
+  return single && list[0].effort === POOL_EFFORT_PLAN ? { workerModel: single } : { modelPool: list };
 }
 
 /** 'Opus' / 'Sonnet' / 'Fable', an agy model's live name, or "Planner's pick" for 'plan'. */
@@ -103,7 +105,33 @@ export function runModelLabel(plan) {
   if (!takesWorkerModel(plan)) return String((plan && plan.workerModel) || '');
   if (frozen(plan) && Array.isArray(plan.modelPool) && plan.modelPool.length) return poolText(plan.modelPool);
   if (!frozen(plan) && isPoolRun(chosenPool())) return poolText(chosenPool());
+  // One ticked model with an effort: 'Opus - xhigh'.
+  const list = frozen(plan) ? [] : chosenPool();
+  if (list.length === 1 && poolEffortLevel(list[0])) return poolText(list);
   return workerModelLabel(chosenWorkerModel(plan));
+}
+
+/** A pool model's name with a level ('Opus - xhigh'), the name alone without one. */
+const withLevel = (key, level) => {
+  const name = key === POOL_FREE_KEY ? t('orch.pkgModel.free') : poolModelName(key);
+  return name && level ? `${name} - ${level}` : name;
+};
+
+/**
+ * A pool package's badge when its model's pool entry fixes an effort: the
+ * run's frozen pool once started, the pool on screen before (main applies
+ * it at Approve). Null for "Per plan", an override or no pool run.
+ */
+function effortBadge(pkg, plan) {
+  if (!pkg || pkg.modelOverride || typeof pkg.poolModel !== 'string') return null;
+  if (frozen(plan)) {
+    const level = packagePoolEffort(plan.modelPool, pkg);
+    return level ? withLevel(pkg.poolModel, level) : null;
+  }
+  const list = chosenPool();
+  if (!isPoolRun(list)) return null;
+  const level = poolEffortLevel(poolEntryOfKey(list, pkg.poolModel));
+  return level ? withLevel(pkg.poolModel, level) : null;
 }
 
 /**
@@ -118,7 +146,7 @@ function movedBadge(pkg, plan) {
   const keys = poolKeys(list);
   if (keys.includes(pkg.poolModel)) return null;
   const to = strongestKey(keys);
-  return to === POOL_FREE_KEY ? t('orch.pkgModel.free') : poolModelName(to);
+  return withLevel(to, poolEffortLevel(poolEntryOfKey(list, to)));
 }
 
 /**
@@ -132,6 +160,9 @@ export function packageModelBadge(pkg, plan, workers) {
   if (!takesWorkerModel(plan)) return pkg && pkg.model ? String(pkg.model) : null;
   const moved = workers === 'free' ? null : movedBadge(pkg, plan);
   if (moved) return moved;
+  // 'Argon (agy) - medium' / 'Opus - xhigh': the effort the pool fixes for its model.
+  const fixed = workers === 'free' ? null : effortBadge(pkg, plan);
+  if (fixed) return fixed;
   const model = badgeModelOf(pkg, chosenWorkerModel(plan), workers);
   if (!model) return null;
   if (model === 'free') return t('orch.pkgModel.free');

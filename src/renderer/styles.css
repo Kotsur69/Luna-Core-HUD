@@ -5380,6 +5380,11 @@ body.is-arranging .panel__grip { cursor: grabbing; }
 .orchestra__pool-row { display: grid; grid-template-columns: auto 1fr; gap: 0 var(--space-4); align-items: baseline; color: var(--text); cursor: pointer; }
 .orchestra__pool-row.is-off { color: var(--text-dim); cursor: not-allowed; }
 .orchestra__pool-hint { grid-column: 2; color: var(--text-dim); }
+/* A ticked row's effort (modules/orchestraPoolPicker.js): the select, or '-' for a free profile. */
+.orchestra__pool-item { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); }
+.orchestra__pool-item > .orchestra__pool-row { flex: 1 1 auto; min-width: 0; }
+.orchestra__pool-effort { flex: none; width: auto; font-size: var(--fs-xs); }
+.orchestra__pool-effort.is-none { color: var(--text-dim); padding-inline: var(--space-3); }
 .orchestra__time { font: inherit; font-size: var(--fs-xs); }
 .orchestra__link { font-size: var(--fs-xs); color: var(--neon-cyan); word-break: break-all; }
 .orchestra__allowed { font-size: var(--fs-xs); color: var(--text-dim); word-break: break-word; }

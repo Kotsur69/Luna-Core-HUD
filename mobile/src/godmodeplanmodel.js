@@ -14,7 +14,8 @@ export const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 /** The mode a new draft starts on: no merge without Mati picking it. */
 export const DEFAULT_INTEGRATION = 'pr';
 import { WORKER_MODELS, WORKER_MODEL_NAMES, DEFAULT_WORKER_MODEL, AGY_MODEL, isWorkerModel, agyModelIdOf } from '../../src/workerModels.js';
-import { normalizePool, isPoolRun, poolLabel, poolModelName, poolFreeProfileId, POOL_FREE_KEY } from '../../src/workerPool.js';
+import { normalizePool, isPoolRun, poolLabel, poolModelName, poolFreeProfileId, poolEffortLevel, POOL_FREE_KEY } from '../../src/workerPool.js';
+import { poolEntryOfKey } from '../../src/poolEffort.js';
 
 /**
  * Every worker model the PC accepts, their product names and the PC's default
@@ -121,8 +122,10 @@ export function poolLine(plan) {
 
 /**
  * A package's model as its plan card shows it. A pool plan names the pool
- * model ('Argon (agy)'; the planner key 'free' = the pool's free profile);
- * a plan without a pool keeps the raw value it always showed.
+ * model ('Argon (agy)'; the planner key 'free' = the pool's free profile),
+ * with the effort its pool entry fixes ('Opus - xhigh'; an agy variant the
+ * pool chose as 'Argon (agy) - medium'); a plan without a pool keeps the
+ * raw value it always showed.
  * @returns {string}
  */
 export function packageModelLine(plan, pkg) {
@@ -130,5 +133,9 @@ export function packageModelLine(plan, pkg) {
   const pool = planPool(plan);
   if (!pool || !model) return model;
   if (model === POOL_FREE_KEY) return poolFreeProfileId(pool) || model;
-  return poolModelName(model) || model;
+  const variantOf = pool.find((e) => e.effort === model);
+  if (variantOf) return `${poolModelName(variantOf.model)} - ${poolEffortLevel(variantOf)}`;
+  const name = poolModelName(model) || model;
+  const level = poolEffortLevel(poolEntryOfKey(pool, model));
+  return level ? `${name} - ${level}` : name;
 }

@@ -256,6 +256,19 @@ test('at launch: a variant that left the list runs on the family\'s live variant
   assert.ok(log.lines.some((l) => /package a: agy variant agy:gemini-4-argon-high is not in the live/.test(l)));
 });
 
+test('the run report names each pool model with its fixed effort', () => {
+  const view = {
+    modelPool: [e('opus', 'xhigh'), e('agy-argon', 'agy:gemini-4-argon-medium'), e('sonnet')],
+    packages: [
+      { id: 'a', poolModel: 'opus', model: 'opus', modelReason: 'hard' },
+      { id: 'b', poolModel: 'agy-argon', model: 'agy:gemini-4-argon-medium', modelReason: 'self-contained' },
+      { id: 'c', poolModel: 'sonnet', model: 'sonnet', modelReason: 'copy' },
+    ],
+  };
+  assert.deepEqual(rules.poolReportRows(view).map((r) => r[1]), ['Opus - xhigh', 'Argon (agy) - medium', 'Sonnet']);
+  assert.ok(rules.poolReportLines(view).includes('- Pool: Opus - xhigh + Argon (agy) - medium + Sonnet'));
+});
+
 // ---- the planner prompt ------------------------------------------------------------------
 
 test('planner prompt: lists each fixed effort; all "Per plan" keeps the pool prompt as it was', () => {
