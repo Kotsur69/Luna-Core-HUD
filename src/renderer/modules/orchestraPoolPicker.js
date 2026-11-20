@@ -113,6 +113,9 @@ const variantsOf = (model) => {
   return hit ? hit.variants : [];
 };
 
+/** The live variants of an agy family for other pickers (the Approve board's per-package pick). */
+export const agyVariantOptions = (model) => variantsOf(model);
+
 /** The row specs of the menu, in menu order. */
 function menuRows(current) {
   const ticked = (model) => current.some((e) => e.model === model);

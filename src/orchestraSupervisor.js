@@ -34,6 +34,7 @@ const { normalizePostMerge, normalizeSha } = require('./orchestraPostMergeState'
 const { normalizeStoredPlanRunFlag, normalizeStoredPlanRun } = require('./orchestraPlanRunView');
 const { normalizeStoredGuard } = require('./orchestraHybridGuard');
 const { normalizeStoredWeakGuard } = require('./orchestraWeakGuard');
+const { normalizeStoredPick } = require('./orchestraPackageModel');
 const { storedWorkers } = require('./orchestraWorkers');
 const { normalizeStoredHybrid, normalizeStoredProfileId } = require('./orchestraHybrid');
 const { normalizeStoredFreeReview } = require('./orchestraFreeReview');
@@ -835,6 +836,8 @@ function normalizePackage(raw) {
     ...(normalizeStoredGuard(raw.hybridGuard) ? { hybridGuard: normalizeStoredGuard(raw.hybridGuard) } : {}),
     // Weak-model guard (src/orchestraWeakGuard.js): why a Hydrogen package moved up.
     ...(normalizeStoredWeakGuard(raw.weakGuard) ? { weakGuard: normalizeStoredWeakGuard(raw.weakGuard) } : {}),
+    // The model + effort Mati picked for this package on Approve (src/orchestraPackageModel.js).
+    ...(normalizeStoredPick(raw.modelPick) ? { modelPick: normalizeStoredPick(raw.modelPick) } : {}),
     // A "Workers" pool run (src/orchestraPool.js): the ticked model, the planner's reason, the moved-from pick.
     ...(isPoolKey(raw.poolModel)
       ? { poolModel: raw.poolModel, modelReason: str(raw.modelReason, MAX_POOL_REASON_CHARS), poolFrom: strOrNull(raw.poolFrom, MAX_MODEL_CHARS) }

@@ -91,6 +91,8 @@ const { createRescueWiring } = require('./orchestraRescueWiring');
 const rescueRules = require('./orchestraRescue');
 // Per-kind parallel caps of a mixed pool run (agy counted over every run).
 const kindCapRules = require('./orchestraKindCaps');
+// A package's model + effort picked on the Approve board (pool runs).
+const packageModelRules = require('./orchestraPackageModel');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -1114,6 +1116,8 @@ function createOrchestra(deps) {
         hybridGuard: p.hybridGuard || null,
         // Weak-model guard: why a package planned on the easiest agy tier moved up (none = it did not).
         ...(p.weakGuard ? { weakGuard: p.weakGuard } : {}),
+        // The model + effort Mati picked on Approve (none = the planner's / pool's).
+        ...(p.modelPick ? { modelPick: p.modelPick } : {}),
         // F6c/F6d: free worker, review, hand-overs, free wait (null outside hybrid runs).
         hybrid: hybridRun.view(p),
         effort: p.effortOverride || p.effort || null,
@@ -2392,6 +2396,32 @@ function createOrchestra(deps) {
    *   Face ID-signed godmode.launch IS the confirmation), so the native
    *   dialog is skipped. orchestra:launch (renderer IPC) never passes it.
    */
+  /** The worker effort a picked agy family's variant aims at (as the pool wiring's effortOf). */
+  const pickEffortOf = (p) => normalizeEffort(workerSettings().effort) || normalizeEffort(p.effort) || DEFAULT_EFFORT;
+
+  /**
+   * Approve's per-package model picks (o.packageModels), checked in main:
+   * only before the start, only for a pool run, each one within the ticked
+   * pool plus Opus (src/orchestraPackageModel.js). An agy pick is checked
+   * against the live `agy models` list.
+   * @returns {Promise<{ok:true, picks:object|null, agyList:object[]}|{ok:false, error:string}>}
+   */
+  async function checkedPackagePicks(o, poolChoice, planAtApprove) {
+    if (o.packageModels === undefined || o.packageModels === null) return { ok: true, picks: null, agyList: [] };
+    if (plan.started || plan.scheduledAt || plan.planRun || poolChoice.kind !== 'pool') return { ok: false, error: 'badPackageModel' };
+    let agyList = [];
+    if (packageModelRules.picksNeedAgy(o.packageModels)) {
+      if (!deps.agyModels) return { ok: false, error: 'badPackageModel' };
+      await deps.agyModels.ensure();
+      if (plan !== planAtApprove || plan.started || plan.killed || isBusy() || allPaused() || plan.hold) return { ok: false, error: 'busy' };
+      agyList = deps.agyModels.list();
+    }
+    const checked = packageModelRules.checkPackagePicks(o.packageModels, { packages: poolChoice.packages, pool: poolChoice.pool, agyList });
+    if (!checked.ok) return checked;
+    if (Object.keys(checked.picks).length) log(`[orchestra] Approve: per-package models ${Object.entries(checked.picks).map(([id, v]) => `${id}=${v.model}/${v.effort}`).join(', ')}`);
+    return { ok: true, picks: checked.picks, agyList };
+  }
+
   async function launch(payload, trusted = {}) {
     const o = payload && typeof payload === 'object' ? payload : {};
     const mergeConfirmed = Boolean(trusted) && trusted.mergeConfirmed === true;
@@ -2451,6 +2481,15 @@ function createOrchestra(deps) {
       return { ok: false, error: 'busy' };
     }
     if (poolChoice.kind === 'error') return { ok: false, error: poolChoice.error };
+    // Awaited only when picks were sent: today's Approve keeps its synchronous
+    // start, so a Kill right after Approve still finds the run starting.
+    const sentPicks = o.packageModels !== undefined && o.packageModels !== null;
+    const packagePicks = sentPicks ? await checkedPackagePicks(o, poolChoice, planAtApprove) : { ok: true, picks: null, agyList: [] };
+    if (!packagePicks.ok) return packagePicks;
+    // The await let other calls in: a replaced, started or killed plan is not this Approve's.
+    if (sentPicks && (plan !== planAtApprove || plan.started || plan.killed || isBusy() || allPaused() || plan.hold)) {
+      return { ok: false, error: 'busy' };
+    }
     const workers = poolChoice.workers || approved;
     // The run model Approve asks for: a pool run's 'plan', a one-model pool's value, else the select's.
     const askedModel = poolChoice.workerModel || o.workerModel;
@@ -2473,7 +2512,11 @@ function createOrchestra(deps) {
       hasNextWorkers = true;
       nextWorkers = workers === 'claude' ? undefined : workers;
       const sourcePackages = applyPromptEdits(poolChoice.packages || plan.packages);
-      stagedPackages = sourcePackages.map((p) => ({ ...p }));
+      // Mati's per-package picks from the Approve board become the planned models.
+      const picked = packagePicks.picks
+        ? packageModelRules.applyPackagePicks(sourcePackages, packagePicks.picks, { agyList: packagePicks.agyList, effortOf: pickEffortOf })
+        : sourcePackages;
+      stagedPackages = picked.map((p) => ({ ...p }));
       const staged = { ...plan, packages: stagedPackages };
       if (nextWorkers === undefined) delete staged.workers;
       else staged.workers = nextWorkers;

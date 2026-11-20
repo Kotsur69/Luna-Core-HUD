@@ -311,3 +311,86 @@ test('regression: an Opus-only run never runs the weak guard (no pool)', async (
   const a = s.view('a');
   assert.deepEqual([a.model, a.weakGuard, a.rescues], ['opus', undefined, undefined]);
 });
+
+// ---- per-package model on Approve -------------------------------------------------------
+
+const POOL3 = [e('sonnet'), e('agy-argon'), e('free:freellm-chain')];
+const approveWith = async (s, packageModels, pool = POOL3, workers = 'hybrid') =>
+  s.orch.launch({ planId: s.planId, integration: 'branches', workers, modelPool: pool, packageModels });
+
+test('Approve pick: a package moves to another ticked model + effort (an agy variant), saved before launch', async () => {
+  const s = await planned({ pool: POOL3, packages: [pkg('a', 'sonnet', { at: 1 }), pkg('b', 'sonnet', { at: 2 })] });
+  const res = await approveWith(s, { a: { model: 'agy-argon', effort: 'agy:gemini-4-argon-high' } });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await s.flush();
+  const a = s.view('a');
+  assert.deepEqual([a.poolModel, a.model, a.modelPick], ['agy-argon', 'agy:gemini-4-argon-high', { model: 'agy-argon', effort: 'agy:gemini-4-argon-high' }]);
+  assert.equal(s.view('b').model, 'sonnet', 'a package without a pick keeps the planner\'s model');
+  const tab = s.log.sessions.find((x) => x.profileId === 'agy-profile');
+  assert.ok(tab, 'the picked package runs on agy');
+});
+
+test('Approve pick: Opus is always offered (even unticked), at the picked effort', async () => {
+  const s = await planned({ pool: POOL3, packages: [pkg('a', 'sonnet')] });
+  const res = await approveWith(s, { a: { model: 'opus', effort: 'xhigh' } });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await s.flush();
+  assert.deepEqual([s.view('a').model, s.view('a').effort], ['opus', 'xhigh']);
+  assert.deepEqual([s.log.sessions[0].task.model, s.log.sessions[0].task.effort], ['opus', 'xhigh']);
+});
+
+test('Approve pick: a pick clears a weak-guard move (Mati\'s call wins)', async () => {
+  const s = await planned({ pool: [e('opus'), e('agy-hydrogen')], packages: [risky('h')] });
+  assert.equal(s.view('h').model, 'opus');
+  const res = await approveWith(s, { h: { model: 'agy-hydrogen', effort: 'plan' } }, [e('opus'), e('agy-hydrogen')], 'claude');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await s.flush();
+  const h = s.view('h');
+  assert.deepEqual([h.model, h.weakGuard, h.rescues], ['agy:gemini-4-hydrogen-medium', undefined, undefined]);
+});
+
+test('Approve pick outside the pool + Opus, or off-shape, is refused and nothing starts', async () => {
+  const bad = [
+    { a: { model: 'agy-hydrogen', effort: 'plan' } },
+    { a: { model: 'free', effort: 'plan' } },
+    { a: { model: 'free:freellm-chain' } },
+    { a: { model: 'opus', effort: 'low' } },
+    { a: { model: 'sonnet', effort: 'turbo' } },
+    { a: { model: 'agy-argon', effort: 'agy:gemini-4-argon-ultra' } },
+    { a: { model: 'agy-argon', effort: 'agy:gemini-4-hydrogen-medium' } },
+    { a: { model: 'opus', effort: 'high', why: 'x' } },
+    { a: { model: ['opus'] } },
+    { a: 'opus' },
+    { ghost: { model: 'opus' } },
+    [{ model: 'opus' }],
+    'opus',
+    Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`p${i}`, { model: 'opus' }])),
+  ];
+  for (const packageModels of bad) {
+    const s = await planned({ pool: POOL3, packages: [pkg('a', 'sonnet')] });
+    const res = await approveWith(s, packageModels);
+    assert.deepEqual(res, { ok: false, error: 'badPackageModel' }, JSON.stringify(packageModels));
+    assert.equal(s.orch.view().started, false);
+    assert.equal(s.log.sessions.length, 0);
+  }
+});
+
+test('regression: Approve picks are refused outside a pool run (Opus only, Workers [Opus])', async () => {
+  for (const pool of [null, [e('opus')]]) {
+    const s = await planned({ pool, packages: [pkg('a', 'opus')] });
+    const res = await s.orch.launch({ planId: s.planId, integration: 'branches', workers: 'claude', ...(pool ? { modelPool: pool } : {}), packageModels: { a: { model: 'opus', effort: 'max' } } });
+    assert.deepEqual(res, { ok: false, error: 'badPackageModel' });
+    // Without picks the same run launches as today.
+    const ok = await s.orch.launch({ planId: s.planId, integration: 'branches', workers: 'claude', ...(pool ? { modelPool: pool } : {}) });
+    assert.equal(ok.ok, true);
+    await s.flush();
+    assert.deepEqual(sessionModels(s), [['cloud', 'opus']]);
+  }
+});
+
+test('Approve pick: the stored pick survives a restart only in shape', () => {
+  const { normalizeStoredPick, pickChoices } = require('../src/orchestraPackageModel');
+  assert.deepEqual(normalizeStoredPick({ model: 'opus', effort: 'xhigh' }), { model: 'opus', effort: 'xhigh' });
+  for (const bad of [null, { model: 'free', effort: 'plan' }, { model: 'gpt', effort: 'plan' }, { model: 'opus' }]) assert.equal(normalizeStoredPick(bad), null);
+  assert.deepEqual(pickChoices(POOL3), ['opus', 'agy-argon', 'sonnet']);
+});
