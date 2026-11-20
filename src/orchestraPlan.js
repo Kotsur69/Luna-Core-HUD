@@ -33,6 +33,8 @@ const { withVariantsSchema, validateVariants, AB_PLANNER_RULES } = require('./or
 const { runAgyPrint, agyJsonPrompt, parseAgyJson } = require('./orchestraAgy');
 // Worker-model pools (2+ ticked models): the planner is offered only those.
 const { isPoolKey, strongestKey, tierOf, POOL_FREE_KEY, STRENGTH_ORDER } = require('./workerPool');
+// A pool run's current usage per ticked model (one optional prompt line).
+const { poolUsageLine } = require('./orchestraPoolUsage');
 const { agyFamilyList } = require('./agyFamilies');
 
 const PLANNER_MODEL = 'opus';
@@ -210,14 +212,50 @@ const poolFreeRules = (fallback) => [
   '- A "free" package must list its files and have a "verify" command. Never mark a package "free" when it touches an entry point, preload, IPC handlers, auth / keys / secrets, migrations, package.json / lockfiles, build config, CI or test infrastructure.',
 ];
 
+/** An effort level as the prompt may carry it: a short word, nothing else. */
+const EFFORT_WORD_RE = /^[a-z0-9][a-z0-9.-]{0,39}$/i;
+
+/**
+ * The fixed per-model efforts of a pool run ([{key, level}],
+ * src/poolEffort.js poolEffortList), checked: ticked keys only, each once.
+ * @param {unknown} efforts
+ * @param {string[]} keys plannerPool() output
+ * @returns {{key:string, level:string}[]}
+ */
+function plannerEfforts(efforts, keys) {
+  const out = [];
+  for (const e of Array.isArray(efforts) ? efforts : []) {
+    if (!e || typeof e !== 'object' || !keys.includes(e.key) || typeof e.level !== 'string' || !EFFORT_WORD_RE.test(e.level)) continue;
+    if (!out.some((x) => x.key === e.key)) out.push({ key: e.key, level: e.level });
+  }
+  return out;
+}
+
+/**
+ * The rule for a pool whose ticked models fix an effort: the planner weighs
+ * model and effort together; "Per plan" models keep the package's own
+ * effort. None fixed = no line (the prompt as before).
+ */
+function poolEffortRules(keys, efforts) {
+  const fixed = plannerEfforts(efforts, keys);
+  if (!fixed.length) return [];
+  const list = fixed.map((e) => `"${e.key}" at ${e.level}`).join(', ');
+  const rest = keys.some((k) => !fixed.some((e) => e.key === k)) ? " The other models run at each package's own \"effort\"." : '';
+  return [
+    `- Fixed worker efforts: ${list} - every package on that model runs at that level, whatever its own "effort". Weigh model and effort together when you pick a model (e.g. a lighter model at high effort against a stronger one at medium).${rest}`,
+  ];
+}
+
 /**
  * The model rules of a pool run: only the ticked keys, easy / hard tiers
  * (a tier no ticked model covers goes to the nearest one), the strongest when
- * unsure, and a reason per package.
+ * unsure, and a reason per package. Fixed per-model efforts and the models'
+ * current usage add one line each when there are any.
  * @param {string[]} keys plannerPool() output
+ * @param {{efforts?:unknown, usage?:unknown}} [extra] poolEfforts / poolUsage of the planner opts
  * @returns {string[]}
  */
-function poolModelRules(keys) {
+function poolModelRules(keys, { efforts = null, usage = null } = {}) {
   const strongest = strongestKey(keys);
   const paid = keys.filter((k) => k !== POOL_FREE_KEY);
   const easy = keys.filter((k) => tierOf(k) === 'easy');
@@ -232,8 +270,16 @@ function poolModelRules(keys) {
     '- Use every model of the run where its tier fits, for the whole run - not one model for everything.',
     `- If unsure, use "${strongest}".`,
     ...(keys.includes(POOL_FREE_KEY) ? poolFreeRules(easyPaid[0] || paid[0]) : []),
+    ...poolEffortRules(keys, efforts),
+    ...usageLines(usage, keys),
     '- "modelReason": one short sentence on why the package got its model.',
   ];
+}
+
+/** The usage line of a pool run as a list (none without data). */
+function usageLines(usage, keys) {
+  const line = poolUsageLine(usage, keys);
+  return line ? [line] : [];
 }
 
 /** Trimmed, capped string ('' when unusable). */
@@ -295,7 +341,7 @@ function buildPlannerPrompt(openTodos, opts = {}) {
   // prompt is exactly what it always was.
   const pool = plannerPool(opts.pool);
   const modelRules = pool
-    ? poolModelRules(pool)
+    ? poolModelRules(pool, { efforts: opts.poolEfforts, usage: opts.poolUsage })
     : ['- "model": "opus" for hard or cross-cutting work, "sonnet" otherwise.', ...(opts.hybrid === true ? HYBRID_MODEL_RULES : [])];
   return [
     'You are the planner for LunaCore God Mode. Split the open to-dos below into work packages.',
@@ -674,6 +720,8 @@ function runPlanner({
   abBuild = false,
   pool = null,
   agyModel = null,
+  poolEfforts = null,
+  poolUsage = null,
 }) {
   // Hybrid (F6) only with the Claude planner: the free planner plans free-only runs.
   const hybridRun = hybrid === true && planner !== 'free';
@@ -681,7 +729,11 @@ function runPlanner({
   const abRun = abBuild === true && planner !== 'free';
   // A worker-model pool (2+ keys) likewise; the free planner's run is free-only.
   const poolRun = planner !== 'free' ? plannerPool(pool) : null;
-  const extraOpts = { ...(hybridRun ? { hybrid: true } : {}), ...(abRun ? { abBuild: true } : {}), ...(poolRun ? { pool: poolRun } : {}) };
+  // A pool run's fixed per-model efforts and current usage: prompt lines only.
+  const poolExtras = poolRun
+    ? { ...(Array.isArray(poolEfforts) && poolEfforts.length ? { poolEfforts } : {}), ...(Array.isArray(poolUsage) && poolUsage.length ? { poolUsage } : {}) }
+    : {};
+  const extraOpts = { ...(hybridRun ? { hybrid: true } : {}), ...(abRun ? { abBuild: true } : {}), ...(poolRun ? { pool: poolRun, ...poolExtras } : {}) };
   const level = plannerEffortOf(effort);
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : plannerCaps(level).timeoutMs;
   // A missing cwd fails execFile with ENOENT - that is a missing project

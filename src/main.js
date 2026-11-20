@@ -1662,6 +1662,8 @@ const orchestraCtx = {
     if (todoSync) todoSync.flush();
   },
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
+  // The meter's whole latest reading: a "Workers" pool's usage line (src/orchestraPoolUsage.js).
+  usageReading: () => latestUsage,
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
   // preferredId: the free profile a "Workers" pool ticked (src/workerPool.js); kept only when it has a chain.
   freeProfileId: (preferredId = null) => pickFreeProfileId(profiles, loadProviders().providers, loadChains(), preferredId),

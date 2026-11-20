@@ -47,7 +47,7 @@ test('POOL_EFFORTS is "plan" + src/efforts.js EFFORTS', () => {
   assert.deepEqual([...pool.POOL_EFFORTS], ['plan', ...EFFORTS]);
 });
 
-test('normalizePool: objects only, valid models, deduped, one free profile, effort plan by default', () => {
+test('normalizePool: objects only, valid models, deduped, one free profile, a missing or unknown effort is plan', () => {
   assert.equal(pool.normalizePool('opus'), null);
   assert.equal(pool.normalizePool(null), null);
   assert.deepEqual(pool.normalizePool([]), []);
@@ -65,7 +65,8 @@ test('normalizePool: objects only, valid models, deduped, one free profile, effo
       { model: 'free:../etc' },
       { model: 'free:' },
     ]),
-    [e('opus'), e('sonnet', 'high'), e('free:freellm-chain')],
+    // agy-argon's 'low' is no variant ('agy:<id>'): "Per plan", the entry stays.
+    [e('opus'), e('sonnet', 'high'), e('agy-argon'), e('free:freellm-chain')],
   );
   const many = Array.from({ length: 50 }, () => ({ model: 'opus' }));
   assert.equal(pool.normalizePool(many).length, 1);

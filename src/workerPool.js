@@ -6,9 +6,13 @@
 //
 //   pool entry     {model, effort}. model is a POOL_MODEL_LIST id or
 //                  'free:<profileId>' (a free provider profile, listed live);
-//                  effort is 'plan' (= today's per-package effort) or one of
-//                  the levels, kept for the per-model effort card - nothing
-//                  reads a level yet.
+//                  effort is 'plan' ("Per plan" = today's per-package effort)
+//                  or what every package on that model runs at: a level for
+//                  Claude (clamped to what the model takes), a live variant
+//                  'agy:<id>' for an agy family (agy has no effort of its
+//                  own), always 'plan' for a free profile. src/poolEffort.js
+//                  holds the select / badge rules, src/orchestraPoolEffort.js
+//                  applies them in main.
 //   planner key    what the planner names: the pool id, 'free' for a free
 //                  profile (a run has at most one free profile).
 //   tiers          easy (Sonnet, Hydrogen, a free profile) / hard (Opus, Opus
@@ -48,6 +52,17 @@ export const STRENGTH_ORDER = Object.freeze([
 ]);
 /** 'plan' + src/efforts.js EFFORTS (kept in line by test/worker-pool.test.js). */
 export const POOL_EFFORTS = Object.freeze(['plan', 'medium', 'high', 'xhigh', 'max']);
+/** "Per plan": each package keeps its own effort (src/orchestra.js effortFor). */
+export const POOL_EFFORT_PLAN = 'plan';
+/**
+ * The --effort levels each Claude pool model runs at. Both take
+ * low..max on the CLI; God Mode never goes below medium (src/efforts.js),
+ * so a lower ask is clamped up.
+ */
+const CLAUDE_POOL_LEVELS = Object.freeze({
+  opus: Object.freeze(POOL_EFFORTS.slice(1)),
+  sonnet: Object.freeze(POOL_EFFORTS.slice(1)),
+});
 /** The pool nobody chose: Opus only, today's run. */
 export const DEFAULT_POOL = Object.freeze([Object.freeze({ model: 'opus', effort: 'plan' })]);
 /** More entries than the menu can ever offer; the rest is ignored. */
@@ -115,11 +130,61 @@ export function poolModelName(model) {
   return m ? m.name : null;
 }
 
+/** The levels a Claude pool model ('opus' / 'sonnet') runs at, weakest first; [] for anything else. */
+export function claudePoolLevels(model) {
+  return Object.prototype.hasOwnProperty.call(CLAUDE_POOL_LEVELS, model) ? [...CLAUDE_POOL_LEVELS[model]] : [];
+}
+
+/**
+ * A level clamped to what a Claude pool model takes: kept when it does,
+ * else the nearest one it takes (a tie goes down). Null for no level.
+ * @param {string} model 'opus' | 'sonnet'
+ * @param {unknown} level
+ * @returns {string|null}
+ */
+export function clampClaudeEffort(model, level) {
+  const allowed = claudePoolLevels(model);
+  if (!allowed.length || typeof level !== 'string' || !hasLevel(level)) return null;
+  if (allowed.includes(level)) return level;
+  const want = LEVEL_RANK[level];
+  return allowed.reduce((best, l) => (Math.abs(LEVEL_RANK[l] - want) < Math.abs(LEVEL_RANK[best] - want) ? l : best));
+}
+
+/**
+ * One entry's effort, checked for its model: a Claude level (clamped), an
+ * agy family's 'agy:<id>' variant (shape only - main checks it against the
+ * live list), anything else 'plan'. A free profile never has one.
+ * @param {string} model a pool model
+ * @param {unknown} effort
+ * @returns {string}
+ */
+export function normalizePoolEffort(model, effort) {
+  const on = runsOnOf(poolKeyOf(model));
+  if (on === 'claude') return clampClaudeEffort(model, effort) || POOL_EFFORT_PLAN;
+  if (on === 'agy') return typeof effort === 'string' && AGY_VARIANT_RE.test(effort) ? effort : POOL_EFFORT_PLAN;
+  return POOL_EFFORT_PLAN;
+}
+
+/**
+ * The level an entry's effort reads as ('xhigh', or an agy variant's
+ * 'medium' - its id's tail, else the id); null for "Per plan".
+ * @param {{model:string, effort?:unknown}|null} entry
+ * @returns {string|null}
+ */
+export function poolEffortLevel(entry) {
+  if (!isObj(entry)) return null;
+  const effort = normalizePoolEffort(entry.model, entry.effort);
+  if (effort === POOL_EFFORT_PLAN) return null;
+  if (runsOnOf(poolKeyOf(entry.model)) !== 'agy') return effort;
+  const id = effort.slice('agy:'.length);
+  return levelOf(id, null) || id;
+}
+
 /**
  * The stored / sent pool, checked: an array of {model, effort} objects, a
  * valid model each, deduplicated, at most one free profile (a run's free
- * packages share one coding profile), capped. A missing effort is 'plan'; an
- * unknown one drops the entry. Anything but an array is null.
+ * packages share one coding profile), capped. A missing or unknown effort
+ * is 'plan' ("Per plan"); see normalizePoolEffort. Anything but an array is null.
  * @param {unknown} raw
  * @returns {{model:string, effort:string}[]|null}
  */
@@ -128,8 +193,7 @@ export function normalizePool(raw) {
   const out = [];
   for (const entry of raw.slice(0, MAX_POOL_ENTRIES)) {
     if (!isObj(entry) || !isPoolModel(entry.model)) continue;
-    const effort = entry.effort === undefined ? 'plan' : entry.effort;
-    if (!POOL_EFFORTS.includes(effort)) continue;
+    const effort = normalizePoolEffort(entry.model, entry.effort);
     if (out.some((e) => e.model === entry.model)) continue;
     if (freeProfileIdOf(entry.model) && out.some((e) => freeProfileIdOf(e.model))) continue;
     out.push({ model: entry.model, effort });
@@ -308,13 +372,19 @@ export function cleanPoolOptions(raw) {
 }
 
 /**
- * The pool's text for a run line: product names joined with ' + '.
- * @param {{model:string}[]} pool
+ * The pool's text for a run line: product names joined with ' + ', each
+ * with its effort when it has one ('Opus - xhigh + Argon (agy) - medium').
+ * A pool all "Per plan" reads as it always did.
+ * @param {{model:string, effort?:string}[]} pool
  * @param {(model:string) => string|null} [nameOf] a free profile's name
  * @returns {string}
  */
 export function poolLabel(pool, nameOf = () => null) {
   return (Array.isArray(pool) ? pool : [])
-    .map((e) => poolModelName(e.model) || nameOf(e.model) || freeProfileIdOf(e.model) || String(e.model))
+    .map((e) => {
+      const name = poolModelName(e.model) || nameOf(e.model) || freeProfileIdOf(e.model) || String(e.model);
+      const level = poolEffortLevel(e);
+      return level ? `${name} - ${level}` : name;
+    })
     .join(' + ');
 }

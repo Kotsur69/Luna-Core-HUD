@@ -22,6 +22,8 @@
 'use strict';
 
 const poolRules = require('./orchestraPool');
+const effortRules = require('./orchestraPoolEffort');
+const { poolEffortList } = require('./poolEffort');
 const { normalizePool, poolKeys, poolWorkers, isPoolRun, runsOnOf } = require('./workerPool');
 const { agyModelIdOf } = require('./workerModels');
 const { DEFAULT_EFFORT, normalizeEffort } = require('./efforts');
@@ -51,6 +53,17 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
   }
 
   /**
+   * The pool with its agy variants checked against the live list
+   * (src/orchestraPoolEffort.js liveEfforts); each one that fell back to
+   * "Per plan" is logged and comes back as a board note.
+   */
+  function checkedEfforts(pool, agyList) {
+    const checked = effortRules.liveEfforts(pool, agyList);
+    for (const n of checked.notes) log(`[orchestra] Workers pool ${n.model}: variant ${n.from} is not in the live \`agy models\` list; it runs Per plan`);
+    return checked;
+  }
+
+  /**
    * A plan request's "Workers" pool when it makes a pool run - 2+ models
    * after the agy families the live `agy models` list lacks are left out -
    * with its planner keys and the agy list it was checked against; else null.
@@ -60,12 +73,14 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
     const asked = normalizePool(raw);
     if (!isPoolRun(asked)) return null;
     const agyList = await agyListFor(asked);
-    const pool = poolRules.livePool(asked, agyList, log);
-    if (!isPoolRun(pool)) {
+    const live = poolRules.livePool(asked, agyList, log);
+    if (!isPoolRun(live)) {
       log('[orchestra] the Workers pool has fewer than two usable models; planning as before');
       return null;
     }
-    return { pool, keys: poolKeys(pool), agyList };
+    const { pool, notes } = checkedEfforts(live, agyList);
+    // efforts: the fixed per-model efforts the planner weighs (none = "Per plan" everywhere).
+    return { pool, keys: poolKeys(pool), agyList, notes, efforts: poolEffortList(pool) };
   }
 
   /**
@@ -78,12 +93,13 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
    * @returns {{packages:object[], warnings:object[]}}
    */
   function applyPlanPool(packages, pool) {
+    const notes = Array.isArray(pool.notes) ? pool.notes : [];
     const applied = poolRules.applyPool(packages, pool.pool, { agyList: pool.agyList, effortOf });
     if (!applied.ok) {
       log(`[orchestra] the Workers pool could not be applied (${applied.error}); the packages keep the planner's picks`);
-      return { packages, warnings: [] };
+      return { packages, warnings: notes };
     }
-    return { packages: applied.packages, warnings: applied.moved.map((m) => ({ code: 'outOfPool', ...m })) };
+    return { packages: applied.packages, warnings: [...notes, ...applied.moved.map((m) => ({ code: 'outOfPool', ...m }))] };
   }
 
   /**
@@ -109,17 +125,23 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
     return choosePool(plan, pool, [], workers);
   }
 
-  /** approvePool() once the agy list (if any) is in: none / single / the pool run with its staged packages. */
+  /**
+   * approvePool() once the agy list (if any) is in: none / single / the pool
+   * run with its staged packages. `notes` = the board notes of agy variants
+   * that fell back to "Per plan" (the caller adds them once it commits).
+   */
   function choosePool(plan, pool, agyList, workers) {
     // An agy family the live list lacks is no model of the run: 2+ usable
     // models stay a pool run, one is today's single value.
     const live = pool ? poolRules.livePool(pool, agyList, log) : null;
-    const choice = poolRules.approveChoice(live, agyList);
-    if (choice.kind !== 'pool') return choice;
+    const checked = live ? checkedEfforts(live, agyList) : { pool: live, notes: [] };
+    const choice = poolRules.approveChoice(checked.pool, agyList);
+    const notes = checked.notes.length ? { notes: checked.notes } : {};
+    if (choice.kind !== 'pool') return choice.kind === 'single' ? { ...choice, ...notes } : choice;
     const applied = poolRules.applyPool(plan.packages, choice.pool, { agyList, effortOf });
     if (!applied.ok) return { kind: 'error', error: applied.error };
     logMoves(applied.moved);
-    return { ...choice, workers: poolWorkers(choice.pool, workers), workerModel: 'plan', packages: applied.packages };
+    return { ...choice, ...notes, workers: poolWorkers(choice.pool, workers), workerModel: 'plan', packages: applied.packages };
   }
 
   /**
