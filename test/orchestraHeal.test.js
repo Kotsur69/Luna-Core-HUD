@@ -1203,3 +1203,163 @@ test('review fixes: retry killed live agy:<id>, mixed-pool pause, finishRun/shut
     assert.equal(s.log.sessions.length, 0);
   }
 });
+
+// ---- Per-backend usage-limit pauses (src/orchestraPauses.js) ------------------
+
+const HOUR_MS = 60 * 60 * 1000;
+const { RESUME_GRACE_MS } = require('../src/orchestra.js');
+
+/** A launched mixed pool run: Opus 'c', agy-argon 'g', free 'f' (MAX_PARALLEL 3: all three run). */
+async function mixedPoolRun() {
+  let saved = null;
+  const s = controllerHarness({
+    selfHeal: false,
+    packages: [
+      { id: 'c', title: 'C', todoAts: [101], prompt: 'c', files: ['a.js'], dependsOn: [], verify: 'npm test', model: 'opus', effort: 'medium' },
+      { id: 'g', title: 'G', todoAts: [102], prompt: 'g', files: ['b.js'], dependsOn: [], verify: 'npm test', model: 'agy-argon', effort: 'medium' },
+      { id: 'f', title: 'F', todoAts: [103], prompt: 'f', files: ['d.js'], dependsOn: [], verify: 'npm test', model: 'free', effort: 'medium' },
+    ],
+    extraDeps: { saveState: (data) => (saved = data) },
+  });
+  const pool = [{ model: 'opus' }, { model: 'agy-argon' }, { model: 'free:free-coding' }];
+  const { plan } = await s.orch.makePlan({ ...s.ctx, modelPool: pool });
+  const launched = await s.orch.launch({ planId: plan.id, ids: null, prompts: {}, modelPool: pool, integration: 'branches' });
+  assert.equal(launched.ok, true);
+  const sessionOf = (pkgId) => s.log.sessions.find((sess) => sess.branch === s.byId(pkgId).branch).id;
+  const pkgOf = (id) => saved.packages.find((p) => p.id === id);
+  const limits = () => (saved.recoveries || []).filter((e) => e.reason === 'usageLimit');
+  return { s, plan, saved: () => saved, pkgOf, limits, sC: sessionOf('c'), sG: sessionOf('g'), sF: sessionOf('f') };
+}
+
+test('per-backend pauses: agy until T+2h then a Claude limit until T+1h - each resumes at its own reset, free never pauses', async () => {
+  const { s, saved, pkgOf, limits, sC, sG, sF } = await mixedPoolRun();
+  const t0 = s.now();
+  const resumeWrites = () => s.log.writes.filter(([, text]) => text === sup.RESUME_TEXT);
+
+  // agy hits its limit first: only agy waits.
+  s.orch.onUsageLimit(sG, t0 + 2 * HOUR_MS);
+  assert.deepEqual(Object.keys(saved().pauses), ['agy']);
+  assert.equal(s.orch.view().pausedUntil, t0 + 2 * HOUR_MS);
+
+  // 10 minutes later a Claude worker hits its limit with an EARLIER reset.
+  s.advance(10 * 60 * 1000);
+  const claudeAt = s.now();
+  s.orch.onUsageLimit(sC, t0 + HOUR_MS);
+  assert.deepEqual(saved().pauses, {
+    agy: { until: t0 + 2 * HOUR_MS, startedAt: t0 },
+    claude: { until: t0 + HOUR_MS, startedAt: claudeAt },
+  }, 'two pauses, no whole-run pause');
+  assert.equal(s.orch.view().pausedUntil, t0 + HOUR_MS, 'the board shows the earliest resume');
+
+  // Both limits are logged; a repeated report of an open limit is not logged again.
+  s.orch.onUsageLimit(sG, t0 + 2 * HOUR_MS);
+  assert.deepEqual(limits().map((e) => e.detail.split(':')[0]), ['g', 'c']);
+
+  // The free worker is never paused: it is nudged and finishes; the paused ones are not nudged.
+  s.log.writes.length = 0;
+  s.orch.onTurnEnd(sF, claudeTurn('still working'));
+  s.orch.onTurnEnd(sC, claudeTurn('still working'));
+  s.orch.onTurnEnd(sG, agyTurnEndLine('still working'));
+  s.advance(6000);
+  assert.deepEqual([...new Set(s.log.writes.map(([id]) => id))], [sF], 'only the free worker is nudged');
+  s.orch.onTurnEnd(sF, claudeTurn('LUNA_DONE f'));
+  await s.flush();
+  assert.equal(s.byId('f').state, 'pushed');
+  assert.equal(pkgOf('f').pausedMs, 0, 'free was never paused');
+
+  // Claude's reset (T+1h): RESUME_TEXT reaches the Claude tab only, credited for its own span.
+  s.log.writes.length = 0;
+  s.advance(t0 + HOUR_MS + RESUME_GRACE_MS - s.now() - 1);
+  assert.deepEqual(resumeWrites(), [], 'nothing resumes before the Claude reset');
+  s.advance(1);
+  assert.deepEqual(resumeWrites(), [[sC, sup.RESUME_TEXT]]);
+  assert.equal(pkgOf('c').pausedMs, s.now() - claudeAt, 'Claude credited from its own limit, not the agy one');
+  assert.equal(pkgOf('g').pausedMs, 0, 'agy still paused: nothing credited yet');
+  assert.deepEqual(Object.keys(saved().pauses), ['agy']);
+  assert.equal(s.orch.view().pausedUntil, t0 + 2 * HOUR_MS);
+
+  // agy's reset (T+2h): RESUME_TEXT reaches the agy tab only.
+  s.log.writes.length = 0;
+  const claudeCredit = pkgOf('c').pausedMs;
+  s.advance(t0 + 2 * HOUR_MS + RESUME_GRACE_MS - s.now());
+  assert.deepEqual(resumeWrites(), [[sG, sup.RESUME_TEXT]]);
+  assert.equal(pkgOf('g').pausedMs, s.now() - t0);
+  assert.equal(pkgOf('c').pausedMs, claudeCredit, 'Claude is not credited again');
+  assert.deepEqual(saved().pauses, {});
+  assert.equal(s.orch.view().pausedUntil, null);
+  assert.equal(saved().pausedTotalMs, s.now() - t0, 'the run waited once, over the union of both pauses');
+  assert.ok(s.log.events.some(([k, d]) => k === 'resumed' && d && d.scope === 'claude'));
+  assert.ok(s.log.events.some(([k, d]) => k === 'resumed' && d && d.scope === 'agy'));
+});
+
+test('per-backend pauses: a later Claude limit extends only Claude; the power flow sees the earliest reset once nothing runs', async () => {
+  const { s, saved, limits, sC, sG, sF } = await mixedPoolRun();
+  const t0 = s.now();
+  s.orch.onUsageLimit(sC, t0 + HOUR_MS);
+  assert.equal(s.orch.powerState().pausedUntil, null, 'agy and free still run: the PC must not sleep');
+  s.orch.onUsageLimit(sC, t0 + 3 * HOUR_MS);
+  assert.deepEqual(saved().pauses, { claude: { until: t0 + 3 * HOUR_MS, startedAt: t0 } });
+  assert.equal(limits().length, 2, 'the later reset is a new limit and is logged');
+  s.orch.onUsageLimit(sG, t0 + 2 * HOUR_MS);
+  s.orch.onTurnEnd(sF, claudeTurn('LUNA_DONE f'));
+  await s.flush();
+  assert.equal(s.orch.powerState().pausedUntil, t0 + 2 * HOUR_MS, 'every live worker is paused: wake at the earliest reset');
+});
+
+test('per-backend pauses: "Pause for shutdown" still stops everything and waits for the latest reset', async () => {
+  const { s, plan, saved, sC, sG, sF } = await mixedPoolRun();
+  const t0 = s.now();
+  s.orch.onUsageLimit(sG, t0 + 2 * HOUR_MS);
+  s.orch.onUsageLimit(sC, t0 + HOUR_MS);
+  s.advance(5 * 60 * 1000);
+  s.log.writes.length = 0;
+
+  assert.deepEqual(s.orch.pauseForShutdown({ planId: plan.id }), { ok: true });
+  const escs = s.log.writes.filter(([, text]) => text === '\u001b').map(([id]) => id);
+  assert.deepEqual(escs.sort(), [sC, sF, sG].sort(), 'every worker, free too, gets Esc');
+  assert.deepEqual(saved().pauses, {});
+  assert.equal(saved().pausedUntil, null);
+  assert.equal(saved().pausedTotalMs, 5 * 60 * 1000);
+  assert.equal(s.orch.view().interrupted.resetAt, t0 + 2 * HOUR_MS, 'the resume waits for the latest reset');
+
+  // The backend timers that were armed resume nothing any more.
+  s.log.writes.length = 0;
+  s.advance(3 * HOUR_MS);
+  assert.deepEqual(s.log.writes.filter(([, text]) => text === sup.RESUME_TEXT), []);
+});
+
+test('per-backend pauses: a run stored with the legacy single pauseScope restores unpaused and pauses per backend again', async () => {
+  const wtRoot = path.resolve('/.luna-worktrees/repo/a');
+  const legacyUntil = 1700000000000 + HOUR_MS;
+  let saved = null;
+  const stored = {
+    id: 'r-legacy',
+    repoPath: path.resolve('/repo'),
+    profileId: 'claude-cloud',
+    agyProfileId: 'agy-1',
+    workers: 'agy',
+    workerModel: ARGON_MODEL,
+    started: true,
+    pauseScope: 'agy',
+    pausedUntil: legacyUntil,
+    pauseStartedAt: 1700000000000 - 60000,
+    pausedTotalMs: 1000,
+    packages: [{
+      id: 'a', title: 'A', todoAts: [101], prompt: 'do a', files: ['src/a.js'], dependsOn: [], verify: 'npm test',
+      model: ARGON_MODEL, state: 'launched', root: wtRoot, cwd: wtRoot, branch: 'luna/a',
+    }],
+  };
+  const s = controllerHarness({ initialState: stored, extraDeps: { saveState: (data) => (saved = data) } });
+  assert.equal(s.orch.view().id, 'r-legacy');
+  assert.equal(s.orch.view().pausedUntil, null, 'restored unpaused');
+  assert.equal(s.orch.view().interrupted.resetAt, legacyUntil, 'the legacy reset still delays the shutdown resume');
+  assert.equal('pauseScope' in saved, false, 'the legacy field is dropped');
+  assert.deepEqual(saved.pauses, {});
+  assert.equal(saved.pausedTotalMs, 1000);
+
+  const retried = await s.orch.retry({ planId: 'r-legacy', id: 'a' });
+  assert.equal(retried.ok, true, 'not refused as paused');
+  s.orch.onUsageLimit(s.byId('a').sessionId, s.now() + HOUR_MS);
+  assert.deepEqual(Object.keys(saved.pauses), ['agy']);
+  assert.equal(s.orch.view().pausedUntil, s.now() + HOUR_MS);
+});

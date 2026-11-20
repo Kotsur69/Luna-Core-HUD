@@ -87,6 +87,8 @@ const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
 const resumeRules = require('./orchestraResume');
+// Usage-limit pauses, one per backend plus the whole-run one (pure helpers).
+const pauseRules = require('./orchestraPauses');
 // Opt-in, fixed per plan (options abBuild / selfHeal / contextGuard): A/B
 // builds, self-healing workers, predictive context routing (logic lives there).
 const variantRules = require('./orchestraVariants');
@@ -487,7 +489,8 @@ function createOrchestra(deps) {
   const transientRetries = new Map();
   // Launches wait a little right after a system resume.
   const resumeGate = createResumeGate({ now });
-  let resumeTimer = null;
+  /** pause key ('all' | 'claude' | 'agy' | 'free') -> its resume timer (orchestraPauses.js) */
+  const resumeTimers = new Map();
   // A 'noNodeModules' hold checks its folders again every minute and resumes
   // on its own once they pass (orchestraHoldWatch.js).
   const holdWatch = createHoldWatch({
@@ -726,7 +729,7 @@ function createOrchestra(deps) {
 
   // The three opt-in evolutions, each on only when its plan option is.
   const planOption = (key) => !!plan && sup.normalizeOptions(plan.options)[key] === true;
-  const allPaused = () => !!plan && !!plan.pausedUntil && !plan.pauseScope;
+  const allPaused = () => !!plan && !!pauseRules.pausesOf(plan)[pauseRules.ALL];
   const runLive = (id) => !!plan && !plan.killed && (!id ? !allPaused() : !isPackagePaused(findPkg(id)));
   /** One more entry on a package's history (report evidence); the caller commits. */
   const recordEntry = (id, entry) => {
@@ -870,16 +873,21 @@ function createOrchestra(deps) {
   function launchableReady() {
     if (!plan || allPaused()) return [];
     const max = maxParallelFor(plan, MAX_PARALLEL);
-    if (!plan.pausedUntil) return sup.readyToLaunch(plan.packages, max);
+    if (!pauseRules.hasPauses(pauseRules.pausesOf(plan))) return sup.readyToLaunch(plan.packages, max);
     // Mask paused pending packages so they do not fill slots ahead of unpaused backends,
     // while active paused packages keep their parallel slots.
     const masked = plan.packages.map((p) => (p.state === 'pending' && isPackagePaused(p) ? { ...p, state: 'paused_skip' } : p));
     return sup.readyToLaunch(masked, max);
   }
 
+  /**
+   * The power flow's pause: the whole-run pause, or - when no unpaused
+   * worker runs or could launch - the earliest backend reset (plan.pausedUntil).
+   */
   function effectivePausedUntil() {
-    if (!plan || !plan.pausedUntil) return null;
-    if (!plan.pauseScope) return plan.pausedUntil;
+    const pauses = plan ? pauseRules.pausesOf(plan) : {};
+    if (!pauseRules.hasPauses(pauses)) return null;
+    if (pauses[pauseRules.ALL]) return plan.pausedUntil;
     const unpausedRunning = plan.packages.some((p) => sup.isActive(p) && !isPackagePaused(p));
     return unpausedRunning || launchableReady().length > 0 ? null : plan.pausedUntil;
   }
@@ -919,7 +927,7 @@ function createOrchestra(deps) {
     // Folders saved on another PC / under another user name re-homed here.
     const stored = normalized && deps.resolvePath ? sup.rehomePlanPaths(normalized, deps.resolvePath, deps.resolveFile) : normalized;
     if (!stored || plan) return false;
-    plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pausedUntil: null, pauseStartedAt: null, pauseScope: null, settled: false };
+    plan = { ...sup.restoreAfterRestart(stored, now()), started: false, killed: false, pauses: {}, pausedUntil: null, pauseStartedAt: null, settled: false };
     // Restart recovery: no session of this run keeps an intake token (matched by run id, never by session id).
     if (deps.revokeRunFollowups) revokeQuietly(() => deps.revokeRunFollowups(plan.id));
     // Tokens are not stored with the run: the book starts empty and counts what runs from here on.
@@ -1194,8 +1202,7 @@ function createOrchestra(deps) {
     contextGuard.clear();
     backgroundOpen.clear();
     lastActivity.clear();
-    if (resumeTimer) clearTimer(resumeTimer);
-    resumeTimer = null;
+    clearResumeTimers();
     holdWatch.cancel();
     clearSchedule();
     shutdownResume.dispose();
@@ -1381,6 +1388,7 @@ function createOrchestra(deps) {
         started: false,
         killed: false,
         settled: false,
+        pauses: {},
         pausedUntil: null,
         pauseStartedAt: null,
         hold: null,
@@ -3078,9 +3086,10 @@ function createOrchestra(deps) {
     if (!sleep || !plan) return false;
     recover.onWake();
     const t = now();
-    const pauseStartedAt = plan.pausedUntil ? plan.pauseStartedAt : null;
+    const pauses = pauseRules.pausesOf(plan);
     for (const p of plan.packages.filter(sup.isActive)) {
-      const credit = sleepCredit(sleep, p, { now: t, pauseStartedAt: isPackagePaused(p) ? pauseStartedAt : null });
+      // Up to the start of the pauses holding this package; theirs is credited at their resume.
+      const credit = sleepCredit(sleep, p, { now: t, pauseStartedAt: pauseRules.heldSince(pauses, p, matchesPauseScope) });
       if (credit > 0) patch(p.id, { pausedMs: (p.pausedMs || 0) + credit });
     }
     // Only a sleep during the run is the run's (a later report counts them).
@@ -3128,12 +3137,14 @@ function createOrchestra(deps) {
     contextGuard.forget(sessionId);
   }
 
+  /** Held by an open pause: the whole-run one, or its own backend's (orchestraPauses.js). */
   function isPackagePaused(pkg) {
-    return Boolean(plan && plan.pausedUntil && matchesPauseScope(pkg, plan.pauseScope || null));
+    return Boolean(plan && pkg && pauseRules.holdingKeys(pauseRules.pausesOf(plan), pkg, matchesPauseScope).length);
   }
 
+  /** Whether the package runs on the backend a pause key names ('all' / null: every package). */
   function matchesPauseScope(pkg, scope) {
-    if (!scope) return true;
+    if (!scope || scope === pauseRules.ALL) return true;
     if (scope === 'claude') return packageRunsClaude(pkg);
     if (scope === 'agy') return !plan.planRun && agyRules.packageRunsAgy(plan, pkg);
     if (scope === 'free') return !plan.planRun && (plan.freeMode === true || hybridRules.runsFree(plan, pkg) || isHybridFreePackage(pkg));
@@ -3147,27 +3158,45 @@ function createOrchestra(deps) {
     }
   }
 
-  function resume() {
-    resumeTimer = null;
-    if (!plan || !plan.pausedUntil) return;
+  function clearResumeTimers() {
+    for (const t of resumeTimers.values()) clearTimer(t);
+    resumeTimers.clear();
+  }
+
+  /** (Re-)arms the resume of one pause key at its reset plus grace. */
+  function armResume(key, until) {
+    if (resumeTimers.has(key)) clearTimer(resumeTimers.get(key));
+    resumeTimers.set(key, setTimer(() => resume(key), until - now() + RESUME_GRACE_MS));
+  }
+
+  /**
+   * One pause ends at its reset. Its packages get the paused span back on
+   * pausedMs (minus any part another open pause still covers) and, once no
+   * other pause holds them, RESUME_TEXT. Every other backend is untouched.
+   * @param {string} key 'all' | 'claude' | 'agy' | 'free'
+   */
+  function resume(key) {
+    resumeTimers.delete(key);
+    if (!plan || !pauseRules.pausesOf(plan)[key]) return;
     // A resume timer that fired on the wake, before 'resume' / the tick: the
     // sleep is credited first, while the pause is still open.
     catchUpSleep();
-    const pausedFor = now() - (plan.pauseStartedAt || now());
-    const scope = plan.pauseScope || null;
-    plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, pausedFor);
-    plan.pausedUntil = null;
-    plan.pauseStartedAt = null;
-    plan.pauseScope = null;
+    const t = now();
+    const pauses = pauseRules.pausesOf(plan);
+    const ended = pauses[key];
+    const rest = pauseRules.withoutPause(pauses, key);
     for (const p of plan.packages.filter(sup.isActive)) {
-      if (!matchesPauseScope(p, scope)) continue;
-      // Never credit more pause than the package has been running.
-      const credit = Math.max(0, Math.min(pausedFor, now() - (p.startedAt || now())));
-      patch(p.id, { pausedMs: p.pausedMs + credit });
+      if (!matchesPauseScope(p, key)) continue;
+      const stillHeld = pauseRules.holdingKeys(rest, p, matchesPauseScope).map((k) => rest[k].startedAt);
+      const credit = pauseRules.resumeCredit(ended, stillHeld, p.startedAt, t);
+      if (credit > 0) patch(p.id, { pausedMs: (p.pausedMs || 0) + credit });
+      // Another backend's or the whole-run pause still holds it: it resumes with that one.
+      if (stillHeld.length) continue;
       // A free package waiting on its own free limits resumes at its own reset.
       if (p.state === 'launched' && !hybridRun.isWaiting(p)) writePty(p.sessionId, sup.RESUME_TEXT, { paste: true });
     }
-    onRunEvent('resumed');
+    Object.assign(plan, pauseRules.withRunPauses(plan, rest, t));
+    onRunEvent('resumed', { scope: key });
     commit();
     kick();
     background(powerFlow.refresh(), 'sleep');
@@ -3178,7 +3207,7 @@ function createOrchestra(deps) {
    * The slept time is credited to the workers first. An integrate step in
    * flight is treated as interrupted (its children may be gone, its promise
    * may never settle): aborted, and finalize runs once more.
-   * Past the reset -> resume now; before it -> re-arm the resume timer.
+   * Each pause past its reset resumes now; one before it re-arms its timer.
    */
   function onSystemResume() {
     applySleep(sleepWatch.onResume());
@@ -3188,11 +3217,14 @@ function createOrchestra(deps) {
     // The resume-after-shutdown countdown is wall-clock: a sleep may have eaten it.
     shutdownResume.onWake();
     background(powerFlow.onSystemResume(), 'sleep');
-    if (!plan || !plan.pausedUntil) return;
-    if (resumeTimer) clearTimer(resumeTimer);
-    resumeTimer = null;
-    if (now() >= plan.pausedUntil) resume();
-    else resumeTimer = setTimer(resume, plan.pausedUntil - now() + RESUME_GRACE_MS);
+    if (!plan) return;
+    const pauses = Object.entries(pauseRules.pausesOf(plan)).sort((a, b) => a[1].until - b[1].until);
+    for (const [key, entry] of pauses) {
+      if (now() >= entry.until) {
+        if (resumeTimers.has(key)) clearTimer(resumeTimers.get(key));
+        resume(key);
+      } else armResume(key, entry.until);
+    }
   }
 
   /** After a wake an integrate step in flight is aborted and run again (logged as a fix). */
@@ -3207,7 +3239,8 @@ function createOrchestra(deps) {
 
   /**
    * The usage limit hit a worker and its tab could not move to another
-   * account: the whole run waits.
+   * account: the packages on that worker's backend wait until its reset
+   * (a plan run's whole run waits). Other backends keep going.
    * @param {string} sessionId
    * @param {number|null} resetsAt epoch ms, when the CLI said
    */
@@ -3216,24 +3249,20 @@ function createOrchestra(deps) {
     if (!pkg || !sup.isActive(pkg) || plan.killed) return;
     // Q9: a hybrid free package waits alone; Claude packages keep going.
     if (hybridRun.onUsageLimit(pkg, resetsAt)) return;
-    const scope = !plan.planRun && agyRules.packageRunsAgy(plan, pkg)
-      ? 'agy'
-      : !plan.planRun && (plan.freeMode || isHybridFreePackage(pkg))
-        ? 'free'
-        : 'claude';
+    // A plan run's workers belong to no single backend pause: the whole run waits.
+    const scope = plan.planRun
+      ? null
+      : agyRules.packageRunsAgy(plan, pkg)
+        ? 'agy'
+        : plan.freeMode || isHybridFreePackage(pkg)
+          ? 'free'
+          : 'claude';
     const until = Number.isFinite(resetsAt) && resetsAt > now() ? resetsAt : now() + DEFAULT_PAUSE_MS;
-    if (plan.pausedUntil && plan.pausedUntil >= until) {
-      // Widen pauseScope if a second backend also hits its limit during the same pause.
-      if (plan.pauseScope && plan.pauseScope !== scope) {
-        plan.pauseScope = null;
-        cancelScopedNudges(null);
-        commit();
-        background(powerFlow.onPaused(), 'sleep');
-      }
-      return;
-    }
-    // Another stored Claude account first; none -> pause until the reset, resume on its own.
-    if (scope === 'claude' && recover.onUsageLimit(pkg, until) === 'failover') return;
+    // The same backend already waits at least that long: another worker's report of the same limit.
+    const open = pauseRules.pausesOf(plan)[pauseRules.keyOf(scope)];
+    if (open && open.until >= until) return;
+    // Every new limit is logged (plan.recoveries); a Claude one may move to another stored account first.
+    if (recover.onUsageLimit(pkg, until) === 'failover' && scope !== 'agy' && scope !== 'free') return;
     pauseUntil(until, scope);
   }
 
@@ -3251,26 +3280,20 @@ function createOrchestra(deps) {
     return true;
   }
 
-  /** Pauses the run until `resetsAt` (+ grace); a longer pause already set wins. */
+  /**
+   * Pauses one backend's packages (scope 'claude' | 'agy' | 'free') or the
+   * whole run (null) until `resetsAt` (+ grace). Each backend keeps its own
+   * reset and timer; a longer pause of the same backend already set wins.
+   */
   function pauseUntil(resetsAt, scope = null) {
     const until = Number.isFinite(resetsAt) && resetsAt > now() ? resetsAt : now() + DEFAULT_PAUSE_MS;
-    const nextScope = plan.pausedUntil ? (plan.pauseScope === (scope || null) ? plan.pauseScope : null) : (scope || null);
-    if (plan.pausedUntil && plan.pausedUntil >= until) {
-      if (nextScope !== plan.pauseScope) {
-        plan.pauseScope = nextScope;
-        cancelScopedNudges(nextScope);
-        commit();
-        background(powerFlow.onPaused(), 'sleep');
-      }
-      return;
-    }
-    cancelScopedNudges(nextScope);
-    if (!plan.pausedUntil) plan.pauseStartedAt = now();
-    plan.pauseScope = nextScope;
-    plan.pausedUntil = until;
-    if (resumeTimer) clearTimer(resumeTimer);
-    resumeTimer = setTimer(resume, until - now() + RESUME_GRACE_MS);
-    onRunEvent('paused', { until });
+    const key = pauseRules.keyOf(scope);
+    const next = pauseRules.withPause(pauseRules.pausesOf(plan), key, until, now());
+    if (!next.changed) return;
+    cancelScopedNudges(key);
+    Object.assign(plan, pauseRules.withRunPauses(plan, next.pauses, now()));
+    armResume(key, until);
+    onRunEvent('paused', { until, scope: key });
     commit();
     background(powerFlow.onPaused(), 'sleep');
   }
@@ -3481,13 +3504,10 @@ function createOrchestra(deps) {
     plan.killed = true;
     // A run paused for shutdown and then killed is no longer resumable.
     shutdownResume.drop();
-    // A kill during a usage-limit pause still counts the pause so far.
-    if (plan.pausedUntil && plan.pauseStartedAt) plan.pausedTotalMs = (plan.pausedTotalMs || 0) + Math.max(0, now() - plan.pauseStartedAt);
     // A running fix-up worker stops with the run: its tab closes, the base stays unpushed.
     fixup.abort();
-    plan.pausedUntil = null;
-    plan.pauseStartedAt = null;
-    plan.pauseScope = null;
+    // Every pause ends; a kill during a usage-limit pause still counts the pause so far.
+    Object.assign(plan, pauseRules.withRunPauses(plan, {}, now()));
     for (const p of plan.packages.filter((x) => x.state === 'launched')) {
       writePty(p.sessionId, ESC);
       patch(p.id, { state: 'killed' });
