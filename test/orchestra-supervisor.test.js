@@ -369,6 +369,9 @@ test('closing the tab of a finishing package lets the finish complete', async ()
   s.orch.onSessionClosed('s1');
   assert.equal(s.orch.view().packages[0].state, 'finishing');
   assert.equal((await s.orch.retry({ planId: s.planId, id: 'a' })).error, 'notRetryable');
+  // finish starts only after the verify semaphore hands out a slot (async).
+  await s.flush();
+  assert.equal(typeof release, 'function');
   release({ ok: true, headSha: 'abc' });
   await s.flush();
   assert.equal(s.orch.view().packages[0].state, 'pushed');
