@@ -20,10 +20,13 @@ test('weekWindow is seven local days from midnight and the server accepts it', (
 });
 
 test('draftFrom builds timed and all-day drafts and refuses bad input', () => {
+  // Pin the server's clock: its create window is relative to "now", so the
+  // real clock would turn these fixed 2026-10 dates into a time bomb.
+  const now = new Date(2026, 9, 19, 12).getTime();
   const timed = draftFrom({ title: 'Dentist', date: '2026-10-20', start: '09:00', end: '', location: '' });
   assert.equal(Date.parse(timed.start), new Date(2026, 9, 20, 9).getTime());
   assert.equal(Date.parse(timed.end) - Date.parse(timed.start), 3600000, 'no end = 1 hour');
-  assert.equal(parseRequest({ action: 'create', draft: timed }).ok, true);
+  assert.equal(parseRequest({ action: 'create', draft: timed }, now).ok, true);
 
   const day = draftFrom({ title: 'Trip', date: '2026-10-31', allDay: true });
   assert.deepEqual([day.start, day.end, day.allDay], ['2026-10-31', '2026-11-01', true]);
