@@ -179,13 +179,14 @@ const clean = (s, max) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, m
  * @returns {Promise<{ok:true, raw:unknown, costUsd:number|null}
  *   | {ok:false, error:'noRepo'|'noClaude'|'timeout'|'limit'|'budget'|'failed'|'badJson', detail?:string}>}
  */
-function runTopicSplit({ cwd, env, request, planner, execImpl = execFile, timeoutMs, isDirImpl = undefined }) {
+function runTopicSplit({ cwd, env, request, planner, model = null, execImpl = execFile, timeoutMs, isDirImpl = undefined }) {
   if (!checkCwd(cwd, isDirImpl).ok) return Promise.resolve({ ok: false, error: 'noRepo', detail: String(cwd || '') });
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : SPLIT_TIMEOUT_MS;
   // The agy planner splits on agy: the topics schema goes into the prompt and
   // the answer is parsed from agy's text for the same validateTopics().
   if (planner === 'agy') {
-    return runAgyPrint({ cwd, env, timeout, execImpl, maxBuffer: 5 * 1024 * 1024, prompt: agyJsonPrompt(buildTopicSplitPrompt(request), core.TOPICS_SCHEMA) }).then(
+    // model: an agy id the controller checked against the live list (null = agy's default).
+    return runAgyPrint({ cwd, env, timeout, execImpl, model: typeof model === 'string' && model ? model : null, maxBuffer: 5 * 1024 * 1024, prompt: agyJsonPrompt(buildTopicSplitPrompt(request), core.TOPICS_SCHEMA) }).then(
       (res) => (res.ok ? parseAgyJson(res.stdout) : res),
     );
   }

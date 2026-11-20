@@ -32,6 +32,19 @@ const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
 const { validatePlanRunPayload, planRunTarget } = require('./orchestraPlanRunStart');
 const { planDocsDir } = require('./orchestraPlanRunView');
 const { planIdPayload } = require('./orchestraResume');
+const { runsOnOf } = require('./workerPool');
+
+/**
+ * The saved agy planner model (ui pref orchestraPlannerAgyModel) for a "Plan
+ * only" run: an agy family key, else null (agy plans on its default model).
+ * @param {(() => object)|undefined} readUiPrefs
+ * @returns {string|null}
+ */
+function savedAgyPlannerModel(readUiPrefs) {
+  const prefs = typeof readUiPrefs === 'function' ? readUiPrefs() : null;
+  const saved = prefs && typeof prefs === 'object' ? prefs.orchestraPlannerAgyModel : null;
+  return runsOnOf(saved) === 'agy' ? saved : null;
+}
 
 const MAX_PROJECT_ID_CHARS = 200;
 // A payload that is present but not a plain object.
@@ -214,6 +227,9 @@ function registerOrchestraIpc(ipcMain, ctx) {
           ? ctx.agyPlannerEnv ? ctx.agyPlannerEnv() : null
           : ctx.toolEnv();
     if (!env) return refuse(req.planner === 'agy' ? 'noAgyProfile' : 'noPlanProfile');
+    // The agy planner's saved model (the same pref the Build picker writes),
+    // read in main; makePlanRun resolves it against the live `agy models` list.
+    const agyModel = req.planner === 'agy' ? savedAgyPlannerModel(ctx.readUiPrefs) : null;
     const res = await registry.ensure(target.projectId).makePlanRun({
       projectId: target.projectId,
       repoPath: target.repoPath,
@@ -221,6 +237,7 @@ function registerOrchestraIpc(ipcMain, ctx) {
       request: req.request,
       planner: req.planner,
       planRunRequest: true,
+      ...(agyModel ? { plannerAgyModel: agyModel } : {}),
     });
     if (res.ok) {
       ctx.playCue('sfx.terminalNew');

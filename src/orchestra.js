@@ -1532,6 +1532,20 @@ function createOrchestra(deps) {
   }
 
   /**
+   * The agy "Plan only" planner's `--model` id: the saved family resolved
+   * against the live `agy models` list, the same way makePlan does (a plan
+   * run has no planner effort, so the default level picks the variant). No
+   * pick, or a family the live list lacks: null, logged - agy's default model.
+   * @param {unknown} key ctx.plannerAgyModel
+   * @returns {Promise<string|null>}
+   */
+  async function planRunAgyModel(key) {
+    const id = key ? await poolRun.agyPlannerModelId(key, null) : null;
+    if (!id) log('[orchestra] Plan only: the agy planner runs on agy\'s default model');
+    return id;
+  }
+
+  /**
    * Free God Mode v2 plan run (orchestraPlanRunStart.js): ONE topic split,
    * then the topic -> critique -> synthesis packages start right away (Q6),
    * locked down on the plan profile (orchestraPlanRunLaunch.js).
@@ -1553,8 +1567,9 @@ function createOrchestra(deps) {
     busy = true;
     planningRepo = ctx.repoPath;
     try {
+      const agyModel = ctx.planner === 'agy' ? await planRunAgyModel(ctx.plannerAgyModel) : null;
       const [res, dirty, baseBranch] = await Promise.all([
-        deps.runTopicSplit({ cwd: ctx.repoPath, env: ctx.env, request: ctx.request, planner: ctx.planner }),
+        deps.runTopicSplit({ cwd: ctx.repoPath, env: ctx.env, request: ctx.request, planner: ctx.planner, ...(agyModel ? { model: agyModel } : {}) }),
         deps.dirtyCount(ctx.repoPath),
         deps.baseBranchOf ? deps.baseBranchOf(ctx.repoPath) : null,
       ]);
