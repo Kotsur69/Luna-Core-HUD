@@ -7,7 +7,24 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.34.0 — Workers multi-select = the run's model pool.**
+> **Current release: v0.35.0 — God Mode plans with agy, Neon, and steadier worktrees.**
+> - add verification semaphore and warm worktree pool
+> - tick a whole tag batch in the to-do picker
+> - use the saved agy planner model in Plan only
+> - run the handback scan in finalize, before the run report
+> - verify GitHub release, delete merged remote luna/* branches, fix release
+>   titles
+> - add opt-in handback To-do scanner and Memory sidebar panel
+> - bring non-Opus God Mode workers to full todo-tick and self-heal parity
+> - add Neon (Argon's replacement) everywhere Argon is
+> - plan with agy's own models (Opus / Argon / Hydrogen)
+> - Fix: cap worktrees.runGit and split the git pool into fast/slow lanes
+> - Fix: run headless agy calls without --print, prompt on stdin
+> - Fix: count agy edit_file diffs and preserve git stats after reads
+> - Fix: a reached reserve cap stops running work like a real limit
+> - Fix: give git worktree add its own 5 min checkout limit
+>
+> **v0.34.0 — Workers multi-select = the run's model pool.**
 > - Workers multi-select = the run's model pool
 > - Antigravity limits as Opus / Gemini / Argon rows, read from agy /usage
 > - show LunaCore's background calls as their own project
