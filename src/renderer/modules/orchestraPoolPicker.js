@@ -94,15 +94,10 @@ export function agyFamilyOptions() {
   return options ? options.models.filter((m) => m.model.startsWith('agy-')).map((m) => ({ model: m.model, available: m.available })) : [];
 }
 
-/** The 'agy:<id>' a one-model agy pool runs on (main's pick), else null. */
-export function agyDefaultVariant(model) {
-  const hit = options && options.models.find((m) => m.model === model);
-  return hit ? hit.defaultVariant : null;
-}
-
 /**
- * The 'agy:<id>' an agy entry runs on: its chosen variant while the live
- * menu lists it, else the family's default (main falls back the same way).
+ * The 'agy:<id>' a one-model agy pool runs on: its chosen variant while the
+ * live menu lists it, else the family's default (main's pick; main falls
+ * back the same way).
  * @param {{model:string, effort:string}} entry
  * @returns {string|null}
  */

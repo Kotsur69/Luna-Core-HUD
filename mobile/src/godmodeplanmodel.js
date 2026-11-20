@@ -133,7 +133,8 @@ export function packageModelLine(plan, pkg) {
   const pool = planPool(plan);
   if (!pool || !model) return model;
   if (model === POOL_FREE_KEY) return poolFreeProfileId(pool) || model;
-  const variantOf = pool.find((e) => e.effort === model);
+  // A package on an agy variant the pool chose ('agy:<id>' only - 'plan' is no model).
+  const variantOf = model.startsWith('agy:') ? pool.find((e) => e.effort === model) : null;
   if (variantOf) return `${poolModelName(variantOf.model)} - ${poolEffortLevel(variantOf)}`;
   const name = poolModelName(model) || model;
   const level = poolEffortLevel(poolEntryOfKey(pool, model));
