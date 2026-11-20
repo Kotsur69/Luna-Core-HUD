@@ -33,6 +33,7 @@ const { withVariantsSchema, validateVariants, AB_PLANNER_RULES } = require('./or
 const { runAgyPrint, agyJsonPrompt, parseAgyJson } = require('./orchestraAgy');
 // Worker-model pools (2+ ticked models): the planner is offered only those.
 const { isPoolKey, strongestKey, tierOf, POOL_FREE_KEY, STRENGTH_ORDER } = require('./workerPool');
+const { agyFamilyList } = require('./agyFamilies');
 
 const PLANNER_MODEL = 'opus';
 // The Claude CLI model aliases Mati may pick for the planner in the to-do
@@ -196,10 +197,8 @@ const HYBRID_MODEL_RULES = [
 const POOL_KEY_TEXT = Object.freeze({
   opus: 'Claude Opus',
   sonnet: 'Claude Sonnet',
-  'agy-opus': 'Claude Opus on the Antigravity CLI',
-  'agy-neon': 'Gemini Neon on the Antigravity CLI',
-  'agy-argon': 'Gemini Argon on the Antigravity CLI',
-  'agy-hydrogen': 'Gemini Hydrogen on the Antigravity CLI',
+  // The agy families (src/agyFamilies.js plannerText).
+  ...Object.fromEntries(agyFamilyList().map((f) => [f.poolKey, f.plannerText])),
   [POOL_FREE_KEY]: 'a free model, much weaker than the others',
 });
 

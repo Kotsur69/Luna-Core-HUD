@@ -25,6 +25,8 @@
 
 'use strict';
 
+const { agyOwnUsageFamilies } = require('./agyFamilies');
+
 const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
 const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY;
@@ -303,19 +305,16 @@ function agyWindowLabel(window) {
   return labelForMinutes(30 * MINUTES_PER_DAY);
 }
 
-/** The Argon model family (agy "Gemini 4 Argon"), which has its own weekly-only quota. Tested on agyWords(). */
-const AGY_ARGON_RE = /\bargon\b/;
-const AGY_ARGON_NAME = 'Argon';
 /**
  * Model families with a quota of their own, named apart from "Gemini" (their
- * ids also say gemini): Argon, and Neon, its replacement. Neon's own bucket
- * is UNVERIFIED (agy /usage listed none on 2026-11-19); it is matched by name
- * so it gets its own row the day agy reports one.
+ * ids also say gemini): the ownUsageRow families of src/agyFamilies.js (Neon,
+ * Argon). Each is matched as a whole word on agyWords(), so a family whose
+ * bucket agy does not report yet gets its own row the day it does.
  */
-const AGY_OWN_FAMILIES = Object.freeze([
-  Object.freeze({ re: AGY_ARGON_RE, name: AGY_ARGON_NAME }),
-  Object.freeze({ re: /\bneon\b/, name: 'Neon' }),
-]);
+const AGY_OWN_FAMILIES = Object.freeze(agyOwnUsageFamilies().map((f) => Object.freeze({
+  re: new RegExp(`\\b${f.family}\\b`),
+  name: f.usageRow,
+})));
 
 /**
  * Response text as separate lower-case words: "_", "-" and "." become spaces,

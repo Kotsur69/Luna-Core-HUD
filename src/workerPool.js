@@ -21,21 +21,21 @@
 // hydrogen) that is matched by name against the live `agy models` list
 // (src/agymodels.js); agyVariantFor() picks the variant for a package effort.
 //
-// Pure and import-free like src/workerModels.js: the renderer and the phone
-// import it as an ES module, main and `node --test` require() it.
+// Pure like src/workerModels.js: its only import is the import-free family
+// registry (src/agyFamilies.js). The renderer and the phone import it as an
+// ES module, main and `node --test` require() it.
 // ============================================================================
 
 'use strict';
+
+import { agyFamilyList, agyPoolKeysOfTier } from './agyFamilies.js';
 
 /** The pool models other than free profiles, in the order the menus show them. */
 export const POOL_MODEL_LIST = Object.freeze([
   Object.freeze({ id: 'opus', name: 'Opus', runsOn: 'claude', tier: 'hard', family: null }),
   Object.freeze({ id: 'sonnet', name: 'Sonnet', runsOn: 'claude', tier: 'easy', family: null }),
-  Object.freeze({ id: 'agy-opus', name: 'Opus (agy)', runsOn: 'agy', tier: 'hard', family: 'opus' }),
-  // Neon replaces Argon on Google's side; both stay while agy lists both.
-  Object.freeze({ id: 'agy-neon', name: 'Neon (agy)', runsOn: 'agy', tier: 'hard', family: 'neon' }),
-  Object.freeze({ id: 'agy-argon', name: 'Argon (agy)', runsOn: 'agy', tier: 'hard', family: 'argon' }),
-  Object.freeze({ id: 'agy-hydrogen', name: 'Hydrogen (agy)', runsOn: 'agy', tier: 'easy', family: 'hydrogen' }),
+  // The agy families (src/agyFamilies.js), strongest first.
+  ...agyFamilyList().map((f) => Object.freeze({ id: f.poolKey, name: f.name, runsOn: 'agy', tier: f.tier, family: f.family })),
 ]);
 
 /** The ids of POOL_MODEL_LIST. */
@@ -43,7 +43,9 @@ export const POOL_MODELS = Object.freeze(POOL_MODEL_LIST.map((m) => m.id));
 /** The planner key of a free provider profile. */
 export const POOL_FREE_KEY = 'free';
 /** Strongest first: "if unsure, the strongest ticked model", and the out-of-pool fallback. */
-export const STRENGTH_ORDER = Object.freeze(['opus', 'agy-opus', 'agy-neon', 'agy-argon', 'sonnet', 'agy-hydrogen', POOL_FREE_KEY]);
+export const STRENGTH_ORDER = Object.freeze([
+  'opus', ...agyPoolKeysOfTier('hard'), 'sonnet', ...agyPoolKeysOfTier('easy'), POOL_FREE_KEY,
+]);
 /** 'plan' + src/efforts.js EFFORTS (kept in line by test/worker-pool.test.js). */
 export const POOL_EFFORTS = Object.freeze(['plan', 'medium', 'high', 'xhigh', 'max']);
 /** The pool nobody chose: Opus only, today's run. */

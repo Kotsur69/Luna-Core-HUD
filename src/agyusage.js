@@ -34,6 +34,7 @@ const { execFile } = require('child_process');
 const path = require('path');
 const parse = require('./providerusageparse');
 const { parseAgyUsageTable, createAgyUsageReader } = require('./agyusagecli');
+const { agyPerModelUsageRows, isWeeklyOnlyUsageRow } = require('./agyFamilies');
 
 /** The app's one `agy -p /usage` reader (it holds the back-off). */
 const sharedAgyUsageReader = createAgyUsageReader();
@@ -58,8 +59,9 @@ const AGY_QUOTA_PATH = '/v1internal:retrieveUserQuotaSummary';
 // (shared by every gemini-* model) is only here. Verified live 2026-11-18.
 const AGY_MODEL_QUOTA_PATH = '/v1internal:retrieveUserQuota';
 /** Model families the summary does not cover, taken from the per-model quota. */
-// Neon (Argon's replacement) counts apart from Gemini once a neon bucket shows up.
-const AGY_MODEL_FAMILIES = new Set(['Gemini', 'Neon', 'Argon']);
+// The per-model usage rows of src/agyFamilies.js (Gemini, Neon, Argon); an
+// own-quota family (Neon) counts apart from Gemini once its bucket shows up.
+const AGY_MODEL_FAMILIES = new Set(agyPerModelUsageRows());
 const HOUR_MS = 60 * 60 * 1000;
 /** Slack on a reset distance, so a window that just started still fits it. */
 const WINDOW_SLACK_MS = 5 * 60 * 1000;
@@ -236,7 +238,7 @@ const lastGoodByAccount = new Map();
  * No reset (a full bucket) falls back to the 5 h window.
  */
 function modelWindow(family, resetsAt, nowMs) {
-  if (family === 'Argon') return WEEKLY_WINDOW;
+  if (isWeeklyOnlyUsageRow(family)) return WEEKLY_WINDOW;
   const left = resetsAt ? Date.parse(resetsAt) - nowMs : NaN;
   if (!Number.isFinite(left)) return RESET_WINDOWS[0];
   return RESET_WINDOWS.find((w) => left <= w.maxMs + WINDOW_SLACK_MS) || WEEKLY_WINDOW;
