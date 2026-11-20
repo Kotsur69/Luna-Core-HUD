@@ -8,7 +8,9 @@
 //
 //   livePlanPool(raw)            a plan request's pool when it makes a pool
 //                                run (2+ usable models), else null
-//   applyPlanPool(pkgs, pool)    the planned packages on their worker models
+//   applyPlanPool(pkgs, pool, rules)
+//                                the planned packages on their worker models,
+//                                then the weak-model guard (src/orchestraWeakGuard.js)
 //   approvePool(o, workers)      what Approve's pool turns the run into; a
 //                                value, or a Promise only when the pool
 //                                names agy (the live list is read then) - so
@@ -23,16 +25,19 @@
 
 const poolRules = require('./orchestraPool');
 const effortRules = require('./orchestraPoolEffort');
+const weakGuard = require('./orchestraWeakGuard');
 const { poolEffortList } = require('./poolEffort');
 const { normalizePool, poolKeys, poolWorkers, isPoolRun, runsOnOf } = require('./workerPool');
 const { agyModelIdOf } = require('./workerModels');
 const { DEFAULT_EFFORT, normalizeEffort } = require('./efforts');
 
 /**
- * @param {{planOf: () => (object|null), deps: object, log: (line:string) => void, workerSettings: () => object}} opts
+ * @param {{planOf: () => (object|null), deps: object, log: (line:string) => void, workerSettings: () => object,
+ *   guardRules?: (repoPath:string|null) => object[], now?: () => number}} opts
  *   planOf: the controller's current plan (it is replaced on a re-plan)
+ *   guardRules: the repo's protected paths (src/orchestraHybridGuard.js loadProtected)
  */
-function createPoolWiring({ planOf, deps, log, workerSettings }) {
+function createPoolWiring({ planOf, deps, log, workerSettings, guardRules = () => undefined, now = Date.now }) {
   /**
    * The effort a package's worker runs at (src/orchestra.js effortFor,
    * before any escalation): it picks the agy variant, at plan time and at
@@ -45,6 +50,24 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
     if (!deps.agyModels || !poolRules.poolNeedsAgy(pool)) return [];
     await deps.agyModels.ensure();
     return deps.agyModels.list();
+  }
+
+  /**
+   * The weak-model guard over a pool run's packages: each package on the
+   * easiest agy tier that breaks the rules moves up (logged; the package
+   * carries the reasons for the board).
+   */
+  function guardWeak(packages, pool, agyList, rules) {
+    const res = weakGuard.applyWeakGuard(packages, {
+      pool,
+      agyList,
+      rules,
+      effortOf,
+      emergencySetting: workerSettings().emergencyEffort,
+      at: now(),
+    });
+    for (const m of res.moves) log(`[orchestra] package ${m.id}: weak-model guard, ${m.text}`);
+    return res.packages;
   }
 
   /** The moves of one applyPool(), logged (they are warnings on the board too). */
@@ -90,16 +113,18 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
    * leaves the packages as planned.
    * @param {object[]} packages
    * @param {{pool:object[], agyList:object[]}} pool livePlanPool() output
+   * @param {object[]} [rules] the repo's protected paths (the weak-model guard)
    * @returns {{packages:object[], warnings:object[]}}
    */
-  function applyPlanPool(packages, pool) {
+  function applyPlanPool(packages, pool, rules) {
     const notes = Array.isArray(pool.notes) ? pool.notes : [];
     const applied = poolRules.applyPool(packages, pool.pool, { agyList: pool.agyList, effortOf });
     if (!applied.ok) {
       log(`[orchestra] the Workers pool could not be applied (${applied.error}); the packages keep the planner's picks`);
       return { packages, warnings: notes };
     }
-    return { packages: applied.packages, warnings: [...notes, ...applied.moved.map((m) => ({ code: 'outOfPool', ...m }))] };
+    const guardedPackages = guardWeak(applied.packages, pool.pool, pool.agyList, rules);
+    return { packages: guardedPackages, warnings: [...notes, ...applied.moved.map((m) => ({ code: 'outOfPool', ...m }))] };
   }
 
   /**
@@ -138,10 +163,12 @@ function createPoolWiring({ planOf, deps, log, workerSettings }) {
     const choice = poolRules.approveChoice(checked.pool, agyList);
     const notes = checked.notes.length ? { notes: checked.notes } : {};
     if (choice.kind !== 'pool') return choice.kind === 'single' ? { ...choice, ...notes } : choice;
-    const applied = poolRules.applyPool(plan.packages, choice.pool, { agyList, effortOf });
+    // The guard's plan-time moves are taken back: Approve's pool decides them anew.
+    const applied = poolRules.applyPool(plan.packages.map(weakGuard.undoWeakGuard), choice.pool, { agyList, effortOf });
     if (!applied.ok) return { kind: 'error', error: applied.error };
     logMoves(applied.moved);
-    return { ...choice, ...notes, workers: poolWorkers(choice.pool, workers), workerModel: 'plan', packages: applied.packages };
+    const packages = guardWeak(applied.packages, choice.pool, agyList, guardRules(plan.repoPath));
+    return { ...choice, ...notes, workers: poolWorkers(choice.pool, workers), workerModel: 'plan', packages };
   }
 
   /**

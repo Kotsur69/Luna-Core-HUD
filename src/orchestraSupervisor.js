@@ -33,6 +33,7 @@ const { normalizeSleeps } = require('./orchestraSleep');
 const { normalizePostMerge, normalizeSha } = require('./orchestraPostMergeState');
 const { normalizeStoredPlanRunFlag, normalizeStoredPlanRun } = require('./orchestraPlanRunView');
 const { normalizeStoredGuard } = require('./orchestraHybridGuard');
+const { normalizeStoredWeakGuard } = require('./orchestraWeakGuard');
 const { storedWorkers } = require('./orchestraWorkers');
 const { normalizeStoredHybrid, normalizeStoredProfileId } = require('./orchestraHybrid');
 const { normalizeStoredFreeReview } = require('./orchestraFreeReview');
@@ -832,6 +833,8 @@ function normalizePackage(raw) {
     ...(raw.splitFailed === true ? { splitFailed: true } : {}),
     // F6 hybrid guard: why a "free" package runs on Sonnet (the board shows it).
     ...(normalizeStoredGuard(raw.hybridGuard) ? { hybridGuard: normalizeStoredGuard(raw.hybridGuard) } : {}),
+    // Weak-model guard (src/orchestraWeakGuard.js): why a Hydrogen package moved up.
+    ...(normalizeStoredWeakGuard(raw.weakGuard) ? { weakGuard: normalizeStoredWeakGuard(raw.weakGuard) } : {}),
     // A "Workers" pool run (src/orchestraPool.js): the ticked model, the planner's reason, the moved-from pick.
     ...(isPoolKey(raw.poolModel)
       ? { poolModel: raw.poolModel, modelReason: str(raw.modelReason, MAX_POOL_REASON_CHARS), poolFrom: strOrNull(raw.poolFrom, MAX_MODEL_CHARS) }

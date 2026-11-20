@@ -24,12 +24,8 @@
 
 const rules = require('./orchestraRescue');
 const { concreteModel } = require('./orchestraPool');
-const { entryModel } = require('./orchestraPoolEffort');
-const { poolEntryOfKey } = require('./poolEffort');
-const { poolEffortLevel, runsOnOf, normalizePool } = require('./workerPool');
 const { poolUsageReadings } = require('./orchestraPoolUsage');
 const { pausesOf } = require('./orchestraPauses');
-const { normalizeEffort } = require('./efforts');
 
 const noop = () => {};
 
@@ -80,15 +76,7 @@ function createRescueWiring(opts) {
    * its entry's variant, else the variant nearest the package's effort.
    */
   function resolve(pkg, key, list, plan) {
-    const entry = poolEntryOfKey(normalizePool(plan.modelPool), key);
-    const on = runsOnOf(key);
-    if (key === rules.OPUS) {
-      const planned = pkg.poolModel === rules.OPUS;
-      return { model: rules.OPUS, effort: planned ? effortFor(pkg) : rules.emergencyEffort(opts.emergencySetting(), effortFor(pkg)) };
-    }
-    if (on === 'claude') return { model: key, effort: normalizeEffort(poolEffortLevel(entry)) };
-    if (on === 'agy') return { model: entryModel(entry, list) || concreteModel(key, effortFor(pkg), list), effort: null };
-    return null;
+    return rules.resolveTarget({ pkg, key, pool: plan.modelPool, agyList: list, effort: effortFor(pkg), emergencySetting: opts.emergencySetting() });
   }
 
   /** The fields one move sets, or null when its target cannot run. */

@@ -220,3 +220,94 @@ test('cross-run: a real run reports its active agy workers (any run kind) for th
   const o = await started({ packages: [pkg('a', 'opus')] });
   assert.equal(o.orch.activeAgyWorkers(), 0);
 });
+
+// ---- weak-model guard (the easiest agy tier) -------------------------------------------
+
+const weakGuard = require('../src/orchestraWeakGuard');
+const { agyPoolKeysOfTier } = require('../src/agyFamilies');
+
+const risky = (id, extra = {}) => pkg(id, 'agy-hydrogen', { files: ['docs/a.md', 'docs/b.md', 'docs/c.md'], ...extra });
+
+test('weak guard: the guarded keys are the easiest agy tier from the family registry (Hydrogen), never Sonnet', () => {
+  assert.deepEqual([...weakGuard.WEAK_KEYS], agyPoolKeysOfTier('easy'));
+  assert.ok(weakGuard.isWeakKey('agy-hydrogen'));
+  for (const k of ['sonnet', 'opus', 'agy-argon', 'agy-neon', 'agy-opus', 'free']) assert.equal(weakGuard.isWeakKey(k), false, k);
+});
+
+test('weak guard: a Hydrogen package with 3 files moves to the next stronger ticked model, reason on the board', async () => {
+  const s = await planned({ pool: [e('opus'), e('agy-hydrogen')], packages: [risky('h')] });
+  const h = s.view('h');
+  assert.deepEqual(h.weakGuard, { from: 'agy-hydrogen', reasons: [{ code: 'tooManyFiles', n: 3 }] });
+  assert.deepEqual([h.model, h.rescueKey, h.emergency], ['opus', 'opus', false]);
+  assert.deepEqual(h.rescues.map((r) => r.text), ['guard: Hydrogen (agy) -> Opus']);
+  assert.ok(s.log.lines.some((l) => l.includes('package h: weak-model guard')));
+  const res = await s.orch.launch({ planId: s.planId, integration: 'branches', workers: 'claude', modelPool: [e('opus'), e('agy-hydrogen')] });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await s.flush();
+  assert.deepEqual(sessionModels(s), [['cloud', 'opus']]);
+});
+
+test('weak guard: a protected path moves Hydrogen to Sonnet, the nearest stronger ticked model', async () => {
+  const s = await started({
+    pool: [e('opus'), e('sonnet'), e('agy-hydrogen')],
+    packages: [pkg('h', 'agy-hydrogen', { files: ['src/main.js'] })],
+  });
+  const h = s.view('h');
+  assert.equal(h.weakGuard.reasons[0].code, 'protected');
+  assert.deepEqual([h.model, h.rescues.map((r) => r.text)], ['sonnet', ['guard: Hydrogen (agy) -> Sonnet']]);
+  assert.deepEqual(sessionModels(s), [['cloud', 'sonnet']]);
+});
+
+test('weak guard: nothing stronger ticked -> Opus as an emergency at the Emergency Opus effort', async () => {
+  const s = await started({
+    pool: [e('agy-hydrogen'), e('free:freellm-chain')],
+    workers: 'hybrid',
+    settings: { emergencyEffort: 'max' },
+    packages: [pkg('h', 'agy-hydrogen', { verify: '' })],
+  });
+  const h = s.view('h');
+  assert.deepEqual(h.weakGuard.reasons, [{ code: 'noVerify' }]);
+  assert.deepEqual([h.model, h.emergency], ['opus', true]);
+  assert.deepEqual(h.rescues.map((r) => r.text), ['guard: Hydrogen (agy) -> Opus (emergency, max)']);
+  assert.equal(s.log.sessions[0].task.model, 'opus');
+  assert.equal(s.log.sessions[0].task.effort, 'max');
+});
+
+test('weak guard: a safe Hydrogen package stays on Hydrogen; Sonnet and Argon are never guarded', async () => {
+  const s = await started({
+    pool: [e('sonnet'), e('agy-argon'), e('agy-hydrogen')],
+    packages: [
+      pkg('h', 'agy-hydrogen', { at: 1 }),
+      pkg('s', 'sonnet', { at: 2, files: ['src/main.js', 'a', 'b'] }),
+      pkg('a', 'agy-argon', { at: 3, files: ['src/preload.js'], verify: '' }),
+    ],
+  });
+  for (const id of ['h', 's', 'a']) assert.equal(s.view(id).weakGuard, undefined, id);
+  assert.deepEqual([s.view('h').model, s.view('s').model, s.view('a').model], ['agy:gemini-4-hydrogen-medium', 'sonnet', 'agy:gemini-4-argon-medium']);
+});
+
+test('weak guard: Approve with another pool takes the plan-time move back and guards anew', async () => {
+  const s = await planned({ pool: [e('opus'), e('agy-hydrogen')], packages: [risky('h')] });
+  assert.equal(s.view('h').model, 'opus');
+  const res = await s.orch.launch({ planId: s.planId, integration: 'branches', workers: 'claude', modelPool: [e('sonnet'), e('agy-hydrogen')] });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await s.flush();
+  const h = s.view('h');
+  assert.deepEqual([h.model, h.rescues.map((r) => r.text)], ['sonnet', ['guard: Hydrogen (agy) -> Sonnet']]);
+});
+
+test('weak guard: the stored record survives a restart only in shape', () => {
+  assert.deepEqual(weakGuard.normalizeStoredWeakGuard({ from: 'agy-hydrogen', reasons: [{ code: 'noFiles' }, { code: 'x' }] }), {
+    from: 'agy-hydrogen',
+    reasons: [{ code: 'noFiles' }],
+  });
+  for (const bad of [null, {}, { from: 'sonnet', reasons: [{ code: 'noFiles' }] }, { from: 'agy-hydrogen', reasons: [] }]) {
+    assert.equal(weakGuard.normalizeStoredWeakGuard(bad), null);
+  }
+});
+
+test('regression: an Opus-only run never runs the weak guard (no pool)', async () => {
+  const s = await started({ packages: [pkg('a', 'opus', { files: ['src/main.js', 'b', 'c'], verify: '' })] });
+  const a = s.view('a');
+  assert.deepEqual([a.model, a.weakGuard, a.rescues], ['opus', undefined, undefined]);
+});

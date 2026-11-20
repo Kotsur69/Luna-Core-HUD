@@ -37,7 +37,7 @@ import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetr
 import { loadPicker, pickerView } from './orchestraPick.js';
 import { loadWorkerModel, takesWorkerModel, runModelLabel, packageModelBadge, workerModelControls, chosenRunWorkers, launchModelFields } from './orchestraWorkerModel.js';
 import { poolModelName } from '../../workerPool.js';
-import { rescueLines } from './orchestraRescueLines.js';
+import { rescueLines, weakGuardLine } from './orchestraRescueLines.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
@@ -401,6 +401,9 @@ function pkgCard(pkg) {
   // F6 guard: the planner marked it "free", the rules moved it to Sonnet.
   const guard = hybridGuardText(pkg.hybridGuard);
   if (guard) card.append(msg(guard, 'is-warn'));
+  // Weak-model guard: planned on the easiest agy tier, the rules moved it up.
+  const weak = weakGuardLine(pkg, t);
+  if (weak) card.append(msg(weak, 'is-warn'));
   // F6c/F6d: runs free, the Claude review, limit waits, hand-overs to Sonnet.
   for (const line of hybridLines(pkg)) card.append(msg(line.text, line.cls));
   // Opt-in evolutions: A/B builds, self-heal, context guard.

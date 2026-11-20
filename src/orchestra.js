@@ -389,8 +389,9 @@ function runPackage(p) {
     stalls: 0,
     stallHistory: [],
     escalated: false,
-    modelOverride: null,
-    effortOverride: null,
+    // A weak-model guard move (src/orchestraWeakGuard.js) is planned as an override; nothing else is.
+    modelOverride: p.weakGuard ? p.modelOverride || null : null,
+    effortOverride: p.weakGuard ? p.effortOverride || null : null,
     touched: [],
     prUrl: null,
     merged: false,
@@ -1111,6 +1112,8 @@ function createOrchestra(deps) {
         ...(p.poolModel ? { poolModel: p.poolModel, modelReason: p.modelReason || '', poolFrom: p.poolFrom || null } : {}),
         // F6 guard: why a "free" package was upgraded to Sonnet (null = it was not).
         hybridGuard: p.hybridGuard || null,
+        // Weak-model guard: why a package planned on the easiest agy tier moved up (none = it did not).
+        ...(p.weakGuard ? { weakGuard: p.weakGuard } : {}),
         // F6c/F6d: free worker, review, hand-overs, free wait (null outside hybrid runs).
         hybrid: hybridRun.view(p),
         effort: p.effortOverride || p.effort || null,
@@ -1298,7 +1301,7 @@ function createOrchestra(deps) {
     }
   }
   // "Workers" pools (src/orchestraPoolWiring.js): planned for, then routed per package.
-  const poolRun = createPoolWiring({ planOf: () => plan, deps, log, workerSettings });
+  const poolRun = createPoolWiring({ planOf: () => plan, deps, log, workerSettings, now, guardRules: (repoPath) => protectedRules(repoPath) });
   // Pool rescue: escalation up the ticked models, limit moves, emergency Opus.
   const rescue = createRescueWiring({
     planOf: () => plan,
@@ -1538,7 +1541,8 @@ function createOrchestra(deps) {
     const guarded = hybrid ? hybridGuard.applyHybridGuard(linked, protectedRules(repoPath)) : linked;
     // A pool run: each package on the model its worker runs on (after the
     // guard, so a free package it upgraded stays on a ticked Claude model).
-    const pooled = pool ? poolRun.applyPlanPool(guarded, pool) : null;
+    // The weak-model guard runs there too (src/orchestraWeakGuard.js).
+    const pooled = pool ? poolRun.applyPlanPool(guarded, pool, protectedRules(repoPath)) : null;
     const packages = pooled ? pooled.packages : guarded;
     if (pooled && pooled.warnings.length) checked = { ...checked, warnings: [...checked.warnings, ...pooled.warnings] };
     // A/B builds: a package with two variants becomes its group plus one package per variant.
