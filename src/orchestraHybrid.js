@@ -432,7 +432,10 @@ function hybridReportRows(view) {
  *   landPushed: (id:string) => void, stall: (id:string, reason:string, detail?:string|null) => void,
  *   runReview?: Function, reviewDiff?: Function, reviewEnv?: () => object|null,
  *   usageLimits?: () => object[],
+ *   handOverTarget?: (pkg:object, kind:string) => (object|null),
  * }} deps
+ *   handOverTarget: a pool run's hand-over fields (modelOverride, effortOverride,
+ *   rescue log); null = Sonnet, as in any other hybrid run
  */
 function createHybridRun(deps) {
   const { now, setTimer, clearTimer } = deps;
@@ -469,12 +472,15 @@ function createHybridRun(deps) {
   function handOver(pkg, kind, { detail = null, reasons = [] } = {}) {
     dropTimer(freeTimers, pkg.id);
     dropTimer(reviewTimers, pkg.id);
-    deps.patch(pkg.id, handOverFields(pkg, kind, now(), detail));
+    // A pool run picks its own target (src/orchestraRescue.js handOverTarget); else Sonnet.
+    const pooled = deps.handOverTarget ? deps.handOverTarget(pkg, kind) : null;
+    deps.patch(pkg.id, { ...handOverFields(pkg, kind, now(), detail), ...(pooled || {}) });
     const fresh = deps.findPkg(pkg.id);
     const text = handOverBrief(deps.briefText(fresh, fresh.branch, { resume: true }), { kind, detail, reasons });
     const res = deps.reopen(fresh, text);
-    onRunEvent('handedOver', { id: pkg.id, kind, ok: res.ok === true });
-    if (!res.ok) log(`[hybrid] hand-over of ${pkg.id} to Sonnet could not open a tab: ${res.error || 'failed'}`);
+    onRunEvent('handedOver', { id: pkg.id, kind, ok: res.ok === true, ...(pooled ? { to: pooled.rescueKey } : {}) });
+    const to = pooled ? pooled.modelOverride : HAND_OVER_MODEL;
+    if (!res.ok) log(`[hybrid] hand-over of ${pkg.id} to ${to} could not open a tab: ${res.error || 'failed'}`);
     return res.ok === true;
   }
 

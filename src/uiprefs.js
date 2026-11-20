@@ -12,6 +12,7 @@
 // termFontFamily, termFontSize, termLineHeight, termLetterSpacing, termCursorStyle,
 // termCursorBlink, termScrollback, termBgOpacity, termBgBlur, termBgImage,
 // orchestraPlannerEffort, orchestraPlannerModel, orchestraWorkers, orchestraModelPool, orchestraFollowups,
+// orchestraEmergencyEffort,
 // collapsed, layoutSizes, widgetSlots, railedRegions, density, fontPack, glow,
 // motion, effectsStrength, welcomeSeen, welcomeChecked, pwaUrl, hideLife,
 // hideMission, hideGodMode.
@@ -31,6 +32,7 @@ const { CLAUDE_MODELS, AGY_MODEL } = require('./claudeModels');
 const { WORKER_MODELS, isWorkerModel } = require('./workerModels');
 const { normalizeWorkers, workersPrefOf } = require('./orchestraWorkers');
 const { normalizePool, runsOnOf } = require('./workerPool');
+const { EMERGENCY_EFFORTS, EMERGENCY_STEP } = require('./orchestraRescue');
 /** The agy planner's model pref: an agy family key ('agy-opus' / 'agy-neon' / 'agy-argon' / 'agy-hydrogen') or null. */
 const agyPlannerModelOf = (v) => (runsOnOf(v) === 'agy' ? v : null);
 const { USAGE_VISIBILITY_DEFAULTS, cleanUsageVisibility } = require('./usagevisibility');
@@ -131,6 +133,11 @@ const ORCHESTRA_PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default
 // Worker --effort: 'plan' = the planner's per-package pick (medium if none);
 // the others force one level. Never 'low' (src/efforts.js).
 const ORCHESTRA_WORKER_EFFORTS = ['plan', ...EFFORTS];
+
+/** A stored Emergency Opus effort pref (src/orchestraRescue.js), or null when it is not one of the options. */
+function emergencyEffortOf(raw) {
+  return EMERGENCY_EFFORTS.includes(raw) ? raw : null;
+}
 
 /** A stored worker-effort pref, or null when it is not one of the options. */
 function workerEffortOf(raw) {
@@ -272,6 +279,10 @@ const DEFAULTS = {
   // God Mode "Sessions may file new to-dos" (orchestraFollowups.js), ticked
   // in the to-do picker: the last choice, fixed into each new plan. Off.
   orchestraFollowups: false,
+  // God Mode "Emergency Opus effort" (src/orchestraRescue.js): the --effort
+  // Opus runs at when it takes over a pool package not planned for it.
+  // 'step' = one step up from the package's effort (today's escalation rule).
+  orchestraEmergencyEffort: EMERGENCY_STEP,
   orchestraIntegration: 'pr',
   orchestraAllowedTools: [],
   orchestraCheckCommand: 'npm test',
@@ -798,6 +809,7 @@ function readUiPrefs() {
       orchestraWorkers: workersPrefOf(obj),
       orchestraModelPool: modelPoolPrefOf(obj.orchestraModelPool),
       orchestraFollowups: obj.orchestraFollowups === true,
+      orchestraEmergencyEffort: emergencyEffortOf(obj.orchestraEmergencyEffort) || DEFAULTS.orchestraEmergencyEffort,
       orchestraIntegration: ORCHESTRA_INTEGRATION_MODES.includes(obj.orchestraIntegration)
         ? obj.orchestraIntegration
         : DEFAULTS.orchestraIntegration,
@@ -924,6 +936,9 @@ function writeUiPrefs(partial) {
     }
     if (partial && ORCHESTRA_PERMISSION_MODES.includes(partial.orchestraPermissionMode)) {
       next.orchestraPermissionMode = partial.orchestraPermissionMode;
+    }
+    if (partial && emergencyEffortOf(partial.orchestraEmergencyEffort)) {
+      next.orchestraEmergencyEffort = partial.orchestraEmergencyEffort;
     }
     if (partial && workerEffortOf(partial.orchestraWorkerEffort)) {
       next.orchestraWorkerEffort = partial.orchestraWorkerEffort;
@@ -1097,5 +1112,6 @@ module.exports = {
   agyPlannerModelOf,
   checkCommandOf,
   workerEffortOf,
+  emergencyEffortOf,
   SUPABASE_APPLY_MODES,
 };

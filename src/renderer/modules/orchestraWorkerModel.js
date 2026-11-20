@@ -24,6 +24,10 @@ import { poolEntryOfKey, packagePoolEffort } from '../../poolEffort.js';
 
 /** The saved single worker model (the Settings select), or null before it was read. */
 let picked = null;
+/** src/orchestraRescue.js EMERGENCY_EFFORTS: the Emergency Opus effort (main validates it again). */
+export const EMERGENCY_OPTIONS = Object.freeze(['step', 'low', 'medium', 'high', 'xhigh', 'max']);
+/** The saved Emergency Opus effort (Settings and Approve share the pref). */
+let emergency = 'step';
 
 /** Reads the saved prefs; an unreadable one keeps the choice already on screen. */
 export async function loadWorkerModel() {
@@ -34,6 +38,7 @@ export async function loadWorkerModel() {
     const prefs = await window.lunacore.getUiPrefs();
     const saved = normalizeWorkerModel(prefs && prefs.orchestraWorkerModel);
     if (saved) picked = saved;
+    if (prefs && EMERGENCY_OPTIONS.includes(prefs.orchestraEmergencyEffort)) emergency = prefs.orchestraEmergencyEffort;
   } catch {
     /* prefs unreadable: the plan view's model (the pref main read) is used */
   }
@@ -190,5 +195,44 @@ export function workerModelControls(plan, disabled, onChange, workers = 'claude'
     fallbackLabel: workerModelLabel(runWorkerModel(plan, picked)),
     onChange,
   });
-  return [label, picker];
+  if (workers === 'agy' || !isPoolRun(chosenPool())) return [label, picker];
+  return [label, picker, ...emergencyControls(disabled)];
+}
+
+/** The text of one Emergency Opus effort choice. */
+export const emergencyOptionText = (value) => (value === 'step' ? t('orchset.emergency.step') : value);
+
+/**
+ * A pool run's "Emergency Opus effort" on Approve: the same pref as the
+ * Settings select, saved on change (main reads it when the run starts).
+ * @param {boolean} disabled
+ * @returns {HTMLElement[]}
+ */
+function emergencyControls(disabled) {
+  const label = document.createElement('span');
+  label.className = 'orchestra__optlabel';
+  label.textContent = t('orchset.emergency');
+  label.title = t('orchset.emergency.hint');
+  const select = document.createElement('select');
+  select.className = 'profile-select';
+  select.disabled = disabled;
+  for (const value of EMERGENCY_OPTIONS) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = emergencyOptionText(value);
+    select.append(opt);
+  }
+  select.value = emergency;
+  select.addEventListener('change', async () => {
+    if (!EMERGENCY_OPTIONS.includes(select.value)) return;
+    const asked = select.value;
+    try {
+      const next = await window.lunacore.setUiPrefs({ orchestraEmergencyEffort: asked });
+      emergency = next && EMERGENCY_OPTIONS.includes(next.orchestraEmergencyEffort) ? next.orchestraEmergencyEffort : asked;
+    } catch (err) {
+      console.warn('[orchestraWorkerModel] saving the Emergency Opus effort failed:', err);
+    }
+    select.value = emergency;
+  });
+  return [label, select];
 }

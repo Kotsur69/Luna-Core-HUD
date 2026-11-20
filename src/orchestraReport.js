@@ -34,6 +34,7 @@ const { planRunResult, planRunReportLines } = require('./orchestraPlanRunView');
 const { hybridReportLines, hybridReportRows } = require('./orchestraHybrid');
 // A "Workers" pool run: the model and the reason per package.
 const { poolReportLines, poolReportRows } = require('./orchestraPool');
+const { poolSummaryLines } = require('./orchestraPoolSummary');
 const { resumeReportLines } = require('./orchestraResume');
 // A/B builds: per group the winner, how it was picked and the kept loser branch.
 const { abReportLines } = require('./orchestraVariantRun');
@@ -643,6 +644,8 @@ function buildReport(view, extra) {
     ...planRunReportLines(view),
     ...hybridReportLines(view),
     ...poolReportLines(view),
+    // Per model: planned / landed / stalled / escalated / emergency Opus / limit moves, and every move.
+    ...poolSummaryLines(view, extra.now),
     ...abReportLines(view),
     ...tailLines(integ.selfCheck),
     // Cards the run's sessions filed (run option "Sessions may file new to-dos"); none = no section.

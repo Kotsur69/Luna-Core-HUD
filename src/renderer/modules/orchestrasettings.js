@@ -24,6 +24,8 @@ const INTEGRATION_MODES = ['pr', 'merge', 'branches'];
 const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits', 'default'];
 // 'plan' + src/efforts.js EFFORTS (the renderer cannot require main-side modules).
 const EFFORT_OPTIONS = ['plan', 'medium', 'high', 'xhigh', 'max'];
+// src/orchestraRescue.js EMERGENCY_EFFORTS: the Emergency Opus effort (main validates it again).
+export const EMERGENCY_OPTIONS = ['step', 'low', 'medium', 'high', 'xhigh', 'max'];
 // src/uiprefs.js SUPABASE_APPLY_MODES (main validates the value again).
 const SUPABASE_APPLY_MODES = ['off', 'ask', 'automatic'];
 // Opt-in God Mode evolutions: [switch id, ui pref key]. Main fixes them into
@@ -155,6 +157,17 @@ export function mountOrchestraSettings(root, prefs) {
       if (!EFFORT_OPTIONS.includes(effort.value)) return;
       sfx.modeToggle();
       window.lunacore.setUiPrefs({ orchestraWorkerEffort: effort.value });
+    });
+  }
+
+  // Emergency Opus effort of a pool run: one step up by default, or one fixed level.
+  const emergency = root.querySelector('#orchestra-emergency-effort');
+  if (emergency) {
+    emergency.value = EMERGENCY_OPTIONS.includes(prefs.orchestraEmergencyEffort) ? prefs.orchestraEmergencyEffort : 'step';
+    emergency.addEventListener('change', () => {
+      if (!EMERGENCY_OPTIONS.includes(emergency.value)) return;
+      sfx.modeToggle();
+      window.lunacore.setUiPrefs({ orchestraEmergencyEffort: emergency.value });
     });
   }
 

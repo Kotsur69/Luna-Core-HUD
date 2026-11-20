@@ -37,6 +37,7 @@ import { retryRefusal, refusalStillValid, canAbortFinish } from './orchestraRetr
 import { loadPicker, pickerView } from './orchestraPick.js';
 import { loadWorkerModel, takesWorkerModel, runModelLabel, packageModelBadge, workerModelControls, chosenRunWorkers, launchModelFields } from './orchestraWorkerModel.js';
 import { poolModelName } from '../../workerPool.js';
+import { rescueLines } from './orchestraRescueLines.js';
 import { runEmailRow, releaseRow, releaseAfterBox, releaseAfterChoice, integrationLine, reportRow } from './orchestraFinish.js';
 import * as board from './orchestraBoard.js';
 import { switcherStrip } from './orchestraSwitcher.js';
@@ -436,7 +437,10 @@ function pkgCard(pkg) {
 
   const progress = progressText(pkg);
   if (progress) card.append(el('div', 'orchestra__meta', progress));
-  if (pkg.escalated) card.append(el('div', 'orchestra__meta', t('orch.progress.escalated')));
+  // A pool run's moves name their models; any other escalation reads as before.
+  const rescues = rescueLines(pkg, t);
+  for (const line of rescues) card.append(el('div', 'orchestra__meta', line));
+  if (pkg.escalated && !rescues.length) card.append(el('div', 'orchestra__meta', t('orch.progress.escalated')));
   for (const line of ladderLines(pkg, plan.packages)) card.append(el('div', 'orchestra__meta', line));
   if (pkg.prUrl) {
     const link = el('a', 'orchestra__link', pkg.prUrl);
