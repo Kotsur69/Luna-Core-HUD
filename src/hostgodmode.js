@@ -46,7 +46,7 @@ const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
 const { INTEGRATION_MODES } = require('./orchestraSupervisor');
 const { normalizeWorkerModel } = require('./orchestraWorkerModel');
 const { normalizeWorkers } = require('./orchestraWorkers');
-const { strictPool, normalizePool } = require('./workerPool');
+const { strictPool, normalizePool, isPoolRun } = require('./workerPool');
 const { poolNeedsAgy, isLivePool, poolOptions } = require('./orchestraPool');
 
 const KINDS = ['godmode.plan', 'godmode.launch', 'godmode.kill', 'godmode.retry', 'godmode.finish', 'godmode.discard'];
@@ -255,6 +255,9 @@ function createHostGodmode(deps) {
     if (payload.modelPool !== undefined && payload.modelPool !== null) {
       const pool = strictPool(payload.modelPool);
       if (!pool) return { error: 'badModelPool' };
+      // A pool replaces the single model and runs on Claude / hybrid workers:
+      // refuse a payload that also asks for something the pool would silently drop.
+      if (out.workerModel || out.free === true || out.workers === 'free' || out.workers === 'agy') return { error: 'badModelPool' };
       out.modelPool = pool;
     }
     return { payload: out };
@@ -275,9 +278,10 @@ function createHostGodmode(deps) {
    * The launch's pool: a sent one must run as sent (every agy family and
    * variant on the live list), else refused. Without a pool or a model, Claude
    * workers launch on the saved pool pref, else as today (the Settings model, Opus by default).
+   * A plan made with its own pool keeps it: the saved pref never replaces it.
    * @returns {Promise<{payload:object}|{error:string}>}
    */
-  async function withPool(out) {
+  async function withPool(out, view) {
     if (out.modelPool) {
       if (!poolNeedsAgy(out.modelPool)) return { payload: out };
       if (!deps.agyModels) return { error: 'badModelPool' };
@@ -286,6 +290,7 @@ function createHostGodmode(deps) {
     }
     const ownWorkers = out.free === true || out.workers === 'free' || out.workers === 'agy';
     if (out.workerModel || ownWorkers) return { payload: out };
+    if (view && isPoolRun(normalizePool(view.modelPool))) return { payload: out };
     const saved = savedPool();
     return { payload: saved ? { ...out, modelPool: saved } : out };
   }
@@ -297,8 +302,11 @@ function createHostGodmode(deps) {
     if (checked.error) return refused(checked.error);
     const blocked = deps.godModeBlock(run.project.id);
     if (blocked) return refusedFrom(blocked);
-    const clean = await withPool(checked.payload);
+    const clean = await withPool(checked.payload, run.view);
     if (clean.error) return refused(clean.error);
+    // The live agy check awaited: Luna's Work may have taken the project meanwhile.
+    const blockedNow = deps.godModeBlock(run.project.id);
+    if (blockedNow) return refusedFrom(blockedNow);
     const work = run.controller.launch(clean.payload, { mergeConfirmed: true });
     const res = await settledOrPending(work);
     if (res === PENDING) {

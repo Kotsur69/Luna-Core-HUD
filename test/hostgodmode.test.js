@@ -689,6 +689,46 @@ test('launch without a pool or a model: the saved pool pref, else today\'s run (
   }
 });
 
+test('launch: a pool with a model or own workers it would silently drop is refused', async () => {
+  const pool = [{ model: 'opus', effort: 'plan' }, { model: 'sonnet', effort: 'plan' }];
+  for (const extraFields of [{ workerModel: 'sonnet' }, { free: true }, { workers: 'agy' }, { workers: 'free' }]) {
+    const s = setup();
+    const c = s.withPlan();
+    const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: pool, ...extraFields });
+    assert.deepEqual(res, { status: 'refused', error: 'badModelPool' }, JSON.stringify(extraFields));
+    assert.equal(c.calls.some((x) => x[0] === 'launch'), false);
+  }
+  // What the phone sends with a pool (free: false, Claude workers) still launches.
+  const s = setup();
+  const c = s.withPlan();
+  const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: pool, free: false, workers: 'claude' });
+  assert.equal(res.status, 'launched');
+  assert.deepEqual(launchArgs(c).modelPool, pool);
+});
+
+test('launch without a pool: a plan made with its own pool keeps it, the saved pref never replaces it', async () => {
+  const own = [{ model: 'opus', effort: 'plan' }, { model: 'agy-argon', effort: 'plan' }];
+  const s = setup({ extra: { savedPool: () => [{ model: 'sonnet', effort: 'plan' }, { model: 'opus', effort: 'high' }] } });
+  const c = s.withPlan('alpha', planView('pabc123', { modelPool: own }));
+  await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123' });
+  assert.deepEqual(launchArgs(c), { planId: 'pabc123' });
+});
+
+test('launch: Luna\'s Work taking the project during the live agy check refuses the launch', async () => {
+  let checks = 0;
+  const godModeBlock = () => {
+    checks += 1;
+    return checks > 1 ? { ok: false, error: 'lunasWorkActive', message: 'Luna\'s Work runs here' } : null;
+  };
+  const s = setup({ extra: { agyModels: fakeAgy(), godModeBlock } });
+  const c = s.withPlan();
+  const res = await s.run('godmode.launch', { projectId: 'alpha', planId: 'pabc123', modelPool: [{ model: 'opus' }, { model: 'agy-argon' }] });
+  assert.equal(res.status, 'refused');
+  assert.equal(res.error, 'lunasWorkActive');
+  assert.equal(checks, 2);
+  assert.equal(c.calls.some((x) => x[0] === 'launch'), false);
+});
+
 test('the plan snapshot carries the PC\'s pool menu (live agy variants, no free profiles)', () => {
   const s = setup({ extra: { agyModels: fakeAgy() } });
   s.withPlan();
