@@ -199,6 +199,13 @@ export const WIDGET_ICONS = {
     ['line', { x1: 12, y1: 12, x2: 18.4, y2: 5.6 }],
   ],
 
+  // Stacked records: the Memory sidebar panel.
+  memory: [
+    ['ellipse', { cx: 12, cy: 6, rx: 7, ry: 2.5 }],
+    ['path', { d: 'M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6' }],
+    ['path', { d: 'M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5' }],
+  ],
+
   // The fallback: the same diamond libicons.js falls back to.
   default: [['path', { d: 'M12 2.5 21.5 12 12 21.5 2.5 12Z' }]],
 };
