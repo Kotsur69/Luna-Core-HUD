@@ -11,7 +11,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { pickable, manualCount, mergeSelection, missingDeps, withDeps } from './orchestraPickRules.js';
+import { pickable, manualCount, mergeSelection, missingDeps, withDeps, tagCounts, withTag } from './orchestraPickRules.js';
 // The "Workers" pool (the models the planner may give packages): shared with Approve.
 import { loadPool, chosenPool, poolPickerView, agyFamilyOptions, refreshPoolOptions } from './orchestraPoolPicker.js';
 import { isPoolRun, poolWorkers, runsOnOf, poolModelName } from '../../workerPool.js';
@@ -359,11 +359,39 @@ function cardRow(card, missing, disabled, repaint) {
     repaint();
   });
   const text = el('span', 'orchestra__pick-text', card.text);
-  const meta = [card.size, card.model, card.effort].filter(Boolean).join(' · ');
+  const tags = Array.isArray(card.tags) ? card.tags.map((tag) => `#${tag}`) : [];
+  const meta = [card.size, card.model, card.effort, ...tags].filter(Boolean).join(' · ');
   row.append(box, text);
   if (meta) row.append(el('span', 'orchestra__pick-meta', meta));
   if (missing) row.append(el('span', 'orchestra__pick-warn', t('orch.pick.needs', { list: missing.join('; ') })));
   return row;
+}
+
+/**
+ * "Tick tag": ticks exactly the cards carrying the chosen tag (e.g. one
+ * #godmode2 batch). Null when no card has a tag.
+ */
+function tagSelect(disabled, repaint) {
+  const counts = tagCounts(cards);
+  if (!counts.length) return null;
+  const sel = el('select', 'profile-select');
+  sel.title = t('orch.pick.byTag.hint');
+  const head = el('option', '', t('orch.pick.byTag'));
+  head.value = '';
+  sel.append(head);
+  for (const { tag, n } of counts) {
+    const opt = el('option', '', `#${tag} (${n})`);
+    opt.value = tag;
+    sel.append(opt);
+  }
+  sel.value = '';
+  sel.disabled = disabled;
+  sel.addEventListener('change', () => {
+    if (!counts.some((c) => c.tag === sel.value)) return;
+    selected = withTag(cards, sel.value);
+    repaint();
+  });
+  return sel;
 }
 
 /**
@@ -401,6 +429,8 @@ export function pickerView({ disabled, canCancel, onPlan, onCancel, repaint }) {
       repaint();
     }, disabled),
   );
+  const byTag = tagSelect(disabled, repaint);
+  if (byTag) bar.append(byTag);
   if (missing.size) {
     bar.append(button(t('orch.pick.addDeps'), () => {
       selected = withDeps(cards, selected);

@@ -57,6 +57,38 @@ export function missingDeps(cards, selected) {
   return out;
 }
 
+/** A card's tags as an array of non-empty strings (main already cleans them). */
+function tagsOf(card) {
+  return card && Array.isArray(card.tags) ? card.tags.filter((tag) => typeof tag === 'string' && tag) : [];
+}
+
+/**
+ * Every tag on the pickable cards with how many cards carry it, sorted by
+ * name with numbers in order (godmode2 before godmode10).
+ * @param {Array<{tags?:string[]}>} cards
+ * @returns {{tag:string, n:number}[]}
+ */
+export function tagCounts(cards) {
+  const counts = new Map();
+  for (const c of (Array.isArray(cards) ? cards : [])) {
+    for (const tag of new Set(tagsOf(c))) counts.set(tag, (counts.get(tag) || 0) + 1);
+  }
+  return [...counts]
+    .map(([tag, n]) => ({ tag, n }))
+    .sort((a, b) => a.tag.localeCompare(b.tag, 'en', { numeric: true }));
+}
+
+/**
+ * "Tick tag": the selection becomes exactly the cards carrying the tag, so
+ * one run's batch (e.g. godmode2) is ticked in one step.
+ * @param {Array<{at:number, tags?:string[]}>} cards
+ * @param {string} tag
+ * @returns {Set<number>}
+ */
+export function withTag(cards, tag) {
+  return new Set((Array.isArray(cards) ? cards : []).filter((c) => tagsOf(c).includes(tag)).map((c) => c.at));
+}
+
 /**
  * The selection plus every open card it depends on, transitively.
  * @param {Array<{at:number, dependsOn?:number[]}>} cards
