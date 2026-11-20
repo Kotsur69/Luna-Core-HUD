@@ -3378,7 +3378,11 @@ function createOrchestra(deps) {
     Object.assign(plan, pauseRules.withRunPauses(plan, next.pauses, now()));
     armResume(key, until);
     onRunEvent('paused', { until, scope: key });
+    // A pool run moves its not-started packages off the paused backend now
+    // and launches them where they went (src/orchestraRescue.js limitMoves).
+    const moved = rescue.moveOffLimits();
     commit();
+    if (moved.length) kick();
     background(powerFlow.onPaused(), 'sleep');
   }
 
