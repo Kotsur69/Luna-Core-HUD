@@ -5,7 +5,8 @@
 // snapshots (snapmodel.godmodePlansFrom), above the live runs:
 //   planning  spinner 'Planning <repo> on <host>'
 //   failed    the errors + Discard
-//   ready     the packages as checkboxes (all ticked; titles read-only), the
+//   ready     a pool plan's read-only Workers pool, the packages as
+//             checkboxes (all ticked; titles and models read-only), the
 //             integration mode, Claude / free workers, the Claude workers'
 //             model (hidden for free workers), 'Create a release
 //             after finish' (merge only), Launch + Discard. A merge asks
@@ -20,7 +21,7 @@ import { t, tf } from '../i18n.js';
 import { godmodePlansFrom } from '../snapmodel.js';
 import { hostForMachine } from '../godmodestart.js';
 import { agyModelLabel } from '../../../src/workerModels.js';
-import { INTEGRATION_MODES, WORKER_MODEL_NAMES, workerModelOptions, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
+import { INTEGRATION_MODES, WORKER_MODEL_NAMES, workerModelOptions, poolLine, packageModelLine, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
 import { confirmSheet } from './sheet.js';
 
 const INTEGRATION_KEY = { pr: 'gmIntegrationPr', merge: 'gmIntegrationMerge', branches: 'gmIntegrationBranches' };
@@ -101,11 +102,17 @@ export function createPlanCards(deps, runnerFor, repaint) {
     );
   }
 
+  /** A pool plan's read-only "Workers" pool; nothing for a plan without one. */
+  function poolRow(plan) {
+    const line = poolLine(plan);
+    return line ? h('p', { class: 'hint gm-pool' }, tf('gmPoolWorkers', { pool: line })) : null;
+  }
+
   function packageRow(plan, draft, p, busy) {
     const id = domId('gm-pkg', planKey(plan), p.id);
     const box = h('input', { type: 'checkbox', id, checked: draft.ticked.includes(p.id), disabled: busy });
     box.addEventListener('change', () => update(plan, (d) => togglePackage(d, p.id)));
-    const meta = [p.model, p.deps.length ? tf('godmodeAfter', { ids: p.deps.join(', ') }) : ''].filter(Boolean).join(' · ');
+    const meta = [packageModelLine(plan, p), p.deps.length ? tf('godmodeAfter', { ids: p.deps.join(', ') }) : ''].filter(Boolean).join(' · ');
     return h('li', {}, h('label', { class: 'gm-check', for: id }, box, h('span', { class: 'gm-check-text' }, h('span', {}, p.title || p.id), meta ? h('span', { class: 'hint num' }, meta) : null)));
   }
 
@@ -140,6 +147,7 @@ export function createPlanCards(deps, runnerFor, repaint) {
       h('div', { class: 'row' }, h('h2', { class: 'section-title grow' }, tf('gmPlanReady', { repo: repoOf(plan) })), staleTag(plan)),
       h('span', { class: 'hint' }, [plan.machine, tf('gmPackagesCount', { n: draft.ticked.length, total: plan.packages.length })].join(' · ')),
       todosList(plan),
+      poolRow(plan),
       h('ul', { class: 'rows' }, plan.packages.map((p) => packageRow(plan, draft, p, busy))),
       controls(plan, draft, busy),
       canRun ? null : h('p', { class: 'hint is-warn' }, t('gmHostOff')),
