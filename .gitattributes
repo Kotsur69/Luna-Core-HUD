@@ -4,5 +4,16 @@
 # blobs are already stored with LF; this is purely about what checkout writes.
 *.sh text eol=lf
 *.command text eol=lf
+# Source, data and docs are LF everywhere too. With core.autocrlf=true they
+# would otherwise check out as CRLF, and agent tools that write LF-only
+# multi-line replacements then fail to match the CRLF text on disk.
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
 # cmd.exe reads batch files most reliably with CRLF.
 *.bat text eol=crlf
