@@ -116,7 +116,13 @@ function manualRows(integ) {
   const rows = list(integ.manualActions)
     .filter((a) => isObject(a) && !(a.kind === 'env' && secretNames.has(a.what)))
     .map((a) => ({ ...a, item: byKey.get(itemKey(a.kind, a.what)) || null }));
-  return { res, rows: [...rows, ...secrets.map((s) => ({ kind: 'secret', what: s.what, item: s }))] };
+  const staleDrafts = isObject(pm.release)
+    ? list(pm.release.staleDrafts).filter((t) => typeof t === 'string' && /^v\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(t))
+    : [];
+  const draftRow = staleDrafts.length
+    ? [{ kind: 'note', what: `Delete stale GitHub draft release(s): ${staleDrafts.join(', ')}`, item: null }]
+    : [];
+  return { res, rows: [...rows, ...secrets.map((s) => ({ kind: 'secret', what: s.what, item: s })), ...draftRow] };
 }
 
 /** Rows that still wait for Mati: not applied, not already set. */
@@ -257,6 +263,8 @@ function needsYouLines(view) {
     const error = [integ.error, integ.detail].filter(Boolean).map((v) => oneLine(v)).join(': ');
     lines.push(`Integration failed${error ? `: ${error}` : ''}`);
   }
+  const relErr = isObject(integ.postMerge) && isObject(integ.postMerge.release) ? integ.postMerge.release.error : null;
+  if (relErr) lines.push(`Release failed: ${oneLine(relErr)}`);
   const manual = openRows(integ).length;
   if (manual) lines.push(`${manual} manual action${manual === 1 ? '' : 's'} to apply live - see Manual actions.`);
   // Last: the report puts the check's output tail right under it.
@@ -528,15 +536,24 @@ const POST_MERGE_LINES = {
   cleanup: (r) => {
     const deleted = list(r.deleted).map((b) => code(b, 80));
     const kept = list(r.kept).filter(isObject).map((k) => `${code(k.branch, 80)} (${oneLine(k.reason, 60)})`);
+    const remoteDeleted = list(r.remoteDeleted).map((b) => code(b, 80));
+    const remoteKept = list(r.remoteKept).filter(isObject).map((k) => `${code(k.branch, 80)} (${oneLine(k.reason, 60)})`);
     const worktree = r.worktree === 'removed' ? 'integration worktree removed' : r.worktree === 'kept' ? 'integration worktree kept' : 'no integration worktree left';
+    const remoteSummary =
+      remoteDeleted.length || remoteKept.length
+        ? `, ${remoteDeleted.length} remote branch${remoteDeleted.length === 1 ? '' : 'es'} deleted`
+        : '';
     return [
-      `- Cleanup: ${worktree}, ${deleted.length} merged branch${deleted.length === 1 ? '' : 'es'} deleted${r.error ? ` - ${oneLine(r.error)}` : ''}`,
+      `- Cleanup: ${worktree}, ${deleted.length} merged branch${deleted.length === 1 ? '' : 'es'} deleted${remoteSummary}${r.error ? ` - ${oneLine(r.error)}` : ''}`,
       ...(deleted.length ? [`  - Deleted: ${deleted.join(', ')}`] : []),
       ...(kept.length ? [`  - Kept: ${kept.join(', ')}`] : []),
+      ...(remoteDeleted.length ? [`  - Remote deleted: ${remoteDeleted.join(', ')}`] : []),
+      ...(remoteKept.length ? [`  - Remote kept: ${remoteKept.join(', ')}`] : []),
     ];
   },
   release: (r) => {
     if (r.skipped) return [`- Release skipped: ${oneLine(r.skipped)}`];
+    if (r.error) return [`- Release failed: ${oneLine(r.error)}`];
     if (!r.released) return [];
     const url = typeof r.url === 'string' && /^https:\/\/github\.com\//.test(r.url) ? oneLine(r.url, 300) : 'no release URL';
     return [`- Released ${code(r.tag || `v${oneLine(r.version, 20)}`, 24)}: ${url}`];
@@ -565,7 +582,7 @@ function postMergeSection(view) {
   for (const [name, result] of Object.entries(steps)) {
     if (!isObject(result)) continue;
     if (result.skipped && name !== 'release') lines.push(`- ${name}: skipped - ${oneLine(result.skipped)}`);
-    else if (result.error) lines.push(`- ${name} failed: ${oneLine(result.error)}`);
+    else if (result.error && name !== 'release') lines.push(`- ${name} failed: ${oneLine(result.error)}`);
     else if (POST_MERGE_LINES[name]) lines.push(...POST_MERGE_LINES[name](result, base));
   }
   return lines.length ? ['', '## After the merge', '', ...lines] : [];

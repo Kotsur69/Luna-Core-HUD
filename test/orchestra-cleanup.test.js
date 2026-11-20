@@ -642,6 +642,8 @@ const realGitOps = {
   removeWorktree: (repo, root) => wt.removeWorktree(repo, root),
   pruneWorktrees: (repo) => wt.pruneWorktrees(repo),
   deleteMergedBranch: (repo, branch, base) => wt.deleteMergedBranch(repo, branch, base),
+  deleteMergedRemoteBranch: (repo, branch, base) => wt.deleteMergedRemoteBranch(repo, branch, base),
+  pruneOrigin: (repo) => wt.pruneOrigin(repo),
 };
 
 // Every git spawn counts here: under a loaded machine (several packages
@@ -743,9 +745,19 @@ test('cleanupMergedRun: integration worktree removed with its junctions unlinked
     // The junction target - the "real" node_modules - is untouched.
     assert.equal(fs.readFileSync(path.join(shared, 'keep.txt'), 'utf8'), 'the real install\n');
     assert.deepEqual(localBranches(repo).sort(), ['luna/skip-ef56g', 'luna/wip-gh78i', 'main']);
-    // Remote branches are never touched.
-    assert.ok(remoteBranches(repo).includes('luna/core-ab12c'));
-    assert.ok(remoteBranches(repo).includes('luna/ui-cd34e'));
+    // Merged luna/* branches are deleted on origin too and pruned; unmerged/skipped and main stay.
+    assert.deepEqual([...res.remoteDeleted].sort(), ['luna/core-ab12c', 'luna/ui-cd34e']);
+    assert.deepEqual(res.remoteKept, [
+      { branch: 'luna/skip-ef56g', reason: 'skipped' },
+      { branch: 'luna/wip-gh78i', reason: 'notMerged' },
+    ]);
+    assert.deepEqual(remoteBranches(repo).sort(), ['luna/skip-ef56g', 'luna/wip-gh78i', 'main']);
+    // Remote-tracking refs for deleted branches were pruned.
+    const tracking = realGit(repo, 'for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin/')
+      .split(/\r?\n/)
+      .filter(Boolean);
+    assert.ok(!tracking.includes('origin/luna/core-ab12c'));
+    assert.ok(!tracking.includes('origin/luna/ui-cd34e'));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -874,7 +886,7 @@ test('cleanupMergedRun refuses a base that could be an option; a vanished branch
     },
     git,
   );
-  assert.deepEqual(res, { ok: true, worktree: 'gone', deleted: ['luna/a-11111'], kept: [], error: null });
+  assert.deepEqual(res, { ok: true, worktree: 'gone', deleted: ['luna/a-11111'], kept: [], remoteDeleted: [], remoteKept: [], error: null });
 });
 
 test('normalizeSettledRun keeps only what is safe to hand to git', () => {
@@ -989,4 +1001,91 @@ test('POST_MERGE_STEPS runs cleanup right after the local base update', () => {
   const names = POST_MERGE_STEPS.map((s) => s.name);
   assert.deepEqual(names.slice(0, 2), ['localBase', 'cleanup']);
   assert.equal(POST_MERGE_STEPS[1].impl, 'cleanupMergedRun');
+});
+
+// ---------------------------------------------------------------------------
+// Remote branch cleanup: merged luna/* only, never unmerged / base / non-luna
+// ---------------------------------------------------------------------------
+
+test('deleteMergedRemoteBranch refuses non-luna, base, and unmerged branches; deletes merged luna/* only', async () => {
+  // Non-luna and base branches are refused before git runs.
+  const noCall = fakeGit(() => ({ stdout: '' }));
+  for (const bad of ['main', 'feature/x', 'luna-free/a-11111', 'luna/../main', '--delete', null]) {
+    assert.deepEqual(await wt.deleteMergedRemoteBranch('/repo', bad, 'main', { execImpl: noCall.execImpl }), { ok: false, error: 'badName' });
+  }
+  assert.equal(noCall.calls.length, 0);
+
+  // Unmerged branch is kept (merge-base --is-ancestor fails).
+  const unmerged = fakeGit((args) => {
+    if (args[0] === 'rev-parse') return { stdout: 'deadbeef\n' };
+    if (args[0] === 'merge-base') return { err: true };
+    return {};
+  });
+  assert.deepEqual(await wt.deleteMergedRemoteBranch('/repo', 'luna/a-11111', 'main', { execImpl: unmerged.execImpl }), {
+    ok: false,
+    error: 'notMerged',
+  });
+  assert.ok(!gitArgs(unmerged.calls).some((a) => a[0] === 'push'));
+
+  // Merged luna/* branch is deleted on origin using --force-with-lease pinned to its verified OID.
+  const tipSha = 'a'.repeat(40);
+  const merged = fakeGit((args) => (args[0] === 'rev-parse' ? { stdout: `${tipSha}\n` } : { stdout: 'ok\n' }));
+  assert.deepEqual(await wt.deleteMergedRemoteBranch('/repo', 'luna/a-11111', 'main', { execImpl: merged.execImpl }), { ok: true });
+  assert.deepEqual(gitArgs(merged.calls), [
+    ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/luna/a-11111'],
+    ['merge-base', '--is-ancestor', 'refs/remotes/origin/luna/a-11111', 'refs/remotes/origin/main'],
+    ['push', `--force-with-lease=refs/heads/luna/a-11111:${tipSha}`, 'origin', '--delete', 'refs/heads/luna/a-11111'],
+  ]);
+});
+
+test('cleanupMergedRun deletes merged remote branches even when local branch is missing, prunes, and reports in buildReport', async () => {
+  const { buildReport } = require('../src/orchestraReport.js');
+  const pushedDeletes = [];
+  let pruned = 0;
+  const git = {
+    listWorktrees: async () => [],
+    removeWorktree: async () => ({ ok: true }),
+    pruneWorktrees: async () => ({ ok: true }),
+    deleteMergedBranch: async () => ({ ok: false, error: 'missing' }),
+    deleteMergedRemoteBranch: async (_repo, branch) => {
+      if (branch === 'luna/merged-11111') {
+        pushedDeletes.push(branch);
+        return { ok: true };
+      }
+      return { ok: false, error: 'notMerged' };
+    },
+    pruneOrigin: async () => {
+      pruned += 1;
+      return { ok: true };
+    },
+  };
+  const res = await cleanupMergedRun(
+    {
+      repoPath: '/r',
+      base: 'main',
+      packages: [
+        { id: 'a', branch: 'luna/merged-11111', merged: true, skipped: false },
+        { id: 'b', branch: 'luna/unmerged-22222', merged: true, skipped: false },
+        { id: 'c', branch: 'luna/skip-33333', merged: false, skipped: true },
+        { id: 'd', branch: 'main', merged: true, skipped: false },
+        { id: 'e', branch: 'feature/other', merged: true, skipped: false },
+      ],
+    },
+    git,
+  );
+  assert.deepEqual(pushedDeletes, ['luna/merged-11111']);
+  assert.equal(pruned, 1);
+  assert.deepEqual(res.remoteDeleted, ['luna/merged-11111']);
+  assert.deepEqual(res.remoteKept, [
+    { branch: 'luna/skip-33333', reason: 'skipped' },
+    { branch: 'luna/unmerged-22222', reason: 'notMerged' },
+  ]);
+
+  const report = buildReport(
+    { id: 'p1', repoPath: '/r', baseBranch: 'main', packages: [], integration: { state: 'done', postMerge: { cleanup: res } } },
+    { now: 1, suggestions: [] },
+  );
+  assert.match(report, /1 remote branch deleted/);
+  assert.match(report, /Remote deleted: `luna\/merged-11111`/);
+  assert.match(report, /Remote kept: `luna\/skip-33333` \(skipped\), `luna\/unmerged-22222` \(notMerged\)/);
 });

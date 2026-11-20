@@ -50,7 +50,7 @@ const FULL_SHA_RE = /^[0-9a-f]{40,64}$/;
 const BASE_RE = /^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/;
 const FEAT_RE = /^feat(\([^)]*\))?!?:\s*/i;
 const FIX_RE = /^fix(\([^)]*\))?!?:\s*/i;
-const RELEASE_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/releases\/tag\/v\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+const RELEASE_URL_RE = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/releases\/tag\/v\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 const CURRENT_RE = /^> \*\*Current release: (v\d+\.\d+\.\d+)(\s+(?:-|—)\s+)(.*)\*\*\s*$/m;
 const CO_AUTHOR = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>';
 const PRODUCT = 'LunaCore';
@@ -60,6 +60,9 @@ const PUSH_TIMEOUT_MS = 5 * 60 * 1000;
 const TEST_TIMEOUT_MS = 20 * 60 * 1000;
 const DIST_TIMEOUT_MS = 40 * 60 * 1000;
 const GH_TIMEOUT_MS = 15 * 60 * 1000;
+const VERIFY_TIMEOUT_MS = 60 * 1000;
+const VERIFY_POLL_MS = 5 * 1000;
+const MAX_STALE_DRAFTS = 20;
 const MAX_SUBJECTS = 200;
 const MAX_TITLE = 60;
 const MAX_SUBJECT = 160;
@@ -123,26 +126,40 @@ function nextVersion(version, subjects) {
 
 /**
  * `text` cut to at most `max` characters on a word boundary: whole words
- * only, no ellipsis (the README line adds its own end dot), trailing
- * punctuation dropped. A first word longer than the limit is the one case
- * cut mid-word.
+ * only, trailing punctuation dropped. Never cuts inside a word — if the first
+ * word alone exceeds the limit, that whole word is kept. When `ellipsis` is
+ * true, appends '...' while staying within `max` (when possible).
  */
-function truncateWords(text, max) {
+function truncateWords(text, max, opts = {}) {
   const src = String(text || '').trim();
   if (src.length <= max) return src;
-  const cut = src.slice(0, max + 1).lastIndexOf(' ');
-  return (cut > 0 ? src.slice(0, cut) : src.slice(0, max)).replace(/[\s.,;:!?-]+$/, '');
+  const suffix = opts.ellipsis ? '...' : '';
+  const budget = Math.max(0, max - suffix.length);
+  const cut = src.slice(0, budget + 1).lastIndexOf(' ');
+  if (cut > 0) {
+    const head = src.slice(0, cut).replace(/[\s.,;:!?-]+$/, '');
+    if (head) return `${head}${suffix}`;
+  }
+  // Never cut inside a word: keep the first whole word intact.
+  const firstWord = src.split(/\s+/)[0].replace(/[\s.,;:!?-]+$/, '');
+  const hasMore = /\s/.test(src);
+  return hasMore && suffix ? `${firstWord}${suffix}` : firstWord;
 }
 
 /**
- * The release title: the newest feature, else the newest fix, cut on a word
- * boundary, no end dot. The subject keeps its own casing; only its first
- * letter is made upper case.
+ * The release title: prefers the newest feature (else newest fix) that fits
+ * within MAX_TITLE without truncation. If every subject exceeds MAX_TITLE,
+ * truncates the newest feature (or fix) on a word boundary with an ellipsis.
+ * Never cuts inside a word; keeps the subject's casing with its first letter
+ * raised.
  */
 function releaseTitle(notes) {
-  const raw = notes.features[0] || notes.fixes[0] || 'maintenance release';
-  const short = truncateWords(raw.replace(/[.\s]+$/, ''), MAX_TITLE);
-  return short.replace(/^\p{Ll}/u, (c) => c.toUpperCase());
+  const clean = (s) => String(s || '').trim().replace(/[.\s]+$/, '');
+  const features = (notes && Array.isArray(notes.features) ? notes.features : []).map(clean).filter(Boolean);
+  const fixes = (notes && Array.isArray(notes.fixes) ? notes.fixes : []).map(clean).filter(Boolean);
+  const shortFit = features.find((s) => s.length <= MAX_TITLE) || fixes.find((s) => s.length <= MAX_TITLE);
+  const chosen = shortFit || truncateWords(features[0] || fixes[0] || 'maintenance release', MAX_TITLE, { ellipsis: true });
+  return chosen.replace(/^\p{Ll}/u, (c) => c.toUpperCase());
 }
 
 /** One bullet, wrapped like the README's hand-written ones. */
@@ -165,7 +182,8 @@ function bullet(text, prefix) {
 /** The README block lines for a release (without the '>' spacer). */
 function readmeBlock(version, title, notes, sep = ' - ') {
   const items = [...notes.features, ...notes.fixes.map((f) => `Fix: ${f}`)];
-  return [`> **Current release: v${version}${sep}${title}.**`, ...items.flatMap((s) => bullet(s, '> - '))];
+  const endDot = /[.…]$/.test(title) ? '' : '.';
+  return [`> **Current release: v${version}${sep}${title}${endDot}**`, ...items.flatMap((s) => bullet(s, '> - '))];
 }
 
 /**
@@ -277,7 +295,8 @@ function execShell(command, opts) {
   });
 }
 
-const DEFAULT_DEPS = { exec: execBin, shell: execShell, fs, lockHolders: findLockHolders };
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const DEFAULT_DEPS = { exec: execBin, shell: execShell, fs, lockHolders: findLockHolders, sleep: defaultSleep, now: () => Date.now() };
 
 // ---------------------------------------------------------------------------
 // The release
@@ -421,13 +440,132 @@ async function distFailure(d, repoPath, tag, dist) {
 }
 
 /**
+ * Verifies the published GitHub release after `gh release create`:
+ *   - `gh release view <tag> --json isDraft,assets`: not draft, all 4 expected assets present
+ *   - `gh api repos/<owner>/<repo>/releases/latest`: Latest tag matches `<tag>`
+ * Retries up to `timeoutMs` (~60s) to absorb GitHub's eventual consistency.
+ * @returns {Promise<{ok:true, summary:{draft:boolean, latest:string, assets:string[]}}|{ok:false, reason:string}>}
+ */
+async function verifyRelease(d, repoPath, tag, expectedAssets, url, opts = {}) {
+  if (typeof tag !== 'string' || !TAG_RE.test(tag)) return { ok: false, reason: 'bad tag' };
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && opts.timeoutMs >= 0 ? opts.timeoutMs : VERIFY_TIMEOUT_MS;
+  const pollMs = Number.isFinite(opts.pollMs) && opts.pollMs > 0 ? opts.pollMs : VERIFY_POLL_MS;
+  const urlMatch = typeof url === 'string' ? RELEASE_URL_RE.exec(url) : null;
+  const safeOwnerRepo =
+    urlMatch && urlMatch[1] !== '.' && urlMatch[1] !== '..' && urlMatch[2] !== '.' && urlMatch[2] !== '..'
+      ? `${urlMatch[1]}/${urlMatch[2]}`
+      : null;
+  const latestEndpoint = safeOwnerRepo ? `repos/${safeOwnerRepo}/releases/latest` : 'repos/{owner}/{repo}/releases/latest';
+  const deadline = d.now() + timeoutMs;
+  let lastReason = 'release verification failed';
+
+  while (true) {
+    const issues = [];
+    const view = await d.exec('gh', ['release', 'view', tag, '--json', 'isDraft,assets'], {
+      cwd: repoPath,
+      timeout: GIT_TIMEOUT_MS,
+      env: d.env,
+    });
+    if (!view.ok) {
+      issues.push(`gh release view failed: ${redact(lastLine(view.stderr)) || 'failed'}`);
+    } else {
+      let parsed = null;
+      let parseOk = true;
+      try {
+        parsed = JSON.parse(view.stdout);
+      } catch {
+        parseOk = false;
+        issues.push('gh release view returned invalid JSON');
+      }
+      if (parseOk) {
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          issues.push('gh release view returned unexpected JSON');
+        } else {
+          if (parsed.isDraft !== false) issues.push(`${tag} is a draft`);
+          const names = new Set(
+            (Array.isArray(parsed.assets) ? parsed.assets : [])
+              .map((a) => (a && typeof a.name === 'string' ? a.name : ''))
+              .filter(Boolean),
+          );
+          const missing = expectedAssets.filter((name) => !names.has(name));
+          if (missing.length) issues.push(`missing assets: ${missing.join(', ')}`);
+        }
+      }
+    }
+
+    const latest = await d.exec('gh', ['api', latestEndpoint], {
+      cwd: repoPath,
+      timeout: GIT_TIMEOUT_MS,
+      env: d.env,
+    });
+    if (!latest.ok) {
+      issues.push(`gh api releases/latest failed: ${redact(lastLine(latest.stderr)) || 'failed'}`);
+    } else {
+      let parsed = null;
+      let parseOk = true;
+      try {
+        parsed = JSON.parse(latest.stdout);
+      } catch {
+        parseOk = false;
+        issues.push('gh api releases/latest returned invalid JSON');
+      }
+      if (parseOk) {
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          issues.push('gh api releases/latest returned unexpected JSON');
+        } else {
+          const latestTag = typeof parsed.tag_name === 'string' ? parsed.tag_name : '';
+          if (latestTag !== tag) issues.push(`Latest is ${latestTag || 'none'}, expected ${tag}`);
+        }
+      }
+    }
+
+    if (!issues.length) {
+      return { ok: true, summary: { draft: false, latest: tag, assets: [...expectedAssets] } };
+    }
+    lastReason = issues.join('; ');
+    const remaining = deadline - d.now();
+    if (remaining <= 0) return { ok: false, reason: lastReason };
+    await d.sleep(Math.min(pollMs, remaining));
+  }
+}
+
+/**
+ * Lists stale draft releases on GitHub (excluding `currentTag`). Never throws
+ * and never fails the release: returns [] if `gh release list` fails.
+ * @returns {Promise<string[]>}
+ */
+async function listStaleDrafts(d, repoPath, currentTag) {
+  const log = d.log || (() => {});
+  try {
+    const res = await d.exec('gh', ['release', 'list', '--limit', '30', '--json', 'tagName,isDraft'], {
+      cwd: repoPath,
+      timeout: GIT_TIMEOUT_MS,
+      env: d.env,
+    });
+    if (!res.ok) {
+      log(`release: could not list stale drafts: ${redact(lastLine(res.stderr)) || 'failed'}`);
+      return [];
+    }
+    const parsed = JSON.parse(res.stdout);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((r) => r && r.isDraft === true && typeof r.tagName === 'string' && TAG_RE.test(r.tagName) && r.tagName !== currentTag)
+      .map((r) => r.tagName)
+      .slice(0, MAX_STALE_DRAFTS);
+  } catch (err) {
+    log(`release: could not parse stale drafts: ${redact(err instanceof Error ? err.message : String(err))}`);
+    return [];
+  }
+}
+
+/**
  * Cuts a release in `repoPath` (the main checkout, on `base`).
  * @param {{repoPath:string, base:string, landedSha:string|null, title?:string}} opts
  *   landedSha: the head the run's merge pushed (integration.headSha) - it
  *   must be in HEAD, so only what landed is released
  * @param {{exec?:Function, shell?:Function, fs?:object, env?:object, log?:(line:string)=>void,
- *   lockHolders?:(file:string)=>Promise<object>}} [deps] lockHolders: fileLockHolder.findLockHolders
- * @returns {Promise<{ok:true, version:string, tag:string, title:string, url:string|null}
+ *   lockHolders?:(file:string)=>Promise<object>, sleep?:(ms:number)=>Promise<void>, now?:()=>number}} [deps]
+ * @returns {Promise<{ok:true, version:string, tag:string, title:string, url:string|null, verified:object, staleDrafts?:string[]}
  *   | {ok:false, refused:boolean, stage:string, reason:string}>} never rejects
  */
 async function cutRelease(opts, deps = {}) {
@@ -449,7 +587,7 @@ async function cutRelease(opts, deps = {}) {
     if (pre.refusal) return pre.refusal;
     const { version, notes } = pre;
     const tag = `v${version}`;
-    const title = truncateWords(oneLine(o.title), MAX_TITLE) || releaseTitle(notes);
+    const title = (o.title ? truncateWords(oneLine(o.title), MAX_TITLE, { ellipsis: true }) : '') || releaseTitle(notes);
 
     // 1. The version (package.json + package-lock.json).
     const bump = await npm(`npm version ${version} --no-git-tag-version`, GIT_TIMEOUT_MS * 2);
@@ -490,6 +628,7 @@ async function cutRelease(opts, deps = {}) {
     d.fs.writeFileSync(path.join(repoPath, inDir(assets.notes)), releaseNotes(version, title, notes), 'utf8');
 
     // 6. The GitHub release, every asset from the version's folder.
+    const expectedAssets = [assets.latest, assets.portable, assets.dashedSetup, assets.dashedBlockmap];
     const gh = await d.exec(
       'gh',
       [
@@ -497,16 +636,27 @@ async function cutRelease(opts, deps = {}) {
         '--title', `${PRODUCT} ${tag}`,
         '--notes-file', inDir(assets.notes),
         '--latest',
-        inDir(assets.latest),
-        inDir(assets.portable),
-        inDir(assets.dashedSetup),
-        inDir(assets.dashedBlockmap),
+        ...expectedAssets.map(inDir),
       ],
       { cwd: repoPath, timeout: GH_TIMEOUT_MS, env: d.env },
     );
     if (!gh.ok) return fail('release', `gh release create failed: ${lastLine(gh.stderr)}`);
     const url = lines(gh.stdout).reverse().find((l) => RELEASE_URL_RE.test(l)) || null;
-    return { ok: true, version, tag, title, url };
+
+    // 7. Verify the published release (not draft, Latest == tag, all 4 assets present).
+    log(`release: verifying ${tag} on GitHub`);
+    const verified = await verifyRelease(d, repoPath, tag, expectedAssets, url);
+    if (!verified.ok) return fail('verify', verified.reason);
+    const staleDrafts = await listStaleDrafts(d, repoPath, tag);
+    return {
+      ok: true,
+      version,
+      tag,
+      title,
+      url,
+      verified: verified.summary,
+      ...(staleDrafts.length ? { staleDrafts } : {}),
+    };
   } catch (err) {
     return fail('error', err instanceof Error ? err.message : String(err));
   }
@@ -517,7 +667,17 @@ async function cutRelease(opts, deps = {}) {
  * released / skipped (a refusal) / error (a step that broke).
  */
 function releaseResult(res) {
-  if (res && res.ok) return { released: true, version: res.version, tag: res.tag, title: res.title, url: res.url };
+  if (res && res.ok) {
+    return {
+      released: true,
+      version: res.version,
+      tag: res.tag,
+      title: res.title,
+      url: res.url,
+      ...(res.verified ? { verified: res.verified } : {}),
+      ...(Array.isArray(res.staleDrafts) && res.staleDrafts.length ? { staleDrafts: res.staleDrafts } : {}),
+    };
+  }
   if (res && res.refused) return { skipped: res.reason };
   return { error: res ? `${res.stage}: ${res.reason}` : 'failed' };
 }
@@ -526,6 +686,8 @@ module.exports = {
   cutRelease,
   unreleasedCount,
   releaseResult,
+  verifyRelease,
+  listStaleDrafts,
   buildNotes,
   nextVersion,
   releaseTitle,
@@ -538,4 +700,6 @@ module.exports = {
   isSkippedSubject,
   redact,
   CO_AUTHOR,
+  VERIFY_TIMEOUT_MS,
+  VERIFY_POLL_MS,
 };

@@ -41,6 +41,8 @@ const GIT_DEFAULTS = {
   removeWorktree: worktrees.removeWorktree,
   pruneWorktrees: worktrees.pruneWorktrees,
   deleteMergedBranch: worktrees.deleteMergedBranch,
+  deleteMergedRemoteBranch: worktrees.deleteMergedRemoteBranch,
+  pruneOrigin: worktrees.pruneOrigin,
 };
 
 /**
@@ -80,6 +82,8 @@ function createPostMergeServices(deps = {}) {
     removeWorktree: (repo, root) => git.removeWorktree(repo, root),
     pruneWorktrees: (repo) => git.pruneWorktrees(repo),
     deleteMergedBranch: (repo, branch, base) => git.deleteMergedBranch(repo, branch, base),
+    deleteMergedRemoteBranch: (repo, branch, base) => git.deleteMergedRemoteBranch(repo, branch, base),
+    pruneOrigin: (repo) => git.pruneOrigin(repo),
   };
 
   /** Adds a landed run to the ledger, so a start a day later sweeps it again. */
@@ -99,7 +103,12 @@ function createPostMergeServices(deps = {}) {
     releaseAfterMerge: async (ctx) => {
       const res = await release({ repoPath: ctx.repoPath, base: ctx.base, landedSha: ctx.headSha });
       const result = releaseResult(res);
-      log(result.released ? `released ${result.tag}: ${result.url || '-'}` : `release skipped: ${result.skipped || result.error}`);
+      const line = result.released
+        ? `released ${result.tag}: ${result.url || '-'}`
+        : result.skipped
+          ? `release skipped: ${result.skipped}`
+          : `release failed: ${result.error || 'failed'}`;
+      log(line);
       return result;
     },
     ...(typeof deps.applyActions === 'function' ? { applySupabaseActions: (ctx) => deps.applyActions(ctx) } : {}),
@@ -127,7 +136,9 @@ function createPostMergeServices(deps = {}) {
     }
     for (const { planId, result } of res.swept) {
       const deleted = Array.isArray(result.deleted) ? result.deleted.length : 0;
-      log(`start-up sweep ${planId}: worktree ${result.worktree || '-'}, ${deleted} branches deleted${result.error ? `, ${result.error}` : ''}`);
+      const remoteDeleted = Array.isArray(result.remoteDeleted) ? result.remoteDeleted.length : 0;
+      const remoteText = remoteDeleted ? `, ${remoteDeleted} remote deleted` : '';
+      log(`start-up sweep ${planId}: worktree ${result.worktree || '-'}, ${deleted} branches deleted${remoteText}${result.error ? `, ${result.error}` : ''}`);
     }
     return res;
   }

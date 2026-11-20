@@ -61,6 +61,8 @@ function fakeTools(opts = {}) {
   const writes = [];
   const subjects = opts.subjects || SUBJECTS;
   let head = HEAD_SHA;
+  let clock = 1000;
+  let verifyAttempts = 0;
   const ok = (stdout = '') => ({ ok: true, code: 0, stdout, stderr: '' });
   const no = (stderr = 'failed', code = 1) => ({ ok: false, code, stdout: '', stderr });
   const fs = {
@@ -113,8 +115,37 @@ function fakeTools(opts = {}) {
       if (opts.noGh) return { ok: false, code: 'ENOENT', stdout: '', stderr: '' };
       return opts.noAuth ? no('You are not logged into any GitHub hosts.') : ok('Logged in');
     }
-    if (bin === 'gh' && args[0] === 'release') return ok('https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.21.0\n');
-    return no(`unexpected ${bin}`);
+    if (bin === 'gh' && args[0] === 'release' && args[1] === 'create') {
+      const tag = args[2];
+      return ok(`https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/${tag}\n`);
+    }
+    if (bin === 'gh' && args[0] === 'release' && args[1] === 'view') {
+      verifyAttempts += 1;
+      const tag = args[2];
+      const v = tag.replace(/^v/, '');
+      const allAssets = [
+        { name: 'latest.yml' },
+        { name: `LunaCore-${v}-portable.exe` },
+        { name: `LunaCore-Setup-${v}.exe` },
+        { name: `LunaCore-Setup-${v}.exe.blockmap` },
+      ];
+      if (typeof opts.verifyView === 'function') return opts.verifyView(verifyAttempts, tag, allAssets);
+      const isDraft = opts.verifyDraft === true;
+      const assets = opts.verifyMissingAsset ? allAssets.filter((a) => a.name !== opts.verifyMissingAsset) : allAssets;
+      return ok(JSON.stringify({ isDraft, assets }));
+    }
+    if (bin === 'gh' && args[0] === 'api' && args[1].endsWith('/releases/latest')) {
+      const v = JSON.parse(files.get(path.join(REPO, 'package.json'))).version;
+      const tag = `v${v}`;
+      if (typeof opts.verifyLatest === 'function') return opts.verifyLatest(verifyAttempts, tag);
+      const latestTag = opts.verifyLatestTag !== undefined ? opts.verifyLatestTag : tag;
+      return ok(JSON.stringify({ tag_name: latestTag }));
+    }
+    if (bin === 'gh' && args[0] === 'release' && args[1] === 'list') {
+      const drafts = Array.isArray(opts.staleDrafts) ? opts.staleDrafts : [];
+      return ok(JSON.stringify(drafts.map((tagName) => ({ tagName, isDraft: true }))));
+    }
+    return no(`unexpected ${bin} ${args.join(' ')}`);
   };
   const shell = async (command, o) => {
     calls.push(command);
@@ -148,7 +179,12 @@ function fakeTools(opts = {}) {
     if (opts.lockHolders instanceof Error) throw opts.lockHolders;
     return opts.lockHolders || { ok: true, holders: [] };
   };
-  return { deps: { exec, shell, fs, lockHolders }, calls, writes, files };
+  const sleep = async (ms) => {
+    calls.push(`sleep ${ms}`);
+    clock += ms;
+  };
+  const now = () => clock;
+  return { deps: { exec, shell, fs, lockHolders, sleep, now }, calls, writes, files };
 }
 
 const cut = (tools, over = {}) => release.cutRelease({ repoPath: REPO, base: 'main', landedSha: LANDED, ...over }, tools.deps);
@@ -239,6 +275,11 @@ test('a release runs exactly the manual steps, in order, and never forces', asyn
     tag: 'v0.21.0',
     title: 'Release after finish',
     url: 'https://github.com/Kotsur69/Luna-Core-HUD/releases/tag/v0.21.0',
+    verified: {
+      draft: false,
+      latest: 'v0.21.0',
+      assets: ['latest.yml', 'LunaCore-0.21.0-portable.exe', 'LunaCore-Setup-0.21.0.exe', 'LunaCore-Setup-0.21.0.exe.blockmap'],
+    },
   });
   const order = (needle) => tools.calls.findIndex((c) => c.startsWith(needle));
   const steps = [
@@ -553,6 +594,12 @@ test('the report says "Release skipped" / "Released" from the stored step result
   assert.match(buildReport(view({ skipped: 'gh not authenticated (gh auth login)' }), { now: 1 }), /- Release skipped: gh not authenticated/);
   assert.match(buildReport(view({ released: true, tag: 'v1.2.0', url: 'https://github.com/o/r/releases/tag/v1.2.0' }), { now: 1 }), /- Released `v1\.2\.0`: https/);
   assert.match(buildReport(view({ released: true, tag: 'v1.2.0', url: 'javascript:alert(1)' }), { now: 1 }), /- Released `v1\.2\.0`: no release URL/);
+  const failedReport = buildReport(view({ error: 'verify: Latest is v1.1.0, expected v1.2.0' }), { now: 1 });
+  assert.match(failedReport, /## Needs you[\s\S]*- Release failed: verify: Latest is v1\.1\.0, expected v1\.2\.0/);
+  assert.match(failedReport, /## After the merge[\s\S]*- Release failed: verify: Latest is v1\.1\.0, expected v1\.2\.0/);
+  assert.doesNotMatch(failedReport, /- Released /);
+  const draftReport = buildReport(view({ released: true, tag: 'v1.2.0', url: 'https://github.com/o/r/releases/tag/v1.2.0', staleDrafts: ['v0.28.0', 'v0.26.0'] }), { now: 1 });
+  assert.match(draftReport, /## Manual actions[\s\S]*Delete stale GitHub draft release\(s\): v0\.28\.0, v0\.26\.0/);
 });
 
 // ---------------------------------------------------------------------------
@@ -722,24 +769,37 @@ test('the run is checked again after the dialog: a changed board cancels the rel
 
 const V031_SUBJECT = 'feat(memory): God Mode run capture reports the memories a run made obsolete';
 
-test('v0.31.0 subject: the title starts with "God Mode" and ends on a whole word', () => {
+test('v0.31.0 subject: long single subject ends on a whole word with ellipsis, never mid-word', () => {
   const title = release.releaseTitle(release.buildNotes([V031_SUBJECT]));
   assert.ok(title.startsWith('God Mode'), title);
   assert.ok(title.length <= 60, title);
+  assert.ok(title.endsWith('...'), title);
   const words = 'God Mode run capture reports the memories a run made obsolete'.split(' ');
-  for (const word of title.split(' ')) assert.ok(words.includes(word), `partial word "${word}" in "${title}"`);
-  assert.equal(title, 'God Mode run capture reports the memories a run made');
+  for (const word of title.replace(/\.\.\.$/, '').split(' ')) assert.ok(words.includes(word), `partial word "${word}" in "${title}"`);
+  assert.equal(title, 'God Mode run capture reports the memories a run made...');
+  const readme = release.updateReadme('# App\n\nIntro.\n', '0.31.0', title, { features: [V031_SUBJECT.replace(/^feat\(memory\): /, '')], fixes: [] });
+  assert.ok(readme.includes(`> **Current release: v0.31.0 - ${title}**`), 'no double dot after ellipsis');
+  assert.ok(!readme.includes('....'), 'no four dots in README');
 });
 
-test('long subject: cut on a word boundary, casing kept, only the first letter raised', () => {
+test('releaseTitle prefers a shorter feature or fix subject before truncating with ellipsis', () => {
+  const longFeat = 'feat: Ctrl+L Report models pickers for the weekly review and daily brief';
+  const shortFeat = 'feat: open the charted God Mode run report';
+  assert.equal(release.releaseTitle(release.buildNotes([longFeat, shortFeat])), 'Open the charted God Mode run report');
+
+  const shortFix = 'fix: keep the email line';
+  assert.equal(release.releaseTitle(release.buildNotes([longFeat, shortFix])), 'Keep the email line');
+
   const long = 'fix: keep the IPC payload checks in sync with the preload bridge when a renderer module reloads mid-run';
   const title = release.releaseTitle(release.buildNotes([long]));
-  assert.equal(title, 'Keep the IPC payload checks in sync with the preload bridge');
-  assert.ok(long.includes(title.replace(/^K/, 'k')), 'a prefix of the subject, nothing cut mid-word');
+  assert.equal(title, 'Keep the IPC payload checks in sync with the preload...');
+  assert.ok(title.length <= 60);
   assert.equal(release.truncateWords('alpha beta gamma', 11), 'alpha beta');
   assert.equal(release.truncateWords('alpha beta, gamma', 12), 'alpha beta', 'trailing punctuation dropped');
+  assert.equal(release.truncateWords('alpha beta gamma', 14, { ellipsis: true }), 'alpha beta...');
   assert.equal(release.truncateWords('short', 60), 'short');
-  assert.equal(release.truncateWords('x'.repeat(70), 60), 'x'.repeat(60), 'one oversized word is the only mid-word cut');
+  assert.equal(release.truncateWords('x'.repeat(70), 60), 'x'.repeat(70), 'never cuts inside a single oversized word');
+  assert.equal(release.truncateWords(`${'x'.repeat(70)} tail`, 60, { ellipsis: true }), `${'x'.repeat(70)}...`, 'oversized first word kept whole');
   assert.equal(release.releaseTitle({ features: ['iOS widget lands'], fixes: [] }), 'IOS widget lands');
   assert.equal(release.releaseTitle({ features: ['LunaCore gets a map'], fixes: [] }), 'LunaCore gets a map');
 });
@@ -748,7 +808,7 @@ test('a release from the v0.31.0 subject carries the whole-word title into the c
   const tools = fakeTools({ subjects: [V031_SUBJECT] });
   const res = await cut(tools);
   assert.equal(res.ok, true);
-  assert.equal(res.title, 'God Mode run capture reports the memories a run made');
+  assert.equal(res.title, 'God Mode run capture reports the memories a run made...');
   assert.ok(tools.calls.includes(`git commit -m chore(release): v0.21.0 - ${res.title} -m ${release.CO_AUTHOR}`));
 });
 
@@ -841,7 +901,7 @@ test('gh release create uploads exactly latest.yml, the portable exe and the DAS
     {
       ...tools.deps,
       exec: (bin, args, o) => {
-        if (bin === 'gh' && args[0] === 'release') ghCalls.push(args);
+        if (bin === 'gh' && args[0] === 'release' && args[1] === 'create') ghCalls.push(args);
         return exec(bin, args, o);
       },
     },
@@ -949,4 +1009,64 @@ test('fileLockHolder: EBUSY path, holder lines and words are parsed; no Windows 
   assert.deepEqual(await holder.findLockHolders('C:\\r\\app.asar', { platform: 'win32', exec: failing, env: {} }), { ok: false, reason: 'lock holder lookup failed: lookup timed out' });
   const throwing = () => { throw new Error('EACCES'); };
   assert.deepEqual(await holder.findLockHolders('C:\\r\\app.asar', { platform: 'win32', exec: throwing, env: {} }), { ok: false, reason: 'lock holder lookup failed: EACCES' });
+});
+
+// ---------------------------------------------------------------------------
+// Post-publish release verification + stale draft reporting
+// ---------------------------------------------------------------------------
+
+test('verifyRelease retries when Latest lags behind and succeeds once GitHub catches up', async () => {
+  const tools = fakeTools({
+    verifyLatest: (attempt, tag) => ({
+      ok: true,
+      code: 0,
+      stdout: JSON.stringify({ tag_name: attempt < 3 ? 'v0.20.0' : tag }),
+      stderr: '',
+    }),
+    staleDrafts: ['v0.28.0', 'v0.26.0', 'v0.24.0'],
+  });
+  const res = await cut(tools);
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.verified, {
+    draft: false,
+    latest: 'v0.21.0',
+    assets: ['latest.yml', 'LunaCore-0.21.0-portable.exe', 'LunaCore-Setup-0.21.0.exe', 'LunaCore-Setup-0.21.0.exe.blockmap'],
+  });
+  assert.deepEqual(res.staleDrafts, ['v0.28.0', 'v0.26.0', 'v0.24.0']);
+  assert.equal(tools.calls.filter((c) => c.startsWith('gh release view v0.21.0')).length, 3);
+  assert.equal(tools.calls.filter((c) => c.startsWith('gh api repos/Kotsur69/Luna-Core-HUD/releases/latest')).length, 3);
+  assert.equal(tools.calls.filter((c) => c.startsWith('sleep ')).length, 2);
+});
+
+test('verifyRelease fails cutRelease when draft is true, an asset is missing, or Latest never updates', async () => {
+  const draftRes = await cut(fakeTools({ verifyDraft: true }));
+  assert.equal(draftRes.ok, false);
+  assert.equal(draftRes.refused, false);
+  assert.equal(draftRes.stage, 'verify');
+  assert.match(draftRes.reason, /v0\.21\.0 is a draft/);
+  assert.deepEqual(release.releaseResult(draftRes), { error: 'verify: v0.21.0 is a draft' });
+
+  const missingAssetRes = await cut(fakeTools({ verifyMissingAsset: 'LunaCore-Setup-0.21.0.exe.blockmap' }));
+  assert.equal(missingAssetRes.ok, false);
+  assert.equal(missingAssetRes.stage, 'verify');
+  assert.match(missingAssetRes.reason, /missing assets: LunaCore-Setup-0\.21\.0\.exe\.blockmap/);
+
+  const wrongLatestRes = await cut(fakeTools({ verifyLatestTag: 'v0.20.0' }));
+  assert.equal(wrongLatestRes.ok, false);
+  assert.equal(wrongLatestRes.stage, 'verify');
+  assert.match(wrongLatestRes.reason, /Latest is v0\.20\.0, expected v0\.21\.0/);
+
+  // Non-object JSON (null / primitive) and invalid tags never pass verification.
+  const nullJsonRes = await cut(
+    fakeTools({
+      verifyView: () => ({ ok: true, code: 0, stdout: 'null', stderr: '' }),
+      verifyLatest: () => ({ ok: true, code: 0, stdout: 'true', stderr: '' }),
+    }),
+  );
+  assert.equal(nullJsonRes.ok, false);
+  assert.equal(nullJsonRes.stage, 'verify');
+  assert.match(nullJsonRes.reason, /unexpected JSON/);
+
+  const badTag = await release.verifyRelease({ exec: async () => assert.fail('should not exec'), sleep: async () => {}, now: () => 0 }, REPO, '--flag', [], null);
+  assert.deepEqual(badTag, { ok: false, reason: 'bad tag' });
 });

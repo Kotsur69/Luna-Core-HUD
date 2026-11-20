@@ -13,9 +13,9 @@
 //
 // cleanupMergedRun() is the post-merge step (orchestraFinalize.js): the
 // run's integration worktree goes (node_modules junctions unlinked first,
-// then `git worktree remove` + prune), and every local package branch
-// origin/<base> already contains is deleted. Skipped / unmerged packages
-// keep their branches; remote branches are never touched.
+// then `git worktree remove` + prune), and every local and remote `luna/`
+// package branch origin/<base> already contains is deleted (then pruned on
+// origin). Skipped, unmerged, base and non-luna branches are never deleted.
 // sweepSettledRuns() applies the same rules once at LunaCore start to
 // settled runs older than a day (the ones a locked file or a crash left).
 //
@@ -202,12 +202,14 @@ function branchPlan(run) {
  * The post-merge cleanup of one run (see the header).
  * @param {{repoPath:string, base:string, integrationBranch?:string|null,
  *   packages:Array<{id:string, branch:string|null, merged:boolean, skipped:boolean}>}} run
- * @param {{listWorktrees:Function, removeWorktree:Function, pruneWorktrees:Function, deleteMergedBranch:Function}} git
+ * @param {{listWorktrees:Function, removeWorktree:Function, pruneWorktrees:Function, deleteMergedBranch:Function,
+ *   deleteMergedRemoteBranch?:Function, pruneOrigin?:Function}} git
  * @returns {Promise<{ok:boolean, worktree:'removed'|'gone'|'kept', deleted:string[],
- *   kept:Array<{branch:string, reason:string}>, error:string|null}>}
+ *   kept:Array<{branch:string, reason:string}>, remoteDeleted:string[],
+ *   remoteKept:Array<{branch:string, reason:string}>, error:string|null}>}
  */
 async function cleanupMergedRun(run, git) {
-  const out = { ok: true, worktree: 'gone', deleted: [], kept: [], error: null };
+  const out = { ok: true, worktree: 'gone', deleted: [], kept: [], remoteDeleted: [], remoteKept: [], error: null };
   try {
     if (!run || !isBase(run.base)) return { ...out, ok: false, error: 'badBase' };
     const list = await git.listWorktrees(run.repoPath);
@@ -228,6 +230,19 @@ async function cleanupMergedRun(run, git) {
       const res = await git.deleteMergedBranch(run.repoPath, branch, run.base);
       if (res && res.ok) out.deleted.push(branch);
       else if (!res || res.error !== 'missing') out.kept.push({ branch, reason: (res && res.error) || 'failed' });
+    }
+    if (typeof git.deleteMergedRemoteBranch === 'function') {
+      out.remoteKept.push(...kept.map((k) => ({ ...k })));
+      for (const branch of candidates) {
+        if (branch === run.base) continue;
+        const res = await git.deleteMergedRemoteBranch(run.repoPath, branch, run.base);
+        if (res && res.ok) out.remoteDeleted.push(branch);
+        else if (!res || res.error !== 'missing') out.remoteKept.push({ branch, reason: (res && res.error) || 'failed' });
+      }
+      if (out.remoteDeleted.length && typeof git.pruneOrigin === 'function') {
+        const pruned = await git.pruneOrigin(run.repoPath);
+        if (pruned && !pruned.ok) out.pruneError = pruned.detail || pruned.error || 'failed';
+      }
     }
   } catch (err) {
     return { ...out, ok: false, error: errMessage(err) };

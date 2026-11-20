@@ -48,6 +48,7 @@ const WORKTREE_DIR = '.luna-worktrees';
 const BRANCH_PREFIX = 'luna/';
 const MAX_SLUG_CHARS = 48;
 const GIT_TIMEOUT_MS = 30000;
+const REMOTE_TIMEOUT_MS = 60000;
 // `git worktree remove` deletes the folder's ignored files too: a real
 // node_modules on Windows can take minutes, far longer than GIT_TIMEOUT_MS.
 const REMOVE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -606,6 +607,55 @@ async function deleteMergedBranch(repoPath, branch, base, deps = {}) {
   return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: firstLine(res.stderr) };
 }
 
+const REMOTE_CRED_RE = /(https?:\/\/)[^/\s@]+@/gi;
+const REMOTE_TOKEN_RE = /\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g;
+const redactRemote = (text) => String(text || '').replace(REMOTE_CRED_RE, '$1***@').replace(REMOTE_TOKEN_RE, '***');
+
+/**
+ * Deletes a remote `luna/` branch on origin whose tip origin/<base> already
+ * contains (`git merge-base --is-ancestor`). Uses `--force-with-lease` pinned
+ * to the verified OID so a branch that received new commits on origin since
+ * the last fetch is never deleted. Refuses non-luna names, the base branch,
+ * and any branch not fully merged into origin/<base>.
+ * @param {string} repoPath any folder of the main checkout
+ * @param {unknown} branch
+ * @param {unknown} base the base branch the run merged into
+ * @param {{execImpl?:Function}} [deps]
+ * @returns {Promise<{ok:true} | {ok:false, error:'badName'|'badBase'|'missing'|'notMerged'|'gitFailed', detail?:string}>}
+ */
+async function deleteMergedRemoteBranch(repoPath, branch, base, deps = {}) {
+  const execImpl = deps.execImpl || execFile;
+  if (typeof branch !== 'string' || !OWN_BRANCH_RE.test(branch)) return { ok: false, error: 'badName' };
+  if (!isSafeBase(base)) return { ok: false, error: 'badBase' };
+  if (branch === base) return { ok: false, error: 'badName' };
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  const exists = await runGit(repoPath, ['rev-parse', '--verify', '--quiet', remoteRef], execImpl);
+  const tipSha = exists.ok ? firstLine(exists.stdout) : '';
+  if (!BASE_SHA_RE.test(tipSha)) return { ok: false, error: 'missing' };
+  // Exit 1 = not an ancestor; any other failure keeps the remote branch too.
+  const merged = await runGit(repoPath, ['merge-base', '--is-ancestor', remoteRef, `refs/remotes/origin/${base}`], execImpl);
+  if (!merged.ok) return { ok: false, error: 'notMerged' };
+  const res = await runGit(
+    repoPath,
+    ['push', `--force-with-lease=refs/heads/${branch}:${tipSha}`, 'origin', '--delete', `refs/heads/${branch}`],
+    execImpl,
+    { timeoutMs: REMOTE_TIMEOUT_MS },
+  );
+  return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: redactRemote(firstLine(res.stderr)) };
+}
+
+/**
+ * Prunes stale remote-tracking refs after remote branch deletions.
+ * @param {string} repoPath any folder of the main checkout
+ * @param {{execImpl?:Function}} [deps]
+ * @returns {Promise<{ok:true} | {ok:false, error:'gitFailed', detail?:string}>}
+ */
+async function pruneOrigin(repoPath, deps = {}) {
+  const execImpl = deps.execImpl || execFile;
+  const res = await runGit(repoPath, ['fetch', '--prune', 'origin'], execImpl, { timeoutMs: REMOTE_TIMEOUT_MS });
+  return res.ok ? { ok: true } : { ok: false, error: 'gitFailed', detail: redactRemote(firstLine(res.stderr)) };
+}
+
 /**
  * Runs a FIXED command string through the shell (npm is a .cmd on Windows).
  * Never pass it anything built from user, renderer or git input.
@@ -697,11 +747,14 @@ module.exports = {
   headFailureReason,
   gitDetail,
   GIT_TIMEOUT_MS,
+  REMOTE_TIMEOUT_MS,
   REMOVE_TIMEOUT_MS,
   ADD_TIMEOUT_MS,
   listWorktrees,
   pruneWorktrees,
   deleteMergedBranch,
+  deleteMergedRemoteBranch,
+  pruneOrigin,
   updateLocalBase,
   runShell,
   lastLine,

@@ -67,7 +67,7 @@ injects prompts or touches the `claude` binary.
 >   whole-word title
 > - Fix: stack clipboard history vertically again
 >
-> **v0.31.0 — god Mode run capture reports the memories a run made obso.**
+> **v0.31.0 — God Mode run capture reports the memories a run made obsolete.**
 > - God Mode run capture reports the memories a run made obsolete
 > - 'changed' review flag when files a memory names have newer commits
 > - "Check if still true" - Sonnet checks a memory against the code
