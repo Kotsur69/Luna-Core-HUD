@@ -151,12 +151,18 @@ function holdWhy(hold) {
   return t('orch.noNodeModules.unknown');
 }
 
+/** An 'agy:<id>' as the board names it: the bare id ('-' when missing). */
+const agyIdText = (v) => String(v || '-').replace(/^agy:/, '');
+
 function warningText(w) {
   // Free planner (orchestraPlanBuild.js): a package still too big after one resize round.
   if (w.code === 'sizing') return t('orch.warn.sizing', { id: w.id, reasons: (w.reasons || []).join('; ') });
   if (w.code === 'uncovered') return t('orch.warn.uncovered', { list: w.texts.join('; ') });
   if (w.code === 'overlap') return t('orch.warn.overlap', { a: w.a, b: w.b, files: w.files.join(', ') });
   if (w.code === 'outOfPool') return t('orch.warn.outOfPool', { id: w.id, from: w.from || '-', to: poolModelName(w.to) || w.to });
+  // A pool's agy variant the live list lacks (src/orchestraPoolEffort.js): Per plan, or the family's variant at launch.
+  if (w.code === 'poolEffortMissing') return t('orch.warn.poolEffortMissing', { model: poolModelName(w.model) || w.model, variant: agyIdText(w.from) });
+  if (w.code === 'agyVariantGone') return t('orch.warn.agyVariantGone', { id: w.id, from: agyIdText(w.from), to: agyIdText(w.to) });
   return t(`orch.warn.${w.code}`, { id: w.id, dep: w.dep });
 }
 

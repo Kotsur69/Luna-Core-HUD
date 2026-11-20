@@ -40,8 +40,11 @@ const {
   strongestKey,
   poolModelName,
   poolLabel,
+  poolEffortLevel,
 } = require('./workerPool');
 const { agyVariant, agyModelIdOf } = require('./workerModels');
+const { poolEntryOfKey, packagePoolEffort } = require('./poolEffort');
+const { entryModel } = require('./orchestraPoolEffort');
 
 const MAX_NAME_CHARS = 80;
 const noop = () => {};
@@ -118,6 +121,8 @@ function keyOfPackage(p, agyList) {
  * Applies a pool (2+ models) to the packages that have not started. A key
  * outside the pool - or an agy family with no live variant - goes to the
  * strongest usable ticked key; `moved` lists each such change for the log.
+ * An agy entry with a live variant runs every package on that variant;
+ * "Per plan" picks the variant nearest each package's effort, as before.
  * A package with an escalation / hand-over override keeps it (rescue).
  * @param {object[]} packages
  * @param {{model:string}[]} pool
@@ -143,7 +148,8 @@ function applyPool(packages, pool, { agyList = [], effortOf = (p) => p.effort ||
     // poolFrom keeps the planner's first out-of-pool pick; a guard move has
     // its own record (hybridGuard) and is no planner pick.
     const record = key !== own && !guarded && !p.poolFrom ? { poolFrom: from } : {};
-    return { ...p, poolModel: key, model: concreteModel(key, effortOf(p), agyList), ...record };
+    const model = entryModel(poolEntryOfKey(pool, key), agyList) || concreteModel(key, effortOf(p), agyList);
+    return { ...p, poolModel: key, model, ...record };
   });
   return { ok: true, packages: out, moved };
 }
@@ -152,11 +158,13 @@ function applyPool(packages, pool, { agyList = [], effortOf = (p) => p.effort ||
  * What Approve's pool turns the run into.
  *   none    no pool: today's flow (the Approve select / Settings model)
  *   single  one model = today's single value: a Claude alias or 'agy:<id>'
- *           as the run's worker model, or a free profile as "Free only"
+ *           as the run's worker model, or a free profile as "Free only".
+ *           A Claude level becomes the run's worker effort (every package
+ *           is on that model); an agy entry's live variant is the model.
  *   pool    2+ models: a pool run (worker model 'plan')
  * @param {{model:string, effort:string}[]|null} pool normalizePool() output
  * @param {{id:string, name:string}[]} agyList
- * @returns {{kind:'none'}|{kind:'single', workerModel?:string, workers?:'free', freeProfileId?:string}
+ * @returns {{kind:'none'}|{kind:'single', workerModel?:string, workerEffort?:string, workers?:'free', freeProfileId?:string}
  *   |{kind:'pool', pool:object[], freeProfileId:string|null}|{kind:'error', error:'badAgyModel'}}
  */
 function approveChoice(pool, agyList) {
@@ -164,8 +172,10 @@ function approveChoice(pool, agyList) {
   if (pool.length >= 2) return { kind: 'pool', pool, freeProfileId: poolFreeProfileId(pool) };
   const key = poolKeyOf(pool[0].model);
   if (key === POOL_FREE_KEY) return { kind: 'single', workers: 'free', freeProfileId: freeProfileIdOf(pool[0].model) };
-  const model = concreteModel(key, null, agyList);
-  return model ? { kind: 'single', workerModel: model } : { kind: 'error', error: 'badAgyModel' };
+  const model = entryModel(pool[0], agyList) || concreteModel(key, null, agyList);
+  if (!model) return { kind: 'error', error: 'badAgyModel' };
+  const level = runsOnOf(key) === 'claude' ? poolEffortLevel(pool[0]) : null;
+  return { kind: 'single', workerModel: model, ...(level ? { workerEffort: level } : {}) };
 }
 
 /**
@@ -207,6 +217,13 @@ function reportWhy(p) {
   return [moved, typeof p.modelReason === 'string' ? p.modelReason : ''].filter(Boolean).join('; ');
 }
 
+/** A package's pool model for the report, with the effort its pool entry fixes ('Opus - xhigh'). */
+function reportModel(view, p) {
+  const name = poolModelName(p.poolModel) || (p.poolModel === POOL_FREE_KEY ? 'free' : '-');
+  const level = packagePoolEffort(view.modelPool, p);
+  return level ? `${name} - ${level}` : name;
+}
+
 /**
  * A pool run's per-package rows: [package, pool model, runs on, why]; null
  * for any other run (no pool on the view).
@@ -217,7 +234,7 @@ function poolReportRows(view) {
   if (!view || !Array.isArray(view.modelPool) || !view.modelPool.length) return null;
   return (Array.isArray(view.packages) ? view.packages : [])
     .filter((p) => p && typeof p === 'object')
-    .map((p) => [String(p.id || ''), poolModelName(p.poolModel) || (p.poolModel === POOL_FREE_KEY ? 'free' : '-'), String(p.model || '-'), reportWhy(p)]);
+    .map((p) => [String(p.id || ''), reportModel(view, p), String(p.model || '-'), reportWhy(p)]);
 }
 
 /**

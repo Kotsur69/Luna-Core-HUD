@@ -149,6 +149,16 @@ test('a pool plan shows its Workers pool and pool model names per package', () =
   assert.deepEqual(plan.packages.map((p) => packageModelLine(plan, p)), ['Sonnet', 'Opus', 'Argon (agy)']);
 });
 
+test('a pool plan with per-model efforts: the snapshot keeps them, the Workers line and package lines show them', () => {
+  const pool = [{ model: 'opus', effort: 'xhigh' }, { model: 'sonnet', effort: 'plan' }, { model: 'agy-argon', effort: 'agy:gemini-4-argon-medium' }];
+  const packages = [...readyPlan.packages, { id: 'c', title: 'Third', deps: [], model: 'agy:gemini-4-argon-medium' }];
+  const rows = snapRows([row('KT-PC', { plans: [{ ...readyPlan, modelPool: pool, packages }] })], NOW);
+  const [plan] = godmodePlansFrom(rows, NOW);
+  assert.deepEqual(plan.modelPool, pool);
+  assert.equal(poolLine(plan), 'Opus - xhigh + Sonnet + Argon (agy) - medium');
+  assert.deepEqual(plan.packages.map((p) => packageModelLine(plan, p)), ['Sonnet', 'Opus - xhigh', 'Argon (agy) - medium']);
+});
+
 test('a pool with a free profile names it for a free package', () => {
   const plan = { ...readyPlan, modelPool: [{ model: 'opus', effort: 'plan' }, { model: 'free:coder', effort: 'plan' }] };
   assert.equal(poolLine(plan), 'Opus + coder');

@@ -83,6 +83,9 @@ const { agyModelIdOf } = require('./workerModels');
 // "Workers" pools (2+ ticked worker models): planned for, routed per package.
 const { createPoolWiring } = require('./orchestraPoolWiring');
 const { poolWorkers } = require('./workerPool');
+// Per-model efforts of a pool (src/orchestraPoolEffort.js) and its usage line's numbers.
+const poolEffortRules = require('./orchestraPoolEffort');
+const { poolUsageReadings } = require('./orchestraPoolUsage');
 const { createFreeReviewer } = require('./orchestraFreeReview');
 // Token bookkeeping of a run (additive: nothing here decides anything).
 const { createUsageBook } = require('./orchestraUsage');
@@ -102,7 +105,7 @@ const { createVerifySemaphore, DEFAULT_VERIFY_CONCURRENCY } = require('./worktre
  * it always had; the free planner, plan docs, a follow-up request and a
  * hybrid run add keys - and so does a planner model other than the default.
  */
-function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid, abBuild, pool = null, agyModel = null }) {
+function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, extraPrompt, hybrid, abBuild, pool = null, agyModel = null, poolEfforts = null, poolUsage = null }) {
   return {
     cwd,
     env,
@@ -118,6 +121,9 @@ function plannerArgs({ cwd, env, openTodos, effort, model, planner, planDocs, ex
     ...(Array.isArray(pool) && pool.length ? { pool } : {}),
     // The agy planner's --model id (live-checked); none = agy's default model.
     ...(planner === 'agy' && agyModel ? { agyModel } : {}),
+    // A pool run's fixed per-model efforts and current usage (prompt lines); none = no key.
+    ...(Array.isArray(pool) && pool.length && Array.isArray(poolEfforts) && poolEfforts.length ? { poolEfforts } : {}),
+    ...(Array.isArray(pool) && pool.length && Array.isArray(poolUsage) && poolUsage.length ? { poolUsage } : {}),
   };
 }
 
@@ -1243,9 +1249,16 @@ function createOrchestra(deps) {
   // "Workers" pools (src/orchestraPoolWiring.js): planned for, then routed per package.
   const poolRun = createPoolWiring({ planOf: () => plan, deps, log, workerSettings });
 
-  /** Escalation override, then a forced Settings level, then the planner's pick, then medium. */
+  /**
+   * Escalation override, then the level a pool's Claude model fixes, then a
+   * forced Settings level, then the planner's pick, then medium.
+   */
   const effortFor = (pkg) =>
-    normalizeEffort(pkg.effortOverride) || normalizeEffort(plan.workerEffort) || normalizeEffort(pkg.effort) || DEFAULT_EFFORT;
+    normalizeEffort(pkg.effortOverride) ||
+    poolEffortRules.claudePoolEffort(plan.modelPool, pkg) ||
+    normalizeEffort(plan.workerEffort) ||
+    normalizeEffort(pkg.effort) ||
+    DEFAULT_EFFORT;
 
   /**
    * Runs the planner for one project. Replaces any previous plan, except one
@@ -1305,11 +1318,18 @@ function createOrchestra(deps) {
       // A/B builds need a Claude planner and Claude workers on one model; a
       // Luna's Work build (cards) never gets them.
       const abBuild = settings.abBuild === true && planner === 'claude' && workers === 'claude' && !pool && !Array.isArray(ctx.cards);
+      // A pool run's fixed per-model efforts and each ticked model's usage now
+      // (the meter's latest reading); none = the prompt as before.
+      const poolEfforts = pool ? pool.efforts : null;
+      const poolUsage = pool && deps.usageReading ? poolUsageReadings(pool.pool, deps.usageReading()) : null;
       const callPlanner = async (extraPrompt) => {
         // The picker's planner effort and model ride in ctx too, so a limit-wait
         // or account-failover replan plans at the same level on the same model.
         const res = await deps.runPlanner(
-          plannerArgs({ cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid, abBuild, pool: pool ? pool.keys : null, agyModel }),
+          plannerArgs({
+            cwd: ctx.repoPath, env: ctx.env, openTodos, effort: plannerEffort, model: plannerModel, planner, planDocs, extraPrompt, hybrid, abBuild,
+            pool: pool ? pool.keys : null, agyModel, poolEfforts, poolUsage,
+          }),
         );
         if (res && res.ok && res.usage) plannerUsage.push(res.usage);
         return res;
@@ -1720,7 +1740,23 @@ function createOrchestra(deps) {
     if (!agyRules.packageRunsAgy(plan, pkg)) return modelFor(pkg);
     const chosen = agyRules.packageAgyModel(plan, pkg);
     if (chosen === agyRules.AGY) return chosen;
-    return deps.agyModels && deps.agyModels.resolveModelId(chosen) ? chosen : agyRules.AGY;
+    if (deps.agyModels && deps.agyModels.resolveModelId(chosen)) return chosen;
+    return poolFamilyFallback(pkg, chosen) || agyRules.AGY;
+  }
+
+  /**
+   * A pool package whose agy variant left the live list: its family's live
+   * variant instead of agy's own default model, with a board note. Null
+   * outside a pool family, or when the family has no live variant either.
+   */
+  function poolFamilyFallback(pkg, chosen) {
+    if (!deps.agyModels || pkg.modelOverride) return null;
+    const fallback = poolEffortRules.familyFallback(pkg, deps.agyModels.list(), effortFor(pkg));
+    if (!fallback || !deps.agyModels.resolveModelId(fallback)) return null;
+    log(`[orchestra] package ${pkg.id}: agy variant ${chosen} is not in the live \`agy models\` list; runs on ${fallback}`);
+    const note = { code: poolEffortRules.NOTE_VARIANT_GONE, id: pkg.id, from: chosen, to: fallback };
+    plan.warnings = poolEffortRules.withNotes(plan.warnings, [note]);
+    return fallback;
   }
 
   /**
@@ -2456,7 +2492,11 @@ function createOrchestra(deps) {
       plan.packages = stagedPackages || applyPromptEdits(plan.packages);
       if (!plan.started && !plan.scheduledAt && !plan.planRun) delete plan.modelPool;
       applyWorkerModel(askedModel, workers);
+      // A one-model pool's Claude level: every package is on that model, so it is the run's effort.
+      if (poolChoice.workerEffort && !plan.started && !plan.scheduledAt && !plan.planRun) plan.workerEffort = poolChoice.workerEffort;
     }
+    // agy variants of Approve's pool that fell back to "Per plan" (src/orchestraPoolEffort.js).
+    if (poolChoice.notes) plan.warnings = poolEffortRules.withNotes(plan.warnings, poolChoice.notes);
     if (startAt) {
       freezeSettings();
       plan.scheduledAt = startAt;
