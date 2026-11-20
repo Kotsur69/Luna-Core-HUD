@@ -340,6 +340,17 @@ test('Approve pick: Opus is always offered (even unticked), at the picked effort
   assert.deepEqual([s.log.sessions[0].task.model, s.log.sessions[0].task.effort], ['opus', 'xhigh']);
 });
 
+test('Approve pick: a "Per plan" pick keeps the package\'s own effort, never the pool entry\'s fixed level', async () => {
+  const pool = [e('opus', 'xhigh'), e('sonnet')];
+  const s = await planned({ pool, packages: [pkg('a', 'sonnet'), pkg('b', 'opus', { at: 2 })] });
+  const res = await approveWith(s, { a: { model: 'opus', effort: 'plan' } }, pool, 'claude');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await s.flush();
+  const task = (id) => s.log.sessions.find((x) => x.task.godMode.packageId === id).task;
+  assert.deepEqual([task('a').model, task('a').effort], ['opus', 'medium'], 'the pick\'s "Per plan" wins over the pool\'s xhigh');
+  assert.deepEqual([task('b').model, task('b').effort], ['opus', 'xhigh'], 'an unpicked Opus package still runs at the pool level');
+});
+
 test('Approve pick: a pick clears a weak-guard move (Mati\'s call wins)', async () => {
   const s = await planned({ pool: [e('opus'), e('agy-hydrogen')], packages: [risky('h')] });
   assert.equal(s.view('h').model, 'opus');
