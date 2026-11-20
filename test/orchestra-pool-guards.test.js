@@ -51,7 +51,7 @@ const pkg = (id, model, extra = {}) => ({
   ...extra,
 });
 
-function setup({ packages, settings = {}, elsewhere = null } = {}) {
+function setup({ packages, settings = {}, elsewhere = null, usage = null } = {}) {
   const clock = 1_000_000;
   let seq = 0;
   const log = { sessions: [], events: [], lines: [] };
@@ -85,7 +85,8 @@ function setup({ packages, settings = {}, elsewhere = null } = {}) {
     agyModels: fakeAgyModels(),
     agyProfileId: () => 'agy-profile',
     codingProfileId: (preferred) => preferred || 'default-coding',
-    usageReading: () => null,
+    // The usage meter's live reading (one per PC, shared by every run).
+    usageReading: () => (typeof usage === 'function' ? usage() : usage),
     ...(elsewhere ? { agyWorkersElsewhere: elsewhere } : {}),
   });
   const ctx = { projectId: 'p1', repoPath: '/repo', profileId: 'cloud', env: {} };
@@ -393,4 +394,40 @@ test('Approve pick: the stored pick survives a restart only in shape', () => {
   assert.deepEqual(normalizeStoredPick({ model: 'opus', effort: 'xhigh' }), { model: 'opus', effort: 'xhigh' });
   for (const bad of [null, { model: 'free', effort: 'plan' }, { model: 'gpt', effort: 'plan' }, { model: 'opus' }]) assert.equal(normalizeStoredPick(bad), null);
   assert.deepEqual(pickChoices(POOL3), ['opus', 'agy-argon', 'sonnet']);
+});
+
+// ---- multi God Mode: shared quota, live usage ----------------------------------------------
+
+test('two runs: the agy cap counts both runs, and limit moves read the shared live meter, not run counters', async () => {
+  const meter = { current: { others: [{ providerId: 'antigravity', status: 'ok', limits: [{ model: 'Argon', window: 'weekly', percentUsed: 40 }] }] } };
+  const runs = {};
+  const other = (name) => () => (runs[name] ? runs[name].orch.activeAgyWorkers() : 0);
+  const pool = [e('opus'), e('agy-argon')];
+  runs.a = await started({
+    pool,
+    usage: () => meter.current,
+    elsewhere: other('b'),
+    packages: [pkg('a1', 'agy-argon', { at: 1 }), pkg('a2', 'agy-argon', { at: 2 }), pkg('a3', 'agy-argon', { at: 3 })],
+  });
+  assert.deepEqual(launchedIds(runs.a), ['a1', 'a2'], 'run A: agy cap 2');
+  // Run B starts while A holds both agy slots: its agy package waits, its Opus one launches.
+  runs.b = await started({
+    pool,
+    usage: () => meter.current,
+    elsewhere: other('a'),
+    packages: [pkg('b1', 'agy-argon', { at: 1 }), pkg('b2', 'opus', { at: 2 })],
+  });
+  assert.deepEqual(launchedIds(runs.b), ['b2']);
+  // The meter now reads Argon's weekly quota as used up: both runs' waiting
+  // agy packages move to Opus on their next look - nothing counted per run.
+  meter.current = { others: [{ providerId: 'antigravity', status: 'ok', limits: [{ model: 'Argon', window: 'weekly', percentUsed: 100 }] }] };
+  runs.a.orch.tick();
+  runs.b.orch.tick();
+  await runs.a.flush();
+  await runs.b.flush();
+  for (const [s, id] of [[runs.a, 'a3'], [runs.b, 'b1']]) {
+    const p = s.view(id);
+    assert.deepEqual([p.state, p.model], ['launched', 'opus'], id);
+    assert.deepEqual(p.rescues.map((r) => r.text), ['Argon (agy) limit -> Opus'], id);
+  }
 });
