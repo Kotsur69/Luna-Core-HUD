@@ -13,10 +13,16 @@
 //                    at once; planReady / planFailed go out as a push and the
 //                    plan lands in the `godmode` snapshot (plans()).
 //   godmode.launch   {projectId, planId, ids?, integration?, free?, releaseAfter?,
-//                    workerModel?, workers?} controller.launch(). workerModel is one of
+//                    workerModel?, workers?, modelPool?} controller.launch(). workerModel is one of
 //                    the ui pref's allow-list (opus/sonnet/fable/agy/plan) or a
 //                    well-formed agy:<id> (Approve checks it against `agy models`), workers one
-//                    of claude/agy/hybrid/free (orchestraWorkers.js). For a merge the signed command IS
+//                    of claude/agy/hybrid/free (orchestraWorkers.js). modelPool is a
+//                    "Workers" pool [{model, effort}] checked strictly (src/workerPool.js
+//                    strictPool: no unknown keys, no non-strings, the size cap, known
+//                    models and efforts) and then against the live `agy models` list.
+//                    Neither a pool nor a model (and Claude workers): the saved pool
+//                    pref, else nothing - today's run (the Settings model, Opus by
+//                    default). For a merge the signed command IS
 //                    the confirmation: {mergeConfirmed: true} is passed on this
 //                    path only, never from a payload.
 //   godmode.kill     {projectId}  stop the run (always allowed, like the HUD)
@@ -40,6 +46,8 @@ const { todoSelection, planTarget, runPlan } = require('./orchestraPlanStart');
 const { INTEGRATION_MODES } = require('./orchestraSupervisor');
 const { normalizeWorkerModel } = require('./orchestraWorkerModel');
 const { normalizeWorkers } = require('./orchestraWorkers');
+const { strictPool, normalizePool } = require('./workerPool');
+const { poolNeedsAgy, isLivePool, poolOptions } = require('./orchestraPool');
 
 const KINDS = ['godmode.plan', 'godmode.launch', 'godmode.kill', 'godmode.retry', 'godmode.finish', 'godmode.discard'];
 const PROJECT_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
@@ -88,6 +96,8 @@ function settledOrPending(promise) {
  *   maxTodoItems: number,
  *   openTab: (projectId: string) => object|null,   a new HUD tab (createSession)
  *   readTodos: (projectId: string) => object[],
+ *   savedPool?: () => unknown,           the saved "Workers" pool pref (ui orchestraModelPool)
+ *   agyModels?: {ensure: () => Promise<unknown>, list: () => object[]},  the live `agy models` list
  *   onChange?: () => void,               plans() changed: re-publish the snapshot
  *   log?: (line: string) => void,
  *   seq?: () => string,                  request ids (tests)
@@ -242,16 +252,53 @@ function createHostGodmode(deps) {
       if (typeof payload[flag] !== 'boolean') return { error: 'badPayload' };
       out[flag] = payload[flag];
     }
+    if (payload.modelPool !== undefined && payload.modelPool !== null) {
+      const pool = strictPool(payload.modelPool);
+      if (!pool) return { error: 'badModelPool' };
+      out.modelPool = pool;
+    }
     return { payload: out };
+  }
+
+  /** The saved pool pref, else null (today's run: the Settings model, Opus by default). A broken pref reads as none. */
+  function savedPool() {
+    let saved = null;
+    try {
+      saved = deps.savedPool ? normalizePool(deps.savedPool()) : null;
+    } catch (err) {
+      log(`[hostgodmode] the saved Workers pool is unreadable: ${errText(err)}`);
+    }
+    return saved && saved.length ? saved : null;
+  }
+
+  /**
+   * The launch's pool: a sent one must run as sent (every agy family and
+   * variant on the live list), else refused. Without a pool or a model, Claude
+   * workers launch on the saved pool pref, else as today (the Settings model, Opus by default).
+   * @returns {Promise<{payload:object}|{error:string}>}
+   */
+  async function withPool(out) {
+    if (out.modelPool) {
+      if (!poolNeedsAgy(out.modelPool)) return { payload: out };
+      if (!deps.agyModels) return { error: 'badModelPool' };
+      await deps.agyModels.ensure();
+      return isLivePool(out.modelPool, deps.agyModels.list()) ? { payload: out } : { error: 'badModelPool' };
+    }
+    const ownWorkers = out.free === true || out.workers === 'free' || out.workers === 'agy';
+    if (out.workerModel || ownWorkers) return { payload: out };
+    const saved = savedPool();
+    return { payload: saved ? { ...out, modelPool: saved } : out };
   }
 
   async function launch(payload) {
     const run = runOf(payload);
     if (run.error) return refused(run.error);
-    const clean = launchPayload(payload, run.view);
-    if (clean.error) return refused(clean.error);
+    const checked = launchPayload(payload, run.view);
+    if (checked.error) return refused(checked.error);
     const blocked = deps.godModeBlock(run.project.id);
     if (blocked) return refusedFrom(blocked);
+    const clean = await withPool(checked.payload);
+    if (clean.error) return refused(clean.error);
     const work = run.controller.launch(clean.payload, { mergeConfirmed: true });
     const res = await settledOrPending(work);
     if (res === PENDING) {
@@ -352,6 +399,22 @@ function createHostGodmode(deps) {
     return { status: 'discarded', projectId: project.id };
   }
 
+  /**
+   * The phone's pool picker menu: every pool model with its live agy
+   * variants (the last `agy models` read). Free profiles are not offered on
+   * the phone. Null without an agy list (the phone then offers Claude only).
+   */
+  function phonePoolOptions() {
+    if (!deps.agyModels) return null;
+    try {
+      const menu = poolOptions({ agyList: deps.agyModels.list(), profiles: [], isFreeProfile: () => false, isCodingProfile: () => false });
+      return { models: menu.models };
+    } catch (err) {
+      log(`[hostgodmode] the pool menu is unreadable: ${errText(err)}`);
+      return null;
+    }
+  }
+
   /** A not-started plan view -> the snapshot's plan entry. */
   function readyEntry(projectId, view, repoName) {
     const errors = Array.isArray(view.errors) ? view.errors.map(String) : [];
@@ -368,6 +431,11 @@ function createHostGodmode(deps) {
       workerModel: normalizeWorkerModel(view.workerModel),
       // A pool plan's "Workers" pool, read-only on the phone (src/workerPool.js); no key otherwise.
       ...(Array.isArray(view.modelPool) ? { modelPool: view.modelPool } : {}),
+      // What the phone's pool picker may tick (src/godmodesnapshot.js checks it again).
+      ...(() => {
+        const menu = phonePoolOptions();
+        return menu ? { poolOptions: menu } : {};
+      })(),
     };
   }
 

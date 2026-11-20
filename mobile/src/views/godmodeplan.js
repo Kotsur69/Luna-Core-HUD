@@ -5,10 +5,12 @@
 // snapshots (snapmodel.godmodePlansFrom), above the live runs:
 //   planning  spinner 'Planning <repo> on <host>'
 //   failed    the errors + Discard
-//   ready     a pool plan's read-only Workers pool, the packages as
+//   ready     a pool plan's Workers pool line, the packages as
 //             checkboxes (all ticked; titles and models read-only), the
-//             integration mode, Claude / free workers, the Claude workers'
-//             model (hidden for free workers), 'Create a release
+//             integration mode, Claude / free workers, the Workers pool
+//             picker (models + effort; hidden for free workers), the Claude
+//             workers' single model (hidden for free workers or a ticked
+//             pool), 'Create a release
 //             after finish' (merge only), Launch + Discard. A merge asks
 //             'Merge into main?' first.
 // Launch / Discard go to the host that published the plan, signed
@@ -21,7 +23,22 @@ import { t, tf } from '../i18n.js';
 import { godmodePlansFrom } from '../snapmodel.js';
 import { hostForMachine } from '../godmodestart.js';
 import { agyModelLabel } from '../../../src/workerModels.js';
-import { INTEGRATION_MODES, WORKER_MODEL_NAMES, workerModelOptions, poolLine, packageModelLine, planDraft, togglePackage, needsMergeConfirm, launchPayload, discardPayload } from '../godmodeplanmodel.js';
+import {
+  INTEGRATION_MODES,
+  WORKER_MODEL_NAMES,
+  workerModelOptions,
+  poolLine,
+  packageModelLine,
+  planDraft,
+  togglePackage,
+  needsMergeConfirm,
+  launchPayload,
+  discardPayload,
+  poolMenu,
+  poolEffortText,
+  togglePoolEntry,
+  setPoolEntryEffort,
+} from '../godmodeplanmodel.js';
 import { confirmSheet } from './sheet.js';
 
 const INTEGRATION_KEY = { pr: 'gmIntegrationPr', merge: 'gmIntegrationMerge', branches: 'gmIntegrationBranches' };
@@ -116,6 +133,37 @@ export function createPlanCards(deps, runnerFor, repaint) {
     return h('li', {}, h('label', { class: 'gm-check', for: id }, box, h('span', { class: 'gm-check-text' }, h('span', {}, p.title || p.id), meta ? h('span', { class: 'hint num' }, meta) : null)));
   }
 
+  /** One pool model: a checkbox, and its effort select once ticked (more than "Per plan" to pick). */
+  function poolPickRow(plan, draft, row, busy) {
+    const id = domId('gm-pool', planKey(plan), row.model);
+    const entry = draft.pool.find((e) => e.model === row.model) || null;
+    const box = h('input', { type: 'checkbox', id, checked: Boolean(entry), disabled: busy || (!entry && !row.available) });
+    box.addEventListener('change', () => update(plan, (d) => togglePoolEntry(plan, d, row.model)));
+    const label = h(
+      'label',
+      { class: `gm-check${!entry && !row.available ? ' is-disabled' : ''}`, for: id },
+      box,
+      h('span', { class: 'gm-check-text' }, h('span', {}, row.name), row.available ? null : h('span', { class: 'hint' }, t('gmPoolUnavailable'))),
+    );
+    if (!entry || row.efforts.length < 2) return h('li', {}, label);
+    const sel = h(
+      'select',
+      { class: 'field', id: `${id}-effort`, disabled: busy, 'aria-label': tf('gmPoolEffortOf', { model: row.name }) },
+      row.efforts.map((v) => h('option', { value: v, selected: v === entry.effort }, poolEffortText(row.model, v) || t('gmPoolEffortPlan'))),
+    );
+    sel.addEventListener('change', () => update(plan, (d) => setPoolEntryEffort(plan, d, row.model, sel.value)));
+    return h('li', {}, label, sel);
+  }
+
+  /** The Workers pool picker: the PC's menu, ticked models with their effort. */
+  function poolPicker(plan, draft, busy) {
+    return [
+      h('span', { class: 'label' }, t('gmPoolPick')),
+      h('span', { class: 'hint' }, t('gmPoolPickHint')),
+      h('ul', { class: 'rows' }, poolMenu(plan).map((row) => poolPickRow(plan, draft, row, busy))),
+    ];
+  }
+
   function controls(plan, draft, busy) {
     const base = domId('gm', planKey(plan));
     const sel = h('select', { class: 'field', id: `${base}-integ`, disabled: busy }, INTEGRATION_MODES.map((m) => h('option', { value: m, selected: m === draft.integration }, t(INTEGRATION_KEY[m]))));
@@ -130,8 +178,9 @@ export function createPlanCards(deps, runnerFor, repaint) {
       h('label', { class: 'label', for: `${base}-integ` }, t('gmIntegration')),
       sel,
       h('label', { class: 'gm-check', for: `${base}-free` }, free, h('span', { class: 'gm-check-text' }, h('span', {}, t(draft.free ? 'gmWorkersFree' : 'gmWorkersClaude')), h('span', { class: 'hint' }, t('gmWorkersHint')))),
-      draft.free ? null : h('label', { class: 'label', for: `${base}-model` }, t('gmWorkerModel')),
-      draft.free ? null : model,
+      ...(draft.free ? [] : poolPicker(plan, draft, busy)),
+      draft.free || draft.pool.length ? null : h('label', { class: 'label', for: `${base}-model` }, t('gmWorkerModel')),
+      draft.free || draft.pool.length ? null : model,
       draft.integration === 'merge' ? h('label', { class: 'gm-check', for: `${base}-release` }, release, h('span', { class: 'gm-check-text' }, t('gmReleaseAfter'))) : null,
     ];
   }

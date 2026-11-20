@@ -44,7 +44,7 @@ const {
 } = require('./workerPool');
 const { agyVariant, agyModelIdOf } = require('./workerModels');
 const { poolEntryOfKey, packagePoolEffort } = require('./poolEffort');
-const { entryModel } = require('./orchestraPoolEffort');
+const { entryModel, liveEfforts } = require('./orchestraPoolEffort');
 
 const MAX_NAME_CHARS = 80;
 const noop = () => {};
@@ -80,6 +80,20 @@ function livePool(raw, agyList, log = noop) {
     log(`[orchestra] pool model ${e.model} is not in the live \`agy models\` list; left out of the pool`);
     return false;
   });
+}
+
+/**
+ * True when every entry of a checked pool can run as sent: each agy family
+ * has a live variant and each chosen agy variant is on the live list for its
+ * family. A sent pool (the phone) is refused otherwise, never trimmed.
+ * @param {{model:string, effort:string}[]} pool strictPool() / normalizePool() output
+ * @param {{id:string, name:string}[]} agyList
+ * @returns {boolean}
+ */
+function isLivePool(pool, agyList) {
+  if (!Array.isArray(pool)) return false;
+  const live = livePool(pool, agyList);
+  return !!live && live.length === pool.length && liveEfforts(pool, agyList).notes.length === 0;
 }
 
 /**
@@ -262,6 +276,7 @@ module.exports = {
   poolReportLines,
   poolNeedsAgy,
   livePool,
+  isLivePool,
   concreteModel,
   applyPool,
   approveChoice,
