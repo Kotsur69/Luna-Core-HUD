@@ -772,6 +772,17 @@ test('animation_frame_sync payload: bad paths are refused', () => {
   bad({ attackStepPath: undefined }, /non-empty string/);
   bad({ characterPath: 'Assets/Prefabs/Blade.asset' }, /\.prefab/);
   bad({ bake: 'true' }, /bake must be true or false/);
+  for (const clipPath of [
+    'Assets/./Slash.anim', // a '.' segment
+    'Assets/Anim./Slash.anim', // Windows drops a trailing dot
+    'Assets/Anim~/Slash.anim', // Unity ignores a folder ending in '~'
+    'Assets/a%2e%2e/Slash.anim', // no encoded dots for the C# side
+    'Assets/CON/Slash.anim', // a Windows device name
+    'Assets/nul.anim',
+    'Assets/a‮/Slash.anim', // bidi override
+    'Assets/．．/Slash.anim', // full-width dots
+    'Assets/ Anim/Slash.anim', // padded segment
+  ]) bad({ clipPath }, /cannot hold/);
   assert.deepEqual(UA.checkFrameSyncPayload(null), { ok: false, error: 'payload must be an object' });
   assert.equal(UA.checkFrameSyncPayload([CLIP]).ok, false);
 });
@@ -807,6 +818,8 @@ test('frame validator: too short, too long, wrong fps, root motion on, parry pas
   assert.deepEqual(codes({ fps: 30 }), [UA.MISMATCH.fps], 'expected fps from the payload');
   assert.deepEqual(codes({ rootMotion: true }), [UA.MISMATCH.rootMotion]);
   assert.deepEqual(codes({ parryStart: 18, parryEnd: 24 }), [UA.MISMATCH.parry]);
+  assert.deepEqual(codes({ parryStart: 5, parryEnd: 5 }), [UA.MISMATCH.parryOrder]);
+  assert.deepEqual(codes({ parryStart: 7, parryEnd: 3 }), [UA.MISMATCH.parryOrder]);
   assert.deepEqual(codes({ clipFrames: 10, clipFps: 24, rootMotion: true }), [UA.MISMATCH.tooShort, UA.MISMATCH.fps, UA.MISMATCH.rootMotion]);
 });
 
@@ -821,7 +834,7 @@ test('frame validator: malformed input throws instead of guessing', () => {
   assert.throws(() => UA.validateAttackFrames({ ...base, rootMotion: 'no' }), /rootMotion/);
   assert.throws(() => UA.validateAttackFrames({ ...base, fps: 5 }), /fps/);
   assert.throws(() => UA.validateAttackFrames({ ...base, parryStart: 4 }), /parryEnd/);
-  assert.throws(() => UA.validateAttackFrames({ ...base, parryStart: 5, parryEnd: 5 }), /after parryStart/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, clipFrames: 10001 }), /clipFrames/);
 });
 
 test('event timeline: time = frame / fps, in frame order, parry included when present', () => {
@@ -874,6 +887,7 @@ test('inspect answer: read into validator input, malformed answers throw', () =>
   assert.throws(() => UA.readInspectResult(inspectAnswer({ rootMotion: 'off' })), /rootMotion/);
   assert.throws(() => UA.readInspectResult(inspectAnswer({ attackStep: { ...FRAMES, startup: '6' } })), /bad startup/);
   assert.throws(() => UA.readInspectResult(inspectAnswer({ attackStep: { ...FRAMES, parryEnd: 4 } })), /bad parryStart/);
+  assert.throws(() => UA.readInspectResult(inspectAnswer({ clip: { length: 200, frameRate: 60 } })), /12000 frames.*not an attack clip/);
 });
 
 test('animationFrameSync: inspects, bakes only when asked and every check passes', async () => {
@@ -899,11 +913,28 @@ test('animationFrameSync: inspects, bakes only when asked and every check passes
   assert.deepEqual(baked.sent.map(([c]) => c), ['animation inspect', 'animation bake_events']);
   assert.equal(baked.sent[1][1].applyRootMotion, false);
 
-  const refused = await run({ clipPath: CLIP, attackStepPath: STEP, bake: true }, inspectAnswer({ rootMotion: true }));
+  assert.equal(baked.res.ok, true);
+  assert.deepEqual(baked.res.fixed, []);
+
+  const rootFixed = await run({ clipPath: CLIP, attackStepPath: STEP, bake: true }, inspectAnswer({ rootMotion: true }));
+  assert.equal(rootFixed.res.baked, true, 'root motion on is the one mismatch the bake repairs');
+  assert.equal(rootFixed.res.ok, true);
+  assert.deepEqual(rootFixed.res.fixed, [UA.MISMATCH.rootMotion]);
+  assert.deepEqual(rootFixed.res.mismatches.map((m) => m.code), [UA.MISMATCH.rootMotion], 'what inspection found is still reported');
+  assert.equal(rootFixed.sent[1][1].applyRootMotion, false);
+
+  const rootCheckOnly = await run({ clipPath: CLIP, attackStepPath: STEP }, inspectAnswer({ rootMotion: true }));
+  assert.equal(rootCheckOnly.res.ok, false);
+  assert.equal(rootCheckOnly.res.baked, false);
+
+  const refused = await run({ clipPath: CLIP, attackStepPath: STEP, bake: true }, inspectAnswer({ rootMotion: true, clip: { length: 18 / 60, frameRate: 60 } }));
   assert.equal(refused.res.ok, false);
   assert.equal(refused.res.baked, false);
-  assert.deepEqual(refused.res.mismatches.map((m) => m.code), [UA.MISMATCH.rootMotion]);
-  assert.deepEqual(refused.sent.map(([c]) => c), ['animation inspect'], 'nothing is baked over a failed check');
+  assert.deepEqual(refused.res.mismatches.map((m) => m.code), [UA.MISMATCH.tooShort, UA.MISMATCH.rootMotion]);
+  assert.deepEqual(refused.sent.map(([c]) => c), ['animation inspect'], 'nothing is baked over a wrong frame count');
+
+  const wrongFps = await run({ clipPath: CLIP, attackStepPath: STEP, bake: true }, inspectAnswer({ clip: { length: 21 / 30, frameRate: 30 } }));
+  assert.equal(wrongFps.res.baked, false, 'nothing is baked over a wrong frame rate');
 
   const badPayload = await run({ clipPath: '../x.anim', attackStepPath: STEP, bake: true }, inspectAnswer());
   assert.equal(badPayload.res.ok, false);

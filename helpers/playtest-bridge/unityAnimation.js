@@ -10,7 +10,8 @@
 //   2. UNITY_PIPELINE_ANIMATION.inspect the editor reads clip + AttackStep
 //   3. readInspectResult(result)        the editor's answer, validated
 //   4. validateAttackFrames(input)      pure: mismatches + event frames
-//   5. UNITY_PIPELINE_ANIMATION.bake    only when bake is asked and step 4 passed
+//   5. UNITY_PIPELINE_ANIMATION.bake    only when bake is asked and step 4 found
+//                                       nothing but root motion on (the bake turns it off)
 //
 // Pipeline protocol (the C# side is a custom command group `animation` in the
 // game project; NOT verified against a live editor yet - if it names the
@@ -47,9 +48,12 @@ const FPS_TOLERANCE = 0.01;
 const MAX_FRAMES = 10000;
 const MAX_CLIP_SECONDS = 600;
 const MAX_CLIP_FPS = 1000;
-// Characters Windows or Unity refuse in an asset path segment, plus control characters.
-// eslint-disable-next-line no-control-regex
-const BAD_SEGMENT_CHARS = /[<>:"|?*\\\u0000-\u001f\u007f]/;
+// Printable ASCII only (no look-alike dots, no bidi overrides), minus the
+// characters Windows or Unity refuse, and '%' (no encoded dots for the C# side).
+const SEGMENT_RE = /^[\x20-\x7e]+$/;
+const BAD_SEGMENT_CHARS = /[<>:"|?*\\%]/;
+// Windows device names (CON, NUL, COM1...) are not files, even with an extension.
+const WINDOWS_DEVICE_RE = /^(?:con|prn|aux|nul|com\d|lpt\d|conin\$|conout\$)(?:\.|$)/i;
 
 /** AnimationEvent function names the character's MonoBehaviour receives. */
 const EVENT_FUNCTIONS = Object.freeze({
@@ -67,7 +71,11 @@ const MISMATCH = Object.freeze({
   fps: 'wrong_fps',
   rootMotion: 'root_motion_on',
   parry: 'parry_outside_clip',
+  parryOrder: 'parry_window_empty',
 });
+
+// The one mismatch the bake itself repairs (it sets applyRootMotion false).
+const BAKE_FIXES = new Set([MISMATCH.rootMotion]);
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const isFrame = (v) => Number.isInteger(v) && v >= 0 && v <= MAX_FRAMES;
@@ -76,6 +84,15 @@ class PayloadError extends Error {}
 
 // ---- 1. the worker's payload --------------------------------------------------------
 
+/**
+ * One folder or file name: printable ASCII, no padding, not '.', not ending in
+ * '.' (Windows drops it) or '~' (Unity ignores the folder), not a device name.
+ */
+function isAssetSegment(s) {
+  if (!s || s !== s.trim() || !SEGMENT_RE.test(s) || BAD_SEGMENT_CHARS.test(s)) return false;
+  return !s.endsWith('.') && !s.endsWith('~') && !WINDOWS_DEVICE_RE.test(s);
+}
+
 /** A project-relative asset path under Assets/ with one of `exts`, or a PayloadError. */
 function assetPath(raw, field, exts) {
   if (typeof raw !== 'string' || !raw) throw new PayloadError(`${field} must be a non-empty string`);
@@ -83,8 +100,7 @@ function assetPath(raw, field, exts) {
   if (!raw.startsWith(ASSETS_PREFIX)) throw new PayloadError(`${field} must start with ${ASSETS_PREFIX}`);
   if (raw.includes('..')) throw new PayloadError(`${field} must not contain '..'`);
   const segments = raw.slice(ASSETS_PREFIX.length).split('/');
-  const badSegment = segments.some((s) => !s.trim() || s !== s.trim() || BAD_SEGMENT_CHARS.test(s));
-  if (badSegment) throw new PayloadError(`${field} has an empty segment or characters an asset path cannot hold`);
+  if (segments.some((s) => !isAssetSegment(s))) throw new PayloadError(`${field} has an empty segment or characters an asset path cannot hold`);
   // The file name needs a base name before its extension ('Slash.anim', not '.anim').
   const fileName = segments[segments.length - 1].toLowerCase();
   if (!exts.some((ext) => fileName.endsWith(ext) && fileName.length > ext.length)) {
@@ -185,8 +201,10 @@ function readInspectResult(result) {
     throw new Error(`Unity 'animation inspect' answered a bad clip frameRate (above 0, at most ${MAX_CLIP_FPS} expected)`);
   }
   if (typeof result.rootMotion !== 'boolean') throw new Error("Unity 'animation inspect' answered without a rootMotion boolean");
+  const clipFrames = Math.round(length * frameRate);
+  if (clipFrames > MAX_FRAMES) throw new Error(`Unity 'animation inspect' answered a clip of ${clipFrames} frames (at most ${MAX_FRAMES}): not an attack clip`);
   const report = {
-    clipFrames: Math.round(length * frameRate),
+    clipFrames,
     clipFps: frameRate,
     startup: answerFrame(step.startup, 'startup'),
     active: answerFrame(step.active, 'active'),
@@ -211,17 +229,15 @@ function inputFrame(raw, field, min = 0) {
 function parryWindow({ parryStart, parryEnd }) {
   const absent = (v) => v === undefined || v === null;
   if (absent(parryStart) && absent(parryEnd)) return null;
-  const start = inputFrame(parryStart, 'parryStart');
-  const end = inputFrame(parryEnd, 'parryEnd');
-  if (end <= start) throw new TypeError('parryEnd must come after parryStart');
-  return { start, end };
+  return { start: inputFrame(parryStart, 'parryStart'), end: inputFrame(parryEnd, 'parryEnd') };
 }
 
 /**
  * Checks an AttackStep's frame data against its clip. Pure.
- * Frame indices are 0-based: with startup 5, frames 0..4 are startup and the
- * hit window opens on frame 5; it closes on startup + active; recovery ends
- * on startup + active + recovery, which is the clip's last frame.
+ * Frame indices are 0-based frame boundaries: with startup 5, frames 0..4 are
+ * startup and the hit window opens at frame 5; it closes at startup + active;
+ * recovery ends at startup + active + recovery = the clip's end, so a clip of
+ * N frames has length N / fps and its recoveryEnd event sits at its length.
  * @param {{clipFrames:number, clipFps:number, startup:number, active:number, recovery:number, rootMotion:boolean, fps?:number, parryStart?:number, parryEnd?:number}} input
  *   fps is the expected frame rate (default 60).
  * @returns {{ok:boolean, fps:number, mismatches:Array<{code:string, message:string, expected:unknown, actual:unknown}>, events:{hitOpen:number, hitClose:number, recoveryEnd:number, parryOpen?:number, parryClose?:number}}}
@@ -255,7 +271,9 @@ function validateAttackFrames(input) {
   if (rootMotion) {
     mismatches.push({ code: MISMATCH.rootMotion, message: 'Animator root motion is on; attacks need it off', expected: false, actual: true });
   }
-  if (parry && parry.end > total) {
+  if (parry && parry.end <= parry.start) {
+    mismatches.push({ code: MISMATCH.parryOrder, message: `parry window closes on frame ${parry.end}, not after it opens on frame ${parry.start}`, expected: `> ${parry.start}`, actual: parry.end });
+  } else if (parry && parry.end > total) {
     mismatches.push({ code: MISMATCH.parry, message: `parry window ends on frame ${parry.end}, after the attack ends on frame ${total}`, expected: total, actual: parry.end });
   }
   return { ok: mismatches.length === 0, fps, mismatches, events };
@@ -279,10 +297,13 @@ function eventTimeline(events, fps) {
 
 /**
  * animation_frame_sync: validate the payload, inspect, check the frame data,
- * and bake only when asked and every check passed. Editor failures throw.
+ * and bake only when asked and nothing but root motion is wrong (the bake
+ * turns root motion off itself). Editor failures throw.
+ * After a bake, ok is true and `fixed` lists the mismatch codes it repaired;
+ * `mismatches` still reports what the inspection found.
  * @param {unknown} rawPayload the worker's payload
  * @param {(call:[string, object]) => Promise<unknown>} invoke one Pipeline call (unity.js pipelineCall bound to a client)
- * @returns {Promise<{ok:boolean, error?:string, fps?:number, mismatches:object[], events:object[], baked:boolean, bakeResult?:unknown}>}
+ * @returns {Promise<{ok:boolean, error?:string, fps?:number, mismatches:object[], events:object[], baked:boolean, fixed?:string[], bakeResult?:unknown}>}
  */
 async function runAnimationFrameSync(rawPayload, invoke) {
   if (typeof invoke !== 'function') throw new TypeError('runAnimationFrameSync needs an invoke function');
@@ -293,9 +314,10 @@ async function runAnimationFrameSync(rawPayload, invoke) {
   const verdict = validateAttackFrames({ ...report, fps: args.fps });
   const events = eventTimeline(verdict.events, verdict.fps);
   const base = { ok: verdict.ok, fps: verdict.fps, mismatches: verdict.mismatches, events, baked: false };
-  if (!args.bake || !verdict.ok) return base;
+  const blocking = verdict.mismatches.filter((m) => !BAKE_FIXES.has(m.code));
+  if (!args.bake || blocking.length) return base;
   const bakeResult = await invoke(bakeCall(args, events));
-  return { ...base, baked: true, bakeResult };
+  return { ...base, ok: true, baked: true, fixed: verdict.mismatches.map((m) => m.code), bakeResult };
 }
 
 /** Tool definition for a worker's tool list (NOT the Playtester's: baking writes assets). */
