@@ -722,3 +722,79 @@ test('the script report is validated; junk is null; the PNG header tells a turnt
   assert.equal(B.isTurntableSheet(PNG.subarray(0, 8)), false);
   assert.equal(B.isTurntableSheet(Buffer.from('not a png at all, really not')), false);
 });
+
+// ---- the optional ffmpeg audio post-process on ComfyUI audio drafts ---------------------
+
+const DRAFT_WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(16, 1)]);
+const NORMALIZED_WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(2048, 9)]);
+
+/** A fake execFile for ffmpeg: 'ok' writes `bytes` to the last token, 'enoent' / 'fail' fail. */
+function fakeFfmpeg(outcome, bytes) {
+  const calls = [];
+  const fn = (cmd, args, opts, cb) => {
+    calls.push({ cmd, args, opts });
+    if (outcome === 'enoent') return setImmediate(() => cb(Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' }), '', ''));
+    if (outcome === 'fail') return setImmediate(() => cb(Object.assign(new Error('Command failed'), { code: 1 }), '', 'Unknown encoder\n'));
+    fs.writeFileSync(args[args.length - 1], bytes);
+    return setImmediate(() => cb(null, '', ''));
+  };
+  return { fn, calls };
+}
+
+const audioComfy = () => ({ run: async () => ({ promptId: 'p-sfx', images: [{ data: DRAFT_WAV }] }) });
+const draftDir = (dir) => path.join(dir, 'Assets', 'BladeBullet', 'Art', 'Audio');
+
+test('ComfyUI audio draft with audioPost: ffmpeg argument array, no shell, normalized file replaces the draft before import', async () => {
+  const dir = tempRepo();
+  const ffmpeg = fakeFfmpeg('ok', NORMALIZED_WAV);
+  const { p, unity } = pipeline(dir, { comfy: audioComfy(), execFile: ffmpeg.fn });
+  const res = await p.comfyDraft({ name: 'Hit Stop', kind: 'audio', prompt: 'sharp clang', workflow: 'concept.json', seed: 3, audioPost: { targetBpm: 60, bpm: 240 } });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const rel = `${ART}/Audio/hit-stop-draft-3.wav`;
+  assert.deepEqual(res.files, [rel]);
+  const target = path.join(dir, ...rel.split('/'));
+  assert.equal(ffmpeg.calls.length, 1);
+  const { cmd, args, opts } = ffmpeg.calls[0];
+  assert.equal(cmd, 'ffmpeg');
+  assert.equal(opts.shell, undefined);
+  const out = args[args.length - 1];
+  assert.equal(path.dirname(out), path.dirname(target));
+  assert.deepEqual(args, [
+    '-hide_banner', '-loglevel', 'error', '-nostdin', '-n', '-protocol_whitelist', 'file', '-i', target, '-vn',
+    '-af', 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=0.5,atempo=0.5,loudnorm=I=-14:TP=-1.5:LRA=11',
+    '-ar', '48000', out,
+  ]);
+  assert.deepEqual(fs.readFileSync(target), NORMALIZED_WAV);
+  assert.deepEqual(fs.readdirSync(draftDir(dir)).filter((n) => n.includes('.tmp')), []);
+  assert.match(res.note, /Audio post-process .* applied to/);
+  assert.equal(unity.calls[0].parameters.path, rel);
+});
+
+test('ComfyUI audio draft with audioPost: ENOENT and a failed run keep the draft bytes and add a note', async () => {
+  for (const [outcome, why] of [['enoent', /ffmpeg was not found on PATH/], ['fail', /ffmpeg failed \(Unknown encoder\)/]]) {
+    const dir = tempRepo();
+    const { p } = pipeline(dir, { comfy: audioComfy(), execFile: fakeFfmpeg(outcome).fn });
+    const res = await p.comfyDraft({ name: 'Tick', kind: 'audio', prompt: 'clock tick', workflow: 'concept.json', seed: 4, audioPost: { trim: true, loudnorm: true } });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.deepEqual(fs.readFileSync(path.join(dir, ...res.files[0].split('/'))), DRAFT_WAV, outcome);
+    assert.match(res.note, why);
+    assert.match(res.note, /the original audio was kept/);
+    assert.deepEqual(fs.readdirSync(draftDir(dir)).filter((n) => n.includes('.tmp')), [], outcome);
+  }
+});
+
+test('ComfyUI audioPost is validated before ComfyUI runs: bad BPM or a non-audio kind is refused', async () => {
+  const dir = tempRepo();
+  let runs = 0;
+  const ffmpeg = fakeFfmpeg('ok', NORMALIZED_WAV);
+  const comfy = { run: async () => { runs += 1; return { promptId: 'p', images: [{ data: DRAFT_WAV }] }; } };
+  const { p } = pipeline(dir, { comfy, execFile: ffmpeg.fn });
+  for (const audioPost of [{ targetBpm: 500, bpm: 120 }, { targetBpm: 120 }, { targetBpm: -Infinity, bpm: 90 }, { bpm: 'x', targetBpm: 90 }]) {
+    const res = await p.comfyDraft({ name: 'Loop', kind: 'audio', workflow: 'concept.json', seed: 1, audioPost });
+    assert.equal(res.error, 'badAudioPost', JSON.stringify(audioPost));
+  }
+  const image = await p.comfyDraft({ name: 'Card', kind: 'concept', workflow: 'concept.json', seed: 1, audioPost: { trim: true } });
+  assert.equal(image.error, 'badAudioPost');
+  assert.equal(runs, 0);
+  assert.equal(ffmpeg.calls.length, 0);
+});

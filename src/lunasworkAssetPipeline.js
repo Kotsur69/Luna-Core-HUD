@@ -57,6 +57,7 @@ const comfyLib = require('./lunasworkComfy');
 const licenses = require('./lunasworkLicenses');
 const { blenderExportScript } = require('./lunasworkBlenderScript');
 const { createBlenderModel } = require('./lunasworkAssetBlender');
+const { cleanAudioPost, createAudioNormalizer, normalizeAll } = require('./lunasworkAudioNormalize');
 const { UNITY_PIPELINE_ASSETS, pipelineCall } = require('../helpers/playtest-bridge/unity');
 
 const DEFAULT_ART_ROOT = 'Assets/BladeBullet/Art';
@@ -237,7 +238,8 @@ function cleanAssetEntry(raw) {
  *   unity?:{exec:(command:string, parameters:object)=>Promise<unknown>},
  *   recordSpend:(p:{tool:string, costUsd:number})=>{ok:boolean, reason:string|null},
  *   cappedTools?:()=>string[], logAsset?:(entry:object)=>void,
- *   fsImpl?:object, now?:()=>number, randomSeed?:()=>number}} deps
+ *   fsImpl?:object, now?:()=>number, randomSeed?:()=>number,
+ *   execFile?:Function}} deps  execFile = child_process.execFile for the optional ffmpeg audio post-process (tests fake it)
  */
 function createAssetPipeline(deps) {
   const d = isObj(deps) ? deps : {};
@@ -445,6 +447,9 @@ function createAssetPipeline(deps) {
     }
   }
 
+  // The optional ffmpeg audio post-process (src/lunasworkAudioNormalize.js), on the guarded paths.
+  const audioNormalizer = createAudioNormalizer({ execFile: d.execFile, fs: fsx, guard: guardPath });
+
   // ---- Blender -------------------------------------------------------------------------
 
   // The Blender step lives in src/lunasworkAssetBlender.js, on these guarded pieces.
@@ -487,6 +492,9 @@ function createAssetPipeline(deps) {
     const given = isObj(raw) ? raw.seed : undefined;
     if (given !== undefined && (!Number.isSafeInteger(given) || given < 0 || given > MAX_SEED)) return fail('badSeed', 'seed must be a non-negative whole number');
     const seed = given === undefined ? newSeed() : given;
+    const audio = cleanAudioPost(isObj(raw) ? raw.audioPost : undefined);
+    if (!audio.ok) return audio;
+    if (audio.post && job.kind !== 'audio') return fail('badAudioPost', 'audioPost is only for kind "audio"');
     const loaded = loadWorkflow(isObj(raw) ? raw.workflow : undefined);
     if (!loaded.ok) return loaded;
     const seeded = comfyLib.applySeed(loaded.workflow, seed);
@@ -516,6 +524,8 @@ function createAssetPipeline(deps) {
     } catch (err) {
       return { ...fail('writeFailed', errText(err)), files };
     }
+    // Before the ledger and the Unity import, so both see the final file; a failure keeps the draft as made.
+    const audioNote = audio.post ? (await normalizeAll(audioNormalizer, files, audio.post)).note : null;
     const ledgerNote = await ledgerGenerated('ComfyUI', job, files, runRel);
     const imports = [];
     for (const rel of files) imports.push(await importToUnity(rel, job.kind));
@@ -523,7 +533,7 @@ function createAssetPipeline(deps) {
       log({ tool: 'comfyui', kind: job.kind, name: job.name, prompt: job.prompt, seed, costUsd: 0, path: rel, sources: [loaded.rel, runRel], imported: imports[i].ok });
     }
     const failed = imports.find((imp) => !imp.ok);
-    const note = [failed ? importNote(failed) : null, ledgerNote].filter(Boolean).join(' ') || null;
+    const note = [failed ? importNote(failed) : null, ledgerNote, audioNote].filter(Boolean).join(' ') || null;
     return { ok: true, files, sources: [loaded.rel, runRel], seed, seeded: seeded.seeded, warnings, unity: imports, ledger: ledgerNote ? null : licenses.LEDGER_FILE, note };
   }
 
@@ -677,6 +687,7 @@ function createAssetPipeline(deps) {
     importNote,
     log,
     updateLedger,
+    normalizeAudio: (rels, post) => normalizeAll(audioNormalizer, rels, post),
   };
   return { blenderModel, comfyDraft, higgsfieldFinal, artRoot, usdPerCredit, shared };
 }
