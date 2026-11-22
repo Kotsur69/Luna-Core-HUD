@@ -235,12 +235,14 @@ test('a planner step logged first without its tool calls opens them when logged 
   assert.deepEqual(state.apply([steps[1]]), []);
 });
 
-test('event ids never collide, even across conversations restarted from step 0', () => {
+test('event ids never collide, even when step_index starts again from 0', () => {
   const state = new AgyTranscriptState({ cwd: CWD });
   const first = state.apply(parseSteps(FIXTURE).steps);
-  state.lastIndex = -1; // as after a restart of the same state
-  const second = state.apply(parseSteps(FIXTURE).steps);
+  // The same indices again, an hour later: new steps, not updates.
+  const later = FIXTURE.replace(/"created_at":"2026-11-17T08:/g, '"created_at":"2026-11-17T09:');
+  const second = state.apply(parseSteps(later).steps);
   const starts = [...first, ...second].filter((e) => e.phase === 'start').map((e) => e.id);
+  assert.equal(second.filter((e) => e.phase === 'start').length, first.filter((e) => e.phase === 'start').length);
   assert.equal(new Set(starts).size, starts.length);
 });
 
@@ -343,7 +345,19 @@ test('workspacesFromRows keeps valid rows only', () => {
   // The file URL and the plain absolute path; no URL, number or network share.
   assert.equal(byId.get(id).length, 2);
   assert.equal(skipped, 3);
-  assert.deepEqual(workspacesFromRows('junk'), { byId: new Map(), skipped: 0 });
+  assert.deepEqual(workspacesFromRows('junk'), { byId: new Map(), parents: new Map(), skipped: 0 });
+});
+
+test('workspacesFromRows maps a subagent conversation to its parent', () => {
+  const parent = 'f89cc211-d3a8-4ee2-aee3-8c1167b8c661';
+  const child = '46b451cb-5636-4ca6-a6a8-c656f3d5fcaa';
+  const ws = JSON.stringify([pathToFileURL(CWD).href]);
+  const { parents } = workspacesFromRows([
+    { conversation_id: parent, workspace_uris: ws, parent_conversation_id: '' },
+    { conversation_id: child, workspace_uris: ws, parent_conversation_id: parent.toUpperCase() },
+    { conversation_id: '1b6cd2b4-0b4a-4e4f-9d5b-6d0f1a2b3c4d', workspace_uris: ws, parent_conversation_id: 'not-a-uuid' },
+  ]);
+  assert.deepEqual([...parents], [[child, parent]]);
 });
 
 test('workspaceMatch tells an exact folder from a containing one', () => {
@@ -743,7 +757,15 @@ test('watcher: calls still lit when the file gets shorter end there, with fresh 
   watcher.safeTick();
   assert.deepEqual(out.tools.map((e) => e.phase), ['start', 'start', 'end', 'end']);
   assert.deepEqual(out.tools.slice(2).map((e) => e.id), out.tools.slice(0, 2).map((e) => e.id));
+  // The very step it already reported, appended again: not replayed.
   fs.appendFileSync(file, `${lines[1]}\n`);
+  watcher.safeTick();
+  assert.equal(out.tools.length, 4, 'a step already reported is not reported twice');
+  // A new step after the restart is live, with fresh ids.
+  fs.appendFileSync(file, `${JSON.stringify({
+    type: 'PLANNER_RESPONSE', step_index: 7, created_at: '2026-11-17T08:30:00Z',
+    tool_calls: [{ name: 'view_file', args: { AbsolutePath: 'C:/repo/a.js' } }, { name: 'view_file', args: { AbsolutePath: 'C:/repo/b.js' } }],
+  })}\n`);
   watcher.safeTick();
   const startIds = out.tools.filter((e) => e.phase === 'start').map((e) => e.id);
   assert.equal(startIds.length, 4);
@@ -961,4 +983,497 @@ test('watcher: conversation claimed when snapshotBaseline ran stays ignored afte
   w2.watcher.safeTick();
   assert.equal(w2.watcher.pinned.full, fileB, 'new conversation for reopened tab is adopted');
   w2.watcher.stop();
+});
+
+// ---- captured agy 1.5.12 runs (2026-11-22) -----------------------------------------
+// Three real transcripts, with local paths replaced by C:\repo, the user name
+// by "dev" and the model's thinking text dropped; nothing else changed:
+// * captured-edit:         gemini-4-neon-low, the COMPACT transcript.jsonl
+//                          (every argument JSON-quoted): read_file, edit_file
+//                          {Path, Target, Replacement}, write_file and a
+//                          run_command headless mode refused (ERROR result);
+// * captured-orchestrator: "Orchestrator (Neon)" in plan mode, the _full
+//                          transcript: reads, exit_plan_mode, "Plan mode is
+//                          off.", a SYSTEM_MESSAGE, then the executor model's
+//                          edit_file / write_file / invoke_subagent;
+// * captured-subagent:     the subagent that invoke_subagent started.
+
+const CAPTURED_EDIT = fs.readFileSync(path.join(__dirname, 'fixtures', 'agy-transcript.captured-edit.jsonl'), 'utf8');
+const CAPTURED_ORCH = fs.readFileSync(path.join(__dirname, 'fixtures', 'agy-transcript.captured-orchestrator.jsonl'), 'utf8');
+const CAPTURED_SUB = fs.readFileSync(path.join(__dirname, 'fixtures', 'agy-transcript.captured-subagent.jsonl'), 'utf8');
+const ORCH_ID = 'f89cc211-d3a8-4ee2-aee3-8c1167b8c661';
+const SUB_ID = '46b451cb-5636-4ca6-a6a8-c656f3d5fcaa';
+const { MAX_CHILD_CONVERSATIONS } = require('../src/agywatcher');
+const { stationForMcp } = require('../src/renderer/modules/workmapmodel.js');
+const { MAX_DETAIL_CHARS } = require('../src/tooldetail');
+
+const startsOf = (events) => events.filter((e) => e.phase === 'start');
+const endOf = (events, tile) => events.find((e) => e.phase === 'end' && e.tile === tile);
+const line = (obj) => JSON.stringify(obj);
+
+test('captured: edit_file reports its Target/Replacement as real +added/-removed, from quoted arguments', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const { tools } = state.fold(parseSteps(CAPTURED_EDIT).steps);
+  assert.deepEqual(
+    tools.map((e) => `${e.phase}:${e.tile}`),
+    ['start:Read', 'end:Read', 'start:Edit', 'start:Write', 'start:Shell', 'end:Edit', 'end:Write', 'end:Shell'],
+  );
+  const notes = normalizeAgyPath('C:\\repo\\notes.txt', CWD);
+  const readEnd = endOf(tools, 'Read');
+  assert.equal(readEnd.file, notes);
+  assert.ok(readEnd.contextChars > 0, 'the read put text into the window');
+  const editEnd = endOf(tools, 'Edit');
+  assert.deepEqual([editEnd.file, editEnd.added, editEnd.removed], [notes, 2, 2]);
+  const writeEnd = endOf(tools, 'Write');
+  assert.deepEqual([writeEnd.file, writeEnd.added, writeEnd.removed], [normalizeAgyPath('C:\\repo\\out.txt', CWD), 2, 0]);
+  assert.equal(startsOf(tools).find((e) => e.tile === 'Shell').detail, 'node -e');
+  assert.equal(state.model, 'Gemini 4 Neon (Low)', 'the planner step names the model');
+  assert.deepEqual(state.usage, { input: 2513, cacheRead: 6838, output: 555 });
+});
+
+test('editStatOf reads edit_file Target/Replacement, its Edits list and a delete', () => {
+  assert.deepEqual(editStatOf('Edit', { Path: 'C:/r/a.js', Target: 'a\nb', Replacement: 'a\nB\nc' }), { added: 2, removed: 1 });
+  assert.deepEqual(editStatOf('Edit', { Target: '"one"', Replacement: '"two"' }), { added: 1, removed: 1 });
+  assert.deepEqual(editStatOf('Edit', { Target: 'one\ntwo' }), { added: 0, removed: 2 }, 'no Replacement deletes the target');
+  const edits = [{ Target: 'x', Replacement: 'y' }, { Target: 'p\nq', Replacement: '' }];
+  assert.deepEqual(editStatOf('Edit', { Path: 'C:/r/a.js', Edits: edits }), { added: 1, removed: 3 });
+  assert.deepEqual(editStatOf('Edit', { Edits: JSON.stringify(edits) }), { added: 1, removed: 3 }, 'Edits as a JSON string');
+  assert.deepEqual(editStatOf('Write', { Path: 'C:/r/b.txt', Content: '"alpha\\nbeta\\n"' }), { added: 2, removed: 0 });
+});
+
+test('an edit result that states its own diff beats counting from the arguments', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const tools = state.apply(parseSteps([
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [{ name: 'edit_file', args: { Path: 'C:/repo/a.js', Target: 'x', Replacement: 'y', AllowMultiple: true } }] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', content: 'Made 3 replacements in C:/repo/a.js starting at line 2 (+3/-3 lines).' }),
+  ].join('\n')).steps);
+  const end = endOf(tools, 'Edit');
+  assert.deepEqual([end.added, end.removed], [3, 3]);
+});
+
+test('captured Orchestrator plan -> execute: the executor\'s steps after exit_plan_mode all count', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const out = state.fold(parseSteps(CAPTURED_ORCH).steps);
+  const starts = startsOf(out.tools);
+  assert.deepEqual(starts.map((e) => e.tile), ['Read', 'Read', 'Task', 'Edit', 'Write', 'Read', 'Read', 'Task']);
+  assert.equal(out.tools.filter((e) => e.phase === 'end').length, starts.length, 'balanced pairs');
+  assert.equal(starts[2].detail, 'exit_plan_mode');
+  assert.equal(starts[7].detail, 'research: List Line Counter');
+  const editEnd = endOf(out.tools, 'Edit');
+  assert.deepEqual([editEnd.file, editEnd.added, editEnd.removed], [normalizeAgyPath('C:\\repo\\notes.txt', CWD), 1, 1]);
+  assert.deepEqual(out.children, [SUB_ID], 'the subagent invoke_subagent started');
+  assert.equal(state.unresolved, 0);
+  // The planner ran on Neon, the executor on Hydrogen: the newest step wins.
+  assert.equal(state.model, 'Gemini 4 Hydrogen (XHigh)');
+  assert.deepEqual(state.usage, { input: 6432, cacheRead: 10036, output: 416 });
+  const m = agyContextMetrics(state.contextChars, { model: state.model, usage: state.usage });
+  assert.deepEqual([m.tokens, m.tokensExact, m.estimated, m.modelLabel], [6432 + 10036, true, true, 'Gemini 4 Hydrogen (XHigh)']);
+  // Without real counts the estimate stays, and says so.
+  assert.equal(agyContextMetrics(4000).tokensExact, false);
+});
+
+test('captured subagent: its read and its message to the parent are tool events', () => {
+  const state = new AgyTranscriptState({ cwd: CWD, idPrefix: `agy:${SUB_ID}:` });
+  const tools = state.apply(parseSteps(CAPTURED_SUB).steps);
+  assert.deepEqual(tools.map((e) => `${e.phase}:${e.tile}`), ['start:Read', 'end:Read', 'start:Task', 'end:Task']);
+  assert.equal(startsOf(tools)[1].detail, 'send_message');
+  assert.ok(tools.every((e) => e.id.startsWith(`agy:${SUB_ID}:`)), 'a child\'s ids never collide with its parent\'s');
+});
+
+test('a step_index that starts again after the hand-off is new steps, not repeats', () => {
+  const lines = CAPTURED_ORCH.trim().split('\n');
+  const handoff = lines.findIndex((l) => JSON.parse(l).type === 'SYSTEM_MESSAGE');
+  // The executor's steps renumbered from 0, as a reset index would log them.
+  const reset = lines.map((l, i) => {
+    if (i <= handoff) return l;
+    const obj = JSON.parse(l);
+    return line({ ...obj, step_index: obj.step_index - (handoff + 1) });
+  });
+  const plain = new AgyTranscriptState({ cwd: CWD }).apply(parseSteps(CAPTURED_ORCH).steps);
+  const renumbered = new AgyTranscriptState({ cwd: CWD }).apply(parseSteps(reset.join('\n')).steps);
+  assert.deepEqual(renumbered.map((e) => `${e.phase}:${e.tile}:${e.added}`), plain.map((e) => `${e.phase}:${e.tile}:${e.added}`));
+  assert.equal(startsOf(renumbered).filter((e) => e.tile === 'Edit').length, 1, 'the executor\'s edit is there');
+});
+
+test('a planner step logged again with more tool calls opens the new ones, in result order', () => {
+  const read = (file) => ({ name: 'view_file', args: { AbsolutePath: `C:/repo/${file}` } });
+  const at = '2026-11-22T20:00:00Z';
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const tools = state.apply(parseSteps([
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, tool_calls: [read('a.js')] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', content: 'aa' }),
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, tool_calls: [read('a.js'), read('b.js')] }),
+    line({ type: 'GENERIC', step_index: 3, status: 'DONE', content: 'bbb' }),
+  ].join('\n')).steps);
+  assert.deepEqual(tools.map((e) => `${e.phase}:${path.basename(e.file)}:${e.contextChars ?? ''}`), [
+    'start:a.js:', 'end:a.js:2', 'start:b.js:', 'end:b.js:3',
+  ]);
+  assert.equal(state.unresolved, 0);
+});
+
+test('calls added to a planner step whose batch is already over still light, and end at once', () => {
+  const read = (file) => ({ name: 'view_file', args: { AbsolutePath: `C:/repo/${file}` } });
+  const at = '2026-11-22T20:00:00Z';
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const tools = state.apply(parseSteps([
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, tool_calls: [read('a.js')] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', content: 'aa' }),
+    line({ type: 'PLANNER_RESPONSE', step_index: 3, created_at: '2026-11-22T20:00:05Z', tool_calls: [read('c.js')] }),
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, tool_calls: [read('a.js'), read('b.js')] }),
+    line({ type: 'GENERIC', step_index: 4, status: 'DONE', content: 'cccc' }),
+  ].join('\n')).steps);
+  assert.deepEqual(tools.map((e) => `${e.phase}:${path.basename(e.file)}:${e.contextChars ?? ''}`), [
+    'start:a.js:', 'end:a.js:2', 'start:c.js:', 'start:b.js:', 'end:b.js:0', 'end:c.js:4',
+  ]);
+  assert.equal(state.unresolved, 1);
+});
+
+test('call_mcp_tool, read_resource and list_resources become balanced MCP events that keep the result order', () => {
+  const server = 'lunacore-s12';
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const out = state.fold(parseSteps([
+    line({
+      type: 'PLANNER_RESPONSE', step_index: 1, created_at: '2026-11-22T20:00:00Z', tool_calls: [
+        { name: 'call_mcp_tool', args: { ServerName: `"${server}"`, ToolName: '"memory_search"', Arguments: '{"query":"agy"}' } },
+        { name: 'view_file', args: { AbsolutePath: 'C:/repo/a.js' } },
+        { name: 'read_resource', args: { ServerName: 'docs', Uri: 'https://docs.example/x?token=abc123' } },
+        { name: 'list_resources', args: { ServerName: 'docs' } },
+        { name: 'call_mcp_tool', args: { ToolName: 'no_server' } },
+      ],
+    }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', created_at: '2026-11-22T20:00:02Z', content: 'Created At: x\nCompleted At: y\n[{"id":"m1"}]' }),
+    line({ type: 'GENERIC', step_index: 3, status: 'DONE', content: 'abc' }),
+    line({ type: 'GENERIC', step_index: 4, status: 'ERROR', error: 'resource not found', content: 'Encountered error' }),
+    line({ type: 'GENERIC', step_index: 5, status: 'DONE', content: 'r1' }),
+    line({ type: 'GENERIC', step_index: 6, status: 'DONE', content: 'x' }),
+  ].join('\n')).steps);
+  const starts = startsOf(out.mcp);
+  assert.deepEqual(starts.map((e) => [e.server, e.tool]), [[server, 'memory_search'], ['docs', 'read_resource'], ['docs', 'list_resources']]);
+  assert.deepEqual(starts[0].input, { query: 'agy' });
+  assert.doesNotMatch(JSON.stringify(starts[1].input), /abc123/, 'a URI query is scrubbed');
+  const ends = out.mcp.filter((e) => e.phase === 'end');
+  assert.deepEqual(ends.map((e) => [e.id, e.ok]), starts.map((e, i) => [e.id, i !== 1]));
+  assert.equal(ends[0].content, '[{"id":"m1"}]', 'agy\'s Created/Completed header is not the result');
+  assert.equal(ends[0].ms, 2000);
+  assert.equal(ends[1].content, 'resource not found');
+  // The MCP slots keep the read's result where it belongs.
+  assert.deepEqual(out.tools.map((e) => `${e.phase}:${e.tile}:${e.contextChars ?? ''}`), ['start:Read:', 'end:Read:3']);
+  // An agy tab's memory server lands on the Memory station.
+  assert.equal(stationForMcp(starts[0].server, starts[0].tool), 'memory');
+});
+
+test('a tool call\'s detail is short and never carries a token or an env value', () => {
+  const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const tools = state.apply(parseSteps(line({
+    type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [
+      { name: 'run_command', args: { CommandLine: `GITHUB_TOKEN=${token} gh pr create --title "x"` } },
+      { name: 'run_command', args: { CommandLine: '"curl -H \\"Authorization: Bearer sk-abcdefghijklmnopqrstuv\\" https://api.x"' } },
+      { name: 'grep_search', args: { Query: `api_key=sk-abcdefghijklmnopqrstuv ${'x'.repeat(200)}` } },
+      { name: 'run_command', args: { CommandLine: '$env:API_KEY="hunter2"; npm test' } },
+    ],
+  })).steps);
+  const details = startsOf(tools).map((e) => e.detail);
+  // Up to three plain arguments; the first quoted one ends the summary.
+  assert.deepEqual([details[0], details[1], details[3]], ['gh pr create --title', 'curl -H', 'npm test']);
+  for (const d of details) {
+    assert.ok(d.length <= MAX_DETAIL_CHARS, d);
+    assert.doesNotMatch(d, /ghp_|sk-abc|hunter2/);
+  }
+});
+
+/** Writes agy's summaries database with parent links: [{id, folder, parent?}]. */
+function writeSummaryRows(root, rows) {
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(path.join(root, 'conversation_summaries.db'));
+  db.exec("create table conversation_summaries (conversation_id text primary key, workspace_uris text not null, parent_conversation_id text not null default '')");
+  const insert = db.prepare('insert into conversation_summaries values (?, ?, ?)');
+  for (const { id, folder, parent = '' } of rows) insert.run(id, JSON.stringify([pathToFileURL(folder).href]), parent);
+  db.close();
+}
+
+/** A watcher that also records MCP events. */
+function makeFullWatcher(root, cwd, extra = {}) {
+  const made = makeWatcher(root, cwd, extra);
+  made.out.mcp = [];
+  made.watcher.onMcp = (events) => made.out.mcp.push(...events);
+  return made;
+}
+
+test('watcher: follows the subagent a result names, and its events count for the tab', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: ORCH_ID, folder: tabDir }, { id: SUB_ID, folder: tabDir, parent: ORCH_ID }]);
+  const { watcher, out } = makeFullWatcher(root, tabDir);
+  writeTranscript(root, SUB_ID, CAPTURED_SUB, 'transcript_full.jsonl');
+  writeTranscript(root, ORCH_ID, CAPTURED_ORCH, 'transcript_full.jsonl');
+  drain(watcher, 5);
+  assert.equal(watcher.pinned.id, ORCH_ID, 'the subagent, newer and in the same folder, is not the tab\'s own');
+  const childEvents = out.tools.filter((e) => e.id.startsWith(`agy:${SUB_ID}:`));
+  assert.deepEqual(childEvents.map((e) => `${e.phase}:${e.tile}`), ['start:Read', 'end:Read', 'start:Task', 'end:Task']);
+  assert.equal(childEvents[0].file, normalizeAgyPath('C:\\repo\\list.txt', tabDir));
+  assert.equal(new Set(out.tools.map((e) => `${e.phase}:${e.id}`)).size, out.tools.length, 'no id twice');
+  assert.equal(startsOf(out.tools).length, 8 + 2);
+  assert.match(out.logs.join('\n'), new RegExp(`following agy subagent conversation ${SUB_ID}`));
+  // Claimed while followed: another tab cannot show it too.
+  const other = makeWatcher(root, tabDir, { conversationId: SUB_ID });
+  other.watcher.safeTick();
+  assert.equal(other.watcher.pinned, null);
+  watcher.stop();
+  other.watcher.safeTick();
+  assert.equal(other.watcher.pinned.id, SUB_ID, 'stop() released it');
+  other.watcher.stop();
+});
+
+// Subagent ids are remembered process-wide (no tab picks one as its own), so
+// the tests below that make subagents use ids no other test needs as a tab's.
+const PARENT_C = 'cccccccc-3333-4333-8333-cccccccccccc';
+const CHILD_D = 'dddddddd-4444-4444-8444-dddddddddddd';
+const CHILD_E = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee';
+const CHILD_F = 'ffffffff-6666-4666-8666-ffffffffffff';
+
+test('watcher: a subagent found through the summaries database while an agent call runs', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: PARENT_C, folder: tabDir }, { id: CHILD_D, folder: tabDir, parent: PARENT_C }]);
+  const { watcher, out } = makeFullWatcher(root, tabDir);
+  // The workflow call is still running: no result names its agents yet.
+  writeTranscript(root, PARENT_C, `${line({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [{ name: 'run_workflow', args: { Name: 'review' } }] })}\n`);
+  writeTranscript(root, CHILD_D, `${line({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [{ name: 'read_file', args: { Path: 'C:/repo/x.js' } }] })}\n`);
+  drain(watcher, 3);
+  assert.equal(startsOf(out.tools)[0].detail, 'review');
+  assert.deepEqual(out.tools.filter((e) => e.id.startsWith(`agy:${CHILD_D}:`)).map((e) => e.tile), ['Read']);
+  watcher.stop();
+});
+
+test('watcher: follows at most MAX_CHILD_CONVERSATIONS subagents', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: ID_A, folder: tabDir }]);
+  const { watcher, out } = makeFullWatcher(root, tabDir);
+  const ids = Array.from({ length: MAX_CHILD_CONVERSATIONS + 8 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+  for (const id of ids) writeTranscript(root, id, `${line({ type: 'USER_INPUT', content: 'hi' })}\n`);
+  const result = (list) => list.map((id) => `"conversationId": "${id}"`).join('\n');
+  writeTranscript(root, ID_A, [
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [{ name: 'invoke_subagent', args: {} }, { name: 'invoke_subagent', args: {} }] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', content: result(ids.slice(0, 20)) }),
+    line({ type: 'GENERIC', step_index: 3, status: 'DONE', content: result(ids.slice(20)) }),
+    '',
+  ].join('\n'));
+  drain(watcher, 5);
+  assert.equal(watcher.children.size, MAX_CHILD_CONVERSATIONS);
+  assert.match(out.logs.join('\n'), /following at most \d+ agy subagent conversations/);
+  watcher.stop();
+});
+
+test('watcher: a subagent transcript that is a symlink is not followed', (t) => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: ORCH_ID, folder: tabDir }]);
+  const target = path.join(root, 'elsewhere.jsonl');
+  fs.writeFileSync(target, CAPTURED_SUB);
+  const dir = path.join(root, 'brain', SUB_ID, '.system_generated', 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.symlinkSync(target, path.join(dir, 'transcript_full.jsonl'));
+  } catch (err) {
+    t.skip(`cannot create a symlink here (${err.code})`);
+    return;
+  }
+  const { watcher, out } = makeFullWatcher(root, tabDir);
+  writeTranscript(root, ORCH_ID, CAPTURED_ORCH, 'transcript_full.jsonl');
+  drain(watcher, 5);
+  assert.equal(watcher.children.size, 0);
+  assert.equal(out.tools.filter((e) => e.id.startsWith(`agy:${SUB_ID}:`)).length, 0);
+  watcher.stop();
+});
+
+test('watcher: a transcript agy rewrote is read again, and the steps it now holds are not swallowed', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const { watcher, out } = makeWatcher(root, CWD);
+  const read = (file) => ({ name: 'view_file', args: { AbsolutePath: `C:/repo/${file}` } });
+  const first = [
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: '2026-11-22T20:00:00Z', tool_calls: [read('a.js')] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', created_at: '2026-11-22T20:00:01Z', content: 'aa' }),
+  ];
+  const file = writeTranscript(root, ID_A, `${first.join('\n')}\n`);
+  watcher.safeTick();
+  assert.equal(out.tools.length, 2);
+  // Rewritten in place (a byte before the read position changed), with the
+  // executor's next step already in it.
+  fs.writeFileSync(file, `${[
+    first[0],
+    first[1].replace('"aa"', '"zz"'),
+    line({ type: 'PLANNER_RESPONSE', step_index: 3, created_at: '2026-11-22T20:00:09Z', tool_calls: [read('b.js')] }),
+    line({ type: 'GENERIC', step_index: 4, status: 'DONE', created_at: '2026-11-22T20:00:10Z', content: 'bbb' }),
+  ].join('\n')}\n`);
+  watcher.safeTick();
+  assert.match(out.logs.join('\n'), /was rewritten; reading it again/);
+  assert.deepEqual(out.tools.slice(2).map((e) => `${e.phase}:${path.basename(e.file)}`), ['start:b.js', 'end:b.js'], 'only the new step, and it is not lost');
+  watcher.stop();
+});
+
+test('watcher: MCP events reach onMcp, and metrics carry the planner\'s real token counts', () => {
+  const root = makeAppData({ [ID_A]: CWD });
+  const { watcher, out } = makeFullWatcher(root, CWD);
+  writeTranscript(root, ID_A, [
+    line({
+      type: 'PLANNER_RESPONSE', step_index: 1, model: 'gemini-4-neon-high', input_tokens: 1200, cache_read_tokens: 800, output_tokens: 50,
+      tool_calls: [{ name: 'call_mcp_tool', args: { ServerName: 'lunacore-s1', ToolName: 'memory_get', Arguments: { key: 'x' } } }],
+    }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', content: '{"ok":true}' }),
+    '',
+  ].join('\n'));
+  watcher.safeTick();
+  assert.deepEqual(out.mcp.map((e) => `${e.phase}:${e.server}:${e.tool}`), ['start:lunacore-s1:memory_get', 'end:lunacore-s1:memory_get']);
+  assert.deepEqual(out.tools, [], 'an MCP call lights no Skill Tracker tile, as on the Claude path');
+  const m = out.metrics.at(-1);
+  assert.deepEqual([m.tokens, m.tokensExact, m.estimated, m.model], [2000, true, true, 'Gemini 4 Neon (High)']);
+  watcher.stop();
+});
+
+// ---- review follow-ups (2026-11-22) --------------------------------------------------
+
+const readCall = (file) => ({ name: 'view_file', args: { AbsolutePath: `C:/repo/${file}` } });
+
+test('a planner step logging only output_tokens says nothing about the window', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  state.apply(parseSteps([
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, input_tokens: 900, cache_read_tokens: 100, output_tokens: 5 }),
+    line({ type: 'PLANNER_RESPONSE', step_index: 2, output_tokens: 40 }),
+  ].join('\n')).steps);
+  assert.deepEqual(state.usage, { input: 900, cacheRead: 100, output: 5 }, 'the last real prompt size stays');
+  const only = new AgyTranscriptState({ cwd: CWD });
+  only.apply(parseSteps(line({ type: 'PLANNER_RESPONSE', step_index: 1, output_tokens: 40 })).steps);
+  assert.equal(only.usage, null);
+  assert.equal(agyContextMetrics(4000, { usage: only.usage }).tokensExact, false, 'no exact 0 %');
+});
+
+test('an old planner step with no calls, logged again with some, does not take over the newer batch', () => {
+  const at = '2026-11-22T20:00:00Z';
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const tools = state.apply(parseSteps([
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, content: 'thinking' }),
+    line({ type: 'PLANNER_RESPONSE', step_index: 2, created_at: '2026-11-22T20:00:05Z', tool_calls: [readCall('c.js')] }),
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, content: 'thinking', tool_calls: [readCall('b.js')] }),
+    line({ type: 'GENERIC', step_index: 3, status: 'DONE', content: 'cccc' }),
+  ].join('\n')).steps);
+  assert.deepEqual(tools.map((e) => `${e.phase}:${path.basename(e.file)}:${e.contextChars ?? ''}`), [
+    'start:c.js:', 'start:b.js:', 'end:b.js:0', 'end:c.js:4',
+  ]);
+});
+
+test('a second restart during a re-read does not replay what the first state reported', () => {
+  const steps = parseSteps([
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: '2026-11-22T20:00:00Z', tool_calls: [readCall('a.js')] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', created_at: '2026-11-22T20:00:01Z', content: 'aa' }),
+    line({ type: 'PLANNER_RESPONSE', step_index: 3, created_at: '2026-11-22T20:00:02Z', tool_calls: [readCall('b.js')] }),
+    line({ type: 'GENERIC', step_index: 4, status: 'DONE', created_at: '2026-11-22T20:00:03Z', content: 'bb' }),
+  ].join('\n')).steps;
+  const first = new AgyTranscriptState({ cwd: CWD });
+  assert.equal(first.apply(steps).length, 4);
+  const second = first.restarted();
+  assert.deepEqual(second.apply(steps.slice(0, 1)), [], 'rewritten again after one line');
+  const third = second.restarted();
+  assert.deepEqual(third.apply(steps), [], 'nothing the first state reported comes back');
+  third.endReplay();
+  const fresh = third.apply(parseSteps(line({ type: 'PLANNER_RESPONSE', step_index: 5, created_at: '2026-11-22T20:00:09Z', tool_calls: [readCall('c.js')] })).steps);
+  assert.deepEqual(fresh.map((e) => e.phase), ['start']);
+  assert.ok(Number(fresh[0].id.split(':')[1]) > 2, 'ids keep counting across restarts');
+});
+
+test('after a restart a planner step reports only the calls it gained since', () => {
+  const at = '2026-11-22T20:00:00Z';
+  const before = new AgyTranscriptState({ cwd: CWD });
+  assert.deepEqual(before.apply(parseSteps(line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at })).steps), []);
+  const after = before.restarted();
+  const tools = after.apply(parseSteps(line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, tool_calls: [readCall('a.js')] })).steps);
+  assert.deepEqual(tools.map((e) => `${e.phase}:${path.basename(e.file)}`), ['start:a.js'], 'never reported before: live now');
+  const again = after.restarted();
+  assert.deepEqual(again.apply(parseSteps(line({ type: 'PLANNER_RESPONSE', step_index: 1, created_at: at, tool_calls: [readCall('a.js')] })).steps), []);
+});
+
+test('editStatOf counts at most 64 chunks, and diffs exactly only what fits its line budget', () => {
+  const many = Array.from({ length: 200 }, () => ({ Target: 'x', Replacement: 'y' }));
+  assert.deepEqual(editStatOf('Edit', { Edits: many }), { added: 64, removed: 64 });
+  const old = Array.from({ length: 600 }, (_, i) => `line ${i}`).join('\n');
+  const changed = old.replace('line 300', 'LINE 300');
+  // 1200 lines do not fit: counted whole rather than with a 600x600 table.
+  assert.deepEqual(editStatOf('Edit', { Target: old, Replacement: changed }), { added: 600, removed: 600 });
+  const small = old.split('\n').slice(0, 100).join('\n');
+  assert.deepEqual(editStatOf('Edit', { Target: small, Replacement: small.replace('line 50', 'LINE 50') }), { added: 1, removed: 1 });
+});
+
+test('watcher: a subagent that goes idle is let go, and taken up again where it was when it grows', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: PARENT_C, folder: tabDir }]);
+  let clock = Date.parse('2026-11-22T20:00:00Z');
+  const { watcher, out } = makeFullWatcher(root, tabDir, { now: () => clock });
+  const named = (step) => [
+    line({ type: 'PLANNER_RESPONSE', step_index: step, tool_calls: [{ name: 'invoke_subagent', args: { Role: 'helper' } }] }),
+    line({ type: 'GENERIC', step_index: step + 1, status: 'DONE', content: `{"conversationId": "${CHILD_E}"}` }),
+  ].join('\n');
+  writeTranscript(root, CHILD_E, `${line({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [readCall('one.js')] })}\n`);
+  const parent = writeTranscript(root, PARENT_C, `${named(1)}\n`);
+  drain(watcher, 3);
+  assert.ok(watcher.children.has(CHILD_E));
+  const childStarts = () => startsOf(out.tools).filter((e) => e.id.startsWith(`agy:${CHILD_E}:`)).map((e) => path.basename(e.file));
+  assert.deepEqual(childStarts(), ['one.js']);
+  clock += 11 * 60 * 1000;
+  watcher.safeTick();
+  assert.equal(watcher.children.has(CHILD_E), false, 'idle for 11 minutes: let go');
+  assert.ok(out.tools.some((e) => e.phase === 'end' && e.id.startsWith(`agy:${CHILD_E}:`)), 'what it lit went dark');
+  // It wakes up and is named again: only what is new is reported.
+  fs.appendFileSync(path.join(root, 'brain', CHILD_E, '.system_generated', 'logs', 'transcript.jsonl'), `${line({ type: 'PLANNER_RESPONSE', step_index: 2, tool_calls: [readCall('two.js')] })}\n`);
+  fs.appendFileSync(parent, `${named(3)}\n`);
+  drain(watcher, 3);
+  assert.deepEqual(childStarts(), ['one.js', 'two.js']);
+  watcher.stop();
+});
+
+test('watcher: a subagent that cannot be read does not stop the tab or the other subagents', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: PARENT_C, folder: tabDir }]);
+  const { watcher, out } = makeFullWatcher(root, tabDir);
+  for (const id of [CHILD_E, CHILD_F]) writeTranscript(root, id, `${line({ type: 'USER_INPUT', content: 'go' })}\n`);
+  const parent = writeTranscript(root, PARENT_C, [
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [{ name: 'invoke_subagent', args: {} }] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', content: `"conversationId": "${CHILD_E}" "conversationId": "${CHILD_F}"` }),
+    '',
+  ].join('\n'));
+  drain(watcher, 3);
+  assert.equal(watcher.children.size, 2);
+  watcher.children.get(CHILD_E).tail.poll = () => {
+    throw new Error('EIO');
+  };
+  fs.appendFileSync(path.join(root, 'brain', CHILD_F, '.system_generated', 'logs', 'transcript.jsonl'), `${line({ type: 'PLANNER_RESPONSE', step_index: 2, tool_calls: [readCall('f.js')] })}\n`);
+  fs.appendFileSync(parent, `${line({ type: 'PLANNER_RESPONSE', step_index: 3, tool_calls: [readCall('p.js')] })}\n`);
+  const metricsBefore = out.metrics.length;
+  watcher.safeTick();
+  assert.deepEqual(startsOf(out.tools).slice(-2).map((e) => path.basename(e.file)).sort(), ['f.js', 'p.js']);
+  assert.equal(out.metrics.length, metricsBefore + 1, 'the tab still gets its reading');
+  assert.match(out.logs.join('\n'), /cannot read .*: EIO/);
+  watcher.stop();
+});
+
+test('watcher: a named subagent is never another tab\'s own conversation, even without the database', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null); // no summaries database: matched by time only
+  const a = makeFullWatcher(root, tabDir);
+  const b = makeFullWatcher(root, tabDir);
+  writeTranscript(root, PARENT_C, [
+    line({ type: 'PLANNER_RESPONSE', step_index: 1, tool_calls: [{ name: 'invoke_subagent', args: {} }] }),
+    line({ type: 'GENERIC', step_index: 2, status: 'DONE', content: `{"conversationId": "${CHILD_F}"}` }),
+    '',
+  ].join('\n'));
+  a.watcher.safeTick(); // pins the parent and learns of the subagent, whose transcript is not there yet
+  writeTranscript(root, CHILD_F, `${line({ type: 'USER_INPUT', content: 'go' })}\n`);
+  b.watcher.safeTick();
+  assert.equal(b.watcher.pinned, null, 'the subagent is new and unclaimed, but not a tab\'s own');
+  a.watcher.safeTick();
+  assert.ok(a.watcher.children.has(CHILD_F));
+  a.watcher.stop();
+  b.watcher.stop();
 });

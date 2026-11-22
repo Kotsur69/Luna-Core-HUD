@@ -32,6 +32,26 @@ test('memoryCallOf knows the four Luna Core Memory tools of the lunacore server 
   assert.equal(memoryCallOf('lunacore', 42), null);
 });
 
+test('memoryCallOf also knows an agy tab\'s own lunacore-<sessionId> server, and nothing that only looks like it', () => {
+  assert.equal(memoryCallOf('lunacore-s12', 'memory_search'), 'search');
+  assert.equal(memoryCallOf('lunacore-abc_DEF-9', 'memory_propose'), 'propose');
+  assert.equal(memoryCallOf('lunacore-s12', 'luna_todo_add'), null);
+  for (const server of ['lunacore-', 'lunacore2', 'xlunacore', 'lunacore-a b', 'lunacore-../x', 'LunaCore', 'lunacore-s1\n']) {
+    assert.equal(memoryCallOf(server, 'memory_search'), null, JSON.stringify(server));
+  }
+  assert.equal(memoryCallOf(null, 'memory_search'), null);
+});
+
+test('an agy tab\'s memory calls (server lunacore-<sessionId>) are counted like a Claude tab\'s', () => {
+  const state = fold([
+    mcp([call('m1', 'memory_search', 'lunacore-s7'), call('m1', 'memory_search', 'lunacore-s7', 'end')]),
+    mcp([call('m2', 'memory_get', 'lunacore-s7')]),
+  ]);
+  const tab = state.tabs.get(S);
+  assert.deepEqual(tab.memoryCalls, { search: 1, get: 1, verify: 0, propose: 0 });
+  assert.equal(tab.stations.memory.total, 2);
+});
+
 test('a fresh tab has zero memory calls', () => {
   assert.deepEqual(createTabState().memoryCalls, { search: 0, get: 0, verify: 0, propose: 0 });
 });

@@ -92,7 +92,9 @@ const NETWORK_MCP_TOKENS = new Set([
 
 // Same non-greedy split as observer.js's MCP_NAME_RE.
 const MCP_NAME_RE = /^mcp__(.+?)__(.+)$/;
-const MEMORY_SERVER = 'lunacore';
+// The Luna Core Memory server: `lunacore` in a Claude tab, `lunacore-<sessionId>`
+// in an agy tab (main's src/agyintake.js agyServerName).
+const MEMORY_SERVER_RE = /^lunacore(?:-[A-Za-z0-9_-]+)?$/;
 const MEMORY_TOOL_PREFIX = 'memory_';
 /** The Luna Core Memory tools counted one by one on the Memory station, by MCP tool name. */
 const MEMORY_CALL_OF_TOOL = new Map([
@@ -116,7 +118,7 @@ export function stationForMcp(server, tool) {
   const srv = typeof server === 'string' ? server : '';
   const name = typeof tool === 'string' ? tool : '';
   if (!srv) return 'other';
-  if (srv === MEMORY_SERVER && name.startsWith(MEMORY_TOOL_PREFIX)) return 'memory';
+  if (MEMORY_SERVER_RE.test(srv) && name.startsWith(MEMORY_TOOL_PREFIX)) return 'memory';
   const tokens = srv.toLowerCase().split(/[-_.\s]+/);
   if (tokens.some((tok) => NETWORK_MCP_TOKENS.has(tok))) return 'network';
   return 'mcp';
@@ -145,7 +147,7 @@ export function stationForTool(name) {
  * @returns {string|null} one of MEMORY_CALLS, or null
  */
 export function memoryCallOf(server, tool) {
-  if (server !== MEMORY_SERVER || typeof tool !== 'string') return null;
+  if (typeof server !== 'string' || !MEMORY_SERVER_RE.test(server) || typeof tool !== 'string') return null;
   return MEMORY_CALL_OF_TOOL.get(tool) || null;
 }
 

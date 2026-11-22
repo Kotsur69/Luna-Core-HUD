@@ -60,6 +60,31 @@ contextBridge.exposeInMainWorld('lunacore', {
   onGitFiles: (callback) => {
     ipcRenderer.on('metrics:gitfiles', (_event, payload) => callback(payload));
   },
+  /** The latest snapshot of OS processes under each tab (src/sessionProcs.js), read-only:
+   *  ({ ok, snapshot: { at, sessions: { [sessionId]: [{pid, ppid, name, label, ports}] } } | null }). */
+  getSessionProcs: () => ipcRenderer.invoke('sessionprocs:get'),
+  /** Receives those snapshots while subscribed; main polls only while someone is.
+   *  Call on show; call the returned function on hide. */
+  subscribeSessionProcs: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    let active = true;
+    const listener = (_event, payload) => {
+      if (active) callback(payload);
+    };
+    ipcRenderer.on('sessionprocs:update', listener);
+    ipcRenderer.invoke('sessionprocs:subscribe')
+      .then((res) => {
+        if (active && res && res.ok && res.snapshot) callback(res.snapshot);
+      })
+      .catch((err) => console.warn('[sessionprocs] subscribe failed:', err && err.message));
+    return () => {
+      if (!active) return;
+      active = false;
+      ipcRenderer.removeListener('sessionprocs:update', listener);
+      ipcRenderer.invoke('sessionprocs:unsubscribe')
+        .catch((err) => console.warn('[sessionprocs] unsubscribe failed:', err && err.message));
+    };
+  },
 
   // --- Tabs (multi-session) ---
   /** Fetches { sessions: [{id,profileId,profileLabel,folder,alive}], activeSessionId }. */

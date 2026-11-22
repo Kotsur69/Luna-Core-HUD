@@ -2,8 +2,9 @@
 // LunaCore - Antigravity (`agy`) transcript watcher (read-only)
 // ----------------------------------------------------------------------------
 // The agy counterpart of observer.js' TranscriptWatcher, for one tab: finds
-// the agy conversation that tab runs, tails its transcript and emits the same
-// tool events and context metrics (src/agytranscript.js does the parsing).
+// the agy conversation that tab runs, tails its transcript (src/agytail.js)
+// and emits the same tool events, MCP events and context metrics
+// (src/agytranscript.js does the parsing).
 //
 // Picking the conversation, like TranscriptWatcher.pickFile() does without a
 // session id, plus a workspace check agy makes possible:
@@ -13,10 +14,28 @@
 //      else one that existed and grew since (`--continue`);
 //   3. only if agy's conversation_summaries.db says it runs in THIS tab's
 //      folder (or, failing an exact match, in a folder containing it) - agy's
-//      brain/ folder is shared by every workspace;
+//      brain/ folder is shared by every workspace - and is not a subagent's
+//      conversation (its row names a parent_conversation_id): a subagent works
+//      in its parent's folder, and picking it would show only its few calls;
 //   4. never one another agy tab has already claimed; newest wins.
 // The pick is permanent. Known limit: a new conversation started inside the
 // same agy process (its /clear) is not followed.
+//
+// Subagents. An Orchestrator session does most of its reading and editing in
+// subagent conversations (invoke_subagent, swarm, run_workflow), each with
+// its own transcript. Their tool and MCP events are attributed to this tab:
+//   * a subagent call's result names the child ("conversationId": "<id>");
+//   * while such a call runs, and for a minute after, the summaries database
+//     is also asked for conversations whose parent is one this tab follows
+//     (at most every CHILD_SCAN_INTERVAL_MS);
+//   * at most MAX_CHILD_CONVERSATIONS are followed, each claimed like the
+//     tab's own conversation, read-only, lstat-guarded like it; a child that
+//     existed before the tab started counts its past as history;
+//   * a child that has not grown for CHILD_IDLE_MS is let go - what it lit
+//     ends, its claim is released - and taken up again where it was, should
+//     it grow later;
+//   * every conversation named as a subagent is remembered process-wide, so
+//     no tab picks one as its own even without the database's parent column.
 //
 // Without a readable database (agy never wrote one, this Node has no
 // node:sqlite, or the file is broken) the folder cannot be checked and the
@@ -35,8 +54,9 @@ const os = require('os');
 const path = require('path');
 const { pathKey } = require('./gitattribution');
 const {
-  UUID_RE, parseSteps, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch,
+  UUID_RE, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch,
 } = require('./agytranscript');
+const { AgyTail } = require('./agytail');
 
 /** agy CLI's app data folder (the IDE and Antigravity 2.0 use sibling folders). */
 const AGY_APP_DATA_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
@@ -50,10 +70,44 @@ const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const DB_BUSY_TIMEOUT_MS = 100;
 /** SQLite result codes that pass on their own: SQLITE_BUSY, SQLITE_LOCKED (low byte of an extended code). */
 const TRANSIENT_SQLITE_CODES = new Set([5, 6]);
-const NEWLINE = 0x0a;
+/** Subagent conversations one tab follows at most. */
+const MAX_CHILD_CONVERSATIONS = 32;
+/** Named children whose transcript is not there yet, waited for at most. */
+const MAX_CHILDREN_WAITING = 64;
+/** How long a named child may take to write its first step. */
+const CHILD_WAIT_MS = 2 * 60 * 1000;
+/** Least time between two summaries-database lookups for children. */
+const CHILD_SCAN_INTERVAL_MS = 5000;
+/** How long after an agent call the database is still asked for children. */
+const CHILD_SCAN_WINDOW_MS = 60 * 1000;
+/** A followed child whose transcript has not grown for this long is let go (its claim too). */
+const CHILD_IDLE_MS = 10 * 60 * 1000;
+/** Let-go children remembered with how far they were read, so a revived one is not replayed. */
+const MAX_RETIRED_CHILDREN = 256;
+/** Subagent conversations named anywhere, so no tab picks one as its own. */
+const MAX_KNOWN_SUBAGENTS = 1024;
+
+const ROWS_SQL = 'select conversation_id, workspace_uris, parent_conversation_id from conversation_summaries';
+/** agy before parent_conversation_id existed. */
+const ROWS_SQL_NO_PARENT = 'select conversation_id, workspace_uris from conversation_summaries';
 
 /** Conversations claimed by live agy watchers, one owner each (cf. claimedTranscripts). */
 const claimedAgyConversations = new Set();
+/**
+ * Conversations some watcher learned are subagents (a result named them, or
+ * the database linked them to a parent), oldest first. Shared because a
+ * subagent works in its parent's folder: without the database's parent
+ * column (or without a cwd to check) another tab would take it for its own.
+ */
+const knownSubagentConversations = new Set();
+
+function noteSubagent(id) {
+  knownSubagentConversations.delete(id);
+  knownSubagentConversations.add(id);
+  if (knownSubagentConversations.size > MAX_KNOWN_SUBAGENTS) {
+    knownSubagentConversations.delete(knownSubagentConversations.keys().next().value);
+  }
+}
 
 const defaultLog = (msg) => console.warn(`[agy-transcript] ${msg}`);
 const errText = (err) => (err && (err.code || err.message)) || String(err);
@@ -64,8 +118,8 @@ function logsDirOf(appDataDir, dirName) {
 }
 
 /**
- * The transcript of one conversation: {id, full, mtimeMs}, or null when it
- * has none yet (a conversation writes its file with its first step).
+ * The transcript of one conversation: {id, full, mtimeMs, size}, or null
+ * when it has none yet (a conversation writes its file with its first step).
  * @param {string} dirName the folder name as it is on disk; `id` is its lowercase form
  */
 function transcriptOf(appDataDir, dirName) {
@@ -74,7 +128,7 @@ function transcriptOf(appDataDir, dirName) {
     try {
       // lstat: a symlink is not followed, it could point anywhere on the disk.
       const st = fs.lstatSync(full);
-      if (st.isFile()) return { id: dirName.toLowerCase(), full, mtimeMs: st.mtimeMs };
+      if (st.isFile()) return { id: dirName.toLowerCase(), full, mtimeMs: st.mtimeMs, size: st.size };
     } catch (err) {
       if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err;
     }
@@ -88,7 +142,7 @@ function transcriptOf(appDataDir, dirName) {
  * to `onSkip` and is left out; without `onSkip` that failure throws.
  * @param {string} appDataDir
  * @param {(dirName: string, err: Error) => void} [onSkip]
- * @returns {{id:string, full:string, mtimeMs:number}[]}
+ * @returns {{id:string, full:string, mtimeMs:number, size:number}[]}
  */
 function listAgyTranscripts(appDataDir, onSkip) {
   let entries;
@@ -113,12 +167,22 @@ function listAgyTranscripts(appDataDir, onSkip) {
   return out;
 }
 
+/** Every summaries row; an agy without the parent column is read without it. */
+function readRows(db) {
+  try {
+    return db.prepare(ROWS_SQL).all();
+  } catch (err) {
+    if (!/no such column/i.test(String(err && err.message))) throw err;
+    return db.prepare(ROWS_SQL_NO_PARENT).all();
+  }
+}
+
 /**
- * conversation id -> workspace folders, read from agy's summaries database.
- * `retry` says the failure passes on its own (agy holds the database
- * locked); anything else - no database, no node:sqlite, a broken file or a
- * schema this code does not know - will not.
- * @returns {{ok:true, byId:Map<string,string[]>, skipped:number}
+ * conversation id -> workspace folders and child -> parent, read from agy's
+ * summaries database. `retry` says the failure passes on its own (agy holds
+ * the database locked); anything else - no database, no node:sqlite, a broken
+ * file or a schema this code does not know - will not.
+ * @returns {{ok:true, byId:Map<string,string[]>, parents:Map<string,string>, skipped:number}
  *   | {ok:false, retry:boolean, reason:string}}
  */
 function readConversationWorkspaces(appDataDir) {
@@ -133,9 +197,8 @@ function readConversationWorkspaces(appDataDir) {
   let db = null;
   try {
     db = new DatabaseSync(file, { readOnly: true, timeout: DB_BUSY_TIMEOUT_MS });
-    const rows = db.prepare('select conversation_id, workspace_uris from conversation_summaries').all();
-    const { byId, skipped } = workspacesFromRows(rows);
-    return { ok: true, byId, skipped };
+    const { byId, parents, skipped } = workspacesFromRows(readRows(db));
+    return { ok: true, byId, parents, skipped };
   } catch (err) {
     const retry = Number.isInteger(err && err.errcode) && TRANSIENT_SQLITE_CODES.has(err.errcode & 0xff);
     const why = (err && err.message) || errText(err);
@@ -145,29 +208,20 @@ function readConversationWorkspaces(appDataDir) {
   }
 }
 
-/** Reads up to `length` bytes at `offset`; the Buffer holds what was actually read. */
-function readRange(file, offset, length) {
-  const fd = fs.openSync(file, 'r');
-  try {
-    const buf = Buffer.alloc(length);
-    const read = fs.readSync(fd, buf, 0, length, offset);
-    return read === length ? buf : buf.subarray(0, read);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 class AgyTranscriptWatcher {
   /**
    * @param {(metrics: object) => void} onMetrics context metrics (estimated)
    * @param {{cwd?: string, conversationId?: string|null, onTools?: Function,
-   *   onTurnStart?: Function, onTurnEnd?: Function,
-   *   intervalMs?: number, appDataDir?: string, log?: (msg: string) => void,
-   *   chunkBytes?: number}} [opts] chunkBytes: read size per tick (tests)
+   *   onMcp?: Function, onTurnStart?: Function, onTurnEnd?: Function,
+   *   intervalMs?: number, appDataDir?: string,
+   *   log?: (msg: string) => void, chunkBytes?: number, now?: () => number}} [opts]
+   *   chunkBytes: read size per tick (tests); onTurnStart / onTurnEnd fire for
+   *   the tab's own conversation only, never for a subagent's
    */
   constructor(onMetrics, opts = {}) {
     this.onMetrics = typeof onMetrics === 'function' ? onMetrics : () => {};
     this.onTools = typeof opts.onTools === 'function' ? opts.onTools : null;
+    this.onMcp = typeof opts.onMcp === 'function' ? opts.onMcp : null;
     this.onTurnStart = typeof opts.onTurnStart === 'function' ? opts.onTurnStart : null;
     this.onTurnEnd = typeof opts.onTurnEnd === 'function' ? opts.onTurnEnd : null;
     this.cwd = typeof opts.cwd === 'string' ? opts.cwd : '';
@@ -176,6 +230,7 @@ class AgyTranscriptWatcher {
     this.appDataDir = opts.appDataDir || AGY_APP_DATA_DIR;
     this.intervalMs = opts.intervalMs || DEFAULT_INTERVAL_MS;
     this.chunkBytes = Number.isInteger(opts.chunkBytes) && opts.chunkBytes > 0 ? opts.chunkBytes : MAX_CHUNK_BYTES;
+    this.now = typeof opts.now === 'function' ? opts.now : Date.now;
     this.log = typeof opts.log === 'function' ? opts.log : defaultLog;
     this.logged = new Set();
     this.timer = null;
@@ -184,18 +239,29 @@ class AgyTranscriptWatcher {
     this.baseline = new Map();
     /** conversation claim keys already owned by other live tabs when this watcher started. */
     this.claimedAtStart = new Set();
-    /** {key, full} of the conversation this tab reads, once picked. */
+    /** {id, key, full} of the conversation this tab reads, once picked. */
     this.pinned = null;
-    this.offset = 0;
-    /** Bytes of the pinned file that were already there: history, not live activity. 0 = none (left). */
-    this.historyUntil = 0;
-    /** Inside a line longer than chunkBytes, which is dropped up to its end. */
-    this.skipping = false;
-    this.lastSize = -1;
-    this.lastMtime = 0;
+    /** Its tail reader, once picked. */
+    this.main = null;
+    /** The state shown before a conversation is picked. */
+    this.idleState = new AgyTranscriptState({ cwd: this.cwd });
     /** Whether a reading of the pinned file went out yet (an empty conversation still shows 0 %). */
     this.emitted = false;
-    this.state = new AgyTranscriptState({ cwd: this.cwd });
+    /** child id -> {key, tail, movedAt} of the subagent conversations followed. */
+    this.children = new Map();
+    /** child id -> bytes read, for children let go after going idle (oldest first). */
+    this.retired = new Map();
+    /** child id -> when it was first named, for children whose transcript is not there yet. */
+    this.childrenWaiting = new Map();
+    /** Until when the summaries database is asked for children (after an agent call). */
+    this.childScanUntil = 0;
+    this.lastChildScan = 0;
+    this.warnOnce = this.warnOnce.bind(this);
+  }
+
+  /** The tab's own conversation state (an empty one until a conversation is picked). */
+  get state() {
+    return this.main ? this.main.state : this.idleState;
   }
 
   /** Logs a reason once per watcher, so a broken file does not flood the log every tick. */
@@ -221,11 +287,16 @@ class AgyTranscriptWatcher {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     if (this.pinned) claimedAgyConversations.delete(this.pinned.key);
+    for (const child of this.children.values()) claimedAgyConversations.delete(child.key);
+    this.children.clear();
+    this.childrenWaiting.clear();
+    this.retired.clear();
     this.pinned = null;
+    this.main = null;
   }
 
   snapshotBaseline() {
-    this.startedAt = Date.now();
+    this.startedAt = this.now();
     this.baseline = new Map();
     // Snapshot conversations owned right now so a dying replaced tab releasing its
     // claim moments later cannot be adopted as a resumed conversation by this new tab.
@@ -253,6 +324,18 @@ class AgyTranscriptWatcher {
     }
   }
 
+  /** A tail reader for one conversation's transcript. */
+  tailFor(transcript, { historyUntil, idPrefix }) {
+    return new AgyTail({
+      file: transcript.full,
+      state: new AgyTranscriptState({ cwd: this.cwd, idPrefix }),
+      historyUntil,
+      chunkBytes: this.chunkBytes,
+      warnOnce: this.warnOnce,
+      log: this.log,
+    });
+  }
+
   /**
    * Pins a transcript for good. `resumed`: what it already holds is history.
    * @returns {string|null} its path, or null when it cannot be read yet
@@ -267,8 +350,8 @@ class AgyTranscriptWatcher {
     }
     const key = this.keyOf(transcript.id);
     claimedAgyConversations.add(key);
-    this.pinned = { key, full: transcript.full };
-    this.historyUntil = resumed ? size : 0;
+    this.pinned = { id: transcript.id, key, full: transcript.full };
+    this.main = this.tailFor(transcript, { historyUntil: resumed ? size : 0, idPrefix: 'agy:' });
     return transcript.full;
   }
 
@@ -284,7 +367,7 @@ class AgyTranscriptWatcher {
     }
     const free = this.list().filter((t) => {
       const key = this.keyOf(t.id);
-      return !claimedAgyConversations.has(key) && !this.claimedAtStart.has(key);
+      return !claimedAgyConversations.has(key) && !this.claimedAtStart.has(key) && !knownSubagentConversations.has(t.id);
     });
     const fresh = free.filter((t) => !this.baseline.has(t.id));
     const resumed = free.filter((t) => this.baseline.has(t.id) && t.mtimeMs > this.baseline.get(t.id));
@@ -295,7 +378,7 @@ class AgyTranscriptWatcher {
     return this.pin(pool[0], this.baseline.has(pool[0].id));
   }
 
-  /** Keeps the conversations agy records as running in this tab's folder. */
+  /** Keeps the conversations agy records as running in this tab's folder, subagents left out. */
   inThisFolder(pool) {
     if (pool.length === 0 || !this.cwd) return pool;
     const ws = readConversationWorkspaces(this.appDataDir);
@@ -312,10 +395,11 @@ class AgyTranscriptWatcher {
     if (ws.skipped > 0) {
       this.warnOnce('workspaces-skipped', `${SUMMARIES_DB}: ignored ${ws.skipped} row(s) that did not validate`);
     }
+    const own = pool.filter((t) => !ws.parents.has(t.id));
     const matchOf = (t) => workspaceMatch(ws.byId.get(t.id), this.cwd);
-    const exact = pool.filter((t) => matchOf(t) === 'exact');
+    const exact = own.filter((t) => matchOf(t) === 'exact');
     if (exact.length > 0) return exact;
-    const containing = pool.filter((t) => matchOf(t) === 'contains');
+    const containing = own.filter((t) => matchOf(t) === 'contains');
     if (containing.length > 0) return containing;
     // A conversation with no row yet is skipped now and picked up next tick.
     this.warnOnce('no-match', `${pool.length} active agy conversation(s), none recorded for ${this.cwd} yet; checking again`);
@@ -325,162 +409,202 @@ class AgyTranscriptWatcher {
   tick() {
     const file = this.pickFile();
     if (!file) return;
-    let st;
-    try {
-      st = fs.lstatSync(file);
-    } catch (err) {
-      this.warnOnce(`stat:${errText(err)}`, `cannot stat ${file}: ${errText(err)}`);
-      return;
-    }
-    if (!st.isFile()) {
-      this.warnOnce('not-file', `${file} is no longer a regular file; not reading it`);
-      return;
-    }
-    if (st.size === this.lastSize && st.mtimeMs === this.lastMtime) return;
-    const before = this.offset;
-    // Unless there is more to read right away, wait for the file to change.
-    if (this.accumulate(file, st.size) !== 'more') {
-      this.lastSize = st.size;
-      this.lastMtime = st.mtimeMs;
-    }
-    if (this.state.unresolved > 0) {
+    const now = this.now();
+    const res = this.pollTail(this.main, now);
+    if (res) this.emitTurns(res.turns);
+    if (this.main.state.unresolved > 0) {
       this.warnOnce('unresolved', `an agy tool call in ${file} got no result step (cancelled, or a transcript format LunaCore does not know)`);
     }
+    this.tickChildren(now);
+    if (!res || res.status !== 'read') return;
     // A line still being written changes nothing: no repeat of the same reading.
-    if (this.emitted && this.offset === before) return;
+    if (this.emitted && !res.moved) return;
     this.emitted = true;
-    this.onMetrics(agyContextMetrics(this.state.contextChars, {
-      file, elapsedMs: Date.now() - this.startedAt, model: this.state.model,
+    const state = this.main.state;
+    this.onMetrics(agyContextMetrics(state.contextChars, {
+      file, elapsedMs: now - this.startedAt, model: state.model, usage: state.usage,
     }));
   }
 
-  /** The file shrank (rewritten or replaced): count again from the start. */
-  restart(file, size) {
-    this.warnOnce('restart', `${file} got shorter; reading it again from the start`);
-    // Calls lit live end here (history lit none), or they would stay lit.
-    const ends = this.state.endOpen(Date.now());
-    const live = this.historyUntil === 0;
-    const next = new AgyTranscriptState({ cwd: this.cwd });
-    next.callSeq = this.state.callSeq; // new ids never repeat old ones
-    next.model = this.state.model;
-    this.state = next;
-    this.offset = 0;
-    // Its content is not news: what is there now counts as history.
-    this.historyUntil = size;
-    this.skipping = false;
-    if (live) this.emitTools(ends);
-  }
-
   /**
-   * Enters a line longer than a read, dropped up to its end. Which step it
-   * held is unknown, so the open batch ends here: a result on that line
-   * would otherwise shift every later result onto the wrong call.
+   * Polls one tail and sends what it read. A tail that cannot be read, or a
+   * listener that throws, is logged and stays that tail's problem: the
+   * metrics and every other tail still get their turn this tick.
+   * @returns {object|null} the poll's result, or null when it failed
    */
-  skipLongLine(file) {
-    this.skipping = true;
-    this.warnOnce('long-line', `skipping a line of ${file} longer than ${this.chunkBytes} bytes; tool calls open at that point end without a result`);
-    const ends = this.state.endOpen(Date.now());
-    if (this.historyUntil === 0) this.emitTools(ends);
+  pollTail(tail, now) {
+    let res;
+    try {
+      res = tail.poll();
+    } catch (err) {
+      this.warnOnce(`poll:${tail.file}:${errText(err)}`, `cannot read ${tail.file}: ${errText(err)}`);
+      return null;
+    }
+    try {
+      this.deliver(res, now);
+    } catch (err) {
+      this.warnOnce(`tick:${errText(err)}`, `tick failed: ${errText(err)}`);
+    }
+    return res;
   }
 
-  emitTools(events) {
-    if (events.length > 0 && this.onTools) this.onTools(events);
+  /** Notes the children one poll named, then sends its events; one listener throwing does not cost the other. */
+  deliver(res, now) {
+    for (const id of res.children) this.nameChild(id, now);
+    if (res.tools.some((ev) => ev.tile === 'Task')) this.childScanUntil = now + CHILD_SCAN_WINDOW_MS;
+    this.notify(this.onMcp, res.mcp);
+    this.notify(this.onTools, res.tools);
   }
 
+  /** Fires the tab's own turn starts and ends (a subagent's turns are not the tab's). */
   emitTurns(turns) {
-    for (const turn of turns) {
-      if (turn.type === 'start' && this.onTurnStart) this.onTurnStart({ at: turn.at });
-      else if (turn.type === 'end' && this.onTurnEnd) {
-        this.onTurnEnd({ startedAt: turn.startedAt, endedAt: turn.endedAt, text: turn.text });
+    for (const turn of turns || []) {
+      try {
+        if (turn.type === 'start' && this.onTurnStart) this.onTurnStart({ at: turn.at });
+        else if (turn.type === 'end' && this.onTurnEnd) {
+          this.onTurnEnd({ startedAt: turn.startedAt, endedAt: turn.endedAt, text: turn.text });
+        }
+      } catch (err) {
+        this.warnOnce(`tick:${errText(err)}`, `tick failed: ${errText(err)}`);
       }
+    }
+  }
+
+  /** Calls one listener with a non-empty batch, logging (once per reason) what it throws. */
+  notify(listener, events) {
+    if (!listener || events.length === 0) return;
+    try {
+      listener(events);
+    } catch (err) {
+      this.warnOnce(`tick:${errText(err)}`, `tick failed: ${errText(err)}`);
+    }
+  }
+
+  // ---- Subagent conversations ---------------------------------------------
+
+  /** A child named by a result or the database: followed soon, or waited for. */
+  nameChild(rawId, now) {
+    const id = String(rawId || '').toLowerCase();
+    if (!UUID_RE.test(id) || id === (this.pinned && this.pinned.id)) return;
+    noteSubagent(id);
+    if (this.children.has(id)) return;
+    if (this.childrenWaiting.has(id)) return;
+    if (this.childrenWaiting.size >= MAX_CHILDREN_WAITING) {
+      this.warnOnce('children-waiting-cap', `more than ${MAX_CHILDREN_WAITING} agy subagent conversations pending; ignoring the rest`);
+      return;
+    }
+    this.childrenWaiting.set(id, now);
+  }
+
+  /** Follows the children whose transcript is there, drops the ones waited for too long. */
+  adoptWaitingChildren(now) {
+    for (const [id, since] of this.childrenWaiting) {
+      if (this.adoptChild(id) || now - since > CHILD_WAIT_MS) this.childrenWaiting.delete(id);
     }
   }
 
   /**
-   * Reads what was appended since the last tick, at most chunkBytes, and
-   * folds its complete lines into the state. Offsets are bytes; a read only
-   * ever ends at a newline byte, so no UTF-8 character is cut in two.
-   * @returns {'eof'|'more'|'partial'} 'more': read again now; 'partial': a
-   *   line is still being written, wait for the file to grow
+   * Starts following one child conversation.
+   * @returns {boolean} true when it is settled: followed now, or never will be
+   *   (claimed elsewhere, over the cap, unchanged since the tab started)
    */
-  accumulate(file, size) {
-    if (size < this.offset) this.restart(file, size);
-    const want = Math.min(size - this.offset, this.chunkBytes);
-    if (want <= 0) return 'eof';
-    const buf = readRange(file, this.offset, want);
-    if (buf.length === 0) return 'eof';
-    let start = 0;
-    if (this.skipping) {
-      const nl = buf.indexOf(NEWLINE);
-      if (nl < 0) {
-        this.offset += buf.length;
-        return this.offset >= size ? 'partial' : 'more';
-      }
-      start = nl + 1;
-      this.skipping = false;
+  adoptChild(id) {
+    if (this.children.size >= MAX_CHILD_CONVERSATIONS) {
+      this.warnOnce('children-cap', `following at most ${MAX_CHILD_CONVERSATIONS} agy subagent conversations per tab; ignoring the rest`);
+      return true;
     }
-    const lastNl = buf.lastIndexOf(NEWLINE);
-    if (lastNl < start) {
-      // A whole chunk with no line end, and the file goes on past it: the
-      // line is longer than a read, not a step anyone can use.
-      if (start === 0 && buf.length >= this.chunkBytes && this.offset + buf.length < size) {
-        this.offset += buf.length;
-        this.skipLongLine(file);
-        return 'more';
-      }
-      this.offset += start;
-      return this.offset + (buf.length - start) >= size ? 'partial' : 'more';
+    const key = this.keyOf(id);
+    if (claimedAgyConversations.has(key)) {
+      this.warnOnce(`child-claimed:${id}`, `agy subagent conversation ${id} is already shown by another tab; not reading it here`);
+      return true;
     }
-    const { events, turns } = this.foldLines(file, buf, start, lastNl + 1);
-    // The place moves on before anyone hears of it: a listener that throws
-    // must not make the next tick fold the same lines again.
-    this.offset += lastNl + 1;
-    this.emitTools(events);
-    this.emitTurns(turns);
-    return this.offset >= size ? 'eof' : 'more';
+    let found;
+    try {
+      found = transcriptOf(this.appDataDir, id);
+    } catch (err) {
+      this.warnOnce(`child:${id}:${errText(err)}`, `cannot read agy subagent conversation ${id}: ${errText(err)}`);
+      return false;
+    }
+    if (!found) return false;
+    const historyUntil = this.childHistory(id, found);
+    if (historyUntil === null) return true;
+    claimedAgyConversations.add(key);
+    this.retired.delete(id);
+    this.children.set(id, {
+      key,
+      tail: this.tailFor(found, { historyUntil, idPrefix: `agy:${id}:` }),
+      movedAt: this.now(),
+    });
+    this.log(`following agy subagent conversation ${id}`);
+    return true;
   }
 
   /**
-   * Folds the complete lines buf[start, end) and returns their live tool
-   * events plus live turn notifications. Lines that were in the file when it
-   * was pinned are history: they count toward the context window but light
-   * no tool and fire no turns, and what they left open is dropped where
-   * history ends.
+   * Bytes of a child's transcript that are history when it is (re)adopted,
+   * or null when there is nothing new to follow. A child let go after going
+   * idle resumes where it was read up to; one that was there before the tab
+   * started counts its past as history. Either one that has not grown since
+   * is left alone (a later scan names it again if it does).
    */
-  foldLines(file, buf, start, end) {
-    let liveFrom = start;
-    if (this.historyUntil > 0) {
-      // The newline closing the last line that ends within history.
-      const boundary = this.historyUntil - this.offset;
-      const lastHistoryNl = boundary > start ? buf.lastIndexOf(NEWLINE, Math.min(boundary, end) - 1) : -1;
-      if (lastHistoryNl >= start) {
-        this.applyLines(file, buf.toString('utf8', start, lastHistoryNl + 1));
-        this.state.takeTurns();
-        liveFrom = lastHistoryNl + 1;
-      }
-      if (this.offset + end < this.historyUntil) return { events: [], turns: [] };
-      // A call the past left open (a killed session) must not light anything now.
-      this.state.forgetPending();
-      this.historyUntil = 0;
+  childHistory(id, found) {
+    if (this.retired.has(id)) {
+      const readUpTo = this.retired.get(id);
+      if (found.size === readUpTo) return null;
+      // Shorter than what was read: rewritten. What it holds now is history.
+      return found.size > readUpTo ? readUpTo : found.size;
     }
-    const events = liveFrom < end ? this.applyLines(file, buf.toString('utf8', liveFrom, end)) : [];
-    const turns = this.state.takeTurns();
-    return { events, turns };
+    if (!this.baseline.has(id)) return 0;
+    return found.mtimeMs > this.baseline.get(id) ? found.size : null;
   }
 
-  /** Parses whole lines, logs the ones it cannot use, returns the tool events. */
-  applyLines(file, text) {
-    const { steps, skipped } = parseSteps(text);
-    if (skipped.length > 0) {
-      this.log(`skipped ${skipped.length} unreadable line(s) of ${file}; first: ${skipped[0].reason}`);
+  /** Lets an idle child go: what it lit ends, its claim is released, its place remembered. */
+  retireChild(id, child, now) {
+    const ended = child.tail.state.endOpen(now);
+    claimedAgyConversations.delete(child.key);
+    this.children.delete(id);
+    this.retired.set(id, child.tail.offset);
+    if (this.retired.size > MAX_RETIRED_CHILDREN) this.retired.delete(this.retired.keys().next().value);
+    try {
+      this.deliver({ ...ended, children: [] }, now);
+    } catch (err) {
+      this.warnOnce(`tick:${errText(err)}`, `tick failed: ${errText(err)}`);
     }
-    return this.state.apply(steps);
+  }
+
+  /** Asks the summaries database for children of the conversations followed. */
+  scanChildren(now) {
+    this.lastChildScan = now;
+    const ws = readConversationWorkspaces(this.appDataDir);
+    // The children results name still work; a busy database is asked again later.
+    if (!ws.ok) return;
+    const parents = new Set([this.pinned.id, ...this.children.keys()]);
+    for (const [child, parent] of ws.parents) {
+      if (parents.has(parent)) this.nameChild(child, now);
+    }
+  }
+
+  /** Whether an agent call of this tab (or of a child) is running now. */
+  hasOpenTask() {
+    if (this.main && this.main.hasOpenTask()) return true;
+    return [...this.children.values()].some((child) => child.tail.hasOpenTask());
+  }
+
+  tickChildren(now) {
+    const scanDue = now - this.lastChildScan >= CHILD_SCAN_INTERVAL_MS;
+    if (scanDue && (now < this.childScanUntil || this.hasOpenTask())) this.scanChildren(now);
+    if (this.childrenWaiting.size > 0) this.adoptWaitingChildren(now);
+    for (const [id, child] of this.children) {
+      const res = this.pollTail(child.tail, now);
+      if (res && res.moved) child.movedAt = now;
+      else if (now - child.movedAt > CHILD_IDLE_MS) this.retireChild(id, child, now);
+    }
   }
 }
 
 module.exports = {
   AGY_APP_DATA_DIR,
   TRANSCRIPT_FILES,
+  MAX_CHILD_CONVERSATIONS,
   AgyTranscriptWatcher,
   listAgyTranscripts,
   readConversationWorkspaces,
