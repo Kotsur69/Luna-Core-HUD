@@ -1,21 +1,33 @@
 // ============================================================================
 // LunaCore - Live map (Ctrl+Shift+G): the Sessions tab, the work map
 // ----------------------------------------------------------------------------
-// What the session in the active tab is doing, drawn on top of the pure model
-// in workmapmodel.js (docs/untouched_docs/rag-stylememory.md, "Bonus"): the
-// model in the centre with its context ring, a station per kind of tool call
-// on a circle around it (name + count), a pulse travelling out to a station
-// when a call starts and back when it ends, failed calls in red, and a
-// Memory station drawn as a hexagon so it reads apart from the rest.
+// What a session is doing, drawn on top of the pure model in workmapmodel.js
+// (docs/untouched_docs/rag-stylememory.md, "Bonus"): the model in the centre
+// with its context ring, a station per kind of tool call on a circle around
+// it (name + count), failed calls in red, and a Memory station drawn as a
+// hexagon so it reads apart from the rest. Slice 2 of #agymap made it move
+// with the session:
+//
+//  - Bursts, ripples and afterglow (workmapFx.js): several packets out and
+//    back for concurrent calls from a capped pool of reused dots, a ripple
+//    when calls reach a station (a call that starts and ends in one frame
+//    still shows), and a glow that follows each station's recent call rate.
+//  - Satellites (workmapSatellites.js): the files, subagents, MCP servers,
+//    processes and ports the session touched sprout from their station and
+//    fade when stale. A file satellite opens its diff (#filediff-modal,
+//    activefiles.js); any other satellite or a station opens the inspector.
+//  - Session switcher, live ticker, inspector (workmapPanel.js).
 //
 //  - One subscription per app (createSessionsTab runs once, from liveMap.js),
-//    on the push feeds sessions.js already listens to: no new IPC, no polling,
-//    no tokens. The map only paints while its tab shows.
+//    on the push feeds sessions.js already listens to; no tokens. The map
+//    only paints while its tab shows. The one poll it causes - the process
+//    snapshot (src/sessionProcs.js) - is taken on show and given back on hide.
 //  - The SVG is built once; a repaint writes attributes and text in place,
-//    batched to one animation frame however many events arrived.
-//  - Pulses are Web Animations on reused dots, and only when motion is
-//    allowed (prefers-reduced-motion and the in-app motion axis); otherwise
-//    the busy spoke and station are highlighted and nothing travels.
+//    batched to one animation frame however many events arrived. While a
+//    station glows or a satellite fades, a slow timer asks for more frames.
+//  - Nothing travels, ripples or sprouts when motion is not allowed
+//    (prefers-reduced-motion and the in-app motion axis): busy stations are
+//    highlighted and satellites stand still instead.
 //  - Data reaches the DOM through textContent / setAttribute only.
 //  - The Memory station shows how many memory_search / memory_get /
 //    memory_verify / memory_propose calls the session made (the model's
@@ -31,10 +43,13 @@
 'use strict';
 
 import { t } from './util.js';
-import { tokenMs, tokenEase, EXIT_RATIO } from './motion.js';
 import { truncate } from './liveMapHelpers.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
-import { STATIONS, MEMORY_CALLS, subscribe, activeTabState, createTabState } from './workmapmodel.js';
+import { STATIONS, MEMORY_CALLS, subscribe, tabStateOf, createTabState, cleanText } from './workmapmodel.js';
+import { svgNode, createPacketPool, playBurst, stopRipple, stepHeat, glowLevel } from './workmapFx.js';
+import { createSatelliteLayer, selectSatellites, satelliteItemsFor, procListOf, snapshotSessionIds, mergeProcs } from './workmapSatellites.js';
+import { createWorkmapPanel, resolveViewed, tickerRows, stationView, satelliteView } from './workmapPanel.js';
+import { openDiffModal, closeDiffModal } from './activefiles.js';
 
 // ---- geometry and pure helpers (tested) --------------------------------------
 
@@ -53,7 +68,12 @@ const MODEL_LABEL_CHARS = 16;
 const CARD_LABEL_DX = 14;
 const CARD_LABEL_DY = 4;
 const ERROR_TITLE_CHARS = 160;
-const SVG_NS = 'http://www.w3.org/2000/svg';
+// How far a station's afterglow reaches past its disc.
+const GLOW_PAD = 16;
+// Repaint pace while something decays on its own: a glow, a fading satellite.
+const GLOW_TICK_MS = 250;
+const SATELLITE_TICK_MS = 2000;
+const SWITCH_LABEL_CHARS = 40;
 const round2 = (n) => Math.round(n * 100) / 100;
 
 /**
@@ -265,13 +285,6 @@ export function applyCardFlags(list) {
 
 // ---- DOM -----------------------------------------------------------------------
 
-function svg(tag, cls, attrs = {}) {
-  const node = document.createElementNS(SVG_NS, tag);
-  if (cls) node.setAttribute('class', cls);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
-  return node;
-}
-
 function el(tag, cls) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -297,36 +310,40 @@ function hexPoints(x, y, r) {
 }
 
 function buildCore() {
-  const g = svg('g', 'wm-core', { role: 'img' });
-  const disc = svg('circle', 'wm-core__disc', { cx: CENTER.x, cy: CENTER.y, r: CORE_R });
-  const track = svg('circle', 'wm-ring__track', { cx: CENTER.x, cy: CENTER.y, r: RING_R });
-  const fill = svg('circle', 'wm-ring__fill', { cx: CENTER.x, cy: CENTER.y, r: RING_R, transform: `rotate(-90 ${CENTER.x} ${CENTER.y})` });
-  const model = svg('text', 'wm-core__model', { x: CENTER.x, y: CENTER.y - 14 });
-  const pct = svg('text', 'wm-core__pct', { x: CENTER.x, y: CENTER.y + 14 });
-  const sub = svg('text', 'wm-core__sub', { x: CENTER.x, y: CENTER.y + 34 });
+  const g = svgNode('g', 'wm-core', { role: 'img' });
+  const disc = svgNode('circle', 'wm-core__disc', { cx: CENTER.x, cy: CENTER.y, r: CORE_R });
+  const track = svgNode('circle', 'wm-ring__track', { cx: CENTER.x, cy: CENTER.y, r: RING_R });
+  const fill = svgNode('circle', 'wm-ring__fill', { cx: CENTER.x, cy: CENTER.y, r: RING_R, transform: `rotate(-90 ${CENTER.x} ${CENTER.y})` });
+  const model = svgNode('text', 'wm-core__model', { x: CENTER.x, y: CENTER.y - 14 });
+  const pct = svgNode('text', 'wm-core__pct', { x: CENTER.x, y: CENTER.y + 14 });
+  const sub = svgNode('text', 'wm-core__sub', { x: CENTER.x, y: CENTER.y + 34 });
   g.append(track, fill, disc, model, pct, sub);
   return { g, fill, model, pct, sub };
 }
 
 function buildStation(pos) {
   const memory = pos.id === 'memory';
-  const g = svg('g', `wm-station is-${pos.id}`, { role: 'img' });
-  const title = svg('title');
-  const halo = svg('circle', 'wm-station__halo', { cx: pos.x, cy: pos.y, r: STATION_R + 7 });
+  // A button: Enter / Space or a click opens the inspector (createSessionsTab's pickStation).
+  const g = svgNode('g', `wm-station is-${pos.id}`, { role: 'button', tabindex: 0, 'data-station': pos.id });
+  const title = svgNode('title');
+  // The afterglow sits behind everything; the ripple spreads out from under the disc.
+  const glow = svgNode('circle', 'wm-station__glow', { cx: pos.x, cy: pos.y, r: STATION_R + GLOW_PAD });
+  const ripple = svgNode('circle', 'wm-ripple', { cx: pos.x, cy: pos.y, r: STATION_R });
+  const halo = svgNode('circle', 'wm-station__halo', { cx: pos.x, cy: pos.y, r: STATION_R + 7 });
   const disc = memory
-    ? svg('polygon', 'wm-station__disc', { points: hexPoints(pos.x, pos.y, STATION_R + 3) })
-    : svg('circle', 'wm-station__disc', { cx: pos.x, cy: pos.y, r: STATION_R });
-  const count = svg('text', 'wm-station__count', { x: pos.x, y: pos.y + 6 });
+    ? svgNode('polygon', 'wm-station__disc', { points: hexPoints(pos.x, pos.y, STATION_R + 3) })
+    : svgNode('circle', 'wm-station__disc', { cx: pos.x, cy: pos.y, r: STATION_R });
+  const count = svgNode('text', 'wm-station__count', { x: pos.x, y: pos.y + 6 });
   const ys = stationLabelY(pos);
-  const name = svg('text', 'wm-station__name', { x: pos.x, y: ys.name });
-  const status = svg('text', 'wm-station__status', { x: pos.x, y: ys.status });
-  g.append(title, halo, disc, count, name, status);
-  const parts = { g, title, disc, count, name, status, card: null, cardLabel: null };
+  const name = svgNode('text', 'wm-station__name', { x: pos.x, y: ys.name });
+  const status = svgNode('text', 'wm-station__status', { x: pos.x, y: ys.status });
+  g.append(title, glow, ripple, halo, disc, count, name, status);
+  const parts = { g, title, glow, ripple, rippleAnim: null, disc, count, name, status, card: null, cardLabel: null, extras: [] };
   if (memory) {
     // The "card loaded" mark: filled = loaded, hollow = not loaded, hidden = unknown.
-    const card = svg('rect', 'wm-card', { x: pos.x + STATION_R - 4, y: pos.y - STATION_R - 6, width: 12, height: 12, rx: 2, transform: `rotate(45 ${pos.x + STATION_R + 2} ${pos.y - STATION_R})` });
+    const card = svgNode('rect', 'wm-card', { x: pos.x + STATION_R - 4, y: pos.y - STATION_R - 6, width: 12, height: 12, rx: 2, transform: `rotate(45 ${pos.x + STATION_R + 2} ${pos.y - STATION_R})` });
     // Said in words too, never by the mark's fill alone.
-    const cardLabel = svg('text', 'wm-card__label', { x: pos.x + STATION_R + CARD_LABEL_DX, y: pos.y - STATION_R + CARD_LABEL_DY });
+    const cardLabel = svgNode('text', 'wm-card__label', { x: pos.x + STATION_R + CARD_LABEL_DX, y: pos.y - STATION_R + CARD_LABEL_DY });
     g.append(card, cardLabel);
     parts.card = card;
     parts.cardLabel = cardLabel;
@@ -334,25 +351,27 @@ function buildStation(pos) {
   return parts;
 }
 
-function buildMap() {
-  const root = svg('svg', 'wm-map', { viewBox: `0 0 ${VIEW.w} ${VIEW.h}`, preserveAspectRatio: 'xMidYMid meet', role: 'group' });
-  const spokes = svg('g', 'wm-spokes');
-  const packets = svg('g', 'wm-packets', { 'aria-hidden': 'true' });
-  const stationLayer = svg('g', 'wm-stations');
+function buildMap(onPickSatellite) {
+  const root = svgNode('svg', 'wm-map', { viewBox: `0 0 ${VIEW.w} ${VIEW.h}`, preserveAspectRatio: 'xMidYMid meet', role: 'group' });
+  const spokes = svgNode('g', 'wm-spokes');
+  const packetLayer = svgNode('g', 'wm-packets', { 'aria-hidden': 'true' });
+  const satLayer = svgNode('g', 'wm-sats');
+  const stationLayer = svgNode('g', 'wm-stations');
   const core = buildCore();
   const items = new Map();
-  for (const pos of stationLayout(STATIONS)) {
-    const s = spokeOf(CENTER, pos, RING_R + SPOKE_GAP_CORE, STATION_R + SPOKE_GAP_STATION);
-    const spoke = svg('line', 'wm-spoke', s);
-    const packet = svg('circle', `wm-packet is-${pos.id}`, { cx: 0, cy: 0, r: 5 });
+  const positions = stationLayout(STATIONS);
+  for (const pos of positions) {
+    const seg = spokeOf(CENTER, pos, RING_R + SPOKE_GAP_CORE, STATION_R + SPOKE_GAP_STATION);
+    const spoke = svgNode('line', 'wm-spoke', seg);
     spokes.append(spoke);
-    packets.append(packet);
     const station = buildStation(pos);
     stationLayer.append(station.g);
-    items.set(pos.id, { ...station, spoke, packet, seg: s, anim: null });
+    items.set(pos.id, { ...station, spoke, seg });
   }
-  root.append(spokes, packets, core.g, stationLayer);
-  return { root, core, items };
+  const pool = createPacketPool(packetLayer);
+  const sats = createSatelliteLayer(satLayer, positions, { center: CENTER, view: VIEW, stationR: STATION_R }, onPickSatellite);
+  root.append(spokes, packetLayer, satLayer, core.g, stationLayer);
+  return { root, core, items, pool, sats };
 }
 
 // ---- the tab -------------------------------------------------------------------
@@ -369,32 +388,13 @@ function motionNow() {
   return travelAllowed(reduced, document.documentElement.dataset.motion);
 }
 
-/** One dot along a spoke: out = core -> station (a call started), back = station -> core. */
-function sendPacket(item, outward, failed) {
-  const ms = tokenMs('--dur-normal');
-  if (!ms || typeof item.packet.animate !== 'function') return;
-  const { x1, y1, x2, y2 } = item.seg;
-  const [from, to] = outward ? [[x1, y1], [x2, y2]] : [[x2, y2], [x1, y1]];
-  if (item.anim) item.anim.cancel();
-  item.packet.classList.toggle('is-failed', !!failed);
-  item.anim = item.packet.animate(
-    [
-      { transform: `translate(${from[0]}px, ${from[1]}px)`, opacity: 0 },
-      { opacity: 1, offset: 0.15 },
-      { opacity: 1, offset: 0.8 },
-      { transform: `translate(${to[0]}px, ${to[1]}px)`, opacity: 0 },
-    ],
-    outward
-      ? { duration: ms, easing: tokenEase('--ease-smooth') }
-      // The return reads as the call settling: shorter, like any exit.
-      : { duration: Math.round(ms * EXIT_RATIO), easing: tokenEase('--ease-sharp') },
-  );
-}
+const clockNow = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
 
 /**
  * The Sessions tab. Subscribes at once, so the counts start with the app.
  * @param {{bridge?: object, getActiveSessionId?: () => (string|null)}} deps
- *   bridge: window.lunacore (onTools/onMcp/onContext/onTurnEnd/onSessions/onRestarted)
+ *   bridge: window.lunacore (onTools/onMcp/onContext/onTurnEnd/onSessions/onRestarted,
+ *   getSessions, subscribeSessionProcs)
  */
 export function createSessionsTab(deps = {}) {
   const bridge = deps.bridge && typeof deps.bridge === 'object' ? deps.bridge : {};
@@ -406,6 +406,16 @@ export function createSessionsTab(deps = {}) {
   let lastId = null;
   let lastTab = null;
   let seededLabels = false;
+  // The switcher's choice: '' follows the active tab, a session id pins the map to it.
+  let pinned = '';
+  // Afterglow heat per station of the session shown, and when it last decayed.
+  const heat = new Map();
+  let heatAt = 0;
+  let fxTimer = 0;
+  let fxPace = 0;
+  // OS processes under each tab (src/sessionProcs.js), only while the tab shows.
+  let unsubProcs = null;
+  const procs = new Map();
 
   const renderSoon = () => {
     if (shown && dom && !frame) frame = requestAnimationFrame(render);
@@ -415,6 +425,8 @@ export function createSessionsTab(deps = {}) {
   // onRestarted (preload.js) return no unsubscribe. While the tab is hidden
   // they only fold events into the model - no DOM work, frame or timer.
   // liveMap.js never remounts a tab, so unmount() leaves them in place.
+  // The process snapshot is the exception: it costs a process list per
+  // poll in main, so it is taken on show and given back on hide.
   const sub = subscribe(bridge, renderSoon, { getActiveSessionId: getActive });
 
   if (typeof bridge.onSessions === 'function') {
@@ -426,6 +438,8 @@ export function createSessionsTab(deps = {}) {
       applyCardFlags(list);
       const live = new Set(list.map((m) => m && m.id).filter(Boolean));
       for (const id of sub.getState().tabs.keys()) if (!live.has(id)) sub.dispatch({ channel: 'tab:closed', payload: { sessionId: id } });
+      // A pinned tab that closed: back to following the active one.
+      if (pinned && !live.has(pinned)) pinned = '';
       if (payload && typeof payload.activeSessionId === 'string') sub.dispatch({ channel: 'tab:active', payload: { sessionId: payload.activeSessionId } });
       renderSoon();
     });
@@ -436,14 +450,15 @@ export function createSessionsTab(deps = {}) {
     });
   }
   memoryListeners.add((sessionId) => {
-    if (sessionId === sub.getState().activeTab) renderSoon();
+    if (sessionId === viewedId()) renderSoon();
   });
 
   function rememberLabels(list) {
     for (const m of list) {
       if (!m || typeof m.id !== 'string') continue;
       const label = [m.folder, m.profileLabel, m.id].find((v) => typeof v === 'string' && v);
-      labels.set(m.id, label);
+      // A folder name is user text: one line, no bidi tricks in the switcher.
+      labels.set(m.id, cleanText(label) || m.id);
     }
   }
 
@@ -466,22 +481,89 @@ export function createSessionsTab(deps = {}) {
     }
   }
 
-  function build(panel) {
+  /** The session on the map: the pinned one while it is open, else the active tab. */
+  function viewedId() {
+    return resolveViewed(pinned, sub.getState().activeTab, labels);
+  }
+
+  // --- process snapshot (shown only) ------------------------------------------
+
+  function onProcSnapshot(payload) {
+    if (!payload || typeof payload !== 'object' || !payload.sessions || typeof payload.sessions !== 'object') return;
+    // Never later than now: a time in the future would keep an exited process from ever fading.
+    const at = Number.isFinite(payload.at) ? Math.min(payload.at, Date.now()) : Date.now();
+    const listed = new Set(snapshotSessionIds(payload));
+    for (const id of new Set([...listed, ...procs.keys()])) {
+      // A tab neither listed nor open is forgotten; one only missing from this snapshot fades out.
+      if (!listed.has(id) && !labels.has(id)) procs.delete(id);
+      else procs.set(id, mergeProcs(procs.get(id) || null, listed.has(id) ? procListOf(payload, id) : [], at));
+    }
+    renderSoon();
+  }
+
+  function startProcs() {
+    if (unsubProcs || typeof bridge.subscribeSessionProcs !== 'function') return;
+    const unsub = bridge.subscribeSessionProcs(onProcSnapshot);
+    unsubProcs = typeof unsub === 'function' ? unsub : null;
+  }
+
+  function stopProcs() {
+    const unsub = unsubProcs;
+    unsubProcs = null;
+    // What was alive is unknown from here on; the next show starts from a fresh snapshot.
+    procs.clear();
+    if (unsub) unsub();
+  }
+
+  // --- picking -----------------------------------------------------------------
+
+  function onPickSatellite(stationId, item) {
+    if (!dom) return;
+    if (item.kind === 'file') {
+      openDiffModal(item.key, viewedId()).catch((err) => console.error('[livemap] sessions map: opening the diff failed:', err));
+      return;
+    }
+    dom.panel.inspect({ type: 'satellite', station: stationId, key: item.key }, document.activeElement);
+    renderSoon();
+  }
+
+  const pickStation = (e) => {
+    if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+    const g = e.target && typeof e.target.closest === 'function' ? e.target.closest('.wm-station') : null;
+    const id = g ? g.getAttribute('data-station') : null;
+    if (!dom || !STATIONS.includes(id)) return;
+    e.preventDefault();
+    dom.panel.inspect({ type: 'station', station: id }, g);
+    renderSoon();
+  };
+
+  function build(host) {
+    const panel = createWorkmapPanel({
+      onSelect: (value) => {
+        pinned = typeof value === 'string' && labels.has(value) ? value : '';
+        renderSoon();
+      },
+    });
     const head = el('div', 'wm-head');
-    const tabName = el('span', 'wm-head__tab');
     const summary = el('span', 'wm-head__sum');
     const turns = el('span', 'wm-head__turns');
-    head.append(tabName, summary, turns);
+    head.append(panel.switcher, summary, turns);
+    const body = el('div', 'wm-body');
     const stage = el('div', 'lm-stage wm-stage');
-    const map = buildMap();
+    const map = buildMap(onPickSatellite);
     const message = el('div', 'lm-stage__msg');
     message.setAttribute('role', 'status');
     stage.append(map.root, message);
+    body.append(stage, panel.side);
     const gap = el('p', 'wm-gap');
-    panel.classList.add('wm-panel');
-    panel.replaceChildren(head, stage, gap);
-    dom = { head, tabName, summary, turns, message, gap, ...map };
+    host.classList.add('wm-panel');
+    host.replaceChildren(head, body, gap);
+    map.root.addEventListener('click', pickStation);
+    map.root.addEventListener('keydown', pickStation);
+    dom = { head, summary, turns, message, gap, panel, ...map };
   }
+
+  // --- painting ------------------------------------------------------------------
 
   function paintCore(tab) {
     const { core } = dom;
@@ -510,9 +592,11 @@ export function createSessionsTab(deps = {}) {
     return { parts, cardText };
   }
 
-  function paintStation(id, item, st, info, moved, travel, calls) {
+  function paintStation(id, item, st, info, calls) {
     const name = t(`lm.wm.station.${id}`);
     const extras = item.card ? memoryExtras(item, calls, info) : { parts: [], cardText: '' };
+    // The inspector lists the same extras.
+    item.extras = extras.cardText ? [...extras.parts, extras.cardText] : extras.parts;
     const parts = [...extras.parts];
     if (st.inFlight > 0) parts.push(t('lm.wm.running', { n: st.inFlight }));
     if (st.errors > 0) parts.push(t('lm.wm.failed', { n: st.errors }));
@@ -527,22 +611,86 @@ export function createSessionsTab(deps = {}) {
     setAttr(item.status, 'class', `wm-station__status${st.errors > 0 ? ' is-bad' : ''}`);
     setAttr(item.spoke, 'class', `wm-spoke${st.inFlight > 0 ? ' is-busy' : ''}`);
     const aria = t('lm.wm.stationAria', { name, calls: st.total, running: st.inFlight, failed: st.errors });
-    setAttr(item.g, 'aria-label', [aria, ...extras.parts, extras.cardText].filter(Boolean).join(', '));
+    setAttr(item.g, 'aria-label', [aria, ...extras.parts, extras.cardText, t('lm.wm.inspectHint')].filter(Boolean).join(', '));
     const lastError = st.lastError && st.lastError.message ? t('lm.wm.lastError', { msg: truncate(st.lastError.message, ERROR_TITLE_CHARS) }) : '';
     setText(item.title, [name, extras.cardText, lastError].filter(Boolean).join('\n'));
-    if (!travel) return;
-    if (moved.started > 0) sendPacket(item, true, false);
-    else if (moved.ended > 0) sendPacket(item, false, moved.failed > 0);
   }
 
-  function paintHead(activeId, tab) {
+  /** Stations, their afterglow, and (motion allowed) their bursts. True while any station still glows. */
+  function paintStations(tab, info, deltas, travel) {
+    const now = clockNow();
+    const dt = heatAt ? now - heatAt : 0;
+    heatAt = now;
+    let warm = false;
+    for (const id of STATIONS) {
+      const item = dom.items.get(id);
+      paintStation(id, item, tab.stations[id], info, tab.memoryCalls);
+      const h = stepHeat(heat.get(id) || 0, dt, deltas[id].started);
+      heat.set(id, h);
+      warm = warm || h > 0;
+      const glow = String(glowLevel(h));
+      if (item.glow.style.opacity !== glow) item.glow.style.opacity = glow;
+      if (travel) playBurst(dom.pool, item, id, deltas[id]);
+    }
+    return warm;
+  }
+
+  /** Every station's satellites. True while any is shown (they fade with time). */
+  function paintSatellites(id, tab, now, travel) {
+    const seen = id ? procs.get(id) || null : null;
+    let any = false;
+    for (const station of STATIONS) {
+      const list = selectSatellites(satelliteItemsFor(station, tab.items, seen), now);
+      dom.sats.paint(station, list, travel);
+      any = any || list.length > 0;
+    }
+    return any;
+  }
+
+  function switcherOptions(activeId) {
+    const activeName = activeId ? labels.get(activeId) || activeId : '';
+    const follow = { value: '', label: activeName ? t('lm.wm.followActive', { name: truncate(activeName, SWITCH_LABEL_CHARS) }) : t('lm.wm.followNone') };
+    return [follow, ...[...labels].map(([value, label]) => ({ value, label: truncate(label, SWITCH_LABEL_CHARS) }))];
+  }
+
+  /** The switcher, the ticker and, when open, the inspector. */
+  function paintSide(id, tab, activeId, now) {
+    const { panel } = dom;
+    panel.paintSwitcher(switcherOptions(activeId), pinned);
+    panel.paintTicker(tickerRows(tab.recent));
+    const target = panel.target();
+    if (!target) return;
+    if (target.type === 'station') {
+      const item = dom.items.get(target.station);
+      panel.paintInspector(stationView(t(`lm.wm.station.${target.station}`), tab.stations[target.station], item.extras, tab.recent, target.station, dom.sats.shown(target.station)));
+      return;
+    }
+    const seen = id ? procs.get(id) || null : null;
+    const found = satelliteItemsFor(target.station, tab.items, seen).find((it) => it.key === target.key) || null;
+    panel.paintInspector(satelliteView(found, now));
+  }
+
+  function paintHead(id, tab) {
     const totals = STATIONS.reduce(
-      (acc, id) => ({ calls: acc.calls + tab.stations[id].total, running: acc.running + tab.stations[id].inFlight, failed: acc.failed + tab.stations[id].errors }),
+      (acc, s) => ({ calls: acc.calls + tab.stations[s].total, running: acc.running + tab.stations[s].inFlight, failed: acc.failed + tab.stations[s].errors }),
       { calls: 0, running: 0, failed: 0 },
     );
-    setText(dom.tabName, activeId ? t('lm.wm.following', { name: labels.get(activeId) || activeId }) : '');
-    setText(dom.summary, activeId ? t('lm.wm.summary', totals) : '');
-    setText(dom.turns, activeId && tab.turns ? t('lm.wm.turns', { n: tab.turns }) : '');
+    setText(dom.summary, id ? t('lm.wm.summary', totals) : '');
+    setText(dom.turns, id && tab.turns ? t('lm.wm.turns', { n: tab.turns }) : '');
+  }
+
+  /** Repaints again soon while something decays on its own: a glow fast, a fading satellite slowly. */
+  function scheduleFx(warm, satellites) {
+    if (!shown || (!warm && !satellites)) return;
+    const pace = warm ? GLOW_TICK_MS : SATELLITE_TICK_MS;
+    // A glow that just lit must not wait out the slow satellite tick already pending.
+    if (fxTimer && pace >= fxPace) return;
+    if (fxTimer) clearTimeout(fxTimer);
+    fxPace = pace;
+    fxTimer = setTimeout(() => {
+      fxTimer = 0;
+      renderSoon();
+    }, pace);
   }
 
   function render() {
@@ -550,32 +698,43 @@ export function createSessionsTab(deps = {}) {
     if (!dom || !shown) return;
     sub.prune();
     const state = sub.getState();
-    const activeId = state.activeTab;
-    const data = activeTabState(state);
+    const id = viewedId();
+    const data = tabStateOf(state, id);
     const tab = data || IDLE_TAB;
-    const deltas = activeId !== null && activeId === lastId ? callDeltas(lastTab, tab) : callDeltas(null, tab);
-    lastId = activeId;
+    const same = id !== null && id === lastId;
+    const deltas = same ? callDeltas(lastTab, tab) : callDeltas(null, tab);
+    // Another session on the map: its glow starts cold, like its packets, and
+    // an inspector open on the last one closes (focus stays where it is).
+    if (!same) heat.clear();
+    if (!same && lastId !== null) dom.panel.close({ keepFocus: true });
+    lastId = id;
     lastTab = tab;
     const travel = motionNow();
-    const info = activeId ? memoryStationInfo(activeId) : null;
-    paintHead(activeId, tab);
+    const now = Date.now();
+    paintHead(id, tab);
     paintCore(tab);
-    for (const id of STATIONS) paintStation(id, dom.items.get(id), tab.stations[id], info, deltas[id], travel, tab.memoryCalls);
+    const warm = paintStations(tab, id ? memoryStationInfo(id) : null, deltas, travel);
+    const satellites = paintSatellites(id, tab, now, travel);
+    paintSide(id, tab, state.activeTab, now);
     let msg = '';
-    if (!activeId) msg = t('lm.wm.noTab');
+    if (!id) msg = t('lm.wm.noTab');
     else if (!data) msg = t('lm.wm.waiting');
     setText(dom.message, msg);
     dom.message.hidden = !msg;
     setAttr(dom.root, 'aria-label', t('lm.wm.label'));
     setText(dom.gap, t('lm.wm.gap'));
+    scheduleFx(warm, satellites);
   }
 
-  function stopPackets() {
+  /** Everything that moves stops: packets, ripples, sprouts, and the repaint tick. */
+  function stopMotion() {
+    if (fxTimer) clearTimeout(fxTimer);
+    fxTimer = 0;
+    fxPace = 0;
     if (!dom) return;
-    for (const item of dom.items.values()) {
-      if (item.anim) item.anim.cancel();
-      item.anim = null;
-    }
+    dom.pool.cancelAll();
+    dom.sats.stop();
+    for (const item of dom.items.values()) stopRipple(item);
   }
 
   // --- the tab contract (liveMap.js registerTab) ------------------------------
@@ -584,17 +743,21 @@ export function createSessionsTab(deps = {}) {
       build(panel);
     },
     unmount() {
-      stopPackets();
+      stopMotion();
+      stopProcs();
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
       dom = null;
     },
     onShow() {
       shown = true;
-      // Whatever happened while hidden is already in the counts; nothing travels for it.
+      // Whatever happened while hidden is already in the counts; nothing travels or glows for it.
       lastTab = null;
+      heat.clear();
+      heatAt = 0;
       const active = getActive();
       if (typeof active === 'string' && active) sub.dispatch({ channel: 'tab:active', payload: { sessionId: active } });
+      startProcs();
       seedLabels();
       renderSoon();
     },
@@ -602,7 +765,14 @@ export function createSessionsTab(deps = {}) {
       shown = false;
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
-      stopPackets();
+      stopMotion();
+      stopProcs();
+    },
+    /** Esc closes what this tab opened on top first: the file diff, then the inspector. */
+    onKey(e) {
+      if (!e || e.key !== 'Escape') return false;
+      if (closeDiffModal()) return true;
+      return dom ? dom.panel.close() : false;
     },
     onLang() {
       renderSoon();

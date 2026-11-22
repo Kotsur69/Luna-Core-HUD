@@ -20,6 +20,12 @@
 //   tab:closed { sessionId }   forget that tab
 //   tab:reset  { sessionId }   the session restarted; drop what was in flight
 //
+// Besides the counts, each tab keeps what the map's ticker and satellites
+// show (slice 2 of #agymap): `recent` (the last calls with their outcome) and
+// `items` (per station, the files / subagents / MCP servers its calls
+// touched). That bookkeeping, and the cleaning of every feed string it keeps,
+// lives in workmapactivity.js.
+//
 // Reducer contract: applyEvent(state, event) never mutates `state`. It returns
 // a NEW state object when anything changed and the SAME reference when the
 // event was ignored, so a subscriber can skip a repaint with `===`. Malformed
@@ -37,6 +43,14 @@
 // ============================================================================
 
 'use strict';
+
+import {
+  addRecent, settleRecent, dropRunning, touchItem, endItem,
+  toolCallInfo, mcpCallInfo, toolCallLines, noCallLines,
+} from './workmapactivity.js';
+
+// The bookkeeping's limits and its text cleaning, for callers of this module.
+export { MAX_RECENT, MAX_ITEMS_PER_STATION, MAX_DETAIL_CHARS, cleanText } from './workmapactivity.js';
 
 /** Station ids, in the order the map lays them out around the model. */
 export const STATIONS = Object.freeze(['files', 'shell', 'network', 'memory', 'agents', 'skills', 'mcp', 'other']);
@@ -177,6 +191,7 @@ export function stationForTile(tile) {
  * @property {string} callId the tool_use id
  * @property {string} station one of STATIONS
  * @property {number|null} startedAt epoch ms from the transcript, else the event's `now`
+ * @property {string|null} item key of the StationItem this call touches, if any
  */
 
 /**
@@ -192,6 +207,8 @@ export function stationForTile(tile) {
  * @property {number|null} lastTurnEndedAt
  * @property {{search:number, get:number, verify:number, propose:number}} memoryCalls
  *   Luna Core Memory tool calls started in this tab, one count per tool (MEMORY_CALLS)
+ * @property {import('./workmapactivity.js').RecentCall[]} recent the last MAX_RECENT calls, oldest first
+ * @property {Record<string, import('./workmapactivity.js').StationItem[]>} items per station, least recently touched first
  * @property {string[]} endedIds internal: recently finished call ids, oldest
  *   first, capped at MAX_ENDED_IDS. A view should not need it.
  */
@@ -216,7 +233,11 @@ function emptyStation() {
 /** @returns {TabState} a fresh, idle tab */
 export function createTabState() {
   const stations = {};
-  for (const id of STATIONS) stations[id] = emptyStation();
+  const items = {};
+  for (const id of STATIONS) {
+    stations[id] = emptyStation();
+    items[id] = [];
+  }
   return {
     stations,
     pulses: [],
@@ -228,6 +249,8 @@ export function createTabState() {
     turns: 0,
     lastTurnEndedAt: null,
     memoryCalls: { search: 0, get: 0, verify: 0, propose: 0 },
+    recent: [],
+    items,
     endedIds: [],
   };
 }
@@ -245,6 +268,17 @@ export function createState() {
 export function activeTabState(state) {
   if (!isState(state) || state.activeTab === null) return null;
   return state.tabs.get(state.activeTab) || null;
+}
+
+/**
+ * Any tab by session id (the map's session switcher), or null.
+ * @param {WorkMapState} state
+ * @param {unknown} sessionId
+ * @returns {TabState|null}
+ */
+export function tabStateOf(state, sessionId) {
+  if (!isState(state) || typeof sessionId !== 'string' || !sessionId) return null;
+  return state.tabs.get(sessionId) || null;
 }
 
 // ---- Helpers ---------------------------------------------------------------
@@ -302,7 +336,7 @@ function withEnded(endedIds, ids) {
   return merged.length > MAX_ENDED_IDS ? merged.slice(merged.length - MAX_ENDED_IDS) : merged;
 }
 
-function startCall(tab, callId, station, startedAt) {
+function startCall(tab, callId, station, startedAt, info) {
   // A re-read of the same line: either still in flight, or already finished
   // (a re-scan after a watcher restart can deliver the start again).
   if (tab.pulses.some((p) => p.callId === callId)) return tab;
@@ -310,10 +344,21 @@ function startCall(tab, callId, station, startedAt) {
   if (tab.pulses.length >= MAX_PULSES) return tab;
   const st = tab.stations[station];
   const next = withStation(tab, station, { inFlight: st.inFlight + 1, total: st.total + 1 });
-  return { ...next, pulses: [...tab.pulses, { callId, station, startedAt }] };
+  return {
+    ...next,
+    pulses: [...tab.pulses, { callId, station, startedAt, item: info.item ? info.item.key : null }],
+    recent: addRecent(tab.recent, callId, station, info, startedAt),
+    items: info.item ? touchItem(tab.items, station, info.item, startedAt) : tab.items,
+  };
 }
 
-function endCall(tab, callId, failure) {
+/**
+ * @param {TabState} tab
+ * @param {string} callId
+ * @param {{at:number|null, message:string}|null} failure
+ * @param {{added:number, removed:number, at:number|null}|null} outcome null = ended with no result
+ */
+function endCall(tab, callId, failure, outcome) {
   const pulse = tab.pulses.find((p) => p.callId === callId);
   if (!pulse) return tab; // orphan: started before we attached, or never mapped
   const st = tab.stations[pulse.station];
@@ -323,10 +368,14 @@ function endCall(tab, callId, failure) {
     patch.lastError = { callId, at: failure.at, message: failure.message };
   }
   const next = withStation(tab, pulse.station, patch);
+  const lines = outcome ? { added: outcome.added, removed: outcome.removed } : { added: 0, removed: 0 };
+  const status = failure ? 'failed' : outcome ? 'ok' : 'dropped';
   return {
     ...next,
     pulses: tab.pulses.filter((p) => p !== pulse),
     endedIds: withEnded(tab.endedIds, [callId]),
+    recent: settleRecent(tab.recent, callId, status, lines),
+    items: pulse.item ? endItem(tab.items, pulse.station, pulse.item, lines, !!failure, outcome ? outcome.at : null) : tab.items,
   };
 }
 
@@ -337,27 +386,37 @@ function countMemoryCall(tab, kind) {
 }
 
 /**
+ * @typedef {object} CallFeed how one feed's events read
+ * @property {(ev: object) => string} stationOf
+ * @property {(ev: object, station: string) => import('./workmapactivity.js').CallInfo} infoOf
+ *   what a start says about its call
+ * @property {(ev: object) => ({message:string}|null)} failureOf
+ * @property {(ev: object) => {added:number, removed:number}} linesOf what an end changed
+ * @property {(ev: object) => (string|null)} memoryKindOf which memory tool a start is, if any
+ */
+
+/**
  * Folds a list of lifecycle events into one tab.
  * @param {TabState} tab
  * @param {unknown[]} events
- * @param {(ev: object) => string} stationOf
- * @param {(ev: object) => ({message:string}|null)} failureOf
+ * @param {CallFeed} feed
  * @param {number|null} now
- * @param {(ev: object) => (string|null)} memoryKindOf which memory tool a start is, if any
  * @returns {TabState}
  */
-function foldCalls(tab, events, stationOf, failureOf, now, memoryKindOf) {
+function foldCalls(tab, events, feed, now) {
   let next = tab;
   for (const ev of events) {
     if (!isObject(ev) || typeof ev.id !== 'string' || !ev.id) continue;
     const at = finiteOrNull(ev.at);
     if (ev.phase === 'start') {
-      const started = startCall(next, ev.id, stationOf(ev), at !== null ? at : now);
+      const station = feed.stationOf(ev);
+      const started = startCall(next, ev.id, station, at !== null ? at : now, feed.infoOf(ev, station));
       // Counted only when the start was new: a re-delivered one changes nothing.
-      next = started === next ? next : countMemoryCall(started, memoryKindOf(ev));
+      next = started === next ? next : countMemoryCall(started, feed.memoryKindOf(ev));
     } else if (ev.phase === 'end') {
-      const failure = failureOf(ev);
-      next = endCall(next, ev.id, failure ? { at, message: failure.message } : null);
+      const failure = feed.failureOf(ev);
+      const outcome = { ...feed.linesOf(ev), at: at !== null ? at : now };
+      next = endCall(next, ev.id, failure ? { at, message: failure.message } : null, outcome);
     }
   }
   return next;
@@ -391,11 +450,14 @@ function mcpMemoryKind(ev) {
 /** Memory tools are MCP calls: metrics:tools never carries one, so it never counts one. */
 const noMemoryKind = () => null;
 
+const TOOL_FEED = Object.freeze({ stationOf: toolStation, infoOf: toolCallInfo, failureOf: toolFailure, linesOf: toolCallLines, memoryKindOf: noMemoryKind });
+const MCP_FEED = Object.freeze({ stationOf: mcpStation, infoOf: mcpCallInfo, failureOf: mcpFailure, linesOf: noCallLines, memoryKindOf: mcpMemoryKind });
+
 // ---- Per-channel reducers ----------------------------------------------------
 
-function reduceCalls(tab, payload, stationOf, failureOf, now, memoryKindOf) {
+function reduceCalls(tab, payload, feed, now) {
   if (!Array.isArray(payload.events) || payload.events.length === 0) return tab;
-  return foldCalls(tab, payload.events, stationOf, failureOf, now, memoryKindOf);
+  return foldCalls(tab, payload.events, feed, now);
 }
 
 function reduceContext(tab, payload) {
@@ -422,7 +484,7 @@ function settleAll(tab) {
   for (const id of STATIONS) stations[id] = { ...tab.stations[id], inFlight: 0 };
   // Cleared ids count as finished: a late re-delivered start must not re-open them.
   const endedIds = withEnded(tab.endedIds, tab.pulses.map((p) => p.callId));
-  return { ...tab, stations, pulses: [], endedIds };
+  return { ...tab, stations, pulses: [], endedIds, recent: dropRunning(tab.recent) };
 }
 
 function reduceTurnEnd(tab, payload) {
@@ -435,8 +497,8 @@ function reduceTurnEnd(tab, payload) {
 }
 
 const TAB_REDUCERS = new Map([
-  ['metrics:tools', (tab, payload, now) => reduceCalls(tab, payload, toolStation, toolFailure, now, noMemoryKind)],
-  ['metrics:mcp', (tab, payload, now) => reduceCalls(tab, payload, mcpStation, mcpFailure, now, mcpMemoryKind)],
+  ['metrics:tools', (tab, payload, now) => reduceCalls(tab, payload, TOOL_FEED, now)],
+  ['metrics:mcp', (tab, payload, now) => reduceCalls(tab, payload, MCP_FEED, now)],
   ['metrics:context', (tab, payload) => reduceContext(tab, payload)],
   ['metrics:turnend', (tab, payload) => reduceTurnEnd(tab, payload)],
   ['tab:reset', (tab) => settleAll(tab)],
@@ -501,7 +563,7 @@ export function pruneStale(state, now, maxAgeMs = DEFAULT_STALE_MS) {
     const stale = tab.pulses.filter((p) => p.startedAt !== null && now - p.startedAt > maxAgeMs);
     if (stale.length === 0) continue;
     let next = tab;
-    for (const p of stale) next = endCall(next, p.callId, null);
+    for (const p of stale) next = endCall(next, p.callId, null, null);
     if (!tabs) tabs = new Map(state.tabs);
     tabs.set(key, next);
   }

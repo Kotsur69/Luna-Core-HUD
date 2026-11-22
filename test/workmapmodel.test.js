@@ -107,7 +107,7 @@ test('a start lights the station and adds a pulse', () => {
   const t = tab(s);
   assert.equal(t.stations.shell.inFlight, 1);
   assert.equal(t.stations.shell.total, 1);
-  assert.deepEqual(t.pulses, [{ callId: 't1', station: 'shell', startedAt: 1234 }]);
+  assert.deepEqual(t.pulses, [{ callId: 't1', station: 'shell', startedAt: 1234, item: null }]);
 });
 
 test('the matching end settles the station and removes the pulse; total stays', () => {
@@ -490,4 +490,143 @@ test('subscribe.prune ages out stuck calls on the subscription clock', () => {
 test('subscribe tolerates a missing or partial bridge', () => {
   assert.doesNotThrow(() => subscribe(undefined, () => {}));
   assert.doesNotThrow(() => subscribe({ onTools: 'not a function' }, null).dispatch(tools([start('a', 'Read')])));
+});
+
+// ---- ticker lines and station items (slice 2 of #agymap) ---------------------------
+
+const {
+  MAX_RECENT,
+  MAX_ITEMS_PER_STATION,
+  MAX_DETAIL_CHARS,
+  cleanText,
+  tabStateOf,
+} = require('../src/renderer/modules/workmapmodel.js');
+
+const fileStart = (id, tile, file, at = 1000) => ({ phase: 'start', id, tile, at, file });
+const fileEnd = (id, tile, file, added, removed, at = 1500) => ({ phase: 'end', id, tile, at, file, added, removed });
+
+test('a start adds a running ticker line with its tool and sanitized detail', () => {
+  const t = tab(applyEvent(createState(), tools([{ phase: 'start', id: 's1', tile: 'Shell', at: 1000, file: '', detail: 'npm test' }])));
+  assert.equal(t.recent.length, 1);
+  assert.deepEqual(t.recent[0], { callId: 's1', station: 'shell', tool: 'Shell', detail: 'npm test', file: '', added: 0, removed: 0, status: 'running', at: 1000 });
+});
+
+test('the end settles its ticker line as ok with its +/- lines', () => {
+  const s = fold([tools([fileStart('e1', 'Edit', 'C:/r/src/a.js')]), tools([fileEnd('e1', 'Edit', 'C:/r/src/a.js', 12, 3)])]);
+  const line = tab(s).recent[0];
+  assert.equal(line.status, 'ok');
+  assert.equal(line.added, 12);
+  assert.equal(line.removed, 3);
+  assert.equal(line.file, 'C:/r/src/a.js');
+});
+
+test('a failed MCP call reads failed; a turn end and a stale prune read dropped', () => {
+  let s = applyEvent(createState(), mcp([{ phase: 'start', id: 'm1', server: 'supabase', tool: 'execute_sql', at: 1 }]));
+  s = applyEvent(s, mcp([{ phase: 'end', id: 'm1', server: 'supabase', tool: 'execute_sql', at: 2, ok: false, content: 'boom' }]));
+  assert.equal(tab(s).recent[0].status, 'failed');
+  s = applyEvent(s, tools([start('r1', 'Read')]));
+  s = applyEvent(s, { channel: 'metrics:turnend', payload: { sessionId: S, turn: { endedAt: 3 } } });
+  assert.equal(tab(s).recent[1].status, 'dropped');
+  s = applyEvent(s, tools([start('r2', 'Read', 10)]));
+  s = pruneStale(s, 10 + 60000, 1000);
+  assert.equal(tab(s).recent[2].status, 'dropped');
+});
+
+test('the ticker keeps the newest MAX_RECENT calls', () => {
+  const events = [];
+  for (let i = 0; i < MAX_RECENT + 5; i += 1) events.push(start(`c${i}`, 'Grep', i), end(`c${i}`, 'Grep', i + 1));
+  const t = tab(applyEvent(createState(), tools(events)));
+  assert.equal(t.recent.length, MAX_RECENT);
+  assert.equal(t.recent[0].callId, 'c5');
+  assert.equal(t.recent[MAX_RECENT - 1].callId, `c${MAX_RECENT + 4}`);
+});
+
+test('MCP calls name their server; the call input is never kept', () => {
+  const t = tab(applyEvent(createState(), mcp([{ phase: 'start', id: 'm1', server: 'supabase', tool: 'execute_sql', input: { query: 'select secret' }, at: 1 }])));
+  assert.equal(t.recent[0].tool, 'execute_sql');
+  assert.equal(t.recent[0].detail, 'supabase');
+  assert.doesNotMatch(JSON.stringify(t), /select secret/);
+});
+
+test('file tools leave one item per distinct file on Files, most recent last, with their lines', () => {
+  const s = fold([
+    tools([fileStart('a1', 'Read', 'C:/r/a.js', 1), fileEnd('a1', 'Read', 'C:/r/a.js', 0, 0, 2)]),
+    tools([fileStart('b1', 'Edit', 'C:/r/b.js', 3), fileEnd('b1', 'Edit', 'C:/r/b.js', 4, 1, 4)]),
+    tools([fileStart('a2', 'Edit', 'C:/r/a.js', 5), fileEnd('a2', 'Edit', 'C:/r/a.js', 2, 2, 6)]),
+  ]);
+  const files = tab(s).items.files;
+  assert.deepEqual(files.map((it) => it.key), ['C:/r/b.js', 'C:/r/a.js']);
+  const a = files[1];
+  assert.equal(a.kind, 'file');
+  assert.equal(a.calls, 2);
+  assert.equal(a.added, 2);
+  assert.equal(a.removed, 2);
+  assert.equal(a.firstAt, 1);
+  assert.equal(a.lastAt, 6);
+});
+
+test('a Grep has no file item; a Task with an agent type is a subagent item', () => {
+  const s = fold([
+    tools([{ phase: 'start', id: 'g', tile: 'Grep', at: 1, file: '', detail: 'TODO' }]),
+    tools([{ phase: 'start', id: 'k', tile: 'Task', at: 2, file: '', detail: 'code-reviewer' }]),
+  ]);
+  const t = tab(s);
+  assert.deepEqual(t.items.files, []);
+  assert.deepEqual(t.items.agents.map((it) => [it.kind, it.label]), [['agent', 'code-reviewer']]);
+});
+
+test('MCP servers are items on their station, never on Memory', () => {
+  const s = fold([
+    mcp([{ phase: 'start', id: 'm1', server: 'supabase', tool: 'list_tables', at: 1 }]),
+    mcp([{ phase: 'start', id: 'm2', server: 'plugin_ecc_chrome-devtools', tool: 'click', at: 2 }]),
+    mcp([{ phase: 'start', id: 'm3', server: 'lunacore', tool: 'memory_search', at: 3 }]),
+  ]);
+  const t = tab(s);
+  assert.deepEqual(t.items.mcp.map((it) => it.key), ['supabase']);
+  assert.deepEqual(t.items.network.map((it) => it.key), ['plugin_ecc_chrome-devtools']);
+  assert.deepEqual(t.items.memory, []);
+});
+
+test('a station remembers at most MAX_ITEMS_PER_STATION items, dropping the least recent', () => {
+  const events = [];
+  for (let i = 0; i < MAX_ITEMS_PER_STATION + 3; i += 1) events.push(fileStart(`f${i}`, 'Read', `C:/r/f${i}.js`, i));
+  const files = tab(applyEvent(createState(), tools(events))).items.files;
+  assert.equal(files.length, MAX_ITEMS_PER_STATION);
+  assert.equal(files[0].key, 'C:/r/f3.js');
+});
+
+test('feed text is cleaned: control, bidi and zero-width characters go, length is capped', () => {
+  assert.equal(cleanText('ls\u202e -la\u0007\nfoo\u200b'), 'ls -la foo');
+  assert.equal(cleanText('x'.repeat(500)).length, MAX_DETAIL_CHARS);
+  assert.equal(cleanText(42), '');
+  assert.equal(cleanText(null), '');
+  const t = tab(applyEvent(createState(), tools([{ phase: 'start', id: 'x', tile: 'Shell', at: 1, file: '', detail: 'rm\u2028-rf' }])));
+  assert.equal(t.recent[0].detail, 'rm -rf');
+});
+
+test('a file path with control characters or of absurd length makes no item', () => {
+  const s = applyEvent(createState(), tools([fileStart('p1', 'Read', 'C:/r/a\u0000.js'), fileStart('p2', 'Read', `C:/${'a'.repeat(2000)}`)]));
+  assert.deepEqual(tab(s).items.files, []);
+  assert.equal(tab(s).stations.files.total, 2);
+});
+
+test('junk +/- counts on an end are read as zero', () => {
+  const s = fold([tools([fileStart('e1', 'Edit', 'C:/r/a.js')]), tools([fileEnd('e1', 'Edit', 'C:/r/a.js', -4, 'nine')])]);
+  assert.equal(tab(s).recent[0].added, 0);
+  assert.equal(tab(s).items.files[0].removed, 0);
+});
+
+test('recording a call never mutates the previous state', () => {
+  const s1 = applyEvent(createState(), tools([fileStart('a', 'Read', 'C:/r/a.js')]));
+  const before = snapshot(s1);
+  applyEvent(s1, tools([fileEnd('a', 'Read', 'C:/r/a.js', 3, 1), fileStart('b', 'Edit', 'C:/r/a.js')]));
+  assert.equal(snapshot(s1), before);
+});
+
+test('tabStateOf reads any tab by id, null for junk or unknown ids', () => {
+  const s = applyEvent(applyEvent(createState(), tools([start('a', 'Read')], 'one')), tools([start('b', 'Read')], 'two'));
+  assert.equal(tabStateOf(s, 'two').stations.files.total, 1);
+  assert.equal(tabStateOf(s, 'three'), null);
+  assert.equal(tabStateOf(s, 42), null);
+  assert.equal(tabStateOf(null, 'one'), null);
 });

@@ -214,14 +214,79 @@ test('every work-map string exists in pl and en, without Polish diacritics', () 
   const enAt = src.indexOf('\n  en: {');
   const pl = src.slice(0, enAt);
   const en = src.slice(enAt);
-  const view = fs.readFileSync(path.join(__dirname, '..', 'src/renderer/modules/workmap.js'), 'utf8');
-  const keys = new Set([...view.matchAll(/'(lm\.wm\.[A-Za-z0-9_.]+)'/g)].map((m) => m[1]));
-  // Built at runtime: one name per station.
+  const views = ['workmap.js', 'workmapPanel.js', 'workmapSatellites.js']
+    .map((f) => fs.readFileSync(path.join(__dirname, '..', 'src/renderer/modules', f), 'utf8'))
+    .join('\n');
+  const keys = new Set([...views.matchAll(/'(lm\.wm\.[A-Za-z0-9_.]+)'/g)].map((m) => m[1]));
+  // Built at runtime: one name per station, per ticker outcome and per satellite kind.
   for (const id of STATIONS) keys.add(`lm.wm.station.${id}`);
-  assert.ok(keys.size >= 20, `found only ${keys.size} keys`);
+  for (const status of ['running', 'ok', 'failed', 'dropped']) keys.add(`lm.wm.status.${status}`);
+  for (const kind of ['file', 'agent', 'mcp', 'process', 'port']) keys.add(`lm.wm.sat.${kind}`);
+  assert.ok(keys.size >= 50, `found only ${keys.size} keys`);
   for (const key of keys) {
     assert.ok(pl.includes(`'${key}':`), `missing pl: ${key}`);
     assert.ok(en.includes(`'${key}':`), `missing en: ${key}`);
   }
   for (const line of pl.split('\n').filter((l) => /^\s*'lm\.wm\./.test(l))) assert.doesNotMatch(line, /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, line);
+});
+
+// --- the tab's lifecycle (no DOM: mount is never called) -------------------------------
+
+function procBridge() {
+  const calls = { subscribed: 0, unsubscribed: 0, callback: null };
+  return {
+    calls,
+    bridge: {
+      subscribeSessionProcs(cb) {
+        calls.subscribed += 1;
+        calls.callback = cb;
+        return () => {
+          calls.unsubscribed += 1;
+        };
+      },
+    },
+  };
+}
+
+test('the process snapshot is subscribed only while the Sessions tab shows', () => {
+  const { bridge, calls } = procBridge();
+  const tab = W.createSessionsTab({ bridge, getActiveSessionId: () => 's1' });
+  assert.equal(calls.subscribed, 0, 'creating the tab polls nothing');
+  tab.onShow();
+  assert.equal(calls.subscribed, 1);
+  tab.onShow();
+  assert.equal(calls.subscribed, 1, 'a second show does not subscribe twice');
+  tab.onHide();
+  assert.equal(calls.unsubscribed, 1);
+  tab.onHide();
+  assert.equal(calls.unsubscribed, 1, 'a second hide does not unsubscribe twice');
+  tab.onShow();
+  assert.equal(calls.subscribed, 2);
+  tab.unmount();
+  assert.equal(calls.unsubscribed, 2, 'closing for good gives it back too');
+});
+
+test('a junk process snapshot is ignored, never thrown on', () => {
+  const { bridge, calls } = procBridge();
+  const tab = W.createSessionsTab({ bridge });
+  tab.onShow();
+  for (const junk of [null, 'x', 42, {}, { sessions: 'nope' }, { at: 'now', sessions: { 's1': 'nope', '../x': [] } }]) {
+    assert.doesNotThrow(() => calls.callback(junk));
+  }
+  tab.onHide();
+});
+
+test('a bridge without process snapshots is fine', () => {
+  const tab = W.createSessionsTab({ bridge: {} });
+  assert.doesNotThrow(() => {
+    tab.onShow();
+    tab.onHide();
+  });
+});
+
+test('Esc is left to the live map when nothing of the tab is open on top', () => {
+  const tab = W.createSessionsTab({ bridge: {} });
+  assert.equal(tab.onKey({ key: 'Escape' }), false);
+  assert.equal(tab.onKey({ key: 'Enter' }), false);
+  assert.equal(tab.onKey(null), false);
 });
