@@ -79,6 +79,7 @@ const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
 const designMatch = require('./lunasworkDesignMatch');
 const variants = require('./lunasworkVariants');
+const { summarizeCombatFeel } = require('./lunasworkCombatFeel');
 const { argsUseAgy, execAgy } = require('./agyexec');
 const { isAgyModel } = require('./workerModels');
 
@@ -1022,6 +1023,21 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl,
 }
 
 /**
+ * The combat-feel summary of a game that keeps a combatFeelLog (an adapter
+ * with combatFeelLog(): unity). Never throws: a failed read is a warning and
+ * the report goes on without it; no log = no summary, the report unchanged.
+ * @returns {Promise<{summary:object|null, warnings:object[]}>}
+ */
+async function readCombatFeel(adapter) {
+  if (typeof adapter.combatFeelLog !== 'function') return { summary: null, warnings: [] };
+  try {
+    return { summary: summarizeCombatFeel(await adapter.combatFeelLog()), warnings: [] };
+  } catch (err) {
+    return { summary: null, warnings: [{ code: 'combatFeelFailed', detail: clean(err && err.message, 300) }] };
+  }
+}
+
+/**
  * Runs one Playtester pass against an already started adapter. Always
  * resolves; a failure carries an empty report with the error noted, so the
  * run goes on (plan: never reject the run).
@@ -1132,11 +1148,15 @@ async function runPlaytest(opts) {
         runJudge: (judge) => callClaude({ ...judge, env, agyEnv, execImpl, killTreeImpl: killImpl }),
       })
       : { designMatch: [], warnings: [], costUsd: null };
+    const feel = await readCombatFeel(adapter);
     const report = {
       ...validated,
       findings: [...validated.findings, ...(screenDiff ? screenDiff.findings : [])],
       designMatch: match.designMatch,
-      warnings: [...validated.warnings, ...(screenDiff ? screenDiff.warnings : []), ...design.warnings, ...match.warnings],
+      warnings: [
+        ...validated.warnings, ...(screenDiff ? screenDiff.warnings : []), ...design.warnings, ...match.warnings, ...feel.warnings,
+      ],
+      ...(feel.summary ? { combatFeel: feel.summary } : {}),
     };
     const costUsd = Number.isFinite(match.costUsd) ? (parsed.costUsd || 0) + match.costUsd : parsed.costUsd;
     return { ok: true, ...base, screenDiff, report, costUsd, durationMs: now() - started };
@@ -1167,5 +1187,6 @@ module.exports = {
   emptyReport,
   baselinesDirFor,
   compareScreens,
+  readCombatFeel,
   runPlaytest,
 };

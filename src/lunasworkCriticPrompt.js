@@ -18,6 +18,7 @@
 'use strict';
 
 const { isStepBack, MAX_TEXT_CHARS } = require('./lunasworkRules');
+const { MAX_SUMMARY_CHARS: MAX_COMBAT_FEEL_CHARS } = require('./lunasworkCombatFeel');
 
 // Playtester scores are 0-10; a gate item passes at this score or above.
 const GATE_PASS_SCORE = 8;
@@ -40,15 +41,23 @@ const capped = (text, max) => (text.length > max ? `${text.slice(0, max)}\n(trun
 const tail = (text, max) => (text.length > max ? `(earlier entries cut)\n${text.slice(-max)}` : text);
 const json = (value, max) => capped(JSON.stringify(value, null, 2), max);
 
-/** What the Critic sees of the playtest report: findings, scores, journeys, screen diffs. */
+/**
+ * What the Critic sees of the playtest report: findings, scores, journeys,
+ * screen diffs - and a Unity game's combat-feel summary text (already capped,
+ * src/lunasworkCombatFeel.js) when the game keeps a combatFeelLog.
+ */
 function reportBrief(report) {
   const r = isObj(report) ? report : {};
   const list = (key) => (Array.isArray(r[key]) ? r[key] : []);
+  const feel = isObj(r.combatFeel) && typeof r.combatFeel.text === 'string'
+    ? { combatFeel: r.combatFeel.text.slice(0, MAX_COMBAT_FEEL_CHARS) }
+    : {};
   return {
     findings: list('findings'),
     scores: list('scores'),
     journeys: list('journeys').map((j) => ({ name: j && j.name, passed: j && j.passed })),
     errors: list('errors'),
+    ...feel,
   };
 }
 
@@ -104,6 +113,9 @@ function buildCriticPrompt({ iteration, docs, report, history, gitLog, openCards
     '- Every bug card: details must tell the builder to write a failing test that reproduces the bug first, then fix it; acceptance must include "A test reproduces the bug".',
     '- Do not duplicate open cards. To change one, set updatesCardId to its "at" and write it out in full. Leave cards that are still right alone.',
     ...stuckLines(stuck),
+    ...(reportBrief(report).combatFeel
+      ? ['- combatFeel in the playtest report is measured frame timing from the game (hit-stop, Time.timeScale changes, input latency, hitbox -> VFX). Its "Out of spec" values are evidence for feel or bug cards that screenshots cannot give.']
+      : []),
     '- logEntry: played = what the Playtester exercised; good / bad / broken / missing = short bullets; scores = one line per milestone; verdict = one or two sentences on why.',
     '- architecture: the full new design/ARCHITECTURE.md (modules, data flow, conventions) as the code is now. Read the code to keep it true; keep what is still right from the current one.',
     '- decisions: choices made this iteration (yours, or visible in the git log) as {choice, because}; empty when none.',

@@ -34,7 +34,7 @@ const { BACKENDS, TOOL_DEFS, checkArgs } = require('./tools');
 const { callControl } = require('./control');
 const { createMcpHttpClient, isLoopbackHttpUrl } = require('./mcp-http');
 const { createPipelineClient } = require('./pipeline-http');
-const { UNITY_TRANSPORTS } = require('./unity');
+const { UNITY_TRANSPORTS, withCombatFeelLog } = require('./unity');
 
 const SERVER_NAME = 'lunacore-playtest';
 const SERVER_VERSION = '1.0.0';
@@ -100,7 +100,8 @@ function unityBackend({ connect, transport = 'mcp', sleep = realSleep }) {
   };
   const handlers = {
     screenshot: () => once(calls.driver('screenshot')),
-    game_state: () => once(calls.driver('state')),
+    // The game's combatFeelLog is untrusted: cleaned and capped before the Playtester sees it.
+    game_state: async () => withCombatFeelLog(await once(calls.driver('state'))),
     send_input: ({ steps }) => once(calls.driver('input', { steps })),
     console_errors: () => once(calls.console()),
     wait: async ({ ms }) => {

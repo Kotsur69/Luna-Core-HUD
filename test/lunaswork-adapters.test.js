@@ -641,7 +641,7 @@ test('electron tools() is the bridge on this run only, after start', async () =>
 const unityProfile = { adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 5 };
 const unityReply = (data) => ({ content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'ok', data }) }] });
 
-function fakeUnity({ playingAfter = 2, driver = true } = {}) {
+function fakeUnity({ playingAfter = 2, driver = true, state = { scene: 'Level1', score: 3 } } = {}) {
   const u = { calls: [], urls: [], sessions: 0, closed: 0, polls: 0 };
   u.connect = (url) => {
     u.sessions += 1;
@@ -658,7 +658,7 @@ function fakeUnity({ playingAfter = 2, driver = true } = {}) {
         if (name === 'execute_custom_tool') {
           if (!driver) return { isError: true, content: [{ type: 'text', text: "Tool 'playtest_driver' not found" }] };
           const { action, steps } = args.parameters;
-          if (action === 'state') return unityReply({ scene: 'Level1', score: 3 });
+          if (action === 'state') return unityReply(state);
           if (action === 'screenshot') return unityReply({ png: PNG, width: 1920, height: 1080 });
           if (action === 'input') return unityReply({ done: steps.length });
         }
@@ -725,6 +725,26 @@ test('unity stop saves console, state and a final screenshot, then leaves play m
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.STATE_FILE), 'utf8')), { scene: 'Level1', score: 3 });
   assert.ok(isPng(path.join(adapter.evidenceDir, U.FINAL_SHOT)));
   assert.deepEqual(adapter.tools().allowedTools, []);
+});
+
+test('unity combatFeelLog() reads the clean log in one session; none before start or without a log', async () => {
+  const state = { scene: 'Arena', combatFeelLog: [{ inputLatencyMs: 40, junk: 1 }, { inputLatencyMs: -3 }] };
+  const world = unityWorld({ state });
+  const adapter = A.createAdapter('unity', world.opts);
+  assert.equal(await adapter.combatFeelLog(), null, 'not started');
+  await adapter.start(unityProfile);
+  const sessions = world.unity.sessions;
+  assert.deepEqual(await adapter.combatFeelLog(), [{ inputLatencyMs: 40 }]);
+  assert.equal(world.unity.sessions, sessions + 1);
+  await adapter.stop();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.STATE_FILE), 'utf8')),
+    { scene: 'Arena', combatFeelLog: [{ inputLatencyMs: 40 }] }, 'the evidence state is cleaned too');
+
+  const plain = unityWorld();
+  const noLog = A.createAdapter('unity', plain.opts);
+  await noLog.start(unityProfile);
+  assert.equal(await noLog.combatFeelLog(), null);
+  await noLog.stop();
 });
 
 test('unity tools() is the bridge on the profile Unity MCP url, after start', async () => {
