@@ -1,10 +1,14 @@
 // ============================================================================
 // LunaCore - Luna's Work asset tools on the lunacore MCP server (main process)
 // ----------------------------------------------------------------------------
-// The asset worker of a Luna's Work build on a Unity project (the scene worker
-// package, lunasworkScene.SCENE_WORKER_ID) reaches the asset pipeline
+// The God Mode workers of a Luna's Work build on a Unity project - the
+// asset-prep packages in their parallel worktrees, and the scene worker
+// (lunasworkScene.SCENE_WORKER_ID) - reach the asset pipeline
 // (src/lunasworkAssetPipeline.js) through five tools on the MCP server every
-// LunaCore tab already has (src/intake.js), next to luna_todo_* and memory_*:
+// LunaCore tab already has (src/intake.js), next to luna_todo_* and memory_*.
+// An asset-prep worker has no Unity editor: its answers report the Unity
+// import / prefab step as deferred to the scene worker (withDeferredImport),
+// not as a failure.
 //
 //   luna_asset_blender      save the open Blender scene + FBX export + prefab,
 //                           optional toon pass, turntable sheet for the Critic
@@ -111,6 +115,10 @@ const CREDIT_KEYS = Object.freeze(['credits', 'total_credits', 'credit_cost', 'c
 // Result URL keys that are previews, not the result itself.
 const PREVIEW_KEY_RE = /(thumb|min|preview|poster|avatar)/i;
 const NO_HIGGSFIELD_KINDS = Object.freeze(['animation', 'audio', 'material']);
+// An import error that means no Unity editor in this worktree (pipeline-http.js /
+// lunasworkAssetPipeline.importToUnity texts), not a failed import.
+const UNITY_UNAVAILABLE_RE = /unity not connected|Unity editor not open|Unity Pipeline port file/i;
+const UNITY_DEFERRED_NOTE = 'No Unity editor in this worktree: the Unity import / prefab step is deferred to the scene-worker package, which imports these files after this package is merged. This is expected for an asset-prep worker; the files are saved and ledgered. (The scene-worker itself: open the editor and import them with your Unity MCP.)';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
@@ -119,13 +127,15 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
 
 // ---- MCP tool definitions -------------------------------------------------------------
 
+// Every tool that imports into Unity says what happens without the editor.
+const DEFERRED_IMPORT_DESCRIPTION = ' Without a Unity editor in the worktree (an asset-prep worker) the Unity import / prefab step is deferred to the scene-worker package: the answer says so (unityDeferred: true) and it is not a failure.';
 const NAME_PROP = { type: 'string', description: 'The asset name as in design/ASSETS.md, e.g. "Ronin Hero". It names the files.' };
 const PROMPT_PROP = { type: 'string', description: 'The generation prompt (the ASSETS.md spec plus the art direction).' };
 
 const ASSET_TOOLS = Object.freeze([
   {
     name: BLENDER_TOOL,
-    description: "Luna's Work asset pipeline: after you built the model in Blender through the Blender MCP, save the open Blender scene to art/blender/<slug>.blend, render a 4-panel turntable sheet (front, side, 3/4, silhouette) to design/asset-renders/<slug>.png for the Critic's style check, export it as FBX for Unity (-Z forward, Y up, scale applied) under the art root, import it through the Unity Pipeline and make its prefab. stylePass \"blade-bullet-toon\" first holds the model to its triangle budget (Decimate), zeroes the root and applies scale, checks a character's height against 1.6 m and adds an inverted-hull black outline. Logged in the run report.",
+    description: "Luna's Work asset pipeline: after you built the model in Blender through the Blender MCP, save the open Blender scene to art/blender/<slug>.blend, render a 4-panel turntable sheet (front, side, 3/4, silhouette) to design/asset-renders/<slug>.png for the Critic's style check, export it as FBX for Unity (-Z forward, Y up, scale applied) under the art root, import it through the Unity Pipeline and make its prefab. stylePass \"blade-bullet-toon\" first holds the model to its triangle budget (Decimate), zeroes the root and applies scale, checks a character's height against 1.6 m and adds an inverted-hull black outline. Logged in the run report." + DEFERRED_IMPORT_DESCRIPTION,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -141,7 +151,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: COMFY_TOOL,
-    description: "Luna's Work asset pipeline: a FREE local generation from ComfyUI (images, TTS/SFX audio, or 3D GLB models). Runs an API-format workflow from the repo's art/comfyui/ (\"{{prompt}}\" placeholder, seed set on every sampler), saves the outputs under the art root and the exact workflow + seed under art/comfyui/runs/, then imports them into Unity (and makes a prefab for GLB models).",
+    description: "Luna's Work asset pipeline: a FREE local generation from ComfyUI (images, TTS/SFX audio, or 3D GLB models). Runs an API-format workflow from the repo's art/comfyui/ (\"{{prompt}}\" placeholder, seed set on every sampler), saves the outputs under the art root and the exact workflow + seed under art/comfyui/runs/, then imports them into Unity (and makes a prefab for GLB models)." + DEFERRED_IMPORT_DESCRIPTION,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -157,7 +167,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: HIGGSFIELD_TOOL,
-    description: "Luna's Work asset pipeline: a paid FINAL from Higgsfield (concept art, textures, VFX, key art, or a GLB model). The cost is estimated and booked against this run's Higgsfield budget BEFORE it generates; \"capReached\" means stop using Higgsfield for this run. Saves (a name already used gets -v2, never an overwrite), imports into Unity and logs prompt, seed and cost. When a paid result cannot be saved, the answer carries its job id and URLs.",
+    description: "Luna's Work asset pipeline: a paid FINAL from Higgsfield (concept art, textures, VFX, key art, or a GLB model). The cost is estimated and booked against this run's Higgsfield budget BEFORE it generates; \"capReached\" means stop using Higgsfield for this run. Saves (a name already used gets -v2, never an overwrite), imports into Unity and logs prompt, seed and cost. When a paid result cannot be saved, the answer carries its job id and URLs." + DEFERRED_IMPORT_DESCRIPTION,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -188,7 +198,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: IMPORT_TOOL,
-    description: "Luna's Work asset library import: one luna_asset_search result into the game. Reads the license again from the library's API and refuses anything not CC0 / CC-BY / free for commercial use, or a game rip; downloads it under the art root (never overwriting: a used name gets -v2), imports it into Unity, adds its row to design/ASSET_LICENSES.md and rewrites the CC-BY credits (Assets/StreamingAssets/CREDITS.txt).",
+    description: "Luna's Work asset library import: one luna_asset_search result into the game. Reads the license again from the library's API and refuses anything not CC0 / CC-BY / free for commercial use, or a game rip; downloads it under the art root (never overwriting: a used name gets -v2), imports it into Unity, adds its row to design/ASSET_LICENSES.md and rewrites the CC-BY credits (Assets/StreamingAssets/CREDITS.txt)." + DEFERRED_IMPORT_DESCRIPTION,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -212,6 +222,32 @@ const RUNNER_OF = Object.freeze({
   [IMPORT_TOOL]: 'libraryImport',
 });
 
+/** The pipeline's note for a failed import (lunasworkAssetPipeline importNote). */
+const importFailedNote = (imp) => `Unity import failed (${imp.error}): the file is in the project; import it with your Unity MCP.`;
+
+/**
+ * A successful answer whose Unity import found no editor (an asset-prep
+ * worker runs without one): the import is reported as deferred to the scene
+ * worker, not as failed. An import that failed with the editor there is left
+ * as it was. Paid booking happened before the import and is not touched.
+ * @param {object} res a tool answer with ok:true
+ * @returns {object} a new answer, or `res` unchanged
+ */
+function withDeferredImport(res) {
+  const imports = (Array.isArray(res.unity) ? res.unity : [res.unity]).filter(isObj);
+  const failed = imports.filter((imp) => imp.ok !== true);
+  if (!failed.length || !failed.every((imp) => typeof imp.error === 'string' && UNITY_UNAVAILABLE_RE.test(imp.error))) return res;
+  const mark = (imp) => (isObj(imp) && imp.ok !== true ? { ...imp, deferred: true } : imp);
+  const before = typeof res.note === 'string' ? res.note : '';
+  const rest = failed.reduce((note, imp) => note.split(importFailedNote(imp)).join(''), before).replace(/\s+/g, ' ').trim();
+  return {
+    ...res,
+    unity: Array.isArray(res.unity) ? res.unity.map(mark) : mark(res.unity),
+    unityDeferred: true,
+    note: [UNITY_DEFERRED_NOTE, rest].filter(Boolean).join(' '),
+  };
+}
+
 /**
  * One asset tool call. Null for a name that is not an asset tool.
  * @param {string} name
@@ -232,7 +268,7 @@ function callAssetTool(name, args, assets) {
   const run = typeof fn === 'function' ? fn : () => ({ ok: false, error: 'toolDown', detail: `${name} is not available in this tab` });
   return Promise.resolve()
     .then(() => run(a))
-    .then((res) => (isObj(res) && res.ok ? { ok: true, payload: res } : { ok: false, error: isObj(res) ? res : { ok: false, error: 'failed' } }))
+    .then((res) => (isObj(res) && res.ok ? { ok: true, payload: withDeferredImport(res) } : { ok: false, error: isObj(res) ? res : { ok: false, error: 'failed' } }))
     .catch((err) => ({ ok: false, error: { ok: false, error: 'failed', detail: oneLine(errText(err)) } }));
 }
 
