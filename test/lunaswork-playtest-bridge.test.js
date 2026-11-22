@@ -1010,3 +1010,195 @@ test('the bridge game_state hands the Playtester a clean, capped combatFeelLog',
   assert.equal(state.combatFeelLog.length, UN.MAX_COMBAT_FEEL_ENTRIES);
   assert.ok(state.combatFeelLog.every((e) => e.inputLatencyMs === 48));
 });
+
+// ---- burst: N screenshots stitched into one labeled contact sheet (burst.js) ---------
+
+const BU = require('../helpers/playtest-bridge/burst.js');
+const { PNG: PngJs } = require('pngjs');
+
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** A real solid-colour PNG, base64, as a backend screenshot returns it. */
+function solidPng(width, height, rgb) {
+  const img = new PngJs({ width, height });
+  for (let i = 0; i < img.data.length; i += 4) {
+    img.data[i] = rgb[0];
+    img.data[i + 1] = rgb[1];
+    img.data[i + 2] = rgb[2];
+    img.data[i + 3] = 255;
+  }
+  return PngJs.sync.write(img).toString('base64');
+}
+
+/**
+ * A fake clock and a fake screenshot source: every capture takes latencyMs,
+ * the frames in failAt (1-based) throw, those in badAt are not PNGs, each
+ * frame has its own colour.
+ */
+function burstWorld({ width = 320, height = 180, latencyMs = 20, failAt = [], badAt = [] } = {}) {
+  const world = { t: 1000, slept: [], calls: [] };
+  world.now = () => world.t;
+  world.sleep = async (ms) => {
+    world.slept.push(ms);
+    world.t += ms;
+  };
+  world.invoke = async (tool, args) => {
+    world.calls.push({ tool, args, at: world.t });
+    const n = world.calls.length;
+    world.t += latencyMs;
+    if (failAt.includes(n)) throw new Error('Game view is not focused');
+    if (badAt.includes(n)) return { png: Buffer.from('<svg/>').toString('base64') };
+    return { png: solidPng(width, height, [n * 20, 100, 200]), width, height };
+  };
+  return world;
+}
+
+const bridgeFor = (backend, world, evidenceDir = tmpDir('lw-burst-')) => ({
+  evidenceDir,
+  bridge: B.createBridge({ backend, evidenceDir, invoke: world.invoke, now: world.now, sleep: world.sleep }),
+});
+
+const readSheet = (file) => {
+  const buf = fs.readFileSync(file);
+  assert.ok(buf.subarray(0, 8).equals(PNG_SIG), 'the sheet starts with the PNG signature');
+  return PngJs.sync.read(buf);
+};
+
+const pixel = (img, x, y) => {
+  const o = (y * img.width + x) * 4;
+  return [...img.data.subarray(o, o + 3)];
+};
+
+test('burst: the frames run through the screenshot call at even intervals, real start times recorded', async () => {
+  const world = burstWorld();
+  const { bridge, evidenceDir } = bridgeFor('unity', world);
+  const res = await bridge.callTool('burst', { name: 'slash', frames: 6, durationMs: 1000 });
+
+  assert.equal(res.isError, undefined);
+  assert.equal(world.calls.length, 6);
+  assert.ok(world.calls.every((c) => c.tool === 'screenshot'));
+  // Targets 0, 200 ... 1000 ms; each capture took 20 ms, so the waits are 180 ms after the first.
+  assert.deepEqual(world.calls.map((c) => c.at - 1000), [0, 200, 400, 600, 800, 1000]);
+  assert.deepEqual(world.slept, [180, 180, 180, 180, 180]);
+
+  assert.deepEqual(fs.readdirSync(evidenceDir), ['burst-slash.png']);
+  const [text, image] = res.content;
+  assert.match(text.text, /Saved burst "burst-slash\.png" \(\d+x\d+\): 6 of 6 frames over 1000 ms/);
+  assert.ok(text.text.includes(BU.BURST_CAPTION), 'the one-line time-sequence caption');
+  assert.match(text.text, /Frame start times \(ms from the start of the burst\): 0, 200, 400, 600, 800, 1000\./);
+  assert.equal(image.type, 'image');
+  assert.equal(image.mimeType, 'image/png');
+  assert.ok(Buffer.from(image.data, 'base64').equals(fs.readFileSync(path.join(evidenceDir, 'burst-slash.png'))));
+
+  // 6 tiles of 320x180 (never upscaled) in a 4-column grid: 2 rows.
+  const sheet = readSheet(path.join(evidenceDir, 'burst-slash.png'));
+  const layout = BU.sheetLayout({ frameW: 320, frameH: 180, count: 6 });
+  assert.deepEqual([layout.cols, layout.rows, layout.tileW, layout.tileH], [4, 2, 320, 180]);
+  assert.deepEqual([sheet.width, sheet.height], [layout.width, layout.height]);
+  // The first tile's label band holds white label pixels; its tile holds frame 1's colour.
+  let lit = 0;
+  for (let y = 4; y < 4 + layout.labelH; y += 1) {
+    for (let x = 4; x < 4 + 150; x += 1) if (pixel(sheet, x, y).every((c) => c === 255)) lit += 1;
+  }
+  assert.ok(lit > 20, 'the tile label is drawn');
+  assert.deepEqual(pixel(sheet, 4 + 160, 4 + layout.labelH + 90), [20, 100, 200]);
+});
+
+test('burst: a capture slower than the interval starts the next one at once, and the times say so', async () => {
+  const world = burstWorld({ latencyMs: 300 });
+  const { bridge } = bridgeFor('unity', world);
+  const res = await bridge.callTool('burst', { name: 'dash', frames: 4, durationMs: 500 });
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(world.calls.map((c) => c.at - 1000), [0, 300, 600, 900]);
+  assert.deepEqual(world.slept, []);
+  assert.match(res.content[0].text, /: 0, 300, 600, 900\./);
+});
+
+test('burst: one failed frame is crossed out with a note, the sheet is still saved', async () => {
+  const world = burstWorld({ failAt: [3], badAt: [5] });
+  const { bridge, evidenceDir } = bridgeFor('unity', world);
+  const res = await bridge.callTool('burst', { name: 'parry', frames: 8, durationMs: 1400 });
+  assert.equal(res.isError, undefined);
+  const text = res.content[0].text;
+  assert.match(text, /6 of 8 frames over 1400 ms/);
+  assert.match(text, /Note: frame #3 \(\+400ms\) failed and is crossed out: Game view is not focused/);
+  assert.match(text, /Note: frame #5 \(\+800ms\) failed and is crossed out: the app did not return a PNG image/);
+  assert.equal(world.calls.length, 8, 'a failure does not stop the burst');
+  const sheet = readSheet(path.join(evidenceDir, 'burst-parry.png'));
+  const layout = BU.sheetLayout({ frameW: 320, frameH: 180, count: 8 });
+  // Frame 3 = column 2 of row 0: its tile has the failed colour (away from the cross).
+  assert.deepEqual(pixel(sheet, 4 + 2 * (layout.tileW + 4) + 160, 4 + layout.labelH + 20), [60, 18, 18]);
+});
+
+test('burst: when every frame fails it is an error and nothing is written', async () => {
+  const world = burstWorld({ failAt: [1, 2, 3, 4] });
+  const { bridge, evidenceDir } = bridgeFor('unity', world);
+  const res = await bridge.callTool('burst', { name: 'gone', frames: 4, durationMs: 500 });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /no frame of the burst could be captured: Game view is not focused/);
+  assert.deepEqual(fs.readdirSync(evidenceDir), []);
+});
+
+test('burst: the electron window and a valid screenshot name reach every capture; bad args never capture', async () => {
+  const world = burstWorld();
+  const { bridge } = bridgeFor('electron', world);
+  const res = await bridge.callTool('burst', { name: 'menu', windowId: 2, frames: 1 });
+  assert.equal(res.isError, undefined);
+  assert.equal(world.calls.length, 4, 'frames clamped up to 4');
+  assert.deepEqual(world.calls[0].args, { name: 'burst-menu.png', windowId: 2 });
+  assert.ok(T.checkArgs('electron', 'screenshot', world.calls[0].args).ok, 'the wrapper accepts the frame args');
+
+  const bad = await bridge.callTool('burst', { name: '../x' });
+  assert.equal(bad.isError, true);
+  assert.equal(world.calls.length, 4);
+});
+
+test('burst: the sheet stays within the evidence PNG caps, and those caps are the ones LunaCore reads with', async () => {
+  const P2 = require('../src/lunasworkPlaytest.js');
+  assert.equal(BU.MAX_SHEET_PIXELS, P2.MAX_PNG_PIXELS, 'mirrors lunasworkPlaytest - never raised here');
+  assert.equal(BU.MAX_SHEET_BYTES, P2.MAX_PNG_BYTES);
+
+  // 12 full-HD frames: tiles scale down to MAX_TILE_SIDE wide.
+  const world = burstWorld({ width: 1920, height: 1080 });
+  const { bridge, evidenceDir } = bridgeFor('unity', world);
+  const res = await bridge.callTool('burst', { name: 'big', frames: 12, durationMs: 1500 });
+  assert.equal(res.isError, undefined);
+  const file = path.join(evidenceDir, 'burst-big.png');
+  const sheet = readSheet(file);
+  assert.ok(sheet.width * sheet.height <= BU.MAX_SHEET_PIXELS);
+  assert.ok(fs.statSync(file).size <= BU.MAX_SHEET_BYTES);
+  const layout = BU.sheetLayout({ frameW: 1920, frameH: 1080, count: 12 });
+  assert.deepEqual([layout.cols, layout.rows, layout.tileW, layout.tileH], [4, 3, BU.MAX_TILE_SIDE, 360]);
+
+  // A tight cap shrinks the tiles until the sheet fits; an impossible one throws.
+  const tight = BU.sheetLayout({ frameW: 1920, frameH: 1080, count: 12, maxPixels: 200000 });
+  assert.ok(tight.width * tight.height <= 200000);
+  assert.ok(tight.tileW < BU.MAX_TILE_SIDE);
+  assert.throws(() => BU.sheetLayout({ frameW: 100, frameH: 100, count: 12, maxPixels: 10 }), /size cap/);
+
+  // An encoded sheet over the byte cap is refused.
+  const shots = [{ index: 0, atMs: 0, png: Buffer.from(solidPng(64, 64, [1, 2, 3]), 'base64') }];
+  assert.throws(() => BU.buildSheet(shots, { maxBytes: 10 }), /larger than the evidence size cap/);
+  assert.ok(BU.buildSheet(shots).png.subarray(0, 8).equals(PNG_SIG));
+});
+
+test('burst: a frame claiming more pixels than any window is refused before decoding', async () => {
+  const huge = Buffer.from(solidPng(8, 8, [0, 0, 0]), 'base64');
+  huge.writeUInt32BE(20000, 16);
+  huge.writeUInt32BE(20000, 20);
+  const small = Buffer.from(solidPng(8, 8, [9, 9, 9]), 'base64');
+  let n = 0;
+  const shots = await BU.captureBurst({
+    capture: async () => {
+      n += 1;
+      return { png: (n === 2 ? huge : small).toString('base64') };
+    },
+    frames: 4,
+    durationMs: 600,
+    now: () => 0,
+    sleep: async () => {},
+  });
+  assert.deepEqual(shots.map((s) => !!s.png), [true, false, true, true]);
+  assert.match(shots[1].error, /larger than any window/);
+  assert.deepEqual(BU.buildSheet(shots).frames.map((f) => f.ok), [true, false, true, true]);
+});

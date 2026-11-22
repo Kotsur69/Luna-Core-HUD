@@ -51,6 +51,7 @@
     ],
     "asarUnpack": [
       "**/node_modules/@lydell/node-pty/**",
+      "**/node_modules/pngjs/**",
       "helpers/**/*"
     ],
     "publish": [

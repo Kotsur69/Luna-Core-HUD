@@ -1483,3 +1483,82 @@ test('playtestDriverCard() is a fresh copy, tagged with the run', () => {
   assert.ok(U.PLAYTEST_DRIVER_CARD.acceptance.length > 0);
   assert.equal('tags' in U.playtestDriverCard(), false);
 });
+
+// ============================================================================
+// burst: the Playtester's time-sequence contact sheet, offered by both bridge adapters
+// ============================================================================
+
+const TL = require('../helpers/playtest-bridge/tools.js');
+const PT = require('../src/lunasworkPlaytest.js');
+
+test('burst is on the allow-list of the electron and unity adapters, and reaches the Playtester argv', async () => {
+  const electron = electronWorld();
+  const desktop = A.createAdapter('electron', electron.opts);
+  await desktop.start(electronProfile);
+  const unity = unityWorld();
+  const game = A.createAdapter('unity', unity.opts);
+  await game.start(unityProfile);
+  try {
+    for (const [adapter, server] of [[desktop, SERVER_NAMES.electron], [game, SERVER_NAMES.unity]]) {
+      const tools = adapter.tools();
+      assert.ok(tools.allowedTools.includes(`mcp__${server}__burst`), server);
+      const argv = PT.buildPlaytestArgs({ model: 'sonnet', tools });
+      const allowed = argv[argv.indexOf('--allowedTools') + 1].split(',');
+      assert.ok(allowed.includes(`mcp__${server}__burst`), `${server} argv`);
+    }
+  } finally {
+    await desktop.stop();
+    await game.stop();
+  }
+});
+
+test('burst args: name gets the burst- prefix, windowId only on electron, defaults fill in', () => {
+  assert.deepEqual(TL.checkArgs('unity', 'burst', { name: 'slash-hitstop' }), {
+    ok: true,
+    args: { name: 'burst-slash-hitstop.png', frames: TL.BURST_DEFAULT_FRAMES, durationMs: TL.BURST_DEFAULT_DURATION_MS },
+  });
+  assert.deepEqual(TL.checkArgs('electron', 'burst', { name: 'burst-menu-open.png', windowId: 3, frames: 6, durationMs: 800, extra: 'x' }), {
+    ok: true,
+    args: { name: 'burst-menu-open.png', frames: 6, durationMs: 800, windowId: 3 },
+  });
+  assert.equal('windowId' in TL.checkArgs('unity', 'burst', { name: 'a', windowId: 3 }).args, false);
+  assert.equal(TL.BURST_DEFAULT_FRAMES, 8);
+  assert.equal(TL.BURST_DEFAULT_DURATION_MS, 1200);
+});
+
+test('burst args: frames clamp to 4..12 and durationMs to 500..1500, rounded; non-numbers are refused', () => {
+  const opts = (raw) => TL.checkArgs('unity', 'burst', { name: 'b', ...raw }).args;
+  assert.deepEqual(opts({ frames: 1, durationMs: 10 }), { name: 'burst-b.png', frames: 4, durationMs: 500 });
+  assert.deepEqual(opts({ frames: 99, durationMs: 60000 }), { name: 'burst-b.png', frames: 12, durationMs: 1500 });
+  assert.deepEqual(opts({ frames: -5, durationMs: -1 }), { name: 'burst-b.png', frames: 4, durationMs: 500 });
+  assert.deepEqual(opts({ frames: 6.6, durationMs: 999.4 }), { name: 'burst-b.png', frames: 7, durationMs: 999 });
+  assert.deepEqual(opts({ frames: null, durationMs: null }), { name: 'burst-b.png', frames: 8, durationMs: 1200 });
+  assert.deepEqual(TL.burstOptions({ frames: 12, durationMs: 1500 }), { frames: 12, durationMs: 1500 });
+  assert.deepEqual(TL.burstOptions(undefined), { frames: 8, durationMs: 1200 });
+  for (const bad of [{ frames: '8' }, { frames: Number.NaN }, { durationMs: Infinity }, { durationMs: [1000] }]) {
+    assert.equal(TL.checkArgs('unity', 'burst', { name: 'b', ...bad }).ok, false, JSON.stringify(bad));
+  }
+  for (const name of ['../x', 'CON', '', 'a'.repeat(79)]) {
+    assert.equal(TL.checkArgs('electron', 'burst', { name }).ok, false, name);
+  }
+});
+
+test('burst in the Playtester prompts of both bridge targets, and the Critic caption when a sheet is cited', () => {
+  for (const target of ['electron', 'unity']) {
+    const prompt = PT.buildPlaytestPrompt({ mode: 'explore', target, testPlan: 'x', shipCriteria: 'y' });
+    assert.match(prompt, /use burst: 4-12 frames over 500-1500 ms/, target);
+    assert.match(prompt, /"burst-<name>\.png"/, target);
+  }
+  const { buildCriticPrompt } = require('../src/lunasworkCriticPrompt.js');
+  const { BURST_CAPTION } = require('../helpers/playtest-bridge/burst.js');
+  const gate = { gates: [], current: 'M1', currentPassed: false };
+  const docs = { shipCriteria: '', testPlan: '', architecture: '', decisions: '', playtestLog: '' };
+  const base = { iteration: 2, docs, history: [], gitLog: '', openCards: [], gate };
+  const finding = (screenshot) => ({ kind: 'feel', title: 'Hit-stop too long', screenshot });
+  const withSheet = buildCriticPrompt({ ...base, report: { findings: [finding('C:\\runs\\iter-2\\burst-slash.png')] } });
+  assert.ok(withSheet.includes(BURST_CAPTION));
+  const viaScore = buildCriticPrompt({ ...base, report: { scores: [{ evidence: { screenshot: '/runs/iter-2/Burst-dash.png' } }] } });
+  assert.ok(viaScore.includes(BURST_CAPTION));
+  const plain = buildCriticPrompt({ ...base, report: { findings: [finding('/runs/iter-2/f1-menu.png')] } });
+  assert.ok(!plain.includes(BURST_CAPTION));
+});
