@@ -103,7 +103,7 @@ function makePhone(over = {}) {
   return { privateKey, credentialId, pub, phoneNonce, row };
 }
 
-function setup({ confirm = async () => true, rows = [] } = {}) {
+function setup({ confirm = async () => true, rows = [], clock = () => NOW } = {}) {
   const client = fakeClient(rows);
   const prompts = [];
   let paired = 0;
@@ -116,7 +116,7 @@ function setup({ confirm = async () => true, rows = [] } = {}) {
       return confirm(req);
     },
     onPaired: () => paired++,
-    now: () => NOW,
+    now: clock,
     setTimer: () => 0,
     clearTimer: () => {},
     log: () => {},
@@ -257,9 +257,53 @@ test('a row challenged by someone else, old, for another host or malformed is no
   assert.equal(other.row.host_nonce, null);
   assert.equal(broken.row.host_nonce, null);
   assert.equal(broken.row.status, 'rejected');
+  assert.equal(foreign.row.status, 'rejected', 'a pre-challenged row is cleared, not left to fill the batch');
   foreign.row.phone_nonce = foreign.phoneNonce;
   await env.p.read();
   assert.equal(env.prompts.length, 0);
+});
+
+test('a challenged request that never reveals is dropped after a minute', async () => {
+  let t = NOW;
+  const phone = makePhone();
+  const env = setup({ rows: [phone.row], clock: () => t });
+  env.p.open();
+  await env.p.read();
+  t += 61 * 1000;
+  await env.p.read();
+  assert.equal(phone.row.status, 'rejected');
+  phone.row.phone_nonce = phone.phoneNonce;
+  await env.p.read();
+  assert.equal(env.prompts.length, 0, 'a late reveal is not shown');
+});
+
+test('a flood of requests closes the pairing window', async () => {
+  const rows = Array.from({ length: 8 }, () => makePhone().row);
+  const env = setup({ rows });
+  env.p.open();
+  await env.p.read();
+  assert.equal(rows.filter((r) => r.host_nonce).length, 5);
+  assert.equal(env.p.isOpen(), false);
+});
+
+test('three rejected dialogs close the pairing window', async () => {
+  const phones = Array.from({ length: 4 }, () => makePhone());
+  const env = setup({ rows: phones.map((p) => p.row), confirm: async () => false });
+  env.p.open();
+  await env.p.read();
+  phones.forEach((p) => (p.row.phone_nonce = p.phoneNonce));
+  await env.p.read();
+  assert.equal(env.prompts.length, 3);
+  assert.equal(env.p.isOpen(), false);
+  assert.equal(phones[3].row.status, 'pending');
+});
+
+test('addKey moves a broken keys file aside instead of blocking pairing', () => {
+  const a = makePhone();
+  fs.writeFileSync(keysPath, '{broken');
+  addKey(keysPath, { credentialId: a.credentialId, publicKey: a.pub, label: 'A' }, 7);
+  assert.equal(readPairedKeys(keysPath).length, 1);
+  assert.equal(fs.readFileSync(`${keysPath}.broken-7`, 'utf8'), '{broken');
 });
 
 test('parseRequest: shape checks', () => {

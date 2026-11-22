@@ -441,7 +441,10 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
     try {
       forgetAll(keysPath);
     } catch (err) {
+      // The keys are still there: say so, and don't pretend the phones are gone.
       console.error('[hostmain] forgetting the phones failed:', err.message);
+      dialog.showErrorBox(tx('forgetTitle'), tx('forgetFailed', { error: err.message }));
+      return;
     }
     auth.forgetGrants();
     console.log('[hostmain] every paired phone forgotten');
@@ -502,6 +505,7 @@ function startHost({ electron, machine, makeDefault = false, cloud: given = null
         { type: 'separator' },
         ...(state === 'login' ? [{ label: tx('login'), click: () => login() }] : []),
         ...(pairing && cloud.status().loggedIn ? [{ label: pairOpen ? tx('pairOpen') : tx('pair'), enabled: !pairOpen, click: () => openPairing() }] : []),
+        ...(pairOpen ? [{ label: tx('pairCancel'), click: () => (pairing.close(), refreshTray()) }] : []),
         { label: tx('forget'), enabled: hasPairedPhone(keysPath), click: () => forgetPhones().catch((err) => console.error('[hostmain] forget failed:', err.message)) },
         ...(readDefault(defaultFile) === machine ? [] : [{ label: tx('makeDefault'), click: () => setDefault() }]),
         { type: 'separator' },

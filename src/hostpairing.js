@@ -32,6 +32,11 @@ const POLL_MS = 3000;
 /** A request older than this is never shown. */
 const MAX_AGE_MS = WINDOW_MS;
 const BATCH = 10;
+/** A challenged request that doesn't reveal within this is dropped. */
+const REVEAL_MS = 60 * 1000;
+/** Per pairing window: past these the window closes (a flood, or Mati saying no). */
+const MAX_CHALLENGES = 5;
+const MAX_REJECTIONS = 3;
 /** hostauth.js MAX_KEYS. */
 const MAX_KEYS = 32;
 const HOST_NONCE_BYTES = 16;
@@ -103,6 +108,17 @@ function hasPairedPhone(file) {
   }
 }
 
+/** The paired keys for a write: a broken file is moved aside (…broken-<ms>) and counts as none. */
+function keysForWrite(file, now) {
+  try {
+    return readPairedKeys(file);
+  } catch (err) {
+    if (err && err.code && err.code !== 'ENOENT') throw err; // unreadable (locked): never overwrite it
+    fs.renameSync(file, `${file}.broken-${now}`);
+    return [];
+  }
+}
+
 /**
  * Adds one confirmed key. Re-pairing the same passkey (same credential id and
  * public key) refreshes its label and keeps its sign count, so an older
@@ -112,7 +128,7 @@ function hasPairedPhone(file) {
  * @returns {'added'|'refreshed'}
  */
 function addKey(file, { credentialId, publicKey, label }, now = Date.now()) {
-  const all = readPairedKeys(file);
+  const all = keysForWrite(file, now);
   const prev = all.find((k) => k.credentialId === credentialId);
   if (prev && prev.publicKey !== publicKey) throw new Error('credential already paired with another key');
   const keys = all.filter((k) => k.credentialId !== credentialId);
@@ -157,8 +173,16 @@ function createHostPairing({
   let openUntil = 0;
   let timer = null;
   let running = null;
+  /** Per window: a flood of requests or rejections closes it. */
+  let challenges = 0;
+  let rejections = 0;
 
   const isOpen = () => openUntil > now();
+
+  function closeFor(why) {
+    log(`[hostpairing] pairing window closed: ${why}`);
+    close();
+  }
 
   async function setStatus(id, status) {
     const { error } = await client.from('host_pairings').update({ status }).eq('id', id).eq('status', 'pending');
@@ -172,6 +196,7 @@ function createHostPairing({
       if (typeof row?.id === 'string') await setStatus(row.id, 'rejected');
       return;
     }
+    if (++challenges > MAX_CHALLENGES) return closeFor('too many requests');
     const hostNonce = random(HOST_NONCE_BYTES).toString('base64url');
     const { data, error } = await client
       .from('host_pairings')
@@ -181,7 +206,7 @@ function createHostPairing({
       .is('host_nonce', null)
       .select('id');
     if (error || !Array.isArray(data) || data.length !== 1) return;
-    challenged.set(req.id, { ...req, hostNonce });
+    challenged.set(req.id, { ...req, hostNonce, at: now() });
   }
 
   async function reveal(row, snap) {
@@ -203,7 +228,11 @@ function createHostPairing({
     } catch (err) {
       log(`[hostpairing] confirm dialog failed: ${errText(err)}`);
     }
-    if (!ok) return setStatus(snap.id, 'rejected');
+    if (!ok) {
+      await setStatus(snap.id, 'rejected');
+      if (++rejections >= MAX_REJECTIONS) closeFor('rejected too often');
+      return;
+    }
     let how;
     try {
       how = addKey(keysPath, snap, now());
@@ -237,10 +266,17 @@ function createHostPairing({
       const snap = challenged.get(row.id);
       if (snap) {
         if (row.phone_nonce) await reveal(row, snap);
-      } else if (row.host_nonce === null || row.host_nonce === undefined) {
+        else if (now() - snap.at > REVEAL_MS) {
+          challenged.delete(row.id);
+          await setStatus(row.id, 'rejected');
+        }
+      } else if ((row.host_nonce ?? null) === null && (row.phone_nonce ?? null) === null) {
         await challenge(row);
+      } else {
+        // Challenged by an earlier run or by someone else: clear it, so junk rows
+        // can't fill the batch and hide a real request.
+        await setStatus(row.id, 'rejected');
       }
-      // A row challenged by an earlier run (or someone else) is left alone.
     }
   }
 
@@ -276,6 +312,8 @@ function createHostPairing({
     /** Opens (or extends) the pairing window. */
     open() {
       openUntil = now() + WINDOW_MS;
+      challenges = 0;
+      rejections = 0;
       log('[hostpairing] pairing window open (10 min)');
       read();
       schedule();
