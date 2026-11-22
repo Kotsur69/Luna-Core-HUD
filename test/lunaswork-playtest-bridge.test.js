@@ -995,6 +995,9 @@ test('withCombatFeelLog: the state keeps its other keys; a state without the log
   assert.equal(state.combatFeelLog.length, 2, 'the input is not mutated');
   const plain = { scene: 'Arena' };
   assert.equal(UN.withCombatFeelLog(plain), plain);
+  assert.deepEqual(UN.withCombatFeelLog({ scene: 'Arena', combatFeelLog: 'x'.repeat(1000) }), { scene: 'Arena' }, 'a non-array log is dropped');
+  assert.deepEqual(UN.withCombatFeelLog({ scene: 'Arena', combatFeelLog: { a: 1 } }), { scene: 'Arena' });
+  assert.equal(UN.withCombatFeelLog(null), null);
 });
 
 test('the bridge game_state hands the Playtester a clean, capped combatFeelLog', async () => {

@@ -83,12 +83,16 @@ function parseCombatFeelLog(state) {
 }
 
 /**
- * The state with its combatFeelLog replaced by the clean one; any other
- * state is returned as it is (a game without the log is unchanged).
+ * The state with its combatFeelLog replaced by the clean one; a combatFeelLog
+ * that is not an array is dropped. A state without the key is returned as it
+ * is (a game without the log is unchanged).
  */
 function withCombatFeelLog(state) {
+  if (!isObj(state) || !Object.prototype.hasOwnProperty.call(state, 'combatFeelLog')) return state;
   const log = parseCombatFeelLog(state);
-  return log === null ? state : { ...state, combatFeelLog: log };
+  if (log !== null) return { ...state, combatFeelLog: log };
+  const { combatFeelLog: _dropped, ...rest } = state;
+  return rest;
 }
 
 module.exports = {

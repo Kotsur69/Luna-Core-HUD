@@ -487,6 +487,10 @@ test('readCombatFeel: the adapter log becomes report.combatFeel; none, empty or 
   const failed = await readCombatFeel({ combatFeelLog: async () => { throw new Error('editor busy'); } });
   assert.equal(failed.summary, null);
   assert.deepEqual(failed.warnings, [{ code: 'combatFeelFailed', detail: 'editor busy' }]);
+  const hung = await readCombatFeel({ combatFeelLog: () => new Promise(() => {}) }, 20);
+  assert.deepEqual(hung, { summary: null, warnings: [{ code: 'combatFeelFailed', detail: 'no answer within 20 ms' }] });
+  const syncThrow = await readCombatFeel({ combatFeelLog: () => { throw new Error('boom'); } });
+  assert.deepEqual(syncThrow.warnings, [{ code: 'combatFeelFailed', detail: 'boom' }]);
 });
 
 test('the combat-feel summary reaches the pass result and the Critic packet, capped', () => {

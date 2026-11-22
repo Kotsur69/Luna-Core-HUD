@@ -78,7 +78,8 @@ const countLabel = (total, shown) => (total > shown ? `${total}, first ${shown}`
 
 /** The summary as bounded text. */
 function summaryText({ entries, metrics, transitions, transitionCount, flags, flagCount }) {
-  const lines = [`combatFeelLog: ${entries} entries`];
+  // "#n" in the flags = the n-th kept sample, oldest first (malformed ones are not counted).
+  const lines = [`combatFeelLog: ${entries} entries (#0 = oldest kept sample)`];
   for (const [key, label, unit] of METRICS) {
     const s = metrics[key];
     if (s) lines.push(`- ${label} (${unit}): n=${s.count} min=${s.min} median=${s.median} p95=${s.p95} max=${s.max}`);

@@ -99,6 +99,8 @@ const SHIP_CONFIRM_MODEL = 'opus';
 const FALLBACK_MODEL = 'sonnet';
 const PLAYTEST_BUDGET_USD = 5;
 const PLAYTEST_TIMEOUT_MS = 30 * 60 * 1000;
+// The one combatFeelLog read after a Unity pass: a hung editor must not stall the run.
+const COMBAT_FEEL_TIMEOUT_MS = 15 * 1000;
 const DESKTOP = { width: 1440, height: 900 };
 const MOBILE = { width: 390, height: 844 };
 // What the app under test is: the adapter's name. Anything else is a web app.
@@ -1028,12 +1030,19 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl,
  * the report goes on without it; no log = no summary, the report unchanged.
  * @returns {Promise<{summary:object|null, warnings:object[]}>}
  */
-async function readCombatFeel(adapter) {
+async function readCombatFeel(adapter, timeoutMs = COMBAT_FEEL_TIMEOUT_MS) {
   if (typeof adapter.combatFeelLog !== 'function') return { summary: null, warnings: [] };
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs);
+  });
   try {
-    return { summary: summarizeCombatFeel(await adapter.combatFeelLog()), warnings: [] };
+    const log = await Promise.race([Promise.resolve().then(() => adapter.combatFeelLog()), timeout]);
+    return { summary: summarizeCombatFeel(log), warnings: [] };
   } catch (err) {
     return { summary: null, warnings: [{ code: 'combatFeelFailed', detail: clean(err && err.message, 300) }] };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
