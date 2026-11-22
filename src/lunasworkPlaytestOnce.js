@@ -43,6 +43,7 @@ const { parseQueueRequest } = require('./lunasworkipc');
 const { getProject, resolveProjectDir } = require('./projects');
 const { createAdapter: createTesterAdapter } = require('./lunasworkAdapters');
 const { addUsage } = require('./lunasworkUsage');
+const { MAX_SUMMARY_CHARS, MAX_FLAGS } = require('./lunasworkCombatFeel');
 
 const CHANNEL = 'lunaswork:playtestOnce';
 const EVENT_TYPE = 'playtestOnce';
@@ -64,6 +65,9 @@ const MAX_FINDINGS = 100;
 const MAX_STEPS = 20;
 const MAX_ROWS = 100;
 const MAX_FILES = 5;
+// A Unity game's combat-feel summary (src/lunasworkCombatFeel.js caps it upstream).
+const MAX_COMBAT_FEEL_CHARS = MAX_SUMMARY_CHARS;
+const MAX_COMBAT_FEEL_FLAGS = MAX_FLAGS;
 // An absolute path in an error text (C:\..., \server\..., /...), at a word start.
 const ABS_PATH_RE = /(?<=^|[\s'"(=])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s'"<>|)]*/g;
 
@@ -208,6 +212,21 @@ function publicResult(record, { makeThumb, log, evidenceDir }) {
     journeys: list(report.journeys).filter(isObj).slice(0, MAX_ROWS).map((j) => ({ name: capped(j.name), passed: j.passed === true })),
     consoleErrors: [...new Set(findings.flatMap((f) => f.consoleErrors))].slice(0, MAX_CONSOLE_ERRORS),
     warnings: list(report.warnings).slice(0, MAX_WARNINGS).map(warningView),
+    ...combatFeelView(report.combatFeel),
+  };
+}
+
+/**
+ * A Unity game's combat-feel summary (src/lunasworkCombatFeel.js) for the
+ * renderer: its bounded text and flags. Nothing when the game keeps no log.
+ */
+function combatFeelView(feel) {
+  if (!isObj(feel) || typeof feel.text !== 'string' || !feel.text) return {};
+  return {
+    combatFeel: {
+      text: capped(feel.text, MAX_COMBAT_FEEL_CHARS),
+      flags: list(feel.flags).filter((f) => typeof f === 'string').slice(0, MAX_COMBAT_FEEL_FLAGS).map((f) => capped(f)),
+    },
   };
 }
 

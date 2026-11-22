@@ -422,3 +422,104 @@ test('lunaswork:playtestOnce turns a thrown service error into a plain failure',
     console.error = original;
   }
 });
+
+// ---- combatFeelLog summary (src/lunasworkCombatFeel.js) -> pass result + Critic packet --
+
+const feel = require('../src/lunasworkCombatFeel');
+const { readCombatFeel } = require('../src/lunasworkPlaytest');
+const { buildCriticPrompt } = require('../src/lunasworkCriticPrompt');
+
+const NO_GATE = { gates: [], current: null, currentPassed: false };
+const NO_DOCS = { brief: '', design: '', shipCriteria: '', testPlan: '', architecture: '', decisions: '', playtestLog: '' };
+const criticPrompt = (report) => buildCriticPrompt({ iteration: 1, docs: NO_DOCS, report, history: [], gitLog: '', openCards: [], gate: NO_GATE });
+const feelLog = () => [
+  { inputLatencyMs: 40, hitStopFrames: 4, hitStopIntendedFrames: 4, hitStopMs: 66, hitboxToVfxFrames: 0 },
+  { inputLatencyMs: 60, hitStopFrames: 7, hitStopIntendedFrames: 4, hitStopMs: 116, hitboxToVfxFrames: 1 },
+  { inputLatencyMs: 140, hitStopFrames: 4, hitStopIntendedFrames: 4, hitStopMs: 66, hitboxToVfxFrames: -4 },
+  { inputLatencyMs: 'slow' },
+  { timeScale: { from: 1, to: 0.1, reason: 'DeadSecond', atMs: 1200 } },
+  { timeScale: { from: 0.1, to: 1, reason: 'GoldenHour', atMs: 1800 } },
+];
+
+test('summarizeCombatFeel: count / min / median / p95 / max per metric, transitions, out-of-spec flags', () => {
+  const s = feel.summarizeCombatFeel(feelLog());
+  assert.equal(s.entries, 5, 'the malformed entry is dropped');
+  assert.deepEqual(s.metrics.inputLatencyMs, { count: 3, min: 40, median: 60, p95: 140, max: 140 });
+  assert.deepEqual(s.metrics.hitStopFrames, { count: 3, min: 4, median: 4, p95: 7, max: 7 });
+  assert.deepEqual(s.metrics.hitboxToVfxFrames, { count: 3, min: -4, median: 0, p95: 1, max: 1 });
+  assert.equal(s.transitionCount, 2);
+  assert.deepEqual(s.transitions[0], { from: 1, to: 0.1, reason: 'DeadSecond', atMs: 1200 });
+  assert.deepEqual(s.flags, [
+    '#1: hit-stop 7 frames, intended 4',
+    `#2: input -> hitbox 140 ms > ${feel.MAX_INPUT_LATENCY_MS} ms`,
+    `#2: hitbox -> VFX -4 frames (limit +-${feel.MAX_HITBOX_TO_VFX_FRAMES})`,
+  ]);
+  assert.match(s.text, /input -> hitbox \(ms\): n=3 min=40 median=60 p95=140 max=140/);
+  assert.match(s.text, /1200 ms: 1 -> 0\.1 \(DeadSecond\)/);
+  assert.match(s.text, /Out of spec \(3\):/);
+  // An even count takes the mean of the middle two.
+  assert.equal(feel.summarizeCombatFeel([{ inputLatencyMs: 10 }, { inputLatencyMs: 20 }]).metrics.inputLatencyMs.median, 15);
+  assert.match(feel.summarizeCombatFeel([{ inputLatencyMs: 10 }]).text, /Out of spec: none/);
+});
+
+test('summarizeCombatFeel: no usable entry is null; transitions, flags and text are capped', () => {
+  for (const log of [undefined, null, 'x', {}, [], [{ inputLatencyMs: -1 }]]) assert.equal(feel.summarizeCombatFeel(log), null);
+  const many = Array.from({ length: 200 }, (_, i) => ({
+    inputLatencyMs: 500 + i, timeScale: { from: 1, to: 0.5, reason: 'DeadSecond'.padEnd(40, '_'), atMs: i },
+  }));
+  const s = feel.summarizeCombatFeel(many);
+  assert.equal(s.transitions.length, feel.MAX_TRANSITIONS);
+  assert.equal(s.transitionCount, 200);
+  assert.equal(s.flags.length, feel.MAX_FLAGS);
+  assert.equal(s.flagCount, 200);
+  assert.ok(s.text.length <= feel.MAX_SUMMARY_CHARS, `${s.text.length} chars`);
+  assert.match(s.text, /\(truncated\)$/);
+  assert.match(s.text, /transitions \(200, first 20\)/);
+});
+
+test('readCombatFeel: the adapter log becomes report.combatFeel; none, empty or a failed read leave it out', async () => {
+  const ok = await readCombatFeel({ combatFeelLog: async () => feelLog() });
+  assert.equal(ok.summary.entries, 5);
+  assert.deepEqual(ok.warnings, []);
+  assert.deepEqual(await readCombatFeel({}), { summary: null, warnings: [] }, 'web / electron adapters have no log');
+  assert.deepEqual(await readCombatFeel({ combatFeelLog: async () => null }), { summary: null, warnings: [] });
+  assert.deepEqual(await readCombatFeel({ combatFeelLog: async () => [] }), { summary: null, warnings: [] });
+  const failed = await readCombatFeel({ combatFeelLog: async () => { throw new Error('editor busy'); } });
+  assert.equal(failed.summary, null);
+  assert.deepEqual(failed.warnings, [{ code: 'combatFeelFailed', detail: 'editor busy' }]);
+  const hung = await readCombatFeel({ combatFeelLog: () => new Promise(() => {}) }, 20);
+  assert.deepEqual(hung, { summary: null, warnings: [{ code: 'combatFeelFailed', detail: 'no answer within 20 ms' }] });
+  const syncThrow = await readCombatFeel({ combatFeelLog: () => { throw new Error('boom'); } });
+  assert.deepEqual(syncThrow.warnings, [{ code: 'combatFeelFailed', detail: 'boom' }]);
+});
+
+test('the combat-feel summary reaches the pass result and the Critic packet, capped', () => {
+  const summary = feel.summarizeCombatFeel(feelLog());
+  const withFeel = { ...okReport(), report: { ...okReport().report, combatFeel: summary } };
+  const view = publicResult({ runId: 'pt1', projectId: 'game', playtest: withFeel }, VIEW);
+  assert.equal(view.combatFeel.text, summary.text);
+  assert.deepEqual(view.combatFeel.flags, summary.flags);
+
+  const prompt = criticPrompt(withFeel.report);
+  assert.match(prompt, /"combatFeel": "combatFeelLog: 5 entries/);
+  assert.match(prompt, /combatFeel in the playtest report is measured frame timing/);
+
+  // A forged, oversized summary is cut on both sides.
+  const huge = { text: 'x'.repeat(50_000), flags: Array.from({ length: 500 }, () => 'y'.repeat(5000)) };
+  const big = publicResult({ runId: 'pt1', projectId: 'game', playtest: { ...okReport(), report: { ...okReport().report, combatFeel: huge } } }, VIEW);
+  assert.equal(big.combatFeel.text.length, feel.MAX_SUMMARY_CHARS);
+  assert.equal(big.combatFeel.flags.length, feel.MAX_FLAGS);
+  assert.ok(big.combatFeel.flags.every((f) => f.length <= 300));
+  assert.ok(!criticPrompt({ combatFeel: huge }).includes('x'.repeat(feel.MAX_SUMMARY_CHARS + 1)));
+});
+
+test('no combatFeelLog: the pass result and the Critic packet are unchanged', () => {
+  const view = publicResult({ runId: 'pt1', projectId: 'game', playtest: okReport() }, VIEW);
+  assert.equal('combatFeel' in view, false);
+  for (const bad of [null, 'text', {}, { text: '' }, { text: 7 }]) {
+    const v = publicResult({ runId: 'pt1', projectId: 'game', playtest: { ...okReport(), report: { ...okReport().report, combatFeel: bad } } }, VIEW);
+    assert.equal('combatFeel' in v, false, JSON.stringify(bad));
+  }
+  const prompt = criticPrompt(okReport().report);
+  assert.equal(prompt.includes('combatFeel'), false);
+});

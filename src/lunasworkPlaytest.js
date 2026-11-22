@@ -79,6 +79,7 @@ const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
 const designMatch = require('./lunasworkDesignMatch');
 const variants = require('./lunasworkVariants');
+const { summarizeCombatFeel } = require('./lunasworkCombatFeel');
 const { argsUseAgy, execAgy } = require('./agyexec');
 const { isAgyModel } = require('./workerModels');
 
@@ -98,6 +99,8 @@ const SHIP_CONFIRM_MODEL = 'opus';
 const FALLBACK_MODEL = 'sonnet';
 const PLAYTEST_BUDGET_USD = 5;
 const PLAYTEST_TIMEOUT_MS = 30 * 60 * 1000;
+// The one combatFeelLog read after a Unity pass: a hung editor must not stall the run.
+const COMBAT_FEEL_TIMEOUT_MS = 15 * 1000;
 const DESKTOP = { width: 1440, height: 900 };
 const MOBILE = { width: 390, height: 844 };
 // What the app under test is: the adapter's name. Anything else is a web app.
@@ -1022,6 +1025,28 @@ function callClaude({ args, prompt, cwd, env, execImpl, timeoutMs, killTreeImpl,
 }
 
 /**
+ * The combat-feel summary of a game that keeps a combatFeelLog (an adapter
+ * with combatFeelLog(): unity). Never throws: a failed read is a warning and
+ * the report goes on without it; no log = no summary, the report unchanged.
+ * @returns {Promise<{summary:object|null, warnings:object[]}>}
+ */
+async function readCombatFeel(adapter, timeoutMs = COMBAT_FEEL_TIMEOUT_MS) {
+  if (typeof adapter.combatFeelLog !== 'function') return { summary: null, warnings: [] };
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs);
+  });
+  try {
+    const log = await Promise.race([Promise.resolve().then(() => adapter.combatFeelLog()), timeout]);
+    return { summary: summarizeCombatFeel(log), warnings: [] };
+  } catch (err) {
+    return { summary: null, warnings: [{ code: 'combatFeelFailed', detail: clean(err && err.message, 300) }] };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Runs one Playtester pass against an already started adapter. Always
  * resolves; a failure carries an empty report with the error noted, so the
  * run goes on (plan: never reject the run).
@@ -1132,11 +1157,15 @@ async function runPlaytest(opts) {
         runJudge: (judge) => callClaude({ ...judge, env, agyEnv, execImpl, killTreeImpl: killImpl }),
       })
       : { designMatch: [], warnings: [], costUsd: null };
+    const feel = await readCombatFeel(adapter);
     const report = {
       ...validated,
       findings: [...validated.findings, ...(screenDiff ? screenDiff.findings : [])],
       designMatch: match.designMatch,
-      warnings: [...validated.warnings, ...(screenDiff ? screenDiff.warnings : []), ...design.warnings, ...match.warnings],
+      warnings: [
+        ...validated.warnings, ...(screenDiff ? screenDiff.warnings : []), ...design.warnings, ...match.warnings, ...feel.warnings,
+      ],
+      ...(feel.summary ? { combatFeel: feel.summary } : {}),
     };
     const costUsd = Number.isFinite(match.costUsd) ? (parsed.costUsd || 0) + match.costUsd : parsed.costUsd;
     return { ok: true, ...base, screenDiff, report, costUsd, durationMs: now() - started };
@@ -1167,5 +1196,6 @@ module.exports = {
   emptyReport,
   baselinesDirFor,
   compareScreens,
+  readCombatFeel,
   runPlaytest,
 };

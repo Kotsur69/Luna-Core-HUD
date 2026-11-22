@@ -943,3 +943,70 @@ test('animationFrameSync: inspects, bakes only when asked and every check passes
 
   await assert.rejects(run({ clipPath: CLIP, attackStepPath: STEP }, { nope: 1 }), /clip and attackStep/);
 });
+
+// ---- combatFeelLog (combatFeelLog.js, through unity.js) -----------------------------
+
+const feelEntry = (over = {}) => ({
+  hitStopFrames: 4, hitStopMs: 66.7, hitStopIntendedFrames: 4, inputLatencyMs: 48, hitboxToVfxFrames: 1, ...over,
+});
+
+test('combatFeelLog: clean entries pass, unknown keys are dropped, no log is null', () => {
+  const transition = { from: 1, to: 0.2, reason: 'DeadSecond', atMs: 1500 };
+  const log = UN.parseCombatFeelLog({ scene: 'Arena', combatFeelLog: [feelEntry({ extra: 'x' }), { timeScale: transition }, { inputLatencyMs: 0 }] });
+  assert.deepEqual(log, [feelEntry(), { timeScale: transition }, { inputLatencyMs: 0 }]);
+  assert.deepEqual(UN.parseCombatFeelLog({ combatFeelLog: [{ timeScale: { from: 0.2, to: 1, atMs: 9 } }] }), [{ timeScale: { from: 0.2, to: 1, atMs: 9 } }]);
+  for (const state of [{ scene: 'Arena' }, null, 'text', [], { combatFeelLog: 'nope' }, { combatFeelLog: {} }]) {
+    assert.equal(UN.parseCombatFeelLog(state), null, JSON.stringify(state));
+  }
+  assert.deepEqual(UN.parseCombatFeelLog({ combatFeelLog: [] }), []);
+});
+
+test('combatFeelLog: malformed or out-of-range entries are dropped whole', () => {
+  const bad = [
+    null, 7, 'hit', [], {}, { extra: 1 },
+    feelEntry({ hitStopFrames: 2.5 }), feelEntry({ hitStopFrames: -1 }), feelEntry({ hitStopFrames: 601 }),
+    feelEntry({ hitStopMs: Infinity }), feelEntry({ hitStopMs: NaN }), feelEntry({ hitStopMs: '66' }),
+    feelEntry({ inputLatencyMs: -5 }), feelEntry({ inputLatencyMs: 5001 }), feelEntry({ inputLatencyMs: null }),
+    feelEntry({ hitboxToVfxFrames: 0.5 }), feelEntry({ hitboxToVfxFrames: -601 }),
+    feelEntry({ hitStopIntendedFrames: 1e9 }),
+    { timeScale: { from: 1, to: 0.2 } }, { timeScale: { from: -1, to: 1, atMs: 0 } }, { timeScale: { from: 1, to: 11, atMs: 0 } },
+    { timeScale: { from: 1, to: 0, atMs: -1 } }, { timeScale: { from: 1, to: 0, atMs: 1e12 } },
+    { timeScale: { from: 1, to: 0, atMs: 0, reason: 'x'.repeat(41) } }, { timeScale: { from: 1, to: 0, atMs: 0, reason: '<script>' } },
+    { timeScale: { from: 1, to: 0, atMs: 0, reason: 42 } }, { timeScale: 'slow' }, { inputLatencyMs: 50, timeScale: null },
+  ];
+  assert.deepEqual(UN.parseCombatFeelLog({ combatFeelLog: [...bad, feelEntry()] }), [feelEntry()]);
+});
+
+test('combatFeelLog: the ring buffer keeps the newest MAX_COMBAT_FEEL_ENTRIES', () => {
+  assert.equal(UN.MAX_COMBAT_FEEL_ENTRIES, 200);
+  const raw = Array.from({ length: 450 }, (_, i) => ({ inputLatencyMs: i }));
+  const log = UN.parseCombatFeelLog({ combatFeelLog: raw });
+  assert.equal(log.length, UN.MAX_COMBAT_FEEL_ENTRIES);
+  assert.deepEqual(log[0], { inputLatencyMs: 250 });
+  assert.deepEqual(log[log.length - 1], { inputLatencyMs: 449 });
+  // A huge array is only scanned at its newest end.
+  const huge = UN.parseCombatFeelLog({ combatFeelLog: [...Array(100_000).fill(null), { inputLatencyMs: 1 }] });
+  assert.deepEqual(huge, [{ inputLatencyMs: 1 }]);
+});
+
+test('withCombatFeelLog: the state keeps its other keys; a state without the log is the same object', () => {
+  const state = { scene: 'Arena', combatFeelLog: [feelEntry(), { bad: true }] };
+  assert.deepEqual(UN.withCombatFeelLog(state), { scene: 'Arena', combatFeelLog: [feelEntry()] });
+  assert.equal(state.combatFeelLog.length, 2, 'the input is not mutated');
+  const plain = { scene: 'Arena' };
+  assert.equal(UN.withCombatFeelLog(plain), plain);
+  assert.deepEqual(UN.withCombatFeelLog({ scene: 'Arena', combatFeelLog: 'x'.repeat(1000) }), { scene: 'Arena' }, 'a non-array log is dropped');
+  assert.deepEqual(UN.withCombatFeelLog({ scene: 'Arena', combatFeelLog: { a: 1 } }), { scene: 'Arena' });
+  assert.equal(UN.withCombatFeelLog(null), null);
+});
+
+test('the bridge game_state hands the Playtester a clean, capped combatFeelLog', async () => {
+  const raw = [{ inputLatencyMs: 'fast' }, ...Array.from({ length: 300 }, () => feelEntry())];
+  const { client } = fakePipeline({ reply: () => okReply({ scene: 'Arena', combatFeelLog: raw }) });
+  const invoke = B.unityBackend({ transport: 'pipeline', connect: () => ({ exec: client.exec, close: async () => {} }) });
+  const bridge = B.createBridge({ backend: 'unity', evidenceDir: tmpDir('lw-bridge-feel-'), invoke });
+  const state = JSON.parse((await bridge.callTool('game_state', {})).content[0].text);
+  assert.equal(state.scene, 'Arena');
+  assert.equal(state.combatFeelLog.length, UN.MAX_COMBAT_FEEL_ENTRIES);
+  assert.ok(state.combatFeelLog.every((e) => e.inputLatencyMs === 48));
+});

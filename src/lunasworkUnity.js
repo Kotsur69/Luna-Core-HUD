@@ -41,7 +41,9 @@ const { validateUnityProfile, unitySubdirField } = require('./lunasworkAdapterPr
 const { bridgeTools, noTools } = require('./lunasworkBridge');
 const { runTag } = require('./todorows');
 const { saveScreenshot } = require('../helpers/playtest-bridge/bridge');
-const { UNITY_TRANSPORTS, DRIVER_GROUP, isPlaying } = require('../helpers/playtest-bridge/unity');
+const {
+  UNITY_TRANSPORTS, DRIVER_GROUP, isPlaying, parseCombatFeelLog, withCombatFeelLog,
+} = require('../helpers/playtest-bridge/unity');
 const { PIPELINE_ERROR, isTransientPipelineError, pipelineCommandDidNotRun } = require('../helpers/playtest-bridge/pipeline-http');
 
 const PLAY_POLL_MS = 500;
@@ -304,7 +306,7 @@ function createUnityAdapter(ctx) {
     const { calls } = target;
     const steps = [
       [CONSOLE_FILE, async () => writeEvidence(ctx.evidenceDir, CONSOLE_FILE, await call(calls.console()))],
-      [STATE_FILE, async () => writeEvidence(ctx.evidenceDir, STATE_FILE, await call(calls.driver('state')))],
+      [STATE_FILE, async () => writeEvidence(ctx.evidenceDir, STATE_FILE, withCombatFeelLog(await call(calls.driver('state'))))],
       [FINAL_SHOT, async () => {
         const shot = await call(calls.driver('screenshot'));
         saveScreenshot(ctx.evidenceDir, FINAL_SHOT, shot && shot.png);
@@ -359,7 +361,18 @@ function createUnityAdapter(ctx) {
     return bridgeTools('unity', { evidenceDir: ctx.evidenceDir, nodeBinary: ctx.nodeBinary, args: [...target.bridgeArgs] });
   }
 
-  return { name: 'unity', evidenceDir: ctx.evidenceDir, start, stop, tools };
+  /**
+   * The game's clean combatFeelLog, read once while play mode still runs (the
+   * Playtester's pass is over, stop() has not run yet). Null when the game
+   * keeps no log or the adapter is not started; a failed read throws.
+   * @returns {Promise<object[]|null>}
+   */
+  async function combatFeelLog() {
+    if (!started) return null;
+    return session(async (call) => parseCombatFeelLog(await call(target.calls.driver('state'))));
+  }
+
+  return { name: 'unity', evidenceDir: ctx.evidenceDir, start, stop, tools, combatFeelLog };
 }
 
 module.exports = {

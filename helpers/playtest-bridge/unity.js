@@ -21,8 +21,11 @@
 // PlaytestDriver protocol (the God Mode card in src/lunasworkUnity.js builds
 // the C# side). Pipeline: command group `playtest`; legacy: custom tool
 // `playtest_driver` with parameters {action, ...}.
-//   state       -> {scene, ...game-specific snapshot}
-//   input       {steps} (tools.js send_input) -> {done:n}
+//   state       -> {scene, ...game-specific snapshot, combatFeelLog?: [...]}
+//               combatFeelLog (optional ring buffer of combat timing samples)
+//               is untrusted: withCombatFeelLog() cleans and caps it
+//               (combatFeelLog.js) wherever LunaCore reads the state.
+//   input      {steps} (tools.js send_input) -> {done:n}
 //               Pipeline passes steps as a JSON string (--steps <json>).
 //   screenshot  -> {png:<base64>, width, height}   (Game view, play mode only)
 // ============================================================================
@@ -30,6 +33,7 @@
 'use strict';
 
 const unityAnimation = require('./unityAnimation');
+const combatFeelLog = require('./combatFeelLog');
 
 const UNITY_MCP_TOOLS = Object.freeze({
   editor: 'manage_editor',
@@ -195,4 +199,7 @@ module.exports = {
   UNITY_PIPELINE_ANIMATION: unityAnimation.UNITY_PIPELINE_ANIMATION,
   ANIMATION_FRAME_SYNC_TOOL: unityAnimation.ANIMATION_FRAME_SYNC_TOOL,
   animationFrameSync,
+  MAX_COMBAT_FEEL_ENTRIES: combatFeelLog.MAX_COMBAT_FEEL_ENTRIES,
+  parseCombatFeelLog: combatFeelLog.parseCombatFeelLog,
+  withCombatFeelLog: combatFeelLog.withCombatFeelLog,
 };
