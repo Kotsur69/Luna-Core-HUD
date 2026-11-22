@@ -31,8 +31,11 @@
 //              `claude -p --json-schema` call compares each new asset's render
 //              (design/asset-renders/<slug>.png, saved by the builder) with the
 //              art-direction images in design/references/ and scores it 0-10.
-//              Below STYLE_PASS_SCORE the asset gets a `feel` card with both
-//              images in its files; otherwise its row is `approved`. It lives
+//              A turntable sheet (luna_asset_blender: front, side, 3/4,
+//              silhouette) also gets silhouette-readability and Blade & Bullet
+//              palette (Midnight / Golden Hour emission slot) scores, which cap
+//              its score. Below STYLE_PASS_SCORE the asset gets a `feel` card
+//              with both images in its files; otherwise its row is `approved`. It lives
 //              here, not in src/lunasworkCritic.js, which is at its size limit;
 //              it reuses the Critic's runner, card writer and model choice.
 //
@@ -59,6 +62,7 @@ const { checkCwd } = require('./projects');
 const { normalizeTodos, runTag, MAX_DETAILS_CHARS } = require('./todorows');
 const { MAX_TASKS_PER_CALL } = require('./intake');
 const { KINDS, artRootOf, unityAssetBrief } = require('./lunasworkAssetPipeline');
+const { isTurntableSheet } = require('./lunasworkBlenderScript');
 
 const ASSETS_FILE = 'ASSETS.md';
 const RENDERS_DIR = 'asset-renders';
@@ -97,6 +101,10 @@ const MAX_REFERENCE_IMAGES = 12;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_LOOK_CHARS = 3000;
 const MAX_NOTES_CHARS = 600;
+// PNG signature + IHDR width/height: enough to tell a turntable sheet.
+const SHEET_HEAD_BYTES = 24;
+// Blade & Bullet emission slots a turntable asset is checked against.
+const PALETTE_SLOTS = Object.freeze(['midnight', 'golden-hour', 'mixed', 'none']);
 
 const MAX_LIST_CHARS = 200000;
 const MAX_NAME_CHARS = 80;
@@ -447,6 +455,25 @@ function renderOf(repoDir, row) {
   return null;
 }
 
+/**
+ * True when a render (checked by renderOf) is the 4-panel turntable sheet
+ * luna_asset_blender renders, told by its PNG header. A render that cannot
+ * be read is scored as a plain render.
+ */
+function isTurntableRender(repoDir, rel) {
+  try {
+    const fd = fs.openSync(path.join(path.resolve(repoDir), ...rel.split('/')), 'r');
+    try {
+      const head = Buffer.alloc(SHEET_HEAD_BYTES);
+      return isTurntableSheet(head.subarray(0, fs.readSync(fd, head, 0, head.length, 0)));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** The "## Look and feel" section of DESIGN.md, capped; '' when there is none. */
 function lookAndFeel(design) {
   const md = String(design || '').replace(/\r\n/g, '\n').replace(/<!--[\s\S]*?-->/g, '');
@@ -467,7 +494,16 @@ const STYLE_SCHEMA = {
         type: 'object',
         additionalProperties: false,
         required: ['name', 'score', 'reference', 'notes'],
-        properties: { name: { type: 'string' }, score: { type: 'number' }, reference: { type: 'string' }, notes: { type: 'string' } },
+        properties: {
+          name: { type: 'string' },
+          score: { type: 'number' },
+          reference: { type: 'string' },
+          notes: { type: 'string' },
+          // Turntable assets only: silhouette readability and palette compliance.
+          silhouette: { type: 'number' },
+          palette: { type: 'number' },
+          paletteSlot: { type: 'string', enum: [...PALETTE_SLOTS] },
+        },
       },
     },
   },
@@ -487,7 +523,17 @@ function buildStyleArgs({ model = FALLBACK_MODEL, budgetUsd = STYLE_BUDGET_USD }
   ];
 }
 
+// The extra checks a turntable sheet (luna_asset_blender) gets.
+const TURNTABLE_RULES = [
+  'A render marked "turntable sheet" is four panels left to right: front orthographic, right side orthographic, 3/4 perspective, and a flat black silhouette on gray. For each of those assets also give:',
+  '- silhouette (0-10): is the black silhouette panel alone readable and distinct at gameplay size (clear pose, weapon and head shapes, no blob)?',
+  '- palette (0-10): Blade & Bullet palette compliance - the emissive accents sit in ONE emission slot, Midnight or Golden Hour, as the art direction (docs/ART_DIRECTION.md, the references, the look and feel) defines them; mixing both slots or off-palette emission scores low.',
+  `- paletteSlot: the slot it reads as - ${PALETTE_SLOTS.join(', ')}.`,
+  'Its score must not be higher than its silhouette or palette score.',
+];
+
 function buildStylePrompt({ assets, references, look }) {
+  const sheet = (a) => (a.turntable === true ? ' (turntable sheet)' : '');
   return [
     "You are the Critic of Luna's Work, running the art-direction style check of a game's new assets.",
     '',
@@ -496,35 +542,51 @@ function buildStylePrompt({ assets, references, look }) {
     ...(look ? ['', 'Look and feel, from design/DESIGN.md:', '<<<', look, '>>>'] : []),
     '',
     'New assets - open every render with Read:',
-    ...assets.map((a) => `- "${a.name}" (${a.type}): ${a.spec || a.name}. Render: ${a.render}`),
+    ...assets.map((a) => `- "${a.name}" (${a.type}): ${a.spec || a.name}. Render: ${a.render}${sheet(a)}`),
     '',
+    ...(assets.some((a) => a.turntable === true) ? [...TURNTABLE_RULES, ''] : []),
     'Score every asset from 0 to 10 for how consistent it is with the art direction: palette, shape language, level of detail, rendering style, proportions.',
     `10 = it could come from the reference game; below ${STYLE_PASS_SCORE} = it would look out of place.`,
     'Answer with JSON. scores: one entry per asset - name (exactly as listed), score, reference (the path of the reference image it should look closest to, from the list above), notes (what differs and what to change, one or two sentences).',
   ].join('\n');
 }
 
+const clampScore = (v) => Math.round(Math.min(10, Math.max(0, v)));
+
 /**
  * The trust boundary: one score per asked asset, the reference one of the
  * listed images (else the first), notes capped. Unknown names are dropped.
- * @returns {{name:string, score:number, reference:string, notes:string}[]}
+ * A turntable asset also needs its silhouette and palette scores (else it is
+ * dropped: not approved, checked again) and its score is capped by both.
+ * @returns {{name:string, score:number, reference:string, notes:string,
+ *   silhouette?:number, palette?:number, paletteSlot?:string|null}[]}
  */
 function validateStyle(raw, assets, references) {
-  const asked = new Set(assets.map((a) => a.name));
+  const asked = new Map(assets.map((a) => [a.name, a]));
   const seen = new Set();
   const out = [];
   for (const s of isObj(raw) && Array.isArray(raw.scores) ? raw.scores : []) {
     if (!isObj(s) || !asked.has(s.name) || seen.has(s.name) || !Number.isFinite(s.score)) continue;
+    const turntable = asked.get(s.name).turntable === true;
+    if (turntable && !(Number.isFinite(s.silhouette) && Number.isFinite(s.palette))) continue;
     seen.add(s.name);
     const reference = references.includes(s.reference) ? s.reference : references[0];
-    out.push({ name: s.name, score: Math.round(Math.min(10, Math.max(0, s.score))), reference, notes: oneLine(s.notes, MAX_NOTES_CHARS) });
+    const entry = { name: s.name, score: clampScore(s.score), reference, notes: oneLine(s.notes, MAX_NOTES_CHARS) };
+    if (!turntable) {
+      out.push(entry);
+      continue;
+    }
+    const silhouette = clampScore(s.silhouette);
+    const palette = clampScore(s.palette);
+    const paletteSlot = PALETTE_SLOTS.includes(s.paletteSlot) ? s.paletteSlot : null;
+    out.push({ ...entry, score: Math.min(entry.score, silhouette, palette), silhouette, palette, paletteSlot });
   }
   return out;
 }
 
 /**
  * One style-check call. Always resolves.
- * @param {{repoDir:string, assets:{name:string, type:string, spec:string, render:string}[], references:string[],
+ * @param {{repoDir:string, assets:{name:string, type:string, spec:string, render:string, turntable?:boolean}[], references:string[],
  *   model?:string, runClaude?:Function, env?:object, timeoutMs?:number, budgetUsd?:number}} opts
  * @returns {Promise<{ok:boolean, scores:object[], costUsd:number|null, error?:string, detail?:string}>}
  */
@@ -557,6 +619,7 @@ async function runStyleCheck(opts) {
 function styleCard(row, s) {
   const details = [
     `The art-direction style check scored the asset "${row.name}" ${s.score}/10 against design/${REFERENCES_DIR}/.`,
+    Number.isFinite(s.silhouette) ? `Turntable sheet: silhouette readability ${s.silhouette}/10, palette compliance ${s.palette}/10 (emission slot: ${s.paletteSlot || 'unclear'}).` : null,
     s.notes,
     `Asset render: ${row.render}`,
     `Art reference: ${s.reference}`,
@@ -626,7 +689,7 @@ function createAssetStep(deps) {
     if (!due.length) return rows;
     const references = referenceImages(run.repoPath);
     if (!references.length) return rows;
-    const batch = due.slice(0, MAX_STYLE_PER_CALL).map((x) => ({ ...x.row, render: x.render }));
+    const batch = due.slice(0, MAX_STYLE_PER_CALL).map((x) => ({ ...x.row, render: x.render, turntable: isTurntableRender(run.repoPath, x.render) }));
     const pick = pickModel('critic', run.models) || { model: FALLBACK_MODEL, reason: 'default' };
     const res = await deps.styleCheck({ repoDir: run.repoPath, assets: batch, references, model: pick.model });
     if (typeof deps.logModel === 'function') deps.logModel('critic', pick.model, `${pick.reason}; asset style check`);

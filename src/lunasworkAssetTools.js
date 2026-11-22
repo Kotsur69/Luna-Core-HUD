@@ -6,7 +6,8 @@
 // (src/lunasworkAssetPipeline.js) through five tools on the MCP server every
 // LunaCore tab already has (src/intake.js), next to luna_todo_* and memory_*:
 //
-//   luna_asset_blender      save the open Blender scene + FBX export + prefab
+//   luna_asset_blender      save the open Blender scene + FBX export + prefab,
+//                           optional toon pass, turntable sheet for the Critic
 //   luna_asset_comfy        a ComfyUI draft from a repo workflow (art/comfyui/)
 //   luna_asset_higgsfield   a paid Higgsfield final, booked against the run's cap
 //   luna_asset_search       free CC0 / CC-BY assets on a library's official API
@@ -52,6 +53,7 @@ const net = require('net');
 const dns = require('dns');
 const childProcess = require('child_process');
 const { createAssetPipeline, KINDS, MODEL_KINDS, COMFY_KINDS } = require('./lunasworkAssetPipeline');
+const { STYLE_PASSES, DEFAULT_STYLE_PASS, MIN_POLY_BUDGET, MAX_POLY_BUDGET, PROP_POLY_BUDGET, CHARACTER_POLY_BUDGET, cleanStyleOptions } = require('./lunasworkBlenderScript');
 const { createComfyClient, readCappedBody } = require('./lunasworkComfy');
 const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-http');
 const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
@@ -123,12 +125,18 @@ const PROMPT_PROP = { type: 'string', description: 'The generation prompt (the A
 const ASSET_TOOLS = Object.freeze([
   {
     name: BLENDER_TOOL,
-    description: "Luna's Work asset pipeline: after you built the model in Blender through the Blender MCP, save the open Blender scene to art/blender/<slug>.blend, export it as FBX for Unity (-Z forward, Y up, scale applied) under the art root, import it through the Unity Pipeline and make its prefab. Logged in the run report.",
+    description: "Luna's Work asset pipeline: after you built the model in Blender through the Blender MCP, save the open Blender scene to art/blender/<slug>.blend, render a 4-panel turntable sheet (front, side, 3/4, silhouette) to design/asset-renders/<slug>.png for the Critic's style check, export it as FBX for Unity (-Z forward, Y up, scale applied) under the art root, import it through the Unity Pipeline and make its prefab. stylePass \"blade-bullet-toon\" first holds the model to its triangle budget (Decimate), zeroes the root and applies scale, checks a character's height against 1.6 m and adds an inverted-hull black outline. Logged in the run report.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['name', 'kind'],
-      properties: { name: NAME_PROP, kind: { type: 'string', enum: [...MODEL_KINDS] }, prompt: PROMPT_PROP },
+      properties: {
+        name: NAME_PROP,
+        kind: { type: 'string', enum: [...MODEL_KINDS] },
+        prompt: PROMPT_PROP,
+        stylePass: { type: 'string', enum: [...STYLE_PASSES], default: DEFAULT_STYLE_PASS, description: 'The style pass before the export: "blade-bullet-toon" (poly budget, outline, zeroed root, character height check) or "none".' },
+        polyBudget: { type: 'integer', minimum: MIN_POLY_BUDGET, maximum: MAX_POLY_BUDGET, description: `Triangle budget of the toon pass (default ${PROP_POLY_BUDGET} for props, ${CHARACTER_POLY_BUDGET} for characters).` },
+      },
     },
   },
   {
@@ -215,6 +223,11 @@ const RUNNER_OF = Object.freeze({
 function callAssetTool(name, args, assets) {
   if (!TOOL_NAMES.has(name)) return null;
   const a = isObj(args) ? args : {};
+  if (name === BLENDER_TOOL) {
+    // Checked here as well as in the pipeline: a bad option never reaches Blender.
+    const style = cleanStyleOptions(a);
+    if (!style.ok) return Promise.resolve({ ok: false, error: { ok: false, error: style.error, detail: style.detail } });
+  }
   const fn = assets[RUNNER_OF[name]];
   const run = typeof fn === 'function' ? fn : () => ({ ok: false, error: 'toolDown', detail: `${name} is not available in this tab` });
   return Promise.resolve()
