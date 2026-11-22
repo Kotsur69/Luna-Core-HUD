@@ -573,7 +573,11 @@ async function askModel(runner, call) {
   } catch (err) {
     return { error: 'failed', detail: clean(err && err.message, 300) };
   }
-  if (!isObj(res) || res.error) return { error: (isObj(res) && res.error) || 'failed', detail: isObj(res) ? res.detail : undefined };
+  if (!isObj(res) || res.error) {
+    // A usage limit that knows its reset (the account reserve gate) keeps it for the run's wait.
+    const resumeAt = isObj(res) && Number.isFinite(res.resumeAt) ? { resumeAt: res.resumeAt } : {};
+    return { error: (isObj(res) && res.error) || 'failed', detail: isObj(res) ? res.detail : undefined, ...resumeAt };
+  }
   const parsed = parsePlannerOutput(res.stdout);
   return parsed.ok ? { raw: parsed.raw, costUsd: parsed.costUsd } : { error: parsed.error, detail: parsed.detail };
 }
@@ -720,6 +724,7 @@ async function runDirector(opts) {
         ...modelInfo,
         error: answer.error,
         ...(answer.detail ? { detail: answer.detail } : {}),
+        ...(Number.isFinite(answer.resumeAt) ? { resumeAt: answer.resumeAt } : {}),
         warnings: contracts.warning ? [contracts.warning] : [],
       });
     }

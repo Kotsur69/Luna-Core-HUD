@@ -150,8 +150,9 @@ function reviewPickFor(models) {
 function createHookDeps(ctx) {
   const settings = typeof ctx.settings === 'function' ? ctx.settings : () => settingsStore.readSettings();
   const log = typeof ctx.log === 'function' ? (message) => ctx.log(`[lunaswork] ${message}`) : () => {};
-  const graph = createGraphRefresher({ env: ctx.env, log: ctx.log });
   const runClaude = typeof ctx.runClaude === 'function' ? ctx.runClaude : execClaude;
+  // The graph's and Lighthouse's claude -p go through the same runner (the wiring's is reserve-gated).
+  const graph = createGraphRefresher({ env: ctx.env, log: ctx.log, runClaude });
   const metered = (role) => (typeof ctx.meter === 'function' ? { runClaude: ctx.meter(role, runClaude) } : { runClaude });
   const agyEnvNow = () => (typeof ctx.agyEnv === 'function' ? ctx.agyEnv() || null : null);
 
@@ -167,6 +168,7 @@ function createHookDeps(ctx) {
         reportDir: typeof evidenceDir === 'string' && evidenceDir ? path.join(evidenceDir, 'lighthouse') : undefined,
         env: ctx.env(),
         log,
+        runClaude,
       });
       return { ...res, budgets: settingsStore.lighthouseBudgetsFor(settings(), projectId) };
     },

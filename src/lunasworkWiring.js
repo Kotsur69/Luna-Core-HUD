@@ -96,6 +96,7 @@ const { runLaunchAssets } = require('./lunasworkLaunch');
 const { createDemoMaker } = require('./lunasworkDemo');
 const { fileQueueStore, queueEmailNote } = require('./lunasworkQueue');
 const { createSecretStore } = require('./lunasworkErrorTracking');
+const { reserveHold } = require('./lunasworkReserveGate');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -216,6 +217,44 @@ ${msg.text}` }),
 }
 
 /**
+ * execClaude for every role call: a `--model agy` call (the role set to agy,
+ * or the agy fallback) gets the agy profile's env and runs on agy
+ * (src/agyexec.js); every other call is the plain `claude -p`, unless the
+ * Claude account its env runs on is held by its reserve - then nothing is
+ * spawned and the call answers {error:'limit', detail, resumeAt}.
+ * @param {{exec?:Function, agyEnv?:()=>object|null, reserveUntil?:(accountId:string)=>number|null,
+ *   now?:()=>number, log?:(line:string)=>void}} [deps]
+ * @returns {(call:object)=>Promise<object>}
+ */
+function createHeadlessRunner({ exec = execClaude, agyEnv = () => null, reserveUntil, now = Date.now, log } = {}) {
+  return (call) => {
+    if (argsUseAgy(call && call.args)) return exec({ ...call, agyEnv: agyEnv() });
+    const held = reserveHold(call && call.env, reserveUntil, { now: now(), log });
+    return held ? Promise.resolve(held) : exec(call);
+  };
+}
+
+/**
+ * The Playtester call booked on a meter `m`; free providers only when asked
+ * for (freeFallback). Its Claude call carries the same reserve gate as
+ * runHeadless (runPlaytest checks it right before spawning; agy is not gated).
+ * @param {{env:()=>object, freeEnv:()=>object|null, agyEnv:()=>object|null,
+ *   reserveUntil?:(accountId:string)=>number|null, now?:()=>number, log?:(line:string)=>void,
+ *   run?:Function}} deps run: runPlaytest (tests inject a fake)
+ */
+function createPlaytestOn({ env, freeEnv, agyEnv, reserveUntil, now = Date.now, log, run = runPlaytest }) {
+  const gate = (callEnv) => reserveHold(callEnv, reserveUntil, { now: now(), log });
+  return (m) => ({ free, ...opts }) => run({
+    ...opts,
+    env: (free && freeEnv()) || env(),
+    // A Playtester set to agy runs in the agy profile's env.
+    agyEnv: agyEnv(),
+    gate,
+    execImpl: m.exec('playtester', execFile),
+  });
+}
+
+/**
  * @param {{
  *   projects: ()=>object[], resolveDir: (p:string)=>string|null,
  *   readTodos: (projectId:string)=>object[], writeTodos: (projectId:string, list:object[])=>boolean,
@@ -227,6 +266,7 @@ ${msg.text}` }),
  *   agyEnv?: ()=>object|null (the agy profile's env: roles set to agy, the agy fallback),
  *   usageLimits: ()=>object[],
  *   accountFailover?: (resetsAt:number|null)=>boolean,
+ *   reserveUntil?: (accountId:string)=>number|null (the reserve reset of a held account, else null),
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
@@ -279,7 +319,8 @@ function createLunasWorkRuntime(ctx) {
     ? {
       runsDir: ctx.runsDir,
       // C10: launch assets at SHIP; B13: a walkthrough video per milestone gate.
-      launch: (run) => runLaunchAssets({ run, env: ctx.env() }),
+      // The marketing agent's claude -p is gated on the account reserve too.
+      launch: (run) => runLaunchAssets({ run, env: ctx.env(), runClaude: runHeadless }),
       demo: createDemoMaker({ runsDir: ctx.runsDir, log: ctx.log }),
       ...(ctx.mailReplies ? { threads: ctx.mailReplies } : {}),
       log: ctx.log,
@@ -299,20 +340,10 @@ function createLunasWorkRuntime(ctx) {
 
   /** The agy profile's env (src/agyprofile.js), or null when there is none. */
   const agyEnvNow = () => (typeof ctx.agyEnv === 'function' ? ctx.agyEnv() || null : null);
-  /**
-   * execClaude for every role call: a `--model agy` call (the role set to agy,
-   * or the agy fallback) gets the agy profile's env and runs on agy
-   * (src/agyexec.js); every other call is the plain `claude -p` as before.
-   */
-  const runHeadless = (call) => execClaude(argsUseAgy(call && call.args) ? { ...call, agyEnv: agyEnvNow() } : call);
-
-  /** The Playtester call booked on `m`; free providers only when asked for (freeFallback). */
-  const playtestOn = (m) => ({ free, ...opts }) => runPlaytest({
-    ...opts,
-    env: (free && ctx.freeEnv()) || ctx.env(),
-    // A Playtester set to agy runs in the agy profile's env.
-    agyEnv: agyEnvNow(),
-    execImpl: m.exec('playtester', execFile),
+  // Every role call, gated on the account reserve (src/lunasworkReserveGate.js).
+  const runHeadless = createHeadlessRunner({ agyEnv: agyEnvNow, reserveUntil: ctx.reserveUntil, log: ctx.log });
+  const playtestOn = createPlaytestOn({
+    env: ctx.env, freeEnv: ctx.freeEnv, agyEnv: agyEnvNow, reserveUntil: ctx.reserveUntil, log: ctx.log,
   });
 
   // "Run Playtester pass": always on Claude (ctx.env() with the account layer),
@@ -616,5 +647,5 @@ function wireDecisionSync({ controller, cloud, putDecisions, putFeedback, putLun
 
 module.exports = {
   createLunasWorkRuntime, createMachineRuntime, createAskRuntime, createAwake, syncCheckout, wireDecisionSync,
-  thumbnail, thumbnailsOf, mailWithNote, meteredPass,
+  thumbnail, thumbnailsOf, mailWithNote, meteredPass, createHeadlessRunner, createPlaytestOn,
 };

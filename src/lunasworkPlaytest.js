@@ -1067,10 +1067,12 @@ async function readCombatFeel(adapter, timeoutMs = COMBAT_FEEL_TIMEOUT_MS) {
  *   variants?:object[],
  *   iteration?:number, isGate?:boolean, models?:object, env?:object, agyEnv?:object|null,
  *   execImpl?:Function, timeoutMs?:number, budgetUsd?:number,
+ *   gate?:(env:object)=>({error:string, detail?:string, resumeAt?:number}|null),
  *   threshold?:number, now?:()=>number, killTreeImpl?:(pid:number)=>void}} opts
+ *   gate: checked right before a Claude call is spawned; an answer fails the pass with it
  * @returns {Promise<{ok:boolean, mode:string, model:string|null, modelReason:string|null,
  *   report:object, screenDiff:object|null, costUsd:number|null, durationMs:number,
- *   error?:string, detail?:string}>}
+ *   error?:string, detail?:string, resumeAt?:number}>}
  */
 async function runPlaytest(opts) {
   const { projectDir, adapter, url, mode = 'explore', models, env = process.env } = opts;
@@ -1081,11 +1083,13 @@ async function runPlaytest(opts) {
   const pick = MODES.includes(mode) ? playtestModel(mode, models) : null;
   const base = { mode, model: pick && pick.model, modelReason: pick && pick.reason, screenDiff: null, costUsd: null };
   const ran = passPlan(opts);
-  const fail = (error, detail) => ({
+  // `resumeAt` (epoch ms) rides along on a usage limit that knows its reset.
+  const fail = (error, detail, resumeAt) => ({
     ok: false,
     ...base,
     error,
     ...(detail ? { detail } : {}),
+    ...(Number.isFinite(resumeAt) ? { resumeAt } : {}),
     report: emptyReport(mode, { code: error, ...(detail ? { detail } : {}) }, ran),
     durationMs: now() - started,
   });
@@ -1110,6 +1114,11 @@ async function runPlaytest(opts) {
     const checks = mode === 'explore' && Array.isArray(opts.checks) ? opts.checks : [];
     if (mode === 'shipConfirm' && !inputs.shipCriteria) return fail('noShipCriteria');
     if (!inputs.testPlan && !inputs.shipCriteria) return fail('noDesignPack');
+    const args = buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd });
+    // The account reserve gate (src/lunasworkReserveGate.js): a Claude call on
+    // an account held by its reserve is never spawned. agy has no Claude account.
+    const held = !argsUseAgy(args) && typeof opts.gate === 'function' ? opts.gate(env) : null;
+    if (held) return fail(held.error, held.detail, held.resumeAt);
 
     // LW 2.19a: the mapped mockups; the ship pass verifies criteria only.
     const design = mode === 'explore' ? designMatch.designTargets(projectDir) : { targets: [], warnings: [] };
@@ -1129,7 +1138,7 @@ async function runPlaytest(opts) {
       || ((pid) => killTree(pid, { platform: process.platform, execFile, kill: process.kill.bind(process) }));
     const execImpl = opts.execImpl || execFile;
     const call = await callClaude({
-      args: buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd }),
+      args,
       prompt: buildPlaytestPrompt({
         mode, target, url: appUrl ? appUrl.href : '', ...inputs, checks, ...ran, tools, designTargets, variantTargets,
       }),
@@ -1140,7 +1149,7 @@ async function runPlaytest(opts) {
       timeoutMs: opts.timeoutMs || PLAYTEST_TIMEOUT_MS,
       killTreeImpl: killImpl,
     });
-    if (call.error) return fail(call.error, call.detail);
+    if (call.error) return fail(call.error, call.detail, call.resumeAt);
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
 

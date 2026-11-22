@@ -1036,3 +1036,38 @@ test('LW 2.19a: a capture the Playtester did not take is not an entry; the SHIP 
   assert.doesNotMatch(ship.calls[0].prompt, /Design match/);
   assert.deepEqual(shipRes.report.designMatch, []);
 });
+
+// ---- the account reserve gate -------------------------------------------------------
+
+test('a gate that holds the account: no claude -p, the pass fails with the limit and keeps its resumeAt', async () => {
+  const fake = fakeClaude({ raw: full() });
+  const resumeAt = Date.UTC(2026, 10, 22, 15, 0, 0);
+  const envs = [];
+  const gate = (env) => {
+    envs.push(env);
+    return { error: 'limit', detail: 'the Claude account is at its usage reserve', resumeAt };
+  };
+  const env = { PATH: 'x', MARK: 'pt-env' };
+  const res = await P.runPlaytest({ projectDir: fakeProject(), adapter: await fakeAdapter(), url: URL_, env, gate, execImpl: fake.execImpl });
+  assert.equal(fake.calls.length, 0);
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'limit');
+  assert.equal(res.resumeAt, resumeAt);
+  assert.match(res.detail, /reserve/);
+  assert.equal(envs[0], env, 'the gate sees the env the call would spawn with');
+});
+
+test('a gate that lets the account through plays as before; an agy Playtester is never asked', async () => {
+  const fake = fakeClaude({ raw: full() });
+  const res = await P.runPlaytest({ projectDir: fakeProject(), adapter: await fakeAdapter(), url: URL_, gate: () => null, execImpl: fake.execImpl });
+  assert.equal(res.ok, true);
+  assert.equal(fake.calls.length, 1);
+
+  let asked = 0;
+  const agy = await P.runPlaytest({
+    projectDir: fakeProject(), adapter: await fakeAdapter(), url: URL_, models: { playtester: 'agy' },
+    gate: () => { asked += 1; return { error: 'limit', resumeAt: 1 }; }, execImpl: fakeClaude({ stdout: '{}' }).execImpl,
+  });
+  assert.equal(asked, 0, 'a Claude account reserve does not gate agy');
+  assert.equal(agy.error, 'noAgyProfile');
+});
