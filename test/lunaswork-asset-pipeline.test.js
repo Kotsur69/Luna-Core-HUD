@@ -459,3 +459,257 @@ test('the art root comes from settings only in the Assets/... shape', () => {
   assert.equal(P.cleanAssetEntry({ tool: 'rm', kind: 'prop', path: 'x' }), null);
   assert.equal(P.assetSpendUsd([{ tool: 'higgsfield', kind: 'concept', path: 'a', costUsd: 1.5 }, { tool: 'comfyui', kind: 'concept', path: 'b' }]), 1.5);
 });
+
+// ---- 5. Blender toon pass and the Critic's turntable sheet ------------------------------
+
+const B = require('../src/lunasworkBlenderScript.js');
+
+/** A PNG header (signature + IHDR) of the given size: enough for every check made on it. */
+function pngOf(width, height) {
+  const ihdr = Buffer.alloc(17);
+  ihdr.write('IHDR', 0, 'latin1');
+  ihdr.writeUInt32BE(width, 4);
+  ihdr.writeUInt32BE(height, 8);
+  return Buffer.concat([PNG.subarray(0, 8), Buffer.from([0, 0, 0, 13]), ihdr, Buffer.alloc(8)]);
+}
+
+/** The value of a `NAME = "..."` line of the generated Python. */
+function pyString(code, name) {
+  const line = code.split('\n').find((l) => l.startsWith(`${name} = "`));
+  return line ? JSON.parse(line.slice(name.length + 3)) : null;
+}
+
+const panelPaths = (code) => JSON.parse(code.split('\n').find((l) => l.startsWith('PANEL_PATHS = [')).slice('PANEL_PATHS = '.length));
+
+/**
+ * Fake Blender add-on that also renders: writes the .blend, the FBX, a
+ * left-over panel and the sheet the script names (`sheet` = the sheet's
+ * bytes, null for none), and answers with `output` as its captured stdout.
+ */
+function renderingBlender({ sheet = pngOf(2048, 512), output = '' } = {}) {
+  const base = fakeBlender();
+  return {
+    scripts: base.scripts,
+    executeCode: async (code) => {
+      await base.executeCode(code);
+      // A panel left behind: the pipeline removes it.
+      fs.writeFileSync(panelPaths(code)[0], PNG);
+      if (sheet) fs.writeFileSync(pyString(code, 'SHEET_PATH'), sheet);
+      return { executed: true, result: output };
+    },
+  };
+}
+
+function idx(code, needle) {
+  const at = code.indexOf(needle);
+  assert.ok(at >= 0, `missing: ${needle}`);
+  return at;
+}
+
+const posixOf = (p) => p.split(path.sep).join('/');
+const renderFor = (stem) => ({
+  sheet: path.resolve(`/r/design/asset-renders/${stem}.png`),
+  panels: B.TURNTABLE_VIEWS.map((v) => path.resolve(`/r/design/asset-renders/${stem}.${v}.tmp.png`)),
+});
+
+test('blenderExportScript: the two-argument call keeps the plain save + export script', () => {
+  const code = B.blenderExportScript('/r/art/blender/a.blend', '/r/Assets/a.fbx');
+  assert.equal(code, P.blenderExportScript('/r/art/blender/a.blend', '/r/Assets/a.fbx'));
+  assert.doesNotMatch(code, /STYLE_PASS|DECIMATE|SOLIDIFY|render\.render|LUNACORE_REPORT/);
+  assert.match(code, /^import bpy\nbpy\.ops\.wm\.save_as_mainfile\(filepath="\/r\/art\/blender\/a\.blend", copy=True\)/);
+  assert.match(code, /axis_forward='-Z', axis_up='Y'/);
+});
+
+test('blenderExportScript: stylePass none vs. blade-bullet-toon', () => {
+  const render = renderFor('a');
+  const none = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'none', render });
+  assert.match(none, /^STYLE_PASS = "none"$/m);
+  // The helpers are defined, but no pass is called.
+  assert.doesNotMatch(none, /^luna_decimate\(|^luna_outline\(|^luna_roots\(/m);
+  assert.match(none, /^ {4}luna_turntable\(luna_meshes\(\)\)$/m);
+
+  const toon = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'blade-bullet-toon', render });
+  assert.match(toon, /^STYLE_PASS = "blade-bullet-toon"$/m);
+  // (1) poly budget: triangles counted, Decimate added and applied when over budget.
+  assert.match(toon, /^POLY_BUDGET = 15000$/m);
+  assert.match(toon, /if total > POLY_BUDGET:\n\s+ratio = POLY_BUDGET \/ total/);
+  assert.match(toon, /modifiers\.new\(name='LunaDecimate', type='DECIMATE'\)/);
+  assert.match(toon, /mod\.ratio = ratio/);
+  assert.match(toon, /bpy\.ops\.object\.modifier_apply\(modifier=mod\.name\)/);
+  assert.match(toon, /len\(me\.loop_triangles\)/);
+  // (2) inverted-hull outline: negative Solidify, flipped normals, offset to a black backface-culled material.
+  assert.match(toon, /modifiers\.new\(name='LunaOutline', type='SOLIDIFY'\)/);
+  assert.match(toon, /mod\.thickness = -OUTLINE_THICKNESS/);
+  assert.match(toon, /^OUTLINE_THICKNESS = 0\.\d+$/m);
+  assert.match(toon, /mod\.use_flip_normals = True/);
+  assert.match(toon, /mod\.material_offset = names\.index\('LunaOutline'\)/);
+  assert.match(toon, /mat\.diffuse_color = \(0\.0, 0\.0, 0\.0, 1\.0\)/);
+  assert.match(toon, /mat\.use_backface_culling = True/);
+  // (3) zeroed root, applied scale.
+  assert.match(toon, /r\.location = \(0\.0, 0\.0, 0\.0\)/);
+  assert.match(toon, /r\.rotation_euler = \(0\.0, 0\.0, 0\.0\)/);
+  assert.match(toon, /transform_apply\(location=False, rotation=False, scale=True\)/);
+  // Order: the .blend source is saved first, the passes and the render run before the FBX export.
+  const saved = idx(toon, 'bpy.ops.wm.save_as_mainfile(');
+  const decimate = idx(toon, '\nluna_decimate(luna_objs)');
+  const outline = idx(toon, '\nluna_outline(luna_objs)');
+  const rendered = idx(toon, '\n    luna_turntable(luna_meshes())');
+  const exported = idx(toon, 'bpy.ops.export_scene.fbx(');
+  assert.ok(saved < decimate && decimate < outline && outline < rendered && rendered < exported);
+  assert.ok(idx(toon, 'print("LUNACORE_REPORT " + json.dumps(LUNA_REPORT))') > exported);
+});
+
+test('blenderExportScript: the poly budget follows the kind unless the call names one', () => {
+  const budget = (opts) => Number(B.blenderExportScript('/r/a.blend', '/r/a.fbx', { stylePass: 'blade-bullet-toon', ...opts }).match(/^POLY_BUDGET = (\d+)$/m)[1]);
+  assert.equal(B.PROP_POLY_BUDGET, 15000);
+  assert.equal(B.CHARACTER_POLY_BUDGET, 25000);
+  assert.equal(budget({ kind: 'prop' }), 15000);
+  assert.equal(budget({ kind: 'character' }), 25000);
+  assert.equal(budget({ kind: 'character', polyBudget: 8000 }), 8000);
+  assert.equal(budget({ kind: 'prop', polyBudget: null }), 15000);
+  assert.throws(() => B.blenderExportScript('/r/a.blend', '/r/a.fbx', { stylePass: 'blade-bullet-toon', polyBudget: 1e12 }), /polyBudget/);
+  assert.throws(() => B.blenderExportScript('/r/a.blend', '/r/a.fbx', { stylePass: 'blade-bullet-toon', polyBudget: '1; import os' }), /polyBudget/);
+  assert.throws(() => B.blenderExportScript('/r/a.blend', '/r/a.fbx', { stylePass: 'os.system("x")' }), /stylePass/);
+});
+
+test('blenderExportScript: a character is measured against 1.6 m; the kind cannot carry Python', () => {
+  const character = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'character', stylePass: 'blade-bullet-toon' });
+  assert.match(character, /^KIND = "character"$/m);
+  assert.match(character, /^CHARACTER_HEIGHT = 1\.6$/m);
+  assert.match(character, /^if KIND == 'character':\n {4}luna_height\(luna_objs\)$/m);
+  assert.match(character, /LUNA_REPORT\['heightOk'\] = abs\(height - CHARACTER_HEIGHT\) <= HEIGHT_TOLERANCE/);
+  assert.match(character, /LUNA_REPORT\['height'\] = height/);
+  assert.match(B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'blade-bullet-toon' }), /^KIND = "prop"$/m);
+  assert.throws(() => B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop"\nimport os', stylePass: 'blade-bullet-toon' }), /kind/);
+});
+
+test('blenderExportScript: the turntable render writes four Workbench panels into one PNG sheet', () => {
+  const render = renderFor('a');
+  const code = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', render });
+  assert.deepEqual(B.TURNTABLE_VIEWS, ['front', 'side', 'three-quarter', 'silhouette']);
+  assert.equal(pyString(code, 'SHEET_PATH'), posixOf(render.sheet));
+  assert.deepEqual(panelPaths(code), render.panels.map(posixOf));
+  assert.match(code, /rs\.engine = 'BLENDER_WORKBENCH'/);
+  assert.match(code, /\('ORTHO', Vector\(\(0\.0, -1\.0, 0\.0\)\), False\), \('ORTHO', Vector\(\(1\.0, 0\.0, 0\.0\)\), False\)/);
+  assert.match(code, /\('PERSP', Vector\(\(1\.0, -1\.0, 0\.6\)\)\.normalized\(\), False\), \('ORTHO', Vector\(\(0\.0, -1\.0, 0\.0\)\), True\)/);
+  // The silhouette panel: flat black on a gray world.
+  assert.match(code, /sh\.light = 'FLAT' if silhouette else 'STUDIO'/);
+  assert.match(code, /sh\.color_type = 'SINGLE' if silhouette else 'MATERIAL'/);
+  assert.match(code, /world\.color = \(0\.5, 0\.5, 0\.5\)/);
+  assert.match(code, /out\.filepath_raw = SHEET_PATH\n\s+out\.file_format = 'PNG'\n\s+out\.save\(\)/);
+  // A failed render never stops the export.
+  assert.match(code, /^except Exception as err:\n {4}LUNA_REPORT\['render'\] = 'failed'/m);
+  assert.throws(() => B.blenderExportScript('/r/a.blend', '/r/a.fbx', { render: { sheet: render.sheet, panels: render.panels.slice(1) } }), /panel paths/);
+  assert.throws(() => B.blenderExportScript('/r/a.blend', '/r/a.fbx', { render: { sheet: 'relative.png', panels: render.panels } }), /absolute/);
+});
+
+test('blenderExportScript: a path with quotes or a newline stays one Python string literal', () => {
+  const evil = path.resolve('/r/x"\nimport os\nos.system("calc")\n#.blend');
+  const code = B.blenderExportScript(evil, '/r/a.fbx', { stylePass: 'blade-bullet-toon' });
+  assert.doesNotMatch(code, /^os\.system/m);
+  const lit = code.match(/save_as_mainfile\(filepath=("(?:[^"\\]|\\.)*"), copy=True\)/)[1];
+  assert.equal(JSON.parse(lit), posixOf(evil));
+});
+
+test('the generated Python parses (when a Python is on this machine)', (t) => {
+  const { spawnSync } = require('child_process');
+  const probe = spawnSync('python', ['-c', 'import ast'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) {
+    t.skip('no python on PATH');
+    return;
+  }
+  const render = renderFor('s');
+  for (const opts of [undefined, { kind: 'character', stylePass: 'blade-bullet-toon', render }, { kind: 'prop', stylePass: 'none', render }]) {
+    const code = B.blenderExportScript(path.resolve('/r/a.blend'), path.resolve('/r/a.fbx'), opts);
+    const res = spawnSync('python', ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'], { input: code, encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr);
+  }
+});
+
+test('blenderModel: toon pass options reach the script; the turntable PNG is checked and returned', async () => {
+  const dir = tempRepo();
+  const report = { stylePass: 'blade-bullet-toon', polyBudget: 25000, trisBefore: 40000, trisAfter: 24990, decimateRatio: 0.625, roots: 1, rootZeroed: 'Ronin', outlined: 2, height: 1.82, heightTarget: 1.6, heightOk: false, render: 'ok', warnings: [] };
+  const blender = renderingBlender({ output: `noise\nLUNACORE_REPORT ${JSON.stringify(report)}\nLUNACORE_EXPORT_OK\n` });
+  const { p, logged } = pipeline(dir, { blender });
+  const res = await p.blenderModel({ name: 'Ronin Hero', kind: 'character', stylePass: 'blade-bullet-toon' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const code = blender.scripts[0];
+  assert.match(code, /^STYLE_PASS = "blade-bullet-toon"$/m);
+  assert.match(code, /^POLY_BUDGET = 25000$/m);
+  assert.match(code, /^KIND = "character"$/m);
+  assert.equal(pyString(code, 'SHEET_PATH'), posixOf(path.join(dir, 'design', 'asset-renders', 'ronin-hero.png')));
+
+  assert.deepEqual(res.renders, ['design/asset-renders/ronin-hero.png']);
+  assert.deepEqual(res.sources, ['art/blender/ronin-hero.blend']);
+  assert.equal(res.style.pass, 'blade-bullet-toon');
+  assert.equal(res.style.polyBudget, 25000);
+  assert.deepEqual([res.style.report.trisBefore, res.style.report.trisAfter, res.style.report.height, res.style.report.heightOk], [40000, 24990, 1.82, false]);
+  assert.match(res.note, /1\.82 m tall, outside 1\.6 m/);
+  assert.deepEqual(logged[0].sources, ['art/blender/ronin-hero.blend', 'design/asset-renders/ronin-hero.png']);
+  // The panels never stay in the repo.
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'design', 'asset-renders')), ['ronin-hero.png']);
+});
+
+test('blenderModel: the plain call still renders the sheet, without a toon pass; a custom budget reaches the script', async () => {
+  const dir = tempRepo();
+  const blender = renderingBlender();
+  const { p } = pipeline(dir, { blender });
+  const res = await p.blenderModel({ name: 'Crate', kind: 'prop' });
+  assert.equal(res.ok, true);
+  assert.match(blender.scripts[0], /^STYLE_PASS = "none"$/m);
+  assert.deepEqual(res.renders, ['design/asset-renders/crate.png']);
+  assert.deepEqual([res.style.pass, res.style.polyBudget, res.style.report], ['none', null, null]);
+  assert.equal(res.note, null);
+
+  const custom = renderingBlender();
+  const res2 = await pipeline(dir, { blender: custom }).p.blenderModel({ name: 'Crate', kind: 'prop', stylePass: 'blade-bullet-toon', polyBudget: 3000 });
+  assert.equal(res2.style.polyBudget, 3000);
+  assert.match(custom.scripts[0], /^POLY_BUDGET = 3000$/m);
+});
+
+test('blenderModel: a missing or invalid render is a note, never a failed export', async () => {
+  const missing = tempRepo();
+  const a = await pipeline(missing, { blender: renderingBlender({ sheet: null }) }).p.blenderModel({ name: 'Crate', kind: 'prop' });
+  assert.equal(a.ok, true);
+  assert.deepEqual(a.renders, []);
+  assert.match(a.note, /No turntable render for the style check \(design\/asset-renders\/crate\.png was not written\)/);
+  assert.deepEqual(fs.readdirSync(path.join(missing, 'design', 'asset-renders')), []);
+
+  const invalid = tempRepo();
+  const b = await pipeline(invalid, { blender: renderingBlender({ sheet: Buffer.from('GIF89a not a png at all') }) }).p.blenderModel({ name: 'Crate', kind: 'prop' });
+  assert.equal(b.ok, true);
+  assert.deepEqual(b.renders, []);
+  assert.match(b.note, /crate\.png is not a PNG image/);
+  // The FBX is still exported and imported.
+  assert.equal(b.prefab, `${ART}/Props/crate.prefab`);
+
+  // An earlier sheet left in place is not taken for a new render.
+  const stale = tempRepo();
+  await pipeline(stale, { blender: renderingBlender() }).p.blenderModel({ name: 'Crate', kind: 'prop' });
+  const c = await pipeline(stale, { blender: renderingBlender({ sheet: null }) }).p.blenderModel({ name: 'Crate', kind: 'prop' });
+  assert.deepEqual(c.renders, []);
+  assert.match(c.note, /the earlier file, not a new export/);
+});
+
+test('blenderModel: a bad stylePass or polyBudget is refused before Blender runs', async () => {
+  const blender = renderingBlender();
+  const { p } = pipeline(tempRepo(), { blender });
+  assert.equal((await p.blenderModel({ name: 'Crate', kind: 'prop', stylePass: 'photoreal' })).error, 'badStylePass');
+  assert.equal((await p.blenderModel({ name: 'Crate', kind: 'prop', polyBudget: 2.5 })).error, 'badPolyBudget');
+  assert.equal(blender.scripts.length, 0);
+});
+
+test('the script report is validated; junk is null; the PNG header tells a turntable sheet', () => {
+  assert.equal(B.parseScriptReport(null), null);
+  assert.equal(B.parseScriptReport({ result: 'LUNACORE_REPORT {not json' }), null);
+  assert.equal(B.parseScriptReport('LUNACORE_REPORT [1,2]'), null);
+  const r = B.parseScriptReport('LUNACORE_REPORT {"trisBefore": -3, "height": "tall", "heightOk": "yes", "render": "rm -rf", "warnings": ["a\\tb", 5]}');
+  assert.deepEqual([r.trisBefore, r.height, r.heightOk, r.render, r.warnings], [null, null, null, null, ['a b', '5']]);
+  assert.deepEqual(B.reportNotes(null), []);
+
+  assert.equal(B.isTurntableSheet(pngOf(2048, 512)), true);
+  assert.equal(B.isTurntableSheet(pngOf(1024, 1024)), false);
+  assert.equal(B.isTurntableSheet(pngOf(0, 0)), false);
+  assert.equal(B.isTurntableSheet(PNG.subarray(0, 8)), false);
+  assert.equal(B.isTurntableSheet(Buffer.from('not a png at all, really not')), false);
+});

@@ -322,3 +322,41 @@ test('luna_asset_search source "all" through the handler: keyed libraries withou
   assert.equal(badType.error.error, 'badType');
   assert.ok(fetched.length > 0);
 });
+
+// ---- luna_asset_blender style pass ----------------------------------------------------
+
+test('luna_asset_blender schema: stylePass is "none" or "blade-bullet-toon", polyBudget a capped positive integer', () => {
+  const schema = T.ASSET_TOOLS.find((t) => t.name === T.BLENDER_TOOL).inputSchema;
+  assert.deepEqual(schema.required, ['name', 'kind']);
+  assert.deepEqual(schema.properties.stylePass.enum, ['none', 'blade-bullet-toon']);
+  assert.equal(schema.properties.stylePass.default, 'none');
+  assert.equal(schema.properties.polyBudget.type, 'integer');
+  assert.ok(schema.properties.polyBudget.minimum > 0);
+  assert.ok(Number.isSafeInteger(schema.properties.polyBudget.maximum) && schema.properties.polyBudget.maximum <= 1000000);
+  assert.equal(schema.additionalProperties, false);
+});
+
+test('luna_asset_blender refuses a bad stylePass or polyBudget before the pipeline runs', async () => {
+  const seen = [];
+  const tools = { blenderModel: async (a) => { seen.push(a); return { ok: true, files: ['x.fbx'] }; } };
+  const bad = [
+    [{ name: 'a', kind: 'prop', stylePass: 'photoreal' }, 'badStylePass'],
+    [{ name: 'a', kind: 'prop', stylePass: 7 }, 'badStylePass'],
+    [{ name: 'a', kind: 'prop', polyBudget: 0 }, 'badPolyBudget'],
+    [{ name: 'a', kind: 'prop', polyBudget: -5 }, 'badPolyBudget'],
+    [{ name: 'a', kind: 'prop', polyBudget: 1500.5 }, 'badPolyBudget'],
+    [{ name: 'a', kind: 'prop', polyBudget: '15000' }, 'badPolyBudget'],
+    [{ name: 'a', kind: 'prop', polyBudget: 10 ** 9 }, 'badPolyBudget'],
+  ];
+  for (const [args, error] of bad) {
+    const res = await T.callAssetTool(T.BLENDER_TOOL, args, tools);
+    assert.deepEqual([res.ok, res.error.error], [false, error], JSON.stringify(args));
+  }
+  assert.equal(seen.length, 0);
+
+  const ok = await T.callAssetTool(T.BLENDER_TOOL, { name: 'a', kind: 'character', stylePass: 'blade-bullet-toon', polyBudget: 20000 }, tools);
+  assert.equal(ok.ok, true);
+  assert.deepEqual(seen, [{ name: 'a', kind: 'character', stylePass: 'blade-bullet-toon', polyBudget: 20000 }]);
+  // Both options are optional.
+  assert.equal((await T.callAssetTool(T.BLENDER_TOOL, { name: 'a', kind: 'prop' }, tools)).ok, true);
+});

@@ -401,3 +401,94 @@ test('a throwing store is one log line, never a crash', async () => {
   assert.equal(await step.beforeDirecting(baseRun(dir)), null);
   assert.ok(events.some((e) => /assets: failed \(disk gone\)/.test(e)));
 });
+
+// ---- the turntable sheet (luna_asset_blender) in the style check ----------------------
+
+/** A PNG header with an IHDR of the given size: what the turntable check reads. */
+function pngSized(width, height) {
+  const ihdr = Buffer.alloc(17);
+  ihdr.write('IHDR', 0, 'latin1');
+  ihdr.writeUInt32BE(width, 4);
+  ihdr.writeUInt32BE(height, 8);
+  return Buffer.concat([PNG.subarray(0, 8), Buffer.from([0, 0, 0, 13]), ihdr, Buffer.alloc(8)]);
+}
+
+/** styledRepo, with Hero Ship's render replaced by a 4-panel turntable sheet. */
+function turntableRepo() {
+  const dir = styledRepo();
+  fs.writeFileSync(path.join(dir, 'design', 'asset-renders', 'hero-ship.png'), pngSized(2048, 512));
+  return dir;
+}
+
+test('style check: a turntable render gets silhouette and palette scores, which cap its score', async () => {
+  const dir = turntableRepo();
+  const store = memStore();
+  const ref = 'design/references/neon-drift/hud.png';
+  const critic = fakeCritic([
+    { name: 'Hero Ship', score: 9, reference: ref, notes: 'Reads well in color.', silhouette: 4, palette: 8, paletteSlot: 'midnight' },
+    { name: 'Crate', score: 9, reference: ref, notes: 'Fits.' },
+  ]);
+  const { step } = makeStep(store, { styleCheck: (opts) => A.runStyleCheck({ ...opts, runClaude: critic.run }) });
+  await step.beforeDirecting(baseRun(dir));
+
+  const { args, prompt } = critic.calls[0];
+  assert.match(prompt, /Render: design\/asset-renders\/hero-ship\.png \(turntable sheet\)/);
+  assert.doesNotMatch(prompt, /crate\.png \(turntable sheet\)/);
+  assert.match(prompt, /front orthographic, right side orthographic, 3\/4 perspective, and a flat black silhouette/);
+  assert.match(prompt, /silhouette \(0-10\)/);
+  assert.match(prompt, /palette \(0-10\): Blade & Bullet palette compliance/);
+  assert.match(prompt, /Midnight or Golden Hour/);
+  const schema = JSON.parse(args[args.indexOf('--json-schema') + 1]);
+  const item = schema.properties.scores.items;
+  assert.deepEqual(item.required, ['name', 'score', 'reference', 'notes']);
+  assert.deepEqual(Object.keys(item.properties), ['name', 'score', 'reference', 'notes', 'silhouette', 'palette', 'paletteSlot']);
+
+  // 9 overall but an unreadable silhouette (4): not approved, a feel card instead.
+  assert.equal(rowOf(dir, 'Hero Ship').status, 'restyle');
+  assert.equal(rowOf(dir, 'Crate').status, 'approved');
+  const feel = assetCards(store);
+  assert.equal(feel.length, 1);
+  assert.match(feel[0].text, /Hero Ship \(4\/10/);
+  assert.match(feel[0].details, /silhouette readability 4\/10, palette compliance 8\/10 \(emission slot: midnight\)/);
+  assert.deepEqual(feel[0].files, ['design/asset-renders/hero-ship.png', ref]);
+});
+
+test('style check: a turntable asset is approved only with both extra scores at the pass mark', async () => {
+  const ref = 'design/references/neon-drift/hud.png';
+  // The Critic left out the silhouette / palette scores: not approved, checked again.
+  const dir = turntableRepo();
+  const store = memStore();
+  const partial = fakeCritic([{ name: 'Hero Ship', score: 9, reference: ref, notes: 'x' }, { name: 'Crate', score: 9, reference: ref, notes: 'Fits.' }]);
+  await makeStep(store, { styleCheck: (opts) => A.runStyleCheck({ ...opts, runClaude: partial.run }) }).step.beforeDirecting(baseRun(dir));
+  assert.equal(rowOf(dir, 'Hero Ship').status, 'done');
+  assert.equal(rowOf(dir, 'Crate').status, 'approved');
+  assert.equal(assetCards(store).length, 0);
+
+  const full = fakeCritic([{ name: 'Hero Ship', score: 8, reference: ref, notes: 'Clean.', silhouette: 9, palette: 7, paletteSlot: 'golden-hour' }]);
+  await makeStep(store, { styleCheck: (opts) => A.runStyleCheck({ ...opts, runClaude: full.run }) }).step.beforeDirecting(baseRun(dir));
+  assert.match(full.calls[0].prompt, /hero-ship\.png \(turntable sheet\)/);
+  assert.equal(rowOf(dir, 'Hero Ship').status, 'approved');
+});
+
+test('style check: a plain render gets no turntable rules', async () => {
+  const dir = styledRepo();
+  const critic = fakeCritic([]);
+  await makeStep(memStore(), { styleCheck: (opts) => A.runStyleCheck({ ...opts, runClaude: critic.run }) }).step.beforeDirecting(baseRun(dir));
+  assert.doesNotMatch(critic.calls[0].prompt, /turntable sheet|silhouette \(0-10\)/);
+});
+
+test('validateStyle: turntable scores are clamped, the slot is pinned to the list, the score capped', () => {
+  const assets = [{ name: 'Ronin', turntable: true }, { name: 'Crate' }];
+  const out = A.validateStyle({
+    scores: [
+      { name: 'Ronin', score: 9, reference: 'r.png', notes: 'n', silhouette: 12, palette: 5.6, paletteSlot: 'neon-pink' },
+      { name: 'Crate', score: 8, reference: 'r.png', notes: 'm', silhouette: 1, palette: 1 },
+    ],
+  }, assets, ['r.png']);
+  assert.deepEqual(out, [
+    { name: 'Ronin', score: 6, reference: 'r.png', notes: 'n', silhouette: 10, palette: 6, paletteSlot: null },
+    // Not a turntable: its extra fields are ignored.
+    { name: 'Crate', score: 8, reference: 'r.png', notes: 'm' },
+  ]);
+  assert.deepEqual(A.validateStyle({ scores: [{ name: 'Ronin', score: 9, reference: 'r.png', notes: '', silhouette: 'high', palette: 9 }] }, assets, ['r.png']), []);
+});
