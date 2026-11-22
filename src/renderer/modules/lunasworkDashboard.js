@@ -12,6 +12,8 @@
 //   - pending decisions with their deadlines (from the live status)
 //   - the Lighthouse trend when the run measured it
 //   - the time-to-SHIP estimate with its range (LW 2.22b, lunasworkEta)
+//   - the Asset Manifest Estimate: free imports, free local, paid finals
+//     with credits / USD and the spend gate (lunasworkAssetCost)
 // While open it refreshes on every lunaswork:event - no polling, no email.
 // Every value from main is painted through textContent / SVG attributes only.
 // ============================================================================
@@ -36,6 +38,13 @@ const LIGHTHOUSE_CATEGORIES = ['performance', 'accessibility', 'bestPractices', 
 const TIMED_PHASES = ['directing', 'building', 'launching', 'playtesting', 'critiquing'];
 const REFRESH_DEBOUNCE_MS = 400;
 const MAX_SHOT_CACHE = 24;
+// The spend gate's outcome (lunasworkAssetCost GATE_*) -> its dashboard line.
+const GATE_LINES = Object.freeze({
+  within: { key: 'lw.dash.asset.within', tone: 'good' },
+  held: { key: 'lw.dash.asset.gated', tone: 'bad' },
+  approved: { key: 'lw.dash.asset.approved', tone: 'warn' },
+  notQueued: { key: 'lw.dash.asset.notQueued', tone: 'bad' },
+});
 
 // ---- pure helpers (tested) -----------------------------------------------------
 
@@ -127,6 +136,26 @@ export function timelineMarks(row) {
   if (row.playtestOk === false) marks.push({ key: 'lw.dash.mark.playtestFailed', tone: 'warn' });
   if (!marks.length) marks.push({ key: 'lw.dash.mark.continue', tone: 'dim' });
   return marks;
+}
+
+/**
+ * The asset cost estimate as [{key, vars, tone}] lines for the caller to
+ * translate; [] without an estimate.
+ */
+export function assetEstimateLines(est) {
+  if (!est || typeof est !== 'object') return [];
+  const n = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+  const lines = [
+    { key: 'lw.dash.asset.library', vars: { n: n(est.library) }, tone: 'good' },
+    { key: 'lw.dash.asset.local', vars: { n: n(est.local) }, tone: 'good' },
+    { key: 'lw.dash.asset.paid', vars: { n: n(est.paid) }, tone: n(est.paid) ? 'warn' : 'dim' },
+  ];
+  const limit = Number.isFinite(est.thresholdUsd) ? formatUsd(est.thresholdUsd) : null;
+  const gate = GATE_LINES[est.gate] || GATE_LINES.within;
+  if (limit !== null) lines.push({ key: gate.key, vars: { limit, id: est.decisionId }, tone: gate.tone });
+  const unknown = Array.isArray(est.unknownModels) ? est.unknownModels.filter((m) => typeof m === 'string') : [];
+  if (unknown.length) lines.push({ key: 'lw.dash.asset.unknown', vars: { models: unknown.join(', ') }, tone: 'warn' });
+  return lines;
 }
 
 // ---- DOM ---------------------------------------------------------------------------
@@ -249,6 +278,21 @@ function tokensBlock(d) {
   return wrap;
 }
 
+function assetCostBlock(est) {
+  const wrap = el('div', 'lw-dash__assets');
+  const head = el('p', 'termcustom__hint', t('lw.dash.asset.iteration', { n: est.iteration }));
+  head.append(' · ', el('strong', '', t('lw.dash.asset.spend', { credits: est.credits, usd: formatUsd(est.usd) })));
+  const table = el('table', 'lw-run__scores');
+  for (const line of assetEstimateLines(est)) {
+    const tr = el('tr');
+    const counted = Number.isInteger(line.vars.n);
+    tr.append(el('td', `lw-dash__mark is-${line.tone}`, t(line.key, line.vars)), el('td', '', counted ? String(line.vars.n) : ''));
+    table.append(tr);
+  }
+  wrap.append(head, table);
+  return wrap;
+}
+
 function decisionsBlock(status) {
   const list = status && Array.isArray(status.decisions) ? status.decisions : [];
   if (!list.length) return empty('lw.dash.noDecisions');
@@ -342,6 +386,7 @@ export function mountLunasWorkDashboard(root) {
       section('lw.dash.shots', shotsBlock(d)),
       section('lw.run.pending', decisionsBlock(status)),
       ...(lighthouse ? [section('lw.dash.lighthouse', lighthouse)] : []),
+      ...(d.assetEstimate ? [section('lw.dash.assetCost', assetCostBlock(d.assetEstimate))] : []),
     );
   }
 

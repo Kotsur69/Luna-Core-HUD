@@ -504,3 +504,150 @@ test('validateStyle: turntable scores are clamped, the slot is pinned to the lis
   ]);
   assert.deepEqual(A.validateStyle({ scores: [{ name: 'Ronin', score: 9, reference: 'r.png', notes: '', silhouette: 'high', palette: 9 }] }, assets, ['r.png']), []);
 });
+
+// ---- Asset Manifest Estimate + spend gate ---------------------------------------------
+
+const Cost = require('../src/lunasworkAssetCost.js');
+const { DEFAULT_USD_PER_CREDIT } = require('../src/lunasworkAssetPipeline.js');
+
+const entry = (name, type, source, spec = name) => ({ name, type, source, spec });
+
+test('estimate: mixed rows split into library, local and paid with credits and USD', () => {
+  const est = A.assetManifestEstimate([
+    entry('Crate', 'texture', 'library'),
+    entry('Ship', 'model', 'blender'),
+    entry('Tree', 'model', 'generated'),
+    entry('Theme', 'audio', 'generated'),
+    entry('Hero', 'sprite', 'generated', 'hero portrait model: soul'),
+    entry('Logo', 'ui', 'generated'),
+  ], { usdPerCredit: 0.05 });
+  assert.equal(est.library.count, 1);
+  assert.equal(est.local.count, 3);
+  assert.equal(est.paid.count, 2);
+  const credits = Cost.HIGGSFIELD_MODEL_CREDITS.soul + Cost.DEFAULT_FINAL_CREDITS;
+  assert.equal(est.paid.credits, credits);
+  assert.equal(est.paid.usd, Math.round(credits * 0.05 * 10000) / 10000);
+  assert.deepEqual(est.paid.rows.map((r) => [r.name, r.model, r.unknownModel]), [['Hero', 'soul', false], ['Logo', null, false]]);
+  assert.deepEqual(est.paid.unknownModels, []);
+  assert.equal(est.total, 6);
+});
+
+test('estimate: zero paid rows cost nothing; a bad credit rate falls back to the pipeline default', () => {
+  const est = A.assetManifestEstimate([entry('Crate', 'texture', 'library'), entry('Ship', 'model', 'generated')], { usdPerCredit: -1 });
+  assert.equal(est.paid.count, 0);
+  assert.equal(est.paid.credits, 0);
+  assert.equal(est.paid.usd, 0);
+  assert.equal(est.usdPerCredit, DEFAULT_USD_PER_CREDIT);
+  assert.deepEqual(A.assetManifestEstimate(null).paid.rows, []);
+});
+
+test('estimate: an unknown model is priced at the default and flagged', () => {
+  const est = A.assetManifestEstimate([entry('Boss', 'sprite', 'generated', 'giant boss, model: mystery-9')]);
+  assert.equal(est.paid.rows[0].credits, Cost.DEFAULT_FINAL_CREDITS);
+  assert.equal(est.paid.rows[0].unknownModel, true);
+  assert.deepEqual(est.paid.unknownModels, ['mystery-9']);
+  assert.equal(est.paid.usd, Cost.DEFAULT_FINAL_CREDITS * DEFAULT_USD_PER_CREDIT);
+  const lines = Cost.estimateLines(Cost.estimateRecord(est, { at: NOW, iteration: 2, thresholdUsd: 10 }));
+  assert.ok(lines.some((l) => /Unknown model\(s\).*mystery-9/.test(l)));
+});
+
+const paidRows = (n) => Array.from({ length: n }, (_, i) => `| Poster ${i + 1} | sprite | poster ${i + 1} | generated |  |  |  |  |`);
+
+test('spend gate: paid finals within the remaining Higgsfield budget are carded, the estimate is recorded', async () => {
+  // 2 finals x 10 credits x $0.1 = $2, under the default $10 cap.
+  const dir = fakeRepo([...paidRows(2), '| Crate | texture | wooden crate | library |  |  |  |  |']);
+  const store = memStore();
+  const recorded = [];
+  const { step, asked } = makeStep(store, { recordEstimate: (e) => recorded.push(e), now: () => NOW });
+  await step.beforeDirecting(baseRun(dir));
+  assert.equal(asked.length, 0);
+  assert.equal(assetCards(store).length, 3);
+  assert.equal(recorded.length, 1);
+  const r = recorded[0];
+  assert.deepEqual(
+    { library: r.library, local: r.local, paid: r.paid, usd: r.usd, gated: r.gated, thresholdUsd: r.thresholdUsd, at: r.at },
+    { library: 1, local: 0, paid: 2, usd: 2, gated: false, thresholdUsd: 10, at: NOW },
+  );
+});
+
+test('spend gate: over the remaining budget the paid finals wait for approval, free rows go on', async () => {
+  const dir = fakeRepo([...paidRows(3), '| Crate | texture | wooden crate | library |  |  |  |  |', '| Ship | model | teal ship | blender |  |  |  |  |']);
+  const store = memStore();
+  const recorded = [];
+  const { step, asked } = makeStep(store, { recordEstimate: (e) => recorded.push(e) });
+  // $3 projected, $8 of the $10 cap already spent: $2 left.
+  const run = baseRun(dir, { spendCaps: { higgsfield: 10 }, spend: { higgsfield: 8 } });
+  await step.beforeDirecting(run);
+  assert.equal(asked.length, 1);
+  assert.deepEqual(asked[0].options, [Cost.SPEND_SKIP, Cost.SPEND_APPROVE]);
+  assert.equal(asked[0].defaultAnswer, Cost.SPEND_SKIP);
+  assert.match(asked[0].question, /\$3\.00 .*30 Higgsfield credits.*3 paid asset final.*\$2\.00/);
+  // Only the free rows were carded: no paid generation can start yet.
+  assert.deepEqual(assetCards(store).map((c) => c.text).sort(), ['Asset: Crate (texture)', 'Asset: Ship (model)']);
+  const created = Decisions.createDecision(asked[0], { now: NOW + 1, list: [] });
+  const held = readList(dir).rows.filter((x) => x.status === 'held');
+  assert.equal(held.length, 3);
+  assert.ok(held.every((x) => x.ref.id === created.decision.id));
+  assert.equal(recorded[0].gated, true);
+  assert.equal(recorded[0].gate, Cost.GATE_HELD);
+  assert.equal(recorded[0].decisionId, created.decision.id);
+
+  // Pending: still nothing paid, not asked again.
+  const decisions = [created.decision];
+  await step.beforeDirecting({ ...run, decisions });
+  assert.equal(asked.length, 1);
+  assert.equal(assetCards(store).length, 2);
+
+  // Approved: the paid finals are carded and not asked about again.
+  const res = Decisions.answerDecision(decisions, { id: created.decision.id, answer: Cost.SPEND_APPROVE }, { by: 'mati', now: NOW + 5 });
+  assert.equal(res.ok, true);
+  await step.beforeDirecting({ ...run, decisions: res.list });
+  assert.equal(asked.length, 1);
+  assert.equal(assetCards(store).length, 5);
+  assert.ok(readList(dir).rows.filter((x) => x.name.startsWith('Poster')).every((x) => x.status === 'queued'));
+  // The record says the finals were approved over budget, not "within".
+  assert.equal(recorded.at(-1).gate, Cost.GATE_APPROVED);
+  assert.equal(recorded.at(-1).paid, 3);
+  assert.match(asked[0].detail, /cap still applies/);
+});
+
+test('spend gate: the skip default marks the paid finals unpaid and never cards them', async () => {
+  const dir = fakeRepo(paidRows(2));
+  const store = memStore();
+  const { step, asked } = makeStep(store);
+  const run = baseRun(dir, { spendCaps: { higgsfield: 1 } });
+  await step.beforeDirecting(run);
+  assert.equal(asked.length, 1);
+  assert.equal(assetCards(store).length, 0);
+  const created = Decisions.createDecision(asked[0], { now: NOW + 1, list: [] });
+  const { list } = Decisions.expireDue([created.decision], created.decision.deadline);
+  assert.equal(list[0].answer, Cost.SPEND_SKIP);
+  await step.beforeDirecting({ ...run, decisions: list });
+  await step.beforeDirecting({ ...run, decisions: list });
+  assert.equal(assetCards(store).length, 0);
+  assert.equal(asked.length, 1);
+  assert.ok(readList(dir).rows.every((x) => x.status === 'unpaid'));
+});
+
+test('spend gate: a question that could not be queued leaves the paid finals planned, uncarded', async () => {
+  const dir = fakeRepo(paidRows(2));
+  const store = memStore();
+  const events = [];
+  const recorded = [];
+  const step = A.createAssetStep({ todoStore: () => store, ask: () => ({ ok: false, reason: 'tooMany' }), logEvent: (t) => events.push(t), recordEstimate: (e) => recorded.push(e) });
+  await step.beforeDirecting(baseRun(dir, { spendCaps: { higgsfield: 0 } }));
+  assert.equal(assetCards(store).length, 0);
+  assert.ok(readList(dir).rows.every((x) => x.status === 'planned'));
+  assert.ok(events.some((e) => /spend question was not queued/.test(e)));
+  assert.equal(recorded[0].gate, Cost.GATE_NOT_QUEUED);
+  assert.equal(recorded[0].gated, false);
+});
+
+test('cleanAssetEstimate: untrusted fields are dropped, a gate without a decision id is not gated', () => {
+  assert.equal(Cost.cleanAssetEstimate('x'), null);
+  const e = Cost.cleanAssetEstimate({ library: -3, local: 2.5, paid: 4, usd: 'lots', credits: 40, unknownModels: ['ok', '<b>', 7], gated: true, thresholdUsd: -1 });
+  assert.deepEqual(
+    [e.library, e.local, e.paid, e.usd, e.credits, e.unknownModels, e.gated, e.thresholdUsd],
+    [0, 0, 4, 0, 40, ['ok'], false, null],
+  );
+});

@@ -10,7 +10,22 @@ import {
   cardLines,
   lighthouseLines,
   timelineMarks,
+  assetEstimateLines,
 } from '../src/renderer/modules/lunasworkDashboard.js';
+
+test('assetEstimateLines: counts, the gate and unknown models; nothing without an estimate', () => {
+  assert.deepEqual(assetEstimateLines(null), []);
+  const gated = assetEstimateLines({ library: 2, local: 1, paid: 3, thresholdUsd: 2, gate: 'held', decisionId: 9, unknownModels: ['x-1'] });
+  assert.deepEqual(gated.map((l) => l.key), ['lw.dash.asset.library', 'lw.dash.asset.local', 'lw.dash.asset.paid', 'lw.dash.asset.gated', 'lw.dash.asset.unknown']);
+  assert.deepEqual(gated[3].vars, { limit: '$2.00', id: 9 });
+  assert.equal(gated[2].tone, 'warn');
+  const free = assetEstimateLines({ library: 1, local: 0, paid: 0, thresholdUsd: 10, gate: 'within', unknownModels: [] });
+  assert.deepEqual(free.map((l) => l.key), ['lw.dash.asset.library', 'lw.dash.asset.local', 'lw.dash.asset.paid', 'lw.dash.asset.within']);
+  assert.equal(free[2].tone, 'dim');
+  assert.equal(assetEstimateLines({ paid: 1, thresholdUsd: 0, gate: 'approved' })[3].key, 'lw.dash.asset.approved');
+  assert.equal(assetEstimateLines({ paid: 1, thresholdUsd: 0, gate: 'notQueued' })[3].key, 'lw.dash.asset.notQueued');
+  assert.equal(assetEstimateLines({ paid: 1, thresholdUsd: 0, gate: 'evil' })[3].key, 'lw.dash.asset.within');
+});
 
 test('formatTokens / formatUsd: short, readable numbers', () => {
   assert.equal(formatTokens(0), '0');

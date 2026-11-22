@@ -374,6 +374,8 @@ function createLunasWorkRuntime(ctx) {
     styleCheck: (opts) => runStyleCheck({ ...opts, env: ctx.env(), runClaude: runHeadless }),
     // Asset cards on a Unity run name the asset pipeline's art root (per-PC setting).
     assetArtRoot: () => settingsStore.assetToolsFor(settingsStore.readSettings()).artRoot,
+    // The Higgsfield credit price the asset cost estimate uses (per-PC setting).
+    assetUsdPerCredit: () => settingsStore.assetToolsFor(settingsStore.readSettings()).higgsfieldUsdPerCredit,
     gitLog,
     syncCheckout,
     checkpoints: createCheckpoints({ log: ctx.log }),

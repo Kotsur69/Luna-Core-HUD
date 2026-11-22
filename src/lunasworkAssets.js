@@ -29,6 +29,12 @@
 //              The capped batch goes on at once - the default answer is
 //              `capped` - and the rest is held: `all` cards it right away,
 //              `capped` defers it to later batches, never asked again.
+//   spend gate src/lunasworkAssetCost.js: the batch's Asset Manifest Estimate
+//              (free library / free local / paid Higgsfield) goes to the run
+//              record (deps.recordEstimate). Paid finals projected over the
+//              run's remaining Higgsfield cap are held for a decision before
+//              their cards are filed; `approve` cards them, `skip` (default)
+//              marks them unpaid. Free rows are carded at once.
 //   style      runStyleCheck: the Critic's style check. One read-only
 //              `claude -p --json-schema` call compares each new asset's render
 //              (design/asset-renders/<slug>.png, saved by the builder) with the
@@ -65,6 +71,7 @@ const { normalizeTodos, runTag, MAX_DETAILS_CHARS } = require('./todorows');
 const { MAX_TASKS_PER_CALL } = require('./intake');
 const { KINDS, artRootOf, unityAssetBrief } = require('./lunasworkAssetPipeline');
 const { isTurntableSheet } = require('./lunasworkBlenderScript');
+const cost = require('./lunasworkAssetCost');
 
 const ASSETS_FILE = 'ASSETS.md';
 const RENDERS_DIR = 'asset-renders';
@@ -91,8 +98,10 @@ const DONE = 'done';
 const APPROVED = 'approved';
 const RESTYLE = 'restyle';
 const DUPLICATE = 'duplicate';
+// A paid final the spend decision skipped: never generated in this run unless set back to planned.
+const UNPAID = 'unpaid';
 // Statuses past `planned`: a changed spec sends these back to planned, once.
-const STARTED = [HELD, DEFERRED, QUEUED, DONE, APPROVED, RESTYLE];
+const STARTED = [HELD, DEFERRED, QUEUED, DONE, APPROVED, RESTYLE, UNPAID];
 
 // Cost gate answers (lunasworkDecisions: neither holds cards).
 const CAPPED = 'capped';
@@ -291,6 +300,9 @@ function settleRows(rows, { decisions, cards }) {
       const d = row.ref && row.ref.kind === 'decision' ? decisionById.get(row.ref.id) : null;
       if (!d) return { ...row, status: PLANNED, ref: null };
       if (d.status === 'pending') return row;
+      // The spend gate's answers: approved finals go now (and are not asked again), skipped ones never.
+      if (d.answer === cost.SPEND_APPROVE) return { ...row, status: DEFERRED, ref: null, now: true, paidOk: true };
+      if (d.answer === cost.SPEND_SKIP) return { ...row, status: UNPAID, ref: null };
       return d.answer === ALL ? { ...row, status: DEFERRED, ref: null, now: true } : { ...row, status: DEFERRED, ref: null };
     }
     if ((row.status === QUEUED || row.status === RESTYLE) && row.ref && row.ref.kind === 'card') {
@@ -664,6 +676,7 @@ function styleCard(row, s) {
  * @param {{todoStore:(projectId:string)=>{read:Function, write:Function, now?:Function},
  *   ask:(spec:object)=>{ok:boolean, id?:number, reason?:string},
  *   styleCheck?:(opts:object)=>Promise<object>, batchLimit?:number, artRoot?:()=>string,
+ *   usdPerCredit?:()=>number, recordEstimate?:(estimate:object)=>void, now?:()=>number,
  *   logEvent:(text:string)=>void, logModel?:(role:string, model:string, reason:string)=>void}} deps
  */
 function createAssetStep(deps) {
@@ -682,6 +695,9 @@ function createAssetStep(deps) {
     logEvent(`${ask.length} asset(s) over the batch limit of ${limit} held for decision ${res.id}`);
     return rows.map((r) => (held.has(r) ? { ...r, status: HELD, ref: { kind: 'decision', id: res.id } } : r));
   }
+
+  /** The spend gate (lunasworkAssetCost.runSpendGate): paid finals over budget are held, never carded. */
+  const spendGate = (run, rows, take) => cost.runSpendGate({ run, rows, take, deps, logEvent, heldStatus: HELD });
 
   /** Files the batch's cards; carded rows become queued. */
   function card(run, rows, take, store, tag) {
@@ -752,17 +768,18 @@ function createAssetStep(deps) {
       const limit = parsed.limit || defaultLimit;
       let rows = dedupeAssets(settleRows(parsed.rows, { decisions: run.decisions, cards: normalizeTodos(store.read()) }));
       const { take, ask } = selectBatch(rows, limit);
-      rows = card(run, gate(rows, ask, limit), take, store, tag);
+      const spend = spendGate(run, gate(rows, ask, limit), take);
+      rows = card(run, spend.rows, spend.take, store, tag);
       rows = await styleCheck(run, rows, store, tag);
-      // `now` is this pass's own flag (an `all` answer), never written.
-      rows = rows.map(({ now, ...r }) => r);
+      // `now` / `paidOk` are this pass's own flags (an `all` / `approve` answer), never written.
+      rows = rows.map(({ now, paidOk, ...r }) => r);
       const next = formatAssetList(parsed, rows);
       if (next !== parsed.lines.join('\n')) {
         const written = pack.applyWrite(run.repoPath, { file: ASSETS_FILE, update: () => next });
         if (!written.ok) logEvent(`design/${ASSETS_FILE} not updated (${oneLine(written.error, 120)})`);
       }
       const count = (status) => rows.filter((r) => isAsset(r) && r.status === status).length;
-      return { queued: count(QUEUED), held: count(HELD), deferred: count(DEFERRED), duplicates: count(DUPLICATE), restyle: count(RESTYLE), approved: count(APPROVED) };
+      return { queued: count(QUEUED), held: count(HELD), unpaid: count(UNPAID), deferred: count(DEFERRED), duplicates: count(DUPLICATE), restyle: count(RESTYLE), approved: count(APPROVED) };
     } catch (err) {
       logEvent(`failed (${oneLine(errText(err), 150)}) - the run went on without it`);
       return null;
@@ -789,6 +806,8 @@ module.exports = {
   settleRows,
   selectBatch,
   costDecision,
+  // The Asset Manifest Estimate (src/lunasworkAssetCost.js), re-exported for the step's callers.
+  assetManifestEstimate: cost.assetManifestEstimate,
   assetCard,
   referenceImages,
   buildStyleArgs,
