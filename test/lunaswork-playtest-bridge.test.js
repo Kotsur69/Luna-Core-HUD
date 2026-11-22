@@ -1202,3 +1202,37 @@ test('burst: a frame claiming more pixels than any window is refused before deco
   assert.match(shots[1].error, /larger than any window/);
   assert.deepEqual(BU.buildSheet(shots).frames.map((f) => f.ok), [true, false, true, true]);
 });
+
+test('burst: a hung app does not cost every frame its full timeout - past the time budget the rest are skipped', async () => {
+  const world = burstWorld({ latencyMs: 6000 });
+  const { bridge } = bridgeFor('unity', world);
+  const res = await bridge.callTool('burst', { name: 'hung', frames: 4, durationMs: 500 });
+  assert.equal(res.isError, undefined);
+  assert.equal(world.calls.length, 2, 'the third frame starts 12 s in, past 500 ms + 10 s');
+  assert.match(res.content[0].text, /2 of 4 frames/);
+  assert.match(res.content[0].text, /frame #3 \(\+12000ms\) failed and is crossed out: skipped: the burst ran past its time budget/);
+});
+
+test('burst: a later, smaller frame is centred at its own size, never upscaled', async () => {
+  const big = Buffer.from(solidPng(320, 180, [200, 0, 0]), 'base64');
+  const small = Buffer.from(solidPng(40, 20, [0, 200, 0]), 'base64');
+  const shots = [0, 1, 2, 3].map((index) => ({ index, atMs: index * 100, png: index === 1 ? small : big }));
+  const out = BU.buildSheet(shots);
+  const sheet = PngJs.sync.read(out.png);
+  const layout = BU.sheetLayout({ frameW: 320, frameH: 180, count: 4 });
+  const x0 = 4 + layout.tileW + 4;
+  const ty = 4 + layout.labelH;
+  assert.deepEqual(pixel(sheet, x0 + 160, ty + 90), [0, 200, 0], 'the small frame sits in the middle');
+  assert.deepEqual(pixel(sheet, x0 + 100, ty + 90), [24, 24, 24], 'around it is background, not a stretched frame');
+});
+
+test('burst: an undecodable first frame still lets the sheet be sized from its header', async () => {
+  const good = Buffer.from(solidPng(64, 36, [5, 6, 7]), 'base64');
+  const broken = Buffer.concat([good.subarray(0, 33), Buffer.from('not zlib data')]);
+  const shots = [0, 1, 2, 3].map((index) => ({ index, atMs: index * 100, png: index === 0 ? broken : good }));
+  const out = BU.buildSheet(shots);
+  assert.deepEqual(out.frames.map((f) => f.ok), [false, true, true, true]);
+  assert.match(out.frames[0].error, /unreadable PNG/);
+  const allBroken = shots.map((s) => ({ ...s, png: broken }));
+  assert.throws(() => BU.buildSheet(allBroken), /no frame of the burst could be captured: unreadable PNG/);
+});

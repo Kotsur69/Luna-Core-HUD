@@ -8,6 +8,8 @@
 // left to right, top to bottom, every tile labeled "#<n> +<ms>ms" (offset
 // from the start of the burst). A frame that failed becomes a crossed-out
 // tile labeled FAIL plus a note; the burst fails only when every frame did.
+// Frames still pending 10 s past the planned end are skipped (a hung app),
+// and frames are decoded one at a time (one decoded frame in memory).
 //
 // The sheet stays within the caps LunaCore applies to a Playtester evidence
 // PNG (src/lunasworkPlaytest.js MAX_PNG_PIXELS / MAX_PNG_BYTES, mirrored here
@@ -36,6 +38,10 @@ const LABEL_PAD_PX = 3;
 const BIG_FONT_MIN_TILE_PX = 160;
 const SHRINK_MARGIN = 0.98;
 const MAX_NOTE_CHARS = 300;
+// A burst stops capturing this long after its planned end (a hung app would
+// otherwise cost every frame its full call timeout); the rest are skipped.
+const MAX_OVERRUN_MS = 10 * 1000;
+const SKIPPED_NOTE = 'skipped: the burst ran past its time budget';
 
 const BACKGROUND = [24, 24, 24];
 const LABEL_COLOR = [255, 255, 255];
@@ -89,7 +95,8 @@ function framePng(result) {
 /**
  * Captures `frames` screenshots at even intervals across `durationMs` (the
  * first at 0, the last at durationMs). A capture that runs late starts the
- * next one at once. Each frame records when its capture really started.
+ * next one at once; past durationMs + MAX_OVERRUN_MS the remaining frames
+ * are skipped. Each frame records when its capture really started.
  * @param {{capture:()=>Promise<unknown>, frames:number, durationMs:number,
  *   now:()=>number, sleep:(ms:number)=>Promise<unknown>}} opts
  * @returns {Promise<Array<{index:number, atMs:number, png?:Buffer, error?:string}>>}
@@ -97,11 +104,16 @@ function framePng(result) {
 async function captureBurst({ capture, frames, durationMs, now, sleep }) {
   const stepMs = frames > 1 ? durationMs / (frames - 1) : 0;
   const start = now();
+  const deadline = start + durationMs + MAX_OVERRUN_MS;
   const shots = [];
   for (let index = 0; index < frames; index += 1) {
     const waitMs = start + Math.round(index * stepMs) - now();
     if (waitMs > 0) await sleep(waitMs);
     const atMs = Math.max(0, Math.round(now() - start));
+    if (now() > deadline) {
+      shots.push({ index, atMs, error: SKIPPED_NOTE });
+      continue;
+    }
     try {
       shots.push({ index, atMs, png: framePng(await capture()) });
     } catch (err) {
@@ -168,25 +180,30 @@ function fillRect(dst, x0, y0, w, h, rgb) {
   }
 }
 
-/** The average colour of one source block, composited over black (opaque out). */
-function blockAverage(src, sx0, sx1, sy0, sy1) {
+/**
+ * Writes the average colour of one source block (composited over black,
+ * opaque out) into dst at byte offset `o`.
+ */
+function averageInto(dst, o, src, sx0, sx1, sy0, sy1) {
   let r = 0;
   let g = 0;
   let b = 0;
   for (let sy = sy0; sy < sy1; sy += 1) {
-    for (let sx = sx0; sx < sx1; sx += 1) {
-      const o = (sy * src.width + sx) * 4;
-      const a = src.data[o + 3] / 255;
-      r += src.data[o] * a;
-      g += src.data[o + 1] * a;
-      b += src.data[o + 2] * a;
+    for (let s = (sy * src.width + sx0) * 4, end = (sy * src.width + sx1) * 4; s < end; s += 4) {
+      const a = src.data[s + 3] / 255;
+      r += src.data[s] * a;
+      g += src.data[s + 1] * a;
+      b += src.data[s + 2] * a;
     }
   }
   const n = (sx1 - sx0) * (sy1 - sy0);
-  return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+  dst.data[o] = Math.round(r / n);
+  dst.data[o + 1] = Math.round(g / n);
+  dst.data[o + 2] = Math.round(b / n);
+  dst.data[o + 3] = 255;
 }
 
-/** Draws `src` scaled to w x h at (x0, y0) by area averaging (nearest when it grows). */
+/** Draws `src` scaled down to w x h at (x0, y0) by area averaging; the target must lie inside dst. */
 function drawScaled(dst, src, x0, y0, w, h) {
   for (let y = 0; y < h; y += 1) {
     const sy0 = Math.min(src.height - 1, Math.floor((y * src.height) / h));
@@ -194,7 +211,7 @@ function drawScaled(dst, src, x0, y0, w, h) {
     for (let x = 0; x < w; x += 1) {
       const sx0 = Math.min(src.width - 1, Math.floor((x * src.width) / w));
       const sx1 = Math.max(sx0 + 1, Math.floor(((x + 1) * src.width) / w));
-      fillRect(dst, x0 + x, y0 + y, 1, 1, blockAverage(src, sx0, sx1, sy0, sy1));
+      averageInto(dst, ((y0 + y) * dst.width + x0 + x) * 4, src, sx0, sx1, sy0, sy1);
     }
   }
 }
@@ -230,16 +247,14 @@ const tileLabel = (shot, failed) => `#${shot.index + 1} +${shot.atMs}ms${failed 
 
 // ---- sheet --------------------------------------------------------------------------
 
-/** Decodes the captured frames; a frame pngjs cannot read becomes a failed one. */
-function decodeShots(shots) {
-  return shots.map((shot) => {
-    if (!shot.png) return shot;
-    try {
-      return { index: shot.index, atMs: shot.atMs, image: PNG.sync.read(shot.png) };
-    } catch (err) {
-      return { index: shot.index, atMs: shot.atMs, error: oneLine(`unreadable PNG: ${errText(err)}`) };
-    }
-  });
+/** Decodes one captured frame; a frame pngjs cannot read becomes a failed one. */
+function decodeShot(shot) {
+  if (!shot.png) return { index: shot.index, atMs: shot.atMs, error: shot.error };
+  try {
+    return { index: shot.index, atMs: shot.atMs, image: PNG.sync.read(shot.png) };
+  } catch (err) {
+    return { index: shot.index, atMs: shot.atMs, error: oneLine(`unreadable PNG: ${errText(err)}`) };
+  }
 }
 
 function paintTile(sheet, shot, layout, slot) {
@@ -253,8 +268,8 @@ function paintTile(sheet, shot, layout, slot) {
     drawFailedTile(sheet, x0, ty, layout.tileW, layout.tileH);
     return;
   }
-  // Letterbox a frame whose size differs from the first one (a resized window).
-  const fit = Math.min(layout.tileW / shot.image.width, layout.tileH / shot.image.height);
+  // Letterbox a frame whose size differs from the first one (a resized window); never upscale.
+  const fit = Math.min(1, layout.tileW / shot.image.width, layout.tileH / shot.image.height);
   const w = Math.max(1, Math.round(shot.image.width * fit));
   const h = Math.max(1, Math.round(shot.image.height * fit));
   drawScaled(sheet, shot.image, x0 + Math.floor((layout.tileW - w) / 2), ty + Math.floor((layout.tileH - h) / 2), w, h);
@@ -269,24 +284,27 @@ function paintTile(sheet, shot, layout, slot) {
  * @throws when no frame was captured, or the sheet breaks a cap or is not a PNG
  */
 function buildSheet(shots, { maxPixels = MAX_SHEET_PIXELS, maxBytes = MAX_SHEET_BYTES } = {}) {
-  const decoded = decodeShots(shots);
-  const first = decoded.find((s) => s.image);
-  if (!first) {
-    const why = decoded.find((s) => s.error);
-    throw new Error(`no frame of the burst could be captured${why ? `: ${why.error}` : ''}`);
-  }
-  const layout = sheetLayout({ frameW: first.image.width, frameH: first.image.height, count: decoded.length, maxPixels });
+  const noFrame = (why) => new Error(`no frame of the burst could be captured${why ? `: ${why}` : ''}`);
+  const first = shots.find((s) => s.png);
+  if (!first) throw noFrame((shots.find((s) => s.error) || {}).error);
+  // The grid is sized from the first frame's header (framePng checked it), so
+  // each frame is decoded, painted and dropped in turn: one decoded frame in memory.
+  const layout = sheetLayout({ frameW: first.png.readUInt32BE(16), frameH: first.png.readUInt32BE(20), count: shots.length, maxPixels });
   const sheet = canvas(layout.width, layout.height, BACKGROUND);
-  decoded.forEach((shot, slot) => paintTile(sheet, shot, layout, slot));
+  const frames = shots.map((raw, slot) => {
+    const shot = decodeShot(raw);
+    paintTile(sheet, shot, layout, slot);
+    return shot.image
+      ? { index: shot.index, atMs: shot.atMs, ok: true }
+      : { index: shot.index, atMs: shot.atMs, ok: false, error: shot.error };
+  });
+  if (!frames.some((f) => f.ok)) throw noFrame(frames[0].error);
 
   const out = new PNG({ width: sheet.width, height: sheet.height });
   sheet.data.copy(out.data);
   const png = PNG.sync.write(out);
   if (!isPng(png)) throw new Error('the contact sheet is not a PNG');
   if (png.length > maxBytes) throw new Error('the contact sheet is larger than the evidence size cap');
-  const frames = decoded.map((s) => (s.image
-    ? { index: s.index, atMs: s.atMs, ok: true }
-    : { index: s.index, atMs: s.atMs, ok: false, error: s.error }));
   return { png, width: sheet.width, height: sheet.height, frames };
 }
 
