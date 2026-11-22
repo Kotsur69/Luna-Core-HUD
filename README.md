@@ -7,7 +7,44 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.35.0 — God Mode plans with agy, Neon, and steadier worktrees.**
+> **Current release: v0.36.0 — Asset manifest cost estimate with a spend gate.**
+> - asset manifest cost estimate with a spend gate
+> - run asset-prep cards in parallel; scene-worker only wires scenes
+> - opt-in ffmpeg trim, -14 LUFS and BPM post-process for game audio
+> - burst capture stitched into a labeled contact-sheet PNG
+> - Blender toon pass, poly budget and Critic turntable sheet
+> - combatFeelLog frame-timing summary for the Playtester and Critic
+> - animation_frame_sync - AttackStep frame validator and event baker
+> - fan-out luna_asset_search across all libraries
+> - per-package model and effort on Approve
+> - launch God Mode with a model pool
+> - weak-model guard on the easiest agy tier
+> - per-kind parallel caps in mixed pool runs
+> - pool escalation ladder and Opus emergency
+> - effort select per ticked model in the Workers pool
+> - per-model effort and usage % in the pool planner
+> - show the Workers pool on the God Mode plan
+> - Fix: BlenderKit signed two-step download, glTF/EXR picks, query filters,
+>   royalty-free license
+> - Fix: spend gate records approved / not-queued outcomes after review
+> - Fix: tighten asset-prep routing after review
+> - Fix: harden the ffmpeg audio post-process
+> - Fix: harden the Blender toon pass and turntable scoring
+> - Fix: burst review fixes - one decoded frame at a time, time budget, no
+>   upscale
+> - Fix: report how many source "all" results were cut
+> - Fix: combatFeelLog review fixes - read timeout, non-array log dropped
+> - Fix: route the graph and Lighthouse hooks through the gated runner
+> - Fix: animation_frame_sync review fixes
+> - Fix: gate headless steps on a reached account reserve
+> - Fix: tighten the phone's pool launch
+> - Fix: a "Per plan" Approve pick keeps the package's own effort
+> - Fix: keep a run's Emergency Opus effort across a restart
+> - Fix: track partial pauses per backend
+> - Fix: harden pairing against request floods and junk rows
+> - Fix: Sunday review after a manual run, retries, cooldown on paid calls
+>
+> **v0.35.0 — God Mode plans with agy, Neon, and steadier worktrees.**
 > - add verification semaphore and warm worktree pool
 > - tick a whole tag batch in the to-do picker
 > - use the saved agy planner model in Plan only
