@@ -535,8 +535,11 @@ function showDiffMessage(msgKey) {
 }
 
 /** Opens #filediff-modal for one file and fills it with `git diff HEAD --
- *  <file>` from main.js. Read-only: this only ever displays the diff text. */
-async function openDiffModal(file) {
+ *  <file>` from main.js. Read-only: this only ever displays the diff text.
+ *  Exported for the Sessions work map (workmap.js), whose session switcher
+ *  can show a tab other than the active one; main resolves `file` against
+ *  that session's own cwd and refuses a path outside it. */
+export async function openDiffModal(file, sessionId = getActiveSessionId()) {
   ensureDiffModal();
   if (!diffModal || !file) return;
 
@@ -558,7 +561,7 @@ async function openDiffModal(file) {
 
   let res;
   try {
-    res = await window.lunacore.getFileDiff(getActiveSessionId(), file);
+    res = await window.lunacore.getFileDiff(sessionId, file);
   } catch {
     res = null;
   }
@@ -578,8 +581,10 @@ async function openDiffModal(file) {
   diffModal.truncated.hidden = !res.truncated;
 }
 
-function closeDiffModal() {
-  if (!diffModalOpen || !diffModal) return;
+/** Closes #filediff-modal; false when it was not open. Exported so the live
+ *  map, which takes Esc first, can close the diff opened on top of it. */
+export function closeDiffModal() {
+  if (!diffModalOpen || !diffModal) return false;
   diffModalOpen = false;
   // The <pre> is emptied on the way OUT, not now: blanking it while the panel
   // is still fading turns a dismissal into a flash of an empty dialog.
@@ -588,6 +593,7 @@ function closeDiffModal() {
       diffModal.text.textContent = '';
     },
   });
+  return true;
 }
 
 /** One `<li class="afile">` - built by createElement, never innerHTML with
