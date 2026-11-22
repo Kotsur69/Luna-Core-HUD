@@ -38,6 +38,13 @@ const LIGHTHOUSE_CATEGORIES = ['performance', 'accessibility', 'bestPractices', 
 const TIMED_PHASES = ['directing', 'building', 'launching', 'playtesting', 'critiquing'];
 const REFRESH_DEBOUNCE_MS = 400;
 const MAX_SHOT_CACHE = 24;
+// The spend gate's outcome (lunasworkAssetCost GATE_*) -> its dashboard line.
+const GATE_LINES = Object.freeze({
+  within: { key: 'lw.dash.asset.within', tone: 'good' },
+  held: { key: 'lw.dash.asset.gated', tone: 'bad' },
+  approved: { key: 'lw.dash.asset.approved', tone: 'warn' },
+  notQueued: { key: 'lw.dash.asset.notQueued', tone: 'bad' },
+});
 
 // ---- pure helpers (tested) -----------------------------------------------------
 
@@ -144,8 +151,8 @@ export function assetEstimateLines(est) {
     { key: 'lw.dash.asset.paid', vars: { n: n(est.paid) }, tone: n(est.paid) ? 'warn' : 'dim' },
   ];
   const limit = Number.isFinite(est.thresholdUsd) ? formatUsd(est.thresholdUsd) : null;
-  if (limit !== null && est.gated === true) lines.push({ key: 'lw.dash.asset.gated', vars: { limit, id: est.decisionId }, tone: 'bad' });
-  else if (limit !== null) lines.push({ key: 'lw.dash.asset.within', vars: { limit }, tone: 'good' });
+  const gate = GATE_LINES[est.gate] || GATE_LINES.within;
+  if (limit !== null) lines.push({ key: gate.key, vars: { limit, id: est.decisionId }, tone: gate.tone });
   const unknown = Array.isArray(est.unknownModels) ? est.unknownModels.filter((m) => typeof m === 'string') : [];
   if (unknown.length) lines.push({ key: 'lw.dash.asset.unknown', vars: { models: unknown.join(', ') }, tone: 'warn' });
   return lines;

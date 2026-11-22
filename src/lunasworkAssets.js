@@ -696,41 +696,8 @@ function createAssetStep(deps) {
     return rows.map((r) => (held.has(r) ? { ...r, status: HELD, ref: { kind: 'decision', id: res.id } } : r));
   }
 
-  /**
-   * The spend gate over this batch: records the Asset Manifest Estimate and,
-   * when the paid finals not yet approved go over the run's remaining
-   * Higgsfield cap, asks about them. Those are held (or, when the question
-   * could not be queued, left planned): never carded before an approval.
-   * @returns {{rows:object[], take:object[]}}
-   */
-  function spendGate(run, rows, take) {
-    const usdPerCredit = typeof deps.usdPerCredit === 'function' ? deps.usdPerCredit() : undefined;
-    const thresholdUsd = cost.remainingHiggsfieldUsd(run);
-    const unapproved = take.filter((r) => !r.paidOk && cost.costClass(r) === 'paid');
-    const pending = cost.assetManifestEstimate(unapproved, { usdPerCredit });
-    let held = [];
-    let decisionId = null;
-    if (unapproved.length && pending.paid.usd > thresholdUsd) {
-      held = unapproved;
-      const res = deps.ask(cost.spendDecision(pending, thresholdUsd));
-      if (isObj(res) && res.ok) {
-        decisionId = res.id;
-        logEvent(`${held.length} paid asset final(s), ~$${pending.paid.usd.toFixed(2)}, over the remaining Higgsfield budget of $${thresholdUsd.toFixed(2)}: held for decision ${res.id}`);
-      } else {
-        logEvent(`the spend question was not queued (${oneLine(res && res.reason, 60) || 'failed'}) - ${held.length} paid asset final(s) stay planned`);
-      }
-    }
-    const est = cost.assetManifestEstimate(take, { usdPerCredit });
-    if (take.length && typeof deps.recordEstimate === 'function') {
-      deps.recordEstimate(cost.estimateRecord(est, { at: typeof deps.now === 'function' ? deps.now() : Date.now(), iteration: run.iteration, thresholdUsd, decisionId }));
-    }
-    if (take.length) logEvent(`estimate: ${est.library.count} library, ${est.local.count} local, ${est.paid.count} paid (~$${est.paid.usd.toFixed(2)})`);
-    const hold = new Set(held);
-    return {
-      rows: decisionId === null ? rows : rows.map((r) => (hold.has(r) ? { ...r, status: HELD, ref: { kind: 'decision', id: decisionId } } : r)),
-      take: take.filter((r) => !hold.has(r)),
-    };
-  }
+  /** The spend gate (lunasworkAssetCost.runSpendGate): paid finals over budget are held, never carded. */
+  const spendGate = (run, rows, take) => cost.runSpendGate({ run, rows, take, deps, logEvent, heldStatus: HELD });
 
   /** Files the batch's cards; carded rows become queued. */
   function card(run, rows, take, store, tag) {

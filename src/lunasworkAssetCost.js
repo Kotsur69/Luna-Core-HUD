@@ -19,7 +19,12 @@
 // high side, like DEFAULT_USD_PER_CREDIT: the real cost is booked by
 // luna_asset_higgsfield (`generate cost`) against the run's spend cap.
 //
-// Pure: no IO. cleanAssetEstimate is the trust boundary for a stored run
+// The spend gate: paid finals not yet approved whose projected USD goes over
+// the run's remaining Higgsfield cap (run.spendCaps - run.spend) are held for
+// a decision (default skip) before their cards are filed (runSpendGate, the
+// asset step's seam; everything else here is pure). An approval does not
+// raise the cap: luna_asset_higgsfield still books each final against it.
+// cleanAssetEstimate is the trust boundary for a stored run
 // (src/lunasworkRun.js) and for the dashboard view.
 // ============================================================================
 
@@ -41,6 +46,12 @@ const DEFAULT_FINAL_CREDITS = 10;
 // The spend gate's answers (distinct from the batch gate's capped / all).
 const SPEND_APPROVE = 'approve';
 const SPEND_SKIP = 'skip';
+// The gate's outcome for the recorded estimate.
+const GATE_WITHIN = 'within';
+const GATE_HELD = 'held';
+const GATE_APPROVED = 'approved';
+const GATE_NOT_QUEUED = 'notQueued';
+const GATES = Object.freeze([GATE_WITHIN, GATE_HELD, GATE_APPROVED, GATE_NOT_QUEUED]);
 const MAX_USD_PER_CREDIT = 10;
 const MAX_CREDITS_PER_FINAL = 10000;
 const MAX_ROWS = 1000;
@@ -134,7 +145,7 @@ function assetManifestEstimate(entries, opts = {}) {
  * What a stored run / the dashboard keeps of an estimate (no per-row list),
  * or null. Untrusted input: every field re-checked.
  * @returns {{at:number|null, iteration:number, library:number, local:number, paid:number, credits:number,
- *   usd:number, usdPerCredit:number, unknownModels:string[], thresholdUsd:number|null, gated:boolean,
+ *   usd:number, usdPerCredit:number, unknownModels:string[], thresholdUsd:number|null, gate:string, gated:boolean,
  *   decisionId:number|null}|null}
  */
 function cleanAssetEstimate(raw) {
@@ -152,13 +163,15 @@ function cleanAssetEstimate(raw) {
     usdPerCredit: usdRate(raw.usdPerCredit),
     unknownModels: unknown.slice(0, MAX_UNKNOWN),
     thresholdUsd: Number.isFinite(raw.thresholdUsd) && raw.thresholdUsd >= 0 ? money(raw.thresholdUsd) : null,
-    gated: raw.gated === true && decisionId !== null,
+    // A held gate needs its decision; without one the question was not queued.
+    gate: raw.gate === GATE_HELD && decisionId === null ? GATE_NOT_QUEUED : GATES.includes(raw.gate) ? raw.gate : GATE_WITHIN,
+    gated: raw.gate === GATE_HELD && decisionId !== null,
     decisionId,
   };
 }
 
 /** The stored summary of an estimate plus its gate outcome. */
-function estimateRecord(est, { at, iteration, thresholdUsd, decisionId = null }) {
+function estimateRecord(est, { at, iteration, thresholdUsd, decisionId = null, gate = GATE_WITHIN }) {
   return cleanAssetEstimate({
     at,
     iteration,
@@ -170,7 +183,7 @@ function estimateRecord(est, { at, iteration, thresholdUsd, decisionId = null })
     usdPerCredit: est.usdPerCredit,
     unknownModels: est.paid.unknownModels,
     thresholdUsd,
-    gated: decisionId !== null,
+    gate,
     decisionId,
   });
 }
@@ -183,9 +196,69 @@ function spendDecision(est, thresholdUsd) {
   return {
     kind: 'other',
     question: `Spend about $${est.paid.usd.toFixed(2)} (${est.paid.credits} Higgsfield credits) on ${est.paid.count} paid asset final(s)? That is over the run's remaining Higgsfield budget of $${thresholdUsd.toFixed(2)}.`,
-    detail: `${SPEND_APPROVE} = generate them; ${SPEND_SKIP} = not in this run (default). Free imports and local generations go on. ${names}${more}.${unknown}`,
+    detail: `${SPEND_APPROVE} = generate them (the run's Higgsfield cap still applies: raise it in the settings first, or generation stops at the cap); ${SPEND_SKIP} = not in this run (default). Free rows go on. ${names}${more}.${unknown}`,
     options: [SPEND_SKIP, SPEND_APPROVE],
     defaultAnswer: SPEND_SKIP,
+  };
+}
+
+/**
+ * The spend gate's plan over this batch: the paid finals not yet approved
+ * (`paidOk`) are held when their projected USD goes over the run's remaining
+ * Higgsfield cap. Only the batch is counted, not cards filed earlier that
+ * have not booked their spend yet: luna_asset_higgsfield's booking against
+ * the cap is the hard stop, this gate is the early warning.
+ * @returns {{est:object, thresholdUsd:number, held:object[], question:object|null, gate:string}}
+ */
+function planSpendGate(run, take, { usdPerCredit } = {}) {
+  const list = Array.isArray(take) ? take : [];
+  const thresholdUsd = remainingHiggsfieldUsd(run);
+  const unapproved = list.filter((r) => isObj(r) && !r.paidOk && costClass(r) === 'paid');
+  const pending = assetManifestEstimate(unapproved, { usdPerCredit });
+  const over = unapproved.length > 0 && pending.paid.usd > thresholdUsd;
+  const approved = list.some((r) => isObj(r) && r.paidOk === true && costClass(r) === 'paid');
+  return {
+    est: assetManifestEstimate(list, { usdPerCredit }),
+    thresholdUsd,
+    held: over ? unapproved : [],
+    question: over ? spendDecision(pending, thresholdUsd) : null,
+    gate: approved ? GATE_APPROVED : GATE_WITHIN,
+  };
+}
+
+/**
+ * The asset step's spend gate (src/lunasworkAssets.js createAssetStep): asks
+ * about the held finals, records the estimate, logs. Held rows get
+ * `heldStatus` under the decision; when the question could not be queued
+ * they stay as they are (planned) - in both cases they leave `take`, so no
+ * paid card is filed before an approval. `take` rows keep their identity
+ * through the batch gate (selectBatch keeps take and ask disjoint).
+ * @param {{run:object, rows:object[], take:object[], heldStatus:string, logEvent:(text:string)=>void,
+ *   deps:{ask:(spec:object)=>{ok:boolean, id?:number, reason?:string}, usdPerCredit?:()=>number,
+ *   recordEstimate?:(estimate:object)=>void, now?:()=>number}}} ctx
+ * @returns {{rows:object[], take:object[]}}
+ */
+function runSpendGate({ run, rows, take, deps, logEvent, heldStatus }) {
+  const plan = planSpendGate(run, take, { usdPerCredit: typeof deps.usdPerCredit === 'function' ? deps.usdPerCredit() : undefined });
+  let decisionId = null;
+  let gate = plan.gate;
+  if (plan.held.length) {
+    const res = deps.ask(plan.question);
+    decisionId = isObj(res) && res.ok && Number.isSafeInteger(res.id) ? res.id : null;
+    gate = decisionId === null ? GATE_NOT_QUEUED : GATE_HELD;
+    logEvent(decisionId === null
+      ? `the spend question was not queued (${oneLine(res && res.reason, 60) || 'failed'}) - ${plan.held.length} paid asset final(s) stay planned`
+      : `${plan.held.length} paid asset final(s) over the remaining Higgsfield budget of $${plan.thresholdUsd.toFixed(2)}: held for decision ${decisionId}`);
+  }
+  if (take.length && typeof deps.recordEstimate === 'function') {
+    const at = typeof deps.now === 'function' ? deps.now() : Date.now();
+    deps.recordEstimate(estimateRecord(plan.est, { at, iteration: run.iteration, thresholdUsd: plan.thresholdUsd, decisionId, gate }));
+  }
+  if (take.length) logEvent(`estimate: ${plan.est.library.count} library, ${plan.est.local.count} local, ${plan.est.paid.count} paid (~$${plan.est.paid.usd.toFixed(2)})`);
+  const hold = new Set(plan.held);
+  return {
+    rows: decisionId === null ? rows : rows.map((r) => (hold.has(r) ? { ...r, status: heldStatus, ref: { kind: 'decision', id: decisionId } } : r)),
+    take: take.filter((r) => !hold.has(r)),
   };
 }
 
@@ -208,9 +281,14 @@ function estimateLines(raw) {
     `Projected paid spend: ${e.credits} credits = $${e.usd.toFixed(2)} at $${e.usdPerCredit} per credit.`,
   ];
   if (e.thresholdUsd !== null) {
-    lines.push(e.gated
-      ? `Over the remaining Higgsfield budget of $${e.thresholdUsd.toFixed(2)}: the paid finals waited for decision ${e.decisionId}.`
-      : `Within the remaining Higgsfield budget of $${e.thresholdUsd.toFixed(2)}.`);
+    const budget = `the remaining Higgsfield budget of $${e.thresholdUsd.toFixed(2)}`;
+    const text = {
+      [GATE_HELD]: `Over ${budget}: the paid finals wait for decision ${e.decisionId}.`,
+      [GATE_APPROVED]: `Paid finals over budget were approved; their spend is still booked against ${budget} (and the run cap).`,
+      [GATE_NOT_QUEUED]: `Over ${budget}: the spend question could not be queued, so the paid finals were not generated.`,
+      [GATE_WITHIN]: `Within ${budget}.`,
+    };
+    lines.push(text[e.gate]);
   }
   if (e.unknownModels.length) lines.push(`Unknown model(s), priced at the default ${DEFAULT_FINAL_CREDITS} credits: ${e.unknownModels.join(', ')}.`);
   return lines;
@@ -221,7 +299,13 @@ module.exports = {
   DEFAULT_FINAL_CREDITS,
   SPEND_APPROVE,
   SPEND_SKIP,
+  GATE_WITHIN,
+  GATE_HELD,
+  GATE_APPROVED,
+  GATE_NOT_QUEUED,
   costClass,
+  planSpendGate,
+  runSpendGate,
   assetManifestEstimate,
   cleanAssetEstimate,
   estimateRecord,

@@ -589,6 +589,7 @@ test('spend gate: over the remaining budget the paid finals wait for approval, f
   assert.equal(held.length, 3);
   assert.ok(held.every((x) => x.ref.id === created.decision.id));
   assert.equal(recorded[0].gated, true);
+  assert.equal(recorded[0].gate, Cost.GATE_HELD);
   assert.equal(recorded[0].decisionId, created.decision.id);
 
   // Pending: still nothing paid, not asked again.
@@ -604,6 +605,10 @@ test('spend gate: over the remaining budget the paid finals wait for approval, f
   assert.equal(asked.length, 1);
   assert.equal(assetCards(store).length, 5);
   assert.ok(readList(dir).rows.filter((x) => x.name.startsWith('Poster')).every((x) => x.status === 'queued'));
+  // The record says the finals were approved over budget, not "within".
+  assert.equal(recorded.at(-1).gate, Cost.GATE_APPROVED);
+  assert.equal(recorded.at(-1).paid, 3);
+  assert.match(asked[0].detail, /cap still applies/);
 });
 
 test('spend gate: the skip default marks the paid finals unpaid and never cards them', async () => {
@@ -628,11 +633,14 @@ test('spend gate: a question that could not be queued leaves the paid finals pla
   const dir = fakeRepo(paidRows(2));
   const store = memStore();
   const events = [];
-  const step = A.createAssetStep({ todoStore: () => store, ask: () => ({ ok: false, reason: 'tooMany' }), logEvent: (t) => events.push(t) });
+  const recorded = [];
+  const step = A.createAssetStep({ todoStore: () => store, ask: () => ({ ok: false, reason: 'tooMany' }), logEvent: (t) => events.push(t), recordEstimate: (e) => recorded.push(e) });
   await step.beforeDirecting(baseRun(dir, { spendCaps: { higgsfield: 0 } }));
   assert.equal(assetCards(store).length, 0);
   assert.ok(readList(dir).rows.every((x) => x.status === 'planned'));
   assert.ok(events.some((e) => /spend question was not queued/.test(e)));
+  assert.equal(recorded[0].gate, Cost.GATE_NOT_QUEUED);
+  assert.equal(recorded[0].gated, false);
 });
 
 test('cleanAssetEstimate: untrusted fields are dropped, a gate without a decision id is not gated', () => {

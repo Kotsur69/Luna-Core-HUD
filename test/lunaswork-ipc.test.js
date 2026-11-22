@@ -887,7 +887,7 @@ test('dashboardView: no view for a malformed run; unknown project, phase and ver
 });
 
 test('dashboardView: the asset cost estimate is rebuilt field by field, null without one', () => {
-  const v = dashboardView({ id: 'abc', assetEstimate: { library: 1, local: 2, paid: 3, usd: 3, credits: 30, unknownModels: ['<img>'], gated: true, decisionId: 4, thresholdUsd: 2, extra: 'x' } }, { isKnownProject: () => true });
+  const v = dashboardView({ id: 'abc', assetEstimate: { library: 1, local: 2, paid: 3, usd: 3, credits: 30, unknownModels: ['<img>'], gate: 'held', decisionId: 4, thresholdUsd: 2, extra: 'x' } }, { isKnownProject: () => true });
   assert.equal(v.assetEstimate.paid, 3);
   assert.equal(v.assetEstimate.gated, true);
   assert.deepEqual(v.assetEstimate.unknownModels, []);
