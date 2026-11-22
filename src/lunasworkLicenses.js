@@ -7,8 +7,9 @@
 // library assets, src/lunasworkAssetPipeline.js for generated ones); the
 // Critic files a card for any art file without one (ledgerCards).
 //
-//   license    classifyLicense: CC0, CC-BY (any version) or an explicit
-//              free-for-commercial license pass; NC, ND, SA, Sampling+,
+//   license    classifyLicense: CC0, CC-BY (any version), an explicit
+//              free-for-commercial license or the named BlenderKit Royalty
+//              Free license pass; NC, ND, SA, Sampling+,
 //              editorial, GPL and anything unknown are refused with the reason
 //   rips       ripReason: a search result whose title or tags name a
 //              commercial game (or say it was ripped) is refused. The art
@@ -47,6 +48,10 @@ const LEDGER_HEADER = [
 // What a generated asset's row says: it is this project's own work.
 const GENERATED_LICENSE = 'Own work (generated)';
 const FREE_COMMERCIAL = 'Free for commercial use';
+// BlenderKit's royalty-free license, as src/lunasworkFreeSources.js names it:
+// commercial use without credit, sale of higher-level derivative works (a
+// game) allowed, resale of the asset itself barred (blenderkit.com/docs/licenses).
+const BLENDERKIT_ROYALTY_FREE = 'BlenderKit Royalty Free';
 
 const MAX_CELL_CHARS = 300;
 const MAX_LEDGER_BYTES = 2 * 1024 * 1024;
@@ -95,6 +100,8 @@ function classifyLicense(raw, opts = {}) {
   if (!text) return { ok: false, reason: 'refused: no license stated' };
   if (opts.library !== true && text === GENERATED_LICENSE) return { ok: true, license: GENERATED_LICENSE, attribution: false };
   if (opts.library !== true && text === FREE_COMMERCIAL) return { ok: true, license: FREE_COMMERCIAL, attribution: false };
+  // A named, checked library license: allowed from library text too (exact match only).
+  if (text === BLENDERKIT_ROYALTY_FREE) return { ok: true, license: BLENDERKIT_ROYALTY_FREE, attribution: false };
   const norm = normalized(text);
   for (const term of REFUSED_TERMS) if (has(norm, term.words)) return { ok: false, reason: `refused: ${term.reason} (${quoted})` };
   if (CC0_RE.test(norm)) return { ok: true, license: 'CC0', attribution: false };
@@ -412,6 +419,7 @@ module.exports = {
   LEDGER_TITLES,
   GENERATED_LICENSE,
   FREE_COMMERCIAL,
+  BLENDERKIT_ROYALTY_FREE,
   REFERENCE_GAMES,
   classifyLicense,
   ripReason,

@@ -396,28 +396,215 @@ test('Smithsonian 3D: sends X-Api-Key header, searches CC0 3D models and imports
   assert.equal(ledgerRows(dir)[0].license, 'CC0');
 });
 
-test('BlenderKit and Lots of Sounds: search and import work with or without optional keys', async () => {
+const BK = 'https://www.blenderkit.com/api/v1';
+const EXR = pad(Buffer.from([0x76, 0x2f, 0x31, 0x01]));
+const bkEndpoint = (uuid) => `${BK}/downloads/${uuid}/`;
+const bkSearchUrl = (words) => `${BK}/search/?query=${encodeURIComponent(words)}&page_size=10`;
+const bkInfoUrl = (id) => `${BK}/search/?query=${encodeURIComponent(`asset_base_id:${id} is_free:true`)}&page_size=1`;
+/** A BlenderKit search record; files: fileType -> endpoint uuid. */
+const bkRecord = (id, assetType, license, files) => ({
+  assetBaseId: id, displayName: id, assetType, isFree: true, license, author: { fullName: 'Kit Artist' }, tags: ['lantern'],
+  files: Object.entries(files).map(([fileType, uuid]) => ({ fileType, downloadUrl: bkEndpoint(uuid), fileThumbnail: null })),
+});
+const MODEL_FILES = { thumbnail: 'aaaa0000-0000-0000-0000-000000000001', blend: 'aaaa0000-0000-0000-0000-000000000002', gltf_godot: 'aaaa0000-0000-0000-0000-000000000003', gltf: 'aaaa0000-0000-0000-0000-000000000004' };
+
+/**
+ * The fake fetch, plus the two-step download: a GET of an endpoint without
+ * ?scene_uuid= answers 403 like the live API; with one it answers `signed[uuid]`.
+ */
+function bkFetch(routes, signed) {
+  const base = fakeFetch(routes);
+  const downloads = [];
+  const fn = async (url, init = {}) => {
+    const m = /^https:\/\/www\.blenderkit\.com\/api\/v1\/downloads\/([\w-]+)\/(\?scene_uuid=([0-9a-f-]{36}))?$/.exec(url);
+    if (!m) return base.fn(url, init);
+    downloads.push({ uuid: m[1], url, headers: init.headers || {} });
+    if (!m[2]) return reply({ detail: 'Parameter scene_uuid not set' }, 403);
+    const hit = signed[m[1]];
+    if (hit === undefined) return reply({ detail: 'not found' }, 404);
+    return typeof hit === 'function' ? hit(url, init) : reply(hit);
+  };
+  return { fn, calls: base.calls, downloads };
+}
+
+test('BlenderKit: without a key, search -> info -> signed two-step download imports the glTF (.glb) of a royalty-free model', async () => {
   const dir = tempRepo();
-  const BK = 'https://www.blenderkit.com/api/v1';
+  const model = bkRecord('bk-lantern-01', 'model', 'royalty_free', MODEL_FILES);
+  const material = bkRecord('bk-rust-mat', 'material', 'royalty_free', { blend: 'bbbb0000-0000-0000-0000-000000000001' });
+  const glbUrl = 'https://assets.blendkit.com/signed/bk-lantern-01/lantern.glb?sig=abc';
+  const fake = bkFetch({
+    [bkSearchUrl('lantern asset_type:model is_free:true')]: { results: [model, material] },
+    [bkInfoUrl('bk-lantern-01')]: { results: [model] },
+    [glbUrl]: () => reply(GLB),
+  }, { [MODEL_FILES.gltf]: { fileType: 'gltf', uuid: MODEL_FILES.gltf, filePath: glbUrl, filePaths: [{ url: glbUrl }] } });
+  const { lib } = library(dir, fake.fn, { keys: {} });
+
+  const found = await lib.search({ source: 'blenderkit', query: 'lantern', type: 'model' });
+  assert.equal(found.ok, true, JSON.stringify(found));
+  assert.deepEqual(found.results.map((r) => [r.id, r.license]), [['bk-lantern-01', L.BLENDERKIT_ROYALTY_FREE]], 'the material record is filtered out');
+  assert.deepEqual(found.refused, []);
+
+  const res = await lib.importAsset({ source: 'blenderkit', id: 'bk-lantern-01', name: 'Iron Lantern', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, [`${ART}/Props/iron-lantern.glb`]);
+  assert.equal(fs.readFileSync(path.join(dir, ...res.files[0].split('/'))).subarray(0, 4).toString('latin1'), 'glTF');
+  assert.equal(ledgerRows(dir)[0].license, L.BLENDERKIT_ROYALTY_FREE);
+  assert.equal(fake.downloads.length, 1, 'one signed call, for the gltf file only');
+  assert.equal(fake.downloads[0].uuid, MODEL_FILES.gltf);
+  assert.match(fake.downloads[0].url, /\?scene_uuid=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.equal(fake.downloads[0].headers.Authorization, undefined, 'no key, no Authorization header');
+  assert.ok(fake.calls.every((c) => !/asset_type=|is_free=/.test(c.url)), 'filters only inside query=');
+});
+
+test('BlenderKit: a stored key goes as a Bearer token to the download endpoint; a refusal never carries it', async () => {
+  const dir = tempRepo();
+  const model = bkRecord('bk-lantern-01', 'model', 'cc0', MODEL_FILES);
+  const glbUrl = 'https://assets.blenderkit.com/files/lantern.glb';
+  const ok = bkFetch({ [bkInfoUrl('bk-lantern-01')]: { results: [model] }, [glbUrl]: () => reply(GLB) }, { [MODEL_FILES.gltf]: { filePath: glbUrl } });
+  const { lib } = library(dir, ok.fn);
+  const res = await lib.importAsset({ source: 'blenderkit', id: 'bk-lantern-01', name: 'Lantern', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(ok.downloads[0].headers.Authorization, `Bearer ${KEYS.blenderkit}`);
+
+  const refused = bkFetch({ [bkInfoUrl('bk-lantern-01')]: { results: [model] } }, { [MODEL_FILES.gltf]: () => reply({ detail: `bad token ${KEYS.blenderkit}` }, 403) });
+  const bad = await library(tempRepo(), refused.fn).lib.importAsset({ source: 'blenderkit', id: 'bk-lantern-01', name: 'Lantern', kind: 'prop' });
+  assert.equal(bad.ok, false);
+  assert.match(bad.detail, /refused the API key \(HTTP 403\)/);
+  assert.equal(JSON.stringify(bad).includes(KEYS.blenderkit), false);
+});
+
+test('BlenderKit: file picks by fileType - glTF only for models, EXR at the resolution or the nearest lower one, never 8K', async () => {
+  const hdriFiles = {
+    thumbnail: 'cccc0000-0000-0000-0000-000000000001', resolution_8K: 'cccc0000-0000-0000-0000-000000000008',
+    resolution_4K: 'cccc0000-0000-0000-0000-000000000004', resolution_1K: 'cccc0000-0000-0000-0000-000000000002', resolution_0_5K: 'cccc0000-0000-0000-0000-000000000005',
+  };
+  const signedOf = (uuid) => ({ filePath: `https://assets.blendkit.com/hdr/${uuid}.exr` });
+  const signed = Object.fromEntries(Object.values(hdriFiles).map((u) => [u, signedOf(u)]));
+  const records = {
+    'bk-sky-01': bkRecord('bk-sky-01', 'hdr', 'cc0', hdriFiles),
+    'bk-sky-02': bkRecord('bk-sky-02', 'hdr', 'cc0', { resolution_8K: hdriFiles.resolution_8K }),
+    'bk-crate-01': bkRecord('bk-crate-01', 'model', 'cc0', { blend: MODEL_FILES.blend, gltf_godot: MODEL_FILES.gltf_godot, thumbnail: MODEL_FILES.thumbnail }),
+  };
+  const fake = bkFetch(Object.fromEntries(Object.entries(records).map(([id, r]) => [bkInfoUrl(id), { results: [r] }])), signed);
+  const bk = S.createFreeSources({ fetch: fake.fn }).blenderkit;
+  assert.deepEqual(bk.types, ['model', 'hdri']);
+
+  const sky = await bk.info('bk-sky-01');
+  assert.equal(sky.type, 'hdri');
+  const at = async (resolution) => (await bk.files(sky, { resolution })).files[0];
+  assert.deepEqual(await at('4k'), { url: signedOf(hdriFiles.resolution_4K).filePath, name: 'bk-sky-01.exr', main: true });
+  assert.equal((await at('2k')).url, signedOf(hdriFiles.resolution_1K).filePath, '2K missing -> 1K');
+  assert.equal((await at(undefined)).url, signedOf(hdriFiles.resolution_1K).filePath, 'default 2k');
+  assert.equal((await at('1k')).url, signedOf(hdriFiles.resolution_1K).filePath);
+  assert.ok(fake.downloads.every((d) => d.uuid !== hdriFiles.resolution_8K && d.uuid !== hdriFiles.thumbnail));
+
+  const only8k = await bk.info('bk-sky-02');
+  await assert.rejects(() => bk.files(only8k, { resolution: '4k' }), (err) => err.code === 'noFile' && /no EXR at 4K or lower/.test(err.message));
+  const crate = await bk.info('bk-crate-01');
+  await assert.rejects(() => bk.files(crate), (err) => err.code === 'noFile' && err.message === 'this BlenderKit model has no glTF file');
+  assert.ok(fake.downloads.every((d) => d.uuid !== hdriFiles.resolution_8K), 'never 8K');
+});
+
+test('BlenderKit: an HDRI import writes a .exr; type texture is badType', async () => {
+  const dir = tempRepo();
+  const sky = bkRecord('bk-sky-01', 'hdr', 'royalty_free', { resolution_2K: 'dddd0000-0000-0000-0000-000000000002', resolution_1K: 'dddd0000-0000-0000-0000-000000000001' });
+  const exrUrl = 'https://assets.blendkit.com/hdr/sky_2k.exr?sig=1';
+  const fake = bkFetch({
+    [bkSearchUrl('sky asset_type:hdr is_free:true')]: { results: [sky] },
+    [bkInfoUrl('bk-sky-01')]: { results: [sky] },
+    [exrUrl]: () => reply(EXR),
+  }, { 'dddd0000-0000-0000-0000-000000000002': { filePath: exrUrl } });
+  const { lib } = library(dir, fake.fn, { keys: {} });
+  assert.deepEqual((await lib.search({ source: 'blenderkit', query: 'sky', type: 'hdri' })).results.map((r) => r.id), ['bk-sky-01']);
+  const res = await lib.importAsset({ source: 'blenderkit', id: 'bk-sky-01', name: 'Dusk Sky', kind: 'texture', resolution: '2k' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.files.length, 1);
+  assert.match(res.files[0], /\/dusk-sky\.exr$/);
+
+  const tex = await lib.search({ source: 'blenderkit', query: 'rust', type: 'texture' });
+  assert.equal(tex.error, 'badType');
+});
+
+test('BlenderKit: signed links are pinned to its file hosts; a broken download reply is a clear error', async () => {
+  const model = bkRecord('bk-lantern-01', 'model', 'cc0', MODEL_FILES);
+  const routes = { [bkInfoUrl('bk-lantern-01')]: { results: [model] } };
+  const filesWith = async (signedReply) => {
+    const bk = S.createFreeSources({ fetch: bkFetch(routes, { [MODEL_FILES.gltf]: signedReply }).fn, keys: { get: () => KEYS.blenderkit } }).blenderkit;
+    return bk.files(await bk.info('bk-lantern-01'));
+  };
+  const offHost = (err) => err.code === 'badReply' && /no download link on its file hosts/.test(err.message);
+  await assert.rejects(() => filesWith({ filePath: 'https://evil.example.com/lantern.glb' }), offHost);
+  await assert.rejects(() => filesWith({ filePath: 'http://assets.blendkit.com/lantern.glb' }), offHost);
+  await assert.rejects(() => filesWith({ filePath: 'https://assets.blendkit.com.evil.com/lantern.glb' }), offHost);
+  await assert.rejects(() => filesWith({ filePath: 'https://user@assets.blendkit.com/lantern.glb' }), offHost);
+  // filePath off-host, a later filePaths[] entry on an allowed host is taken.
+  const second = await filesWith({ filePath: 'https://evil.example.com/x.glb', filePaths: [{ url: 'https://cdn.example.com/y.glb' }, { url: 'https://assets.blenderkit.com/z.glb' }] });
+  assert.equal(second.files[0].url, 'https://assets.blenderkit.com/z.glb');
+  // A signed path without a known extension falls back to .glb for a model.
+  assert.equal((await filesWith({ filePath: 'https://assets.blendkit.com/blob/123' })).files[0].name, 'bk-lantern-01.glb');
+  await assert.rejects(() => filesWith(() => reply(Buffer.from(`<html>${KEYS.blenderkit}</html>`))), (err) => err.code === 'badReply' && /BlenderKit download answered without JSON/.test(err.message) && !err.message.includes(KEYS.blenderkit));
+  await assert.rejects(() => filesWith(['not', 'a', 'record']), (err) => err.code === 'badReply' && /unusable download record/.test(err.message));
+  // A download endpoint that is not on BlenderKit's API is never called (the key could go there).
+  const foreign = { ...model, files: [{ fileType: 'gltf', downloadUrl: 'https://evil.example.com/api/v1/downloads/aaaa0000-0000-0000-0000-000000000004/' }] };
+  const fake = bkFetch({ [bkInfoUrl('bk-lantern-01')]: { results: [foreign] } }, {});
+  const bk = S.createFreeSources({ fetch: fake.fn, keys: { get: () => KEYS.blenderkit } }).blenderkit;
+  await assert.rejects(async () => bk.files(await bk.info('bk-lantern-01')), (err) => err.code === 'noFile');
+  assert.ok(fake.calls.every((c) => !c.url.startsWith('https://evil.example.com')));
+});
+
+test('BlenderKit: license mapping - cc0 / cc_zero -> CC0, cc_by -> CC-BY 4.0, royalty_free / roy_free -> BlenderKit Royalty Free; search and info agree', async () => {
+  const cases = [['cc0', 'CC0'], ['cc_zero', 'CC0'], ['cc_by', 'CC-BY 4.0'], ['royalty_free', L.BLENDERKIT_ROYALTY_FREE], ['roy_free', L.BLENDERKIT_ROYALTY_FREE], ['ROYALTY_FREE', L.BLENDERKIT_ROYALTY_FREE]];
+  const records = cases.map(([lic], i) => bkRecord(`bk-asset-0${i}`, 'model', lic, MODEL_FILES));
+  const routes = { [bkSearchUrl('lamp asset_type:model is_free:true')]: { results: records } };
+  for (const r of records) routes[bkInfoUrl(r.assetBaseId)] = { results: [r] };
+  const bk = S.createFreeSources({ fetch: bkFetch(routes, {}).fn }).blenderkit;
+  const searched = await bk.search('lamp', { type: 'model' });
+  assert.deepEqual(searched.map((i) => i.license), cases.map(([, want]) => want));
+  for (const r of records) assert.equal((await bk.info(r.assetBaseId)).license, searched.find((i) => i.id === r.assetBaseId).license);
+  // No license stated is never guessed from isFree.
+  const bare = bkRecord('bk-bare-01', 'model', undefined, MODEL_FILES);
+  const bareBk = S.createFreeSources({ fetch: bkFetch({ [bkInfoUrl('bk-bare-01')]: { results: [bare] } }, {}).fn }).blenderkit;
+  assert.equal((await bareBk.info('bk-bare-01')).license, '');
+});
+
+test('BlenderKit review hardening: ":" in words is no operator, 0_5K is the last fallback, the first duplicate fileType wins, signed URLs are normalized', async () => {
+  const hdri = bkRecord('bk-sky-03', 'hdr', 'cc0', { resolution_8K: 'eeee0000-0000-0000-0000-000000000008', resolution_0_5K: 'eeee0000-0000-0000-0000-000000000005' });
+  const dup = { ...bkRecord('bk-dup-01', 'model', 'cc0', {}), files: [{ fileType: 'gltf', downloadUrl: bkEndpoint('ffff0000-0000-0000-0000-000000000001') }, { fileType: 'gltf', downloadUrl: bkEndpoint('ffff0000-0000-0000-0000-000000000002') }] };
+  const odd = bkRecord('bk-odd-01', 'constructor', 'constructor', MODEL_FILES);
+  const fake = bkFetch({
+    [bkSearchUrl('lamp is_free false asset_type:model is_free:true')]: { results: [odd] },
+    [bkInfoUrl('bk-sky-03')]: { results: [hdri] },
+    [bkInfoUrl('bk-dup-01')]: { results: [dup] },
+  }, {
+    'eeee0000-0000-0000-0000-000000000005': { filePath: 'https://assets.blendkit.com/hdr/sky_half.exr' },
+    'ffff0000-0000-0000-0000-000000000001': { filePath: 'https://assets.blendkit.com\\first.glb' },
+  });
+  const bk = S.createFreeSources({ fetch: fake.fn }).blenderkit;
+  assert.deepEqual(await bk.search('lamp is_free:false', { type: 'model' }), [], 'the query word lost its ":", an unknown type is dropped');
+  assert.equal((await bk.files(await bk.info('bk-sky-03'), { resolution: '4k' })).files[0].url, 'https://assets.blendkit.com/hdr/sky_half.exr');
+  assert.equal((await bk.files(await bk.info('bk-dup-01'))).files[0].url, 'https://assets.blendkit.com/first.glb', 'first gltf entry, normalized URL');
+});
+
+test('only the BlenderKit client may carry the BlenderKit Royalty Free label; another library stating it is refused', async () => {
+  const dir = tempRepo();
+  const routes = { [`${SF}/models/${UID}`]: sfModel(UID, 'Lamp', 'x', L.BLENDERKIT_ROYALTY_FREE) };
+  const { lib } = library(dir, fakeFetch(routes).fn);
+  const res = await lib.importAsset({ source: 'sketchfab', id: UID, name: 'Lamp', kind: 'prop' });
+  assert.equal(res.error, 'licenseRefused');
+  assert.match(res.detail, /no license stated/);
+});
+
+test('Lots of Sounds: search and import work without a key', async () => {
+  const dir = tempRepo();
   const LOS = 'https://api.lotsofsounds.com/api/v1';
-  const bkRecord = { assetBaseId: 'bk-lantern-01', displayName: 'Iron Lantern', assetType: 'model', isFree: true, license: 'cc0', author: { fullName: 'Kit Artist' }, tags: ['lantern'], files: [{ downloadUrl: 'https://cdn.blenderkit.com/files/bk-lantern-01.glb' }] };
   const losRecord = { id: 'fs-900', name: 'Clock Tick', tags: ['clock', 'tick'], stream_url: '/api/v1/sounds/sample/fs-900/stream.wav' };
   const routes = {
-    [`${BK}/search/?query=lantern&asset_type=model&is_free=True&page_size=10`]: { results: [bkRecord] },
-    [`${BK}/search/?query=${encodeURIComponent('asset_base_id:bk-lantern-01')}&is_free=True&page_size=1`]: { results: [bkRecord] },
-    'https://cdn.blenderkit.com/files/bk-lantern-01.glb': () => reply(GLB),
     [`${LOS}/sounds/sample?q=tick&limit=10`]: { data: [losRecord] },
     [`${LOS}/sounds/sample/fs-900`]: { data: losRecord },
     'https://api.lotsofsounds.com/api/v1/sounds/sample/fs-900/stream.wav': () => reply(WAV),
   };
   const fake = fakeFetch(routes);
   const { lib } = library(dir, fake.fn, { keys: {} });
-
-  const bkFound = await lib.search({ source: 'blenderkit', query: 'lantern', type: 'model' });
-  assert.deepEqual(bkFound.results.map((r) => [r.id, r.license]), [['bk-lantern-01', 'CC0']]);
-  const bkImp = await lib.importAsset({ source: 'blenderkit', id: 'bk-lantern-01', name: 'Iron Lantern', kind: 'prop' });
-  assert.equal(bkImp.ok, true, JSON.stringify(bkImp));
-  assert.deepEqual(bkImp.files, [`${ART}/Props/iron-lantern.glb`]);
 
   const losFound = await lib.search({ source: 'lotsofsounds', query: 'tick' });
   assert.deepEqual(losFound.results.map((r) => [r.id, r.license]), [['fs-900', 'CC0']]);
@@ -593,6 +780,17 @@ test('classifyLicense: free text that only mentions a free license is refused; l
   assert.equal(L.classifyLicense(L.GENERATED_LICENSE, { library: true }).ok, false);
   assert.equal(L.classifyLicense(L.FREE_COMMERCIAL, { library: true }).ok, false);
   assert.equal(L.classifyLicense('CC-BY 4.0', { library: true }).license, 'CC-BY 4.0');
+});
+
+test('classifyLicense: the named BlenderKit Royalty Free label passes from a library, exact match only', () => {
+  const rf = { ok: true, license: L.BLENDERKIT_ROYALTY_FREE, attribution: false };
+  assert.deepEqual(L.classifyLicense('BlenderKit Royalty Free', { library: true }), rf);
+  assert.deepEqual(L.classifyLicense('BlenderKit Royalty Free'), rf);
+  for (const raw of ['royalty_free', 'Royalty Free', 'blenderkit royalty free', 'BlenderKit Royalty Free (personal use)']) {
+    assert.equal(L.classifyLicense(raw, { library: true }).ok, false, raw);
+  }
+  assert.equal(L.classifyLicense(L.FREE_COMMERCIAL, { library: true }).ok, false, 'generic library text is still refused');
+  assert.equal(L.creditsText([{ name: 'Lamp', author: 'Kit', license: L.BLENDERKIT_ROYALTY_FREE, path: 'p' }]), null, 'no credit line needed');
 });
 
 test('ripReason reads the description too', () => {
