@@ -360,3 +360,80 @@ test('luna_asset_blender refuses a bad stylePass or polyBudget before the pipeli
   // Both options are optional.
   assert.equal((await T.callAssetTool(T.BLENDER_TOOL, { name: 'a', kind: 'prop' }, tools)).ok, true);
 });
+
+// ---- asset-prep workers: no Unity editor -> the import is deferred to the scene worker ----
+
+const { createAssetPipeline } = require('../src/lunasworkAssetPipeline.js');
+
+const PNG_BYTES = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 1)]);
+const EDITOR_NOT_OPEN = () => Object.assign(new Error('Unity editor not open on X, or com.unity.pipeline not installed'), { code: 'UNITY_PIPELINE_NOT_OPEN' });
+
+/** A temp repo with one ComfyUI workflow, and the real pipeline over fakes. */
+function prepPipeline(extra = {}) {
+  const fsx = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-asset-prep-'));
+  fsx.mkdirSync(path.join(dir, 'art', 'comfyui'), { recursive: true });
+  fsx.writeFileSync(path.join(dir, 'art', 'comfyui', 'concept.json'), JSON.stringify({
+    3: { class_type: 'KSampler', inputs: { seed: 1, model: ['4', 0] } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+  }));
+  const logged = [];
+  const p = createAssetPipeline({
+    repoPath: dir,
+    comfy: { run: async () => ({ promptId: 'p', images: [{ data: PNG_BYTES }] }) },
+    recordSpend: () => ({ ok: true, reason: null }),
+    logAsset: (e) => logged.push(e),
+    ...extra,
+  });
+  const tools = { comfyDraft: (a) => p.comfyDraft(a), higgsfieldFinal: (a) => p.higgsfieldFinal(a) };
+  return { tools, logged };
+}
+
+test('no Unity editor in the worktree: the answer says the import is deferred to the scene-worker, not failed', async () => {
+  for (const unity of [undefined, { exec: async () => { throw EDITOR_NOT_OPEN(); } }]) {
+    const { tools } = prepPipeline({ unity });
+    const res = await T.callAssetTool(T.COMFY_TOOL, { name: 'Sky', kind: 'concept', workflow: 'concept.json', seed: 2 }, tools);
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.payload.unityDeferred, true);
+    assert.match(res.payload.note, /deferred to the scene-worker package/);
+    assert.doesNotMatch(res.payload.note, /Unity import failed/);
+    assert.ok(res.payload.unity.every((imp) => imp.deferred === true && imp.ok === false));
+    assert.ok(res.payload.files.length > 0, 'the file is saved all the same');
+  }
+});
+
+test('an import that fails with the editor open stays a failure for the worker to fix', async () => {
+  const { tools } = prepPipeline({ unity: { exec: async () => { throw new Error('prefab create crashed'); } } });
+  const res = await T.callAssetTool(T.COMFY_TOOL, { name: 'Sky', kind: 'concept', workflow: 'concept.json', seed: 2 }, tools);
+  assert.equal(res.ok, true);
+  assert.equal(res.payload.unityDeferred, undefined);
+  assert.match(res.payload.note, /Unity import failed \(prefab create crashed\)/);
+});
+
+test('a paid Higgsfield final without the editor is still booked first; only the import is deferred', async () => {
+  const booked = [];
+  const { tools, logged } = prepPipeline({
+    higgsfield: {
+      estimate: async () => ({ credits: 4 }),
+      generate: async () => ({ jobId: 'job_1', urls: ['https://cdn.example.test/out.png'], seed: 99 }),
+    },
+    usdPerCredit: 0.25,
+    download: async () => PNG_BYTES,
+    recordSpend: (x) => { booked.push(x); return { ok: true, reason: null }; },
+  });
+  const res = await T.callAssetTool(T.HIGGSFIELD_TOOL, { name: 'Key Art', kind: 'keyart', prompt: 'hero duel', model: 'gpt_image_2_6' }, tools);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(booked.length, 1, 'booked against the run cap before generating');
+  assert.equal(res.payload.costUsd, 1);
+  assert.equal(res.payload.credits, 4);
+  assert.equal(res.payload.unityDeferred, true);
+  assert.equal(logged[0].costUsd, 1);
+});
+
+test('the asset tools that import into Unity tell the worker about the deferred import', () => {
+  for (const name of [T.BLENDER_TOOL, T.COMFY_TOOL, T.HIGGSFIELD_TOOL, T.IMPORT_TOOL]) {
+    assert.match(T.ASSET_TOOLS.find((t) => t.name === name).description, /deferred to the scene-worker/, name);
+  }
+});

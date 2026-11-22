@@ -192,7 +192,7 @@ test('an open card from a lost ASSETS.md write is adopted, not filed twice', asy
 
 // ---- asset cards ----------------------------------------------------------------------
 
-test('an asset card goes to the scene worker, names its source and stays in scope', async () => {
+test('an asset card is asset-prep work for a parallel worker, names its source and stays in scope', async () => {
   const dir = fakeRepo(['| Hero Ship | model | low-poly teal fighter | blender |  |  |  |  |']);
   const store = memStore();
   await makeStep(store).step.beforeDirecting(baseRun(dir));
@@ -200,7 +200,8 @@ test('an asset card goes to the scene worker, names its source and stays in scop
   assert.equal(card.text, 'Asset: Hero Ship (model)');
   assert.ok(card.tags.includes(RUN_TAG) && card.tags.includes('kind:missing'));
   // A Unity run: the asset pipeline's folders, tools and rules.
-  assert.ok(card.files.includes('Assets/BladeBullet/Art/Models/hero-ship.prefab'));
+  assert.ok(card.files.includes('Assets/BladeBullet/Art/Models/hero-ship.fbx'));
+  assert.ok(!card.files.some((f) => /\.(prefab|unity)$/.test(f)), 'no prefab or scene in its files');
   assert.match(card.details, /Blender MCP/);
   assert.match(card.details, /blender-game-assets skill/);
   assert.match(card.details, /luna_asset_blender/);
@@ -209,20 +210,28 @@ test('an asset card goes to the scene worker, names its source and stays in scop
   assert.match(card.details, /AMD GPU/);
   assert.match(card.details, /ONLY through luna_asset_higgsfield/);
   assert.match(card.details, /design\/asset-renders\/hero-ship\.png/);
-  assert.equal(require('../src/lunasworkScene.js').isSceneCard(card), true);
+  // The Unity import / prefab step is deferred to the scene worker, never done here.
+  assert.match(card.details, /deferred to the scene-worker package/);
+  assert.match(card.details, /do not open Unity/);
+  assert.doesNotMatch(card.details, /import it with your Unity MCP/);
+  assert.doesNotMatch(card.details, /[\w-]\.prefab\b/, 'no prefab file named, so the text cannot route it to the scene worker');
+  assert.match(card.details, /luna_asset_\* answer that says the Unity import is deferred/);
+  assert.equal(require('../src/lunasworkScene.js').isSceneCard(card), false);
+  assert.equal(require('../src/lunasworkScene.js').isAssetPrepCard(card), true);
   assert.equal(scopeCheck(card, 'a puzzle game about gardens').inScope, true);
 });
 
 test('a generated 2D asset card names ComfyUI for drafts and Higgsfield for finals; a non-Unity card keeps the old folder', () => {
   const [row] = A.parseAssetList(`${HEADER}\n| Slash FX | vfx | red arc | generated |  |  |  |  |`).rows;
   const card = A.assetCard(row, { unity: true, artRoot: 'Assets/Game/Art' });
-  assert.ok(card.files.includes('Assets/Game/Art/VFX/slash-fx.prefab'));
+  assert.ok(card.files.includes('Assets/Game/Art/VFX/slash-fx.png'));
   assert.match(card.details, /luna_asset_comfy/);
   assert.match(card.details, /art\/comfyui\/runs\//);
   assert.match(card.details, /luna_asset_higgsfield/);
   assert.match(card.details, /higgsfield-media skill/);
   const plain = A.assetCard(row);
-  assert.ok(plain.files.includes('Assets/Art/slash-fx/slash-fx.prefab'));
+  assert.ok(plain.files.includes('Assets/Art/slash-fx/slash-fx.png'));
+  assert.match(plain.details, /deferred to the scene-worker package/);
   assert.doesNotMatch(plain.details, /luna_asset_/);
 });
 

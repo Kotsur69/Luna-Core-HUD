@@ -5,9 +5,11 @@
 // Which MCP servers and CLIs the God Mode workers of a Luna's Work build may
 // use, per role, stored per project in lunaswork-settings.local.json:
 //
-//   builder   every code package of a build
+//   builder   every code package of a build, and the asset-prep packages
+//             (asset cards: raw files only, no Unity editor)
 //   asset     the scene worker package (lunasworkScene SCENE_WORKER_ID): the
-//             one worker with the Unity editor, where asset cards land
+//             one worker with the Unity editor, where scene / prefab work and
+//             the asset import / prefab pass land
 //
 // The other roles are FIXED and not part of the kit: the Director and the
 // Critic are read-only headless calls (`--tools Read,Grep,Glob`), and the

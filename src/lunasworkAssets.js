@@ -15,9 +15,11 @@
 //              card (kind `missing`, tag `asset`) the Director schedules like
 //              any other. The card tells the builder to generate through a
 //              generation API (e.g. Higgsfield, image-to-3D), Blender MCP or an
-//              asset library, then import it into the Unity project. Its
-//              `files` name the asset's prefab, so src/lunasworkScene.js routes
-//              the card to the scene worker (the only one with the editor).
+//              asset library, and save the raw file under the art root. Its
+//              `files` are that file and the asset bookkeeping only, so it is
+//              an asset-prep card (src/lunasworkScene.js): a parallel worker
+//              without the Unity editor. The import / prefab step is deferred
+//              to the scene worker, which depends on the asset-prep packages.
 //              On a Unity run the card carries the asset pipeline's brief
 //              (src/lunasworkAssetPipeline.js unityAssetBrief): files under
 //              Assets/<game>/Art/<Kind>/, sources under art/, the lunacore
@@ -68,8 +70,16 @@ const ASSETS_FILE = 'ASSETS.md';
 const RENDERS_DIR = 'asset-renders';
 const REFERENCES_DIR = 'references';
 const ASSET_TAG = 'asset';
-// The prefab the scene worker makes; a *.prefab in a card's files routes it there.
+// The art folder of a non-Unity-adapter run's asset cards.
 const UNITY_ART_DIR = 'Assets/Art';
+// The raw file an asset card expects, by type (a hint; never a prefab, which would route it to the scene worker).
+const RAW_EXT_BY_TYPE = Object.freeze({ model: 'fbx', animation: 'fbx', audio: 'wav' });
+const DEFAULT_RAW_EXT = 'png';
+// The pipeline brief's paragraph that has the worker import into Unity itself; an asset-prep card defers that.
+const UNITY_IMPORT_PARAGRAPH_RE = /^The luna_asset_\* tools import the result into Unity/;
+const DEFERRED_IMPORT_TEXT = 'This card prepares the asset files only and runs in parallel, without the Unity editor: do not open Unity, do not make a prefab and do not edit any scene. The Unity import / prefab step is deferred to the scene-worker package, which imports this folder and makes the prefab after this card is merged.';
+// Only a Unity run's card names the luna_asset_* tools.
+const DEFERRED_TOOL_TEXT = 'A luna_asset_* answer that says the Unity import is deferred is expected, not a failure.';
 
 const TYPES = ['sprite', 'texture', 'model', 'material', 'animation', 'audio', 'ui', 'vfx', 'other'];
 const SOURCES = ['generated', 'blender', 'library'];
@@ -334,6 +344,7 @@ const HOW = Object.freeze({
  * The builder card for one asset row (Critic card shape, lunasworkCritic.applyCards).
  * A Unity run's card names the asset pipeline (src/lunasworkAssetPipeline.js):
  * its folders under the art root, its lunacore tools, the art direction.
+ * An asset-prep card (lunasworkScene.isAssetPrepCard): import / prefab deferred.
  * @param {object} row
  * @param {{unity?:boolean, artRoot?:string}} [opts]
  */
@@ -341,16 +352,19 @@ function assetCard(row, opts = {}) {
   const slug = slugOf(row);
   const unity = isObj(opts) && opts.unity === true;
   const folder = unity ? `${artRootOf(opts.artRoot)}/${KINDS[row.type] ? KINDS[row.type].dir : KINDS.other.dir}` : `${UNITY_ART_DIR}/${slug}`;
-  const prefab = `${folder}/${slug}.prefab`;
-  const how = unity ? unityAssetBrief({ kind: row.type, slug, source: row.source, artRoot: opts.artRoot }) : [HOW[row.source]];
+  const rawFile = `${folder}/${slug}.${RAW_EXT_BY_TYPE[row.type] || DEFAULT_RAW_EXT}`;
+  const how = unity
+    ? unityAssetBrief({ kind: row.type, slug, source: row.source, artRoot: opts.artRoot }).filter((p) => !UNITY_IMPORT_PARAGRAPH_RE.test(p))
+    : [HOW[row.source]];
   const details = [
     `Make the game asset "${row.name}" from design/${ASSETS_FILE} (hash ${row.hash}).`,
     `Type: ${row.type}. Source: ${row.source}. Spec: ${row.spec || row.name}`,
     ...how,
     `Generate it once: before any generation call, read design/${ASSETS_FILE}. If a row with hash ${row.hash} or the name "${row.name}" is already done or approved with a file, reuse that file instead.`,
-    `Import it into the Unity project under ${folder}/ with a prefab ${prefab}.`,
+    `Save the raw asset file(s) under ${folder}/ (for example ${rawFile}), with their sources under art/.`,
+    unity ? `${DEFERRED_IMPORT_TEXT} ${DEFERRED_TOOL_TEXT}` : DEFERRED_IMPORT_TEXT,
     `Save a render or screenshot of it to ${renderBase(row)}.png for the art-direction style check.`,
-    `Last, in design/${ASSETS_FILE} set this row's File to the imported path and its Status to done.`,
+    `Last, in design/${ASSETS_FILE} set this row's File to the saved asset path and its Status to done.`,
   ].join('\n\n');
   return {
     kind: 'missing',
@@ -358,11 +372,11 @@ function assetCard(row, opts = {}) {
     text: `Asset: ${row.name} (${row.type})`,
     details: details.slice(0, MAX_DETAILS_CHARS),
     acceptance: [
-      `The asset is imported under ${folder}/ with a prefab`,
+      `The asset file is saved under ${folder}/ (the Unity import and prefab are left to the scene-worker)`,
       `${renderBase(row)}.png shows it`,
       `Its design/${ASSETS_FILE} row is done, with the file path`,
     ],
-    files: [prefab, `design/${ASSETS_FILE}`, ...(row.file ? [row.file] : [])],
+    files: [rawFile, `design/${ASSETS_FILE}`, ...(row.file && row.file !== rawFile ? [row.file] : [])],
     updatesCardId: null,
     splitsCardId: null,
     extraTags: [ASSET_TAG],

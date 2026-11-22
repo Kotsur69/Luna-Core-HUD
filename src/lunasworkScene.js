@@ -6,15 +6,27 @@
 //
 //   code packages   run in parallel worktrees as usual, and are told not to
 //                   touch *.unity / *.prefab or open the editor
+//   asset-prep      packages whose files are only raw asset files (FBX, GLB,
+//   packages        PNG, WAV ... and their .meta) under Assets/**/Art/ or
+//                   art/, plus the asset bookkeeping (design/ASSETS.md,
+//                   design/ASSET_LICENSES.md, design/asset-renders/). They
+//                   fetch / generate / export in parallel, without the
+//                   editor; their Unity import and prefab step is deferred
+//                   to the scene worker
 //   scene worker    ONE package (id `scene-worker`) gets every card and every
-//                   planned package whose files are scenes or prefabs. It is
-//                   the only one that opens the editor.
+//                   planned package whose files are scenes or prefabs (a
+//                   mixed asset + scene card included). It is the only one
+//                   that opens the editor, and it dependsOn the asset-prep
+//                   packages, so it runs one import / prefab / placement
+//                   pass after they finish.
 //
 // routeScenePackages() does that on the God Mode planner's answer
 // (lunasworkBuild.wrapPlanner), before God Mode validates it. Dependencies
 // on a merged package point at the scene worker; a package that would close
 // a dependency cycle through it is folded into it too, so the plan never
-// becomes unlaunchable. A plan without scene work is returned untouched.
+// becomes unlaunchable. An asset-prep package that itself waits for the
+// scene worker is not made a dependency of it (that would be a cycle). A
+// plan without scene work is returned untouched.
 //
 // sceneOwnership() is the same rule as an ownership map in the shape of LW
 // 2.12 (`{path|glob: owner}`, makePlan ctx.ownership): with the 2.12 guard
@@ -39,7 +51,19 @@ const SCENE_WORKER_ID = 'scene-worker';
 const SCENE_FILE_RE = /\.(?:unity|prefab)$/i;
 // A scene / prefab file named in card text: "Main.unity", not "com.unity.inputsystem".
 const SCENE_MENTION_RE = /[\w-]\.(?:unity|prefab)\b(?![.\w])/i;
+// A Unity scene named in card text; a card naming one is never asset-prep.
+const UNITY_SCENE_MENTION_RE = /[\w-]\.unity\b(?![.\w])/i;
 const SCENE_GLOBS = Object.freeze(['**/*.unity', '**/*.prefab']);
+// Raw asset files an asset-prep package makes without the Unity editor, with their .meta.
+const RAW_ASSET_RE = /\.(?:fbx|glb|gltf|obj|blend|png|jpe?g|tga|exr|hdr|ogg|wav|mp3)(?:\.meta)?$/i;
+// Where they live: Assets/**/Art/ (the Unity art root) or art/ (the sources).
+// Case-insensitive: Windows and macOS checkouts do not tell Art from art.
+const ART_PATH_RE = /^(?:Assets\/(?:[^/]+\/)*Art|art)\/[^/]/i;
+// The asset bookkeeping an asset-prep package updates next to its files.
+const ASSET_BOOKKEEPING = Object.freeze(new Set(['design/ASSET_LICENSES.md', 'design/ASSETS.md']));
+const ASSET_RENDER_RE = /^design\/asset-renders\/[^/]+\.(?:png|jpe?g)$/i;
+// The scene worker's import pass lists at most this many asset files.
+const MAX_IMPORT_FILES = 20;
 const MODEL_RANK = { sonnet: 0, opus: 1, fable: 2 };
 // God Mode's planner limits (orchestraPlan.js).
 const MAX_PROMPT_CHARS = 8000;
@@ -50,9 +74,14 @@ const SCENE_WORKER_BRIEF = [
   'You are the SCENE WORKER of this build: the only worker allowed to open the Unity editor (through Unity MCP) and to change scenes and prefabs (*.unity, *.prefab).',
   'One editor = one Unity MCP connection, so every scene and prefab change of this build is yours. Other packages run in parallel and change code only.',
   'Save every scene / prefab you change in the editor and commit them with your work.',
+  'A luna_asset_* answer that says the Unity import is deferred means YOUR editor is not connected: that is a failure for you, not for an asset-prep worker. Open the Unity editor on this project and import the files with your Unity MCP before you finish.',
 ].join('\n');
 const CODE_WORKER_NOTE =
   `Do not open the Unity editor and do not edit *.unity or *.prefab files: the ${SCENE_WORKER_ID} package owns all scene and prefab work in this build.`;
+const ASSET_PREP_NOTE = [
+  'This package prepares raw asset files only and runs in parallel, without the Unity editor: do not open Unity and do not create or edit *.unity or *.prefab files.',
+  `The Unity import / prefab step is deferred to the ${SCENE_WORKER_ID} package, which runs after this one. A luna_asset_* answer that says the Unity import is deferred is expected, not a failure: the files are saved and ledgered.`,
+].join(' ');
 
 // UnityYAMLMerge as a git merge driver.
 const MERGE_DRIVER = 'unityyamlmerge';
@@ -73,11 +102,60 @@ function isSceneFile(file) {
   return typeof file === 'string' && SCENE_FILE_RE.test(file.trim());
 }
 
-/** A card is scene work when it lists a scene / prefab file or names one in its text. */
-function isSceneCard(card) {
+/** A repo path with forward slashes and no leading "./"; '' for anything else. */
+function repoPath(file) {
+  if (typeof file !== 'string') return '';
+  const p = file.trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+  return p.split('/').includes('..') ? '' : p;
+}
+
+/**
+ * True for a file an asset-prep package may make without the Unity editor:
+ * a raw asset file (or its .meta) under Assets/**\/Art/ or art/, or the asset
+ * bookkeeping (design/ASSETS.md, design/ASSET_LICENSES.md, an asset render).
+ */
+function isAssetPrepFile(file) {
+  const p = repoPath(file);
+  if (!p) return false;
+  if (ASSET_BOOKKEEPING.has(p) || ASSET_RENDER_RE.test(p)) return true;
+  return ART_PATH_RE.test(p) && RAW_ASSET_RE.test(p);
+}
+
+const namesUnityScene = (card) => [card.text, card.details].some((t) => typeof t === 'string' && UNITY_SCENE_MENTION_RE.test(t));
+
+/**
+ * An asset-prep card lists files, every one of them an asset-prep file, and
+ * names no Unity scene in its text. It runs in a parallel worktree; a prefab
+ * named in its text is the one the scene worker makes later.
+ */
+function isAssetPrepCard(card) {
   if (!isObj(card)) return false;
+  const files = list(card.files);
+  return files.length > 0 && files.every(isAssetPrepFile) && !namesUnityScene(card);
+}
+
+/**
+ * A card is scene work when it lists a scene / prefab file or names one in
+ * its text, and is not an asset-prep card. A card mixing asset files with a
+ * scene / prefab file is scene work.
+ */
+function isSceneCard(card) {
+  if (!isObj(card) || isAssetPrepCard(card)) return false;
   if (list(card.files).some(isSceneFile)) return true;
   return [card.text, card.details].some((t) => typeof t === 'string' && SCENE_MENTION_RE.test(t));
+}
+
+/**
+ * An asset-prep package (not scene work, checked first): its files are all
+ * asset-prep files, or it lists no files and covers asset-prep cards only.
+ * A package that also covers a code card (one listing other files) is not.
+ */
+function isAssetPrepPackage(pkg, assetAts, codeAts) {
+  const ats = list(pkg.todoAts);
+  if (ats.some((at) => codeAts.has(at))) return false;
+  const files = list(pkg.files);
+  if (files.length) return files.every(isAssetPrepFile);
+  return ats.length > 0 && ats.every((at) => assetAts.has(at));
 }
 
 /** Ids reachable from `starts` through dependsOn. */
@@ -118,19 +196,34 @@ function foldCycles(packages, memberIds) {
 const strongest = (values, rank) => values.reduce((best, v) => (v in rank && (best === null || rank[v] > rank[best]) ? v : best), null);
 const effortRank = Object.fromEntries(EFFORTS.map((e, i) => [e, i]));
 
-function mergeScenePackages(members, memberIds) {
-  const unique = (xs) => [...new Set(xs)];
+const unique = (xs) => [...new Set(xs)];
+
+/** The scene worker's first step: import what the asset-prep packages made. '' without any. */
+function importPass(feeders) {
+  if (!feeders.length) return '';
+  const files = unique(feeders.flatMap((p) => list(p.files).map(repoPath)).filter((f) => f.startsWith('Assets/') && !f.endsWith('.meta')));
+  const shown = files.slice(0, MAX_IMPORT_FILES);
+  return [
+    '## Asset import pass (do this first)',
+    `These packages prepared raw asset files without the Unity editor and are merged before you start: ${feeders.map((p) => p.id).join(', ')}.`,
+    'Their Unity import and prefab step is yours, in one pass: import the new files under Assets/**/Art/ (the sources under art/ are not imported), make a prefab next to each model (FBX / GLB, same name) and a material for each texture that needs one, then use them in the scene work below.',
+    ...(shown.length ? [`Their files: ${shown.join(', ')}${files.length > shown.length ? ', ...' : ''}.`] : []),
+  ].join('\n');
+}
+
+function mergeScenePackages(members, memberIds, feeders) {
   const prompt = [
     SCENE_WORKER_BRIEF,
+    importPass(feeders),
     ...members.map((p) => `## ${p.title || p.id}\n\n${typeof p.prompt === 'string' ? p.prompt : ''}`),
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
   return {
     id: SCENE_WORKER_ID,
     title: `Scene worker: ${members.map((p) => p.title || p.id).join(', ')}`.slice(0, MAX_TITLE_CHARS),
     todoAts: unique(members.flatMap((p) => list(p.todoAts))),
     prompt: prompt.slice(0, MAX_PROMPT_CHARS),
     files: unique(members.flatMap((p) => list(p.files))).slice(0, MAX_FILES),
-    dependsOn: unique(members.flatMap((p) => list(p.dependsOn)).filter((d) => !memberIds.has(d))),
+    dependsOn: unique([...members.flatMap((p) => list(p.dependsOn)).filter((d) => !memberIds.has(d)), ...feeders.map((p) => p.id)]),
     verify: (members.find((p) => typeof p.verify === 'string' && p.verify.trim()) || {}).verify || '',
     model: strongest(members.map((p) => p.model), MODEL_RANK) || members[0].model,
     effort: strongest(members.map((p) => p.effort), effortRank) || members[0].effort,
@@ -138,7 +231,20 @@ function mergeScenePackages(members, memberIds) {
 }
 
 /**
- * Routes ALL scene / prefab work of a planned build to the one scene worker.
+ * The asset-prep packages the scene worker waits for: not merged into it,
+ * and not waiting for it themselves (that edge would close a cycle).
+ */
+function feederPackages(plain, memberIds, cards) {
+  const assetAts = new Set(cards.filter(isAssetPrepCard).map((c) => c.at));
+  const codeAts = new Set(cards.filter((c) => isObj(c) && list(c.files).length > 0 && !isAssetPrepCard(c)).map((c) => c.at));
+  const depsOf = new Map(plain.map((p) => [p.id, list(p.dependsOn)]));
+  const waitsForScene = (p) => [...closure(list(p.dependsOn), depsOf)].some((id) => id === SCENE_WORKER_ID || memberIds.has(id));
+  return plain.filter((p) => !memberIds.has(p.id) && isAssetPrepPackage(p, assetAts, codeAts) && !waitsForScene(p));
+}
+
+/**
+ * Routes ALL scene / prefab work of a planned build to the one scene worker;
+ * asset-prep packages stay parallel and the scene worker depends on them.
  * @param {unknown[]} packages the planner's raw packages
  * @param {object[]} cards the build's cards (their `at`, files, text)
  * @returns {unknown[]} a new list; the same list when there is no scene work
@@ -154,7 +260,9 @@ function routeScenePackages(packages, cards) {
 
   const memberIds = foldCycles(plain, seeds);
   const members = plain.filter((p) => memberIds.has(p.id));
-  const scene = mergeScenePackages(members, memberIds);
+  const feeders = feederPackages(plain, memberIds, list(cards));
+  const feederIds = new Set(feeders.map((p) => p.id));
+  const scene = mergeScenePackages(members, memberIds, feeders);
   const out = [];
   for (const p of packages) {
     if (!isObj(p)) {
@@ -166,7 +274,8 @@ function routeScenePackages(packages, cards) {
       continue;
     }
     const deps = [...new Set(list(p.dependsOn).map((d) => (memberIds.has(d) ? SCENE_WORKER_ID : d)))];
-    const prompt = typeof p.prompt === 'string' ? `${p.prompt}\n\n${CODE_WORKER_NOTE}`.slice(0, MAX_PROMPT_CHARS) : p.prompt;
+    const note = feederIds.has(p.id) ? ASSET_PREP_NOTE : CODE_WORKER_NOTE;
+    const prompt = typeof p.prompt === 'string' ? `${p.prompt}\n\n${note}`.slice(0, MAX_PROMPT_CHARS) : p.prompt;
     out.push({ ...p, dependsOn: deps, prompt });
   }
   return out;
@@ -308,8 +417,11 @@ module.exports = {
   MERGE_DRIVER,
   MERGE_EXTENSIONS,
   CODE_WORKER_NOTE,
+  ASSET_PREP_NOTE,
   isSceneFile,
   isSceneCard,
+  isAssetPrepFile,
+  isAssetPrepCard,
   routeScenePackages,
   sceneOwnership,
   isUnityProject,
