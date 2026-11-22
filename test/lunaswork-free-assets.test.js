@@ -774,3 +774,145 @@ test('key IPC: status never carries a key; a malformed request is refused', asyn
   assert.equal((await handlers['lunaswork:setAssetKey'](null, { source: 'polypizza', key: undefined })).reason, 'bad-request');
   assert.equal(K.createAssetKeyStore({ dir: () => dir, safeStorage: () => fakeSafeStorage() }).get('polypizza'), KEYS.polypizza, 'the stored key was not cleared');
 });
+
+// ---- source "all": fan-out over fake library clients -------------------------------------
+
+const A = require('../src/lunasworkAssetFanout.js');
+
+/** A fake library client: `answer` is an item list, an Error to reject with, or 'hang'. */
+function fakeClient(id, types, answer, { searchKey = false } = {}) {
+  const calls = [];
+  return {
+    id,
+    label: `Fake ${id}`,
+    types,
+    needsKey: { search: searchKey, import: searchKey },
+    calls,
+    search: async (query, opts) => {
+      calls.push({ query, ...opts });
+      if (answer === 'hang') return new Promise(() => {});
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
+  };
+}
+
+const fakeItem = (source, id, name, license, extra = {}) => ({
+  source, id, name, author: 'someone', sourceUrl: `https://${source}.example.com/a/${id}`, license, tags: [], description: '', type: 'model', ...extra,
+});
+
+/** Only the given libraries have a client, so "all" finds those and no other. */
+function fanoutLibrary(given, { keys = [], sourceTimeoutMs } = {}) {
+  return F.createFreeAssets({
+    shared: { repoPath: 'x', files: {} },
+    sources: { ...given },
+    download: async () => { throw new Error('no download in a search'); },
+    hasKey: (id) => keys.includes(id),
+    sourceTimeoutMs,
+  });
+}
+
+test('search all: asks every library that has the type in parallel, keeps each result\'s source', async () => {
+  const ph = fakeClient('polyhaven', ['hdri', 'texture', 'model'], [fakeItem('polyhaven', 'crate', 'Wooden Crate', 'CC0')]);
+  const sf = fakeClient('sketchfab', ['model'], [fakeItem('sketchfab', 'u1', 'Crate Pile', 'CC Attribution 4.0')]);
+  const fsd = fakeClient('freesound', ['audio'], [fakeItem('freesound', '9', 'Crate Drop', 'CC0', { type: 'audio' })], { searchKey: true });
+  const lib = fanoutLibrary({ polyhaven: ph, sketchfab: sf, freesound: fsd }, { keys: ['freesound'] });
+  const res = await lib.search({ source: 'all', query: 'wooden crate', limit: 5 });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.source, 'all');
+  assert.deepEqual([...res.searched].sort(), ['freesound', 'polyhaven', 'sketchfab']);
+  assert.deepEqual(res.results.map((r) => `${r.source}:${r.id}`).sort(), ['freesound:9', 'polyhaven:crate', 'sketchfab:u1']);
+  assert.deepEqual(ph.calls, [{ query: 'wooden crate', type: undefined, limit: 5 }]);
+  assert.deepEqual([res.errors, res.skipped], [[], []]);
+});
+
+test('search all: the type picks the libraries; an unknown type, query or source is refused', async () => {
+  const ph = fakeClient('polyhaven', ['hdri', 'texture', 'model'], [fakeItem('polyhaven', 'sky', 'Sky', 'CC0', { type: 'hdri' })]);
+  const sf = fakeClient('sketchfab', ['model'], []);
+  const ls = fakeClient('lotsofsounds', ['audio'], []);
+  const lib = fanoutLibrary({ polyhaven: ph, sketchfab: sf, lotsofsounds: ls });
+  const res = await lib.search({ source: 'all', query: 'sky', type: 'hdri' });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.searched, ['polyhaven']);
+  assert.equal(ph.calls[0].type, 'hdri');
+  assert.deepEqual([sf.calls.length, ls.calls.length], [0, 0]);
+  assert.equal((await lib.search({ source: 'all', query: 'sky', type: 'mesh' })).error, 'badType');
+  assert.equal((await lib.search({ source: 'all', query: '...' })).error, 'badQuery');
+  const bad = await lib.search({ source: 'everything', query: 'sky' });
+  assert.equal(bad.error, 'badSource');
+  assert.match(bad.detail, /"all" or one of polyhaven/);
+});
+
+test('search all: a keyed library without its key is skipped with a note, never asked', async () => {
+  const pp = fakeClient('polypizza', ['model'], [fakeItem('polypizza', 'p', 'Tree', 'CC0')], { searchKey: true });
+  const sf = fakeClient('sketchfab', ['model'], [fakeItem('sketchfab', 's', 'Tree', 'CC0')]);
+  const res = await fanoutLibrary({ polypizza: pp, sketchfab: sf }).search({ source: 'all', query: 'tree', type: 'model' });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.skipped, [{ source: 'polypizza', note: A.SKIPPED_NO_KEY }]);
+  assert.equal(pp.calls.length, 0);
+  assert.deepEqual(res.results.map((r) => r.source), ['sketchfab']);
+  // A library that answers noKey itself is listed as skipped as well.
+  const sfNoKey = fakeClient('sketchfab', ['model'], Object.assign(new Error('no token'), { code: 'noKey' }));
+  const other = await fanoutLibrary({ sketchfab: sfNoKey, polyhaven: fakeClient('polyhaven', ['model'], []) }).search({ source: 'all', query: 'tree', type: 'model' });
+  assert.equal(other.ok, true);
+  assert.deepEqual(other.skipped, [{ source: 'sketchfab', note: A.SKIPPED_NO_KEY }]);
+});
+
+test('search all: one library rejecting or hanging does not fail the others; every one failing does', async () => {
+  const ph = fakeClient('polyhaven', ['model'], [fakeItem('polyhaven', 'a', 'Anvil', 'CC0')]);
+  const sf = fakeClient('sketchfab', ['model'], Object.assign(new Error('Sketchfab answered HTTP 500'), { code: 'http' }));
+  const bk = fakeClient('blenderkit', ['model'], 'hang');
+  const res = await fanoutLibrary({ polyhaven: ph, sketchfab: sf, blenderkit: bk }, { sourceTimeoutMs: 30 }).search({ source: 'all', query: 'anvil' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.results.map((r) => r.id), ['a']);
+  assert.deepEqual(res.errors.map((e) => [e.source, e.error]), [['sketchfab', 'http'], ['blenderkit', 'timeout']]);
+  assert.match(res.errors[0].detail, /HTTP 500/);
+
+  const all = await fanoutLibrary({ sketchfab: sf, blenderkit: bk }, { sourceTimeoutMs: 30 }).search({ source: 'all', query: 'anvil' });
+  assert.deepEqual([all.ok, all.error, all.errors.length], [false, 'allFailed', 2]);
+  const none = await fanoutLibrary({ polypizza: fakeClient('polypizza', ['model'], [], { searchKey: true }) }).search({ source: 'all', query: 'anvil' });
+  assert.deepEqual([none.ok, none.error, none.skipped.length], [false, 'noSource', 1]);
+});
+
+test('search all: duplicates dropped, CC0 before CC-BY, then by query words; refused results kept', async () => {
+  const ph = fakeClient('polyhaven', ['model'], [
+    fakeItem('polyhaven', 'barrel', 'Barrel', 'CC Attribution 4.0'),
+    fakeItem('polyhaven', 'barrel', 'Barrel', 'CC Attribution 4.0'),
+    fakeItem('polyhaven', 'rusty', 'Rusty Metal Barrel', 'CC0', { tags: ['metal'] }),
+    fakeItem('polyhaven', 'chair', 'Chair', 'CC0'),
+  ]);
+  const bk = fakeClient('blenderkit', ['model'], [
+    // Poly Haven's asset listed again by another library: same name and page.
+    fakeItem('blenderkit', 'other-id', 'Rusty metal barrel', 'CC0', { sourceUrl: 'https://polyhaven.example.com/a/rusty/' }),
+    fakeItem('blenderkit', 'nc', 'Barrel NC', 'CC BY-NC 4.0'),
+    fakeItem('blenderkit', 'b2', 'Metal Barrel', 'CC0'),
+  ]);
+  const res = await fanoutLibrary({ polyhaven: ph, blenderkit: bk }).search({ source: 'all', query: 'rusty metal barrel' });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.results.map((r) => `${r.source}:${r.id}:${r.license}`), [
+    'polyhaven:rusty:CC0',
+    'blenderkit:b2:CC0',
+    'polyhaven:chair:CC0',
+    'polyhaven:barrel:CC-BY 4.0',
+  ]);
+  assert.deepEqual(res.refused.map((r) => [r.source, r.id]), [['blenderkit', 'nc']]);
+  assert.match(res.refused[0].reason, /refused/);
+});
+
+test('single-source search is unchanged: no source field on results, no fan-out keys', async () => {
+  const ph = fakeClient('polyhaven', ['model'], [fakeItem('polyhaven', 'a', 'Anvil', 'CC0')]);
+  const sf = fakeClient('sketchfab', ['model'], [fakeItem('sketchfab', 'b', 'Anvil', 'CC0')]);
+  const res = await fanoutLibrary({ polyhaven: ph, sketchfab: sf }).search({ source: 'polyhaven', query: 'anvil' });
+  assert.deepEqual(Object.keys(res).sort(), ['next', 'note', 'ok', 'refused', 'results', 'source']);
+  assert.equal(res.results[0].source, undefined);
+  assert.equal(sf.calls.length, 0);
+});
+
+test('fan-out helpers: withTimeout rejects with code timeout, mergeResults caps the list, relevance counts distinct words', async () => {
+  assert.equal(await A.withTimeout(Promise.resolve(7), 10_000, 'x'), 7);
+  await assert.rejects(A.withTimeout(new Promise(() => {}), 5, 'Slow'), (err) => err.code === 'timeout' && /Slow did not answer/.test(err.message));
+  const many = Array.from({ length: 50 }, (_, i) => ({ source: 's', id: String(i), name: `n${i}`, license: 'CC0', url: `https://e.example.com/${i}`, tags: [] }));
+  assert.equal(A.mergeResults(many, 'n').length, A.MAX_MERGED_RESULTS);
+  assert.equal(A.relevance(['red', 'brick'], { name: 'Red red wall', tags: ['brick'] }), 2);
+  assert.deepEqual(['CC0', 'CC-BY 4.0', 'checked on import'].map(A.licenseRank), [0, 1, 2]);
+});

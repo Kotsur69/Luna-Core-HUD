@@ -7,7 +7,11 @@
 //
 //   search   one library, one query: the results whose license passes
 //            (lunasworkLicenses.classifyLicense) and that are no game rip
-//            (ripReason); the rest come back under `refused` with the reason
+//            (ripReason); the rest come back under `refused` with the reason.
+//            source "all": every library that has the type, in parallel
+//            (src/lunasworkAssetFanout.js); a keyed one without its key is
+//            skipped, one that fails or hangs is listed under `errors`, the
+//            rest merged, deduplicated and ranked (CC0, then CC-BY)
 //   import   the license is read AGAIN from the library's API (never taken
 //            from the worker's words) and checked, as is the rip rule. Then:
 //            download (public https only, size-capped) -> unzip when the
@@ -33,7 +37,8 @@ const path = require('path');
 const { KINDS, MODEL_KINDS, slugOf, artRootOf } = require('./lunasworkAssetPipeline');
 const { imageKind } = require('./lunasworkComfy');
 const { classifyLicense, ripReason, withLedgerLock } = require('./lunasworkLicenses');
-const { SOURCE_IDS, NO_API_SOURCES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
+const { SOURCE_IDS, NO_API_SOURCES, RESOLUTIONS, TYPES, redact } = require('./lunasworkFreeSources');
+const { ALL_SOURCES, SKIPPED_NO_KEY, SOURCE_TIMEOUT_MS, eligibleSources, withTimeout, mergeResults } = require('./lunasworkAssetFanout');
 const { readZip, isSafeName } = require('./lunasworkZip');
 
 const MAX_QUERY_CHARS = 100;
@@ -116,7 +121,8 @@ function foldersOf(root, rels) {
 /**
  * @param {{shared:{repoPath?:string, files:object, importToUnity:Function, importNote:Function, log:Function, updateLedger:Function},
  *   artRoot?:string, sources:Record<string, object>, download:(url:string)=>Promise<Buffer>,
- *   secrets?:()=>string[]}} deps
+ *   secrets?:()=>string[], hasKey?:(source:string)=>boolean, sourceTimeoutMs?:number}} deps
+ *   hasKey = whether a library's key is stored (source "all" skips a keyed library without one)
  * @returns {{search:(raw:object)=>Promise<object>, importAsset:(raw:object)=>Promise<object>}}
  */
 function createFreeAssets(deps) {
@@ -125,6 +131,8 @@ function createFreeAssets(deps) {
   const secrets = () => (typeof deps.secrets === 'function' ? deps.secrets() : []);
   // Redacted before it is cut, so a key split by the cut cannot leak half of itself.
   const fail = (error, detail, extra = {}) => ({ ok: false, error, ...(detail ? { detail: oneLine(redact(oneLine(detail, 4000), secrets()), 400) } : {}), ...extra });
+  const hasKey = (id) => typeof deps.hasKey === 'function' && deps.hasKey(id) === true;
+  const sourceTimeoutMs = Number.isInteger(deps.sourceTimeoutMs) && deps.sourceTimeoutMs > 0 ? deps.sourceTimeoutMs : SOURCE_TIMEOUT_MS;
   const importLockKey = `${typeof shared.repoPath === 'string' ? shared.repoPath : 'repo'}#import`;
 
   /** The client of a source, or a failure that says why there is none. */
@@ -152,8 +160,31 @@ function createFreeAssets(deps) {
     tags: item.tags.slice(0, MAX_SEARCH_TAGS),
   });
 
+  /** Library items split into the ones offered and the ones refused (license or rip). */
+  function screen(client, items, withSource) {
+    const tag = withSource ? { source: client.id } : {};
+    const results = [];
+    const refused = [];
+    for (const item of Array.isArray(items) ? items : []) {
+      if (!isObj(item)) continue;
+      const lic = item.license ? classifyLicense(item.license, { library: true }) : null;
+      const why = ripReason(item) || (lic && !lic.ok ? lic.reason : null);
+      if (why) refused.push({ ...tag, id: item.id, name: oneLine(item.name, MAX_SUMMARY_CHARS), reason: why });
+      else results.push({ ...tag, ...summary(item, lic ? lic.license : 'checked on import') });
+    }
+    return { results, refused };
+  }
+
+  /** The query of a search, or null when it has no word in it. */
+  function queryOf(raw) {
+    const query = oneLine(raw.query, MAX_QUERY_CHARS);
+    return query && HAS_WORD_RE.test(query) ? query : null;
+  }
+
   async function search(raw) {
+    if (isObj(raw) && raw.source === ALL_SOURCES) return searchAll(raw);
     const picked = clientOf(raw);
+    if (picked.error === 'badSource') return fail('badSource', `source must be "${ALL_SOURCES}" or one of ${SOURCE_IDS.join(', ')}`);
     if (!picked.ok) return picked;
     const { client } = picked;
     const query = oneLine(raw.query, MAX_QUERY_CHARS);
@@ -165,20 +196,60 @@ function createFreeAssets(deps) {
     } catch (err) {
       return sourceFail(client, err);
     }
-    const results = [];
-    const refused = [];
-    for (const item of items) {
-      const lic = item.license ? classifyLicense(item.license, { library: true }) : null;
-      const why = ripReason(item) || (lic && !lic.ok ? lic.reason : null);
-      if (why) refused.push({ id: item.id, name: oneLine(item.name, MAX_SUMMARY_CHARS), reason: why });
-      else results.push(summary(item, lic ? lic.license : 'checked on import'));
-    }
+    const { results, refused } = screen(client, items, false);
     return {
       ok: true,
       source: client.id,
       results,
       refused,
       next: 'luna_asset_import {source, id, name, kind} imports one result; it checks the license again.',
+      note: UNTRUSTED_NOTE,
+    };
+  }
+
+  /**
+   * Every library that has the type at once. A library that rejects or hangs
+   * lands under `errors`, one without its key under `skipped`; each result
+   * keeps its `source` for luna_asset_import.
+   */
+  async function searchAll(raw) {
+    const query = queryOf(raw);
+    if (!query) return fail('badQuery', 'query must be a few words');
+    if (raw.type !== undefined && !TYPES.includes(raw.type)) return fail('badType', `type must be one of ${TYPES.join(', ')}`);
+    const { eligible, skipped } = eligibleSources(sources, SOURCE_IDS, { type: raw.type, hasKey });
+    if (!eligible.length) return fail('noSource', `no library can search ${raw.type || 'assets'} without a key. ${KEY_HINT}`, { skipped });
+    const settled = await Promise.allSettled(eligible.map((client) => withTimeout(
+      Promise.resolve().then(() => client.search(query, { type: raw.type, limit: raw.limit })),
+      sourceTimeoutMs,
+      client.label || client.id,
+    )));
+    const found = [];
+    const refused = [];
+    const errors = [];
+    const searched = [];
+    for (const [i, outcome] of settled.entries()) {
+      const client = eligible[i];
+      if (outcome.status === 'fulfilled') {
+        const screened = screen(client, outcome.value, true);
+        found.push(...screened.results);
+        refused.push(...screened.refused);
+        searched.push(client.id);
+        continue;
+      }
+      const failed = sourceFail(client, outcome.reason);
+      if (failed.error === 'noKey') skipped.push({ source: client.id, note: SKIPPED_NO_KEY });
+      else errors.push({ source: client.id, error: failed.error, detail: failed.detail || '' });
+    }
+    if (!searched.length) return fail('allFailed', 'no library answered', { skipped, errors });
+    return {
+      ok: true,
+      source: ALL_SOURCES,
+      searched,
+      results: mergeResults(found, query),
+      refused,
+      skipped,
+      errors,
+      next: 'luna_asset_import {source, id, name, kind} imports one result (use its own source); it checks the license again.',
       note: UNTRUSTED_NOTE,
     };
   }

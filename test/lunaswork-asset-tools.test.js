@@ -282,3 +282,43 @@ test('createAssetToolsFor builds the pipeline per call from the settings; no rep
   assert.deepEqual([res.ok, res.error.error], [false, 'failed']);
   assert.match(res.error.detail, /absolute/);
 });
+
+// ---- luna_asset_search source "all" ---------------------------------------------------
+
+test('luna_asset_search schema: source takes "all" or one library; type is one of the library types', () => {
+  const schema = T.ASSET_TOOLS.find((t) => t.name === T.SEARCH_TOOL).inputSchema;
+  assert.equal(schema.properties.source.enum[0], 'all');
+  assert.ok(schema.properties.source.enum.includes('polyhaven'));
+  assert.deepEqual(schema.properties.type.enum, ['model', 'texture', 'hdri', 'audio']);
+  assert.deepEqual(schema.required, ['source', 'query']);
+  // luna_asset_import still names one library: "all" is a search-only value.
+  const importSchema = T.ASSET_TOOLS.find((t) => t.name === T.IMPORT_TOOL).inputSchema;
+  assert.equal(importSchema.properties.source.enum.includes('all'), false);
+});
+
+test('luna_asset_search source "all" through the handler: keyed libraries without a stored key are skipped', async () => {
+  const os = require('os');
+  // Fake key assembled at runtime: no key-shaped literal in the source.
+  const freesoundKey = `fs${'k'.repeat(28)}`;
+  const keys = { get: (s) => (s === 'freesound' ? freesoundKey : null), secrets: () => [freesoundKey] };
+  const fetched = [];
+  const fetch = async (url) => { fetched.push(url); throw new Error(`offline ${freesoundKey}`); };
+  const assetsFor = T.createAssetToolsFor({ assetTools: () => ({ comfyuiPort: 8188, blenderPort: 9876, higgsfieldUsdPerCredit: 0.1, artRoot: 'Assets/X/Art' }), keys, fetch, lookup: async () => [{ address: '93.184.216.34', family: 4 }] });
+  const tools = assetsFor({ repoPath: os.tmpdir(), recordSpend: () => ({ ok: true }), recordAsset: () => true, cappedTools: () => [] });
+
+  const res = await T.callAssetTool(T.SEARCH_TOOL, { source: 'all', query: 'door creak', type: 'audio' }, tools);
+  assert.equal(res.ok, false);
+  assert.equal(res.error.error, 'allFailed');
+  // Audio libraries: freesound (key stored) and lotsofsounds (no key needed) are asked; none is skipped.
+  assert.deepEqual(res.error.errors.map((e) => e.source).sort(), ['freesound', 'lotsofsounds']);
+  assert.deepEqual(res.error.skipped, []);
+  assert.equal(JSON.stringify(res).includes(freesoundKey), false, 'a stored key leaked into the answer');
+
+  const models = await T.callAssetTool(T.SEARCH_TOOL, { source: 'all', query: 'old chair', type: 'model' }, tools);
+  assert.deepEqual(models.error.skipped.map((s) => s.source).sort(), ['polypizza', 'smithsonian']);
+  assert.ok(models.error.skipped.every((s) => s.note === 'skipped: no key'));
+
+  const badType = await T.callAssetTool(T.SEARCH_TOOL, { source: 'all', query: 'x', type: 'video' }, tools);
+  assert.equal(badType.error.error, 'badType');
+  assert.ok(fetched.length > 0);
+});
