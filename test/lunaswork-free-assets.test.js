@@ -823,7 +823,7 @@ test('search all: asks every library that has the type in parallel, keeps each r
   assert.deepEqual([...res.searched].sort(), ['freesound', 'polyhaven', 'sketchfab']);
   assert.deepEqual(res.results.map((r) => `${r.source}:${r.id}`).sort(), ['freesound:9', 'polyhaven:crate', 'sketchfab:u1']);
   assert.deepEqual(ph.calls, [{ query: 'wooden crate', type: undefined, limit: 5 }]);
-  assert.deepEqual([res.errors, res.skipped], [[], []]);
+  assert.deepEqual([res.errors, res.skipped, res.total, res.truncated], [[], [], 3, false]);
 });
 
 test('search all: the type picks the libraries; an unknown type, query or source is refused', async () => {

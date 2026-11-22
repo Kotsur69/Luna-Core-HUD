@@ -38,7 +38,7 @@ const { KINDS, MODEL_KINDS, slugOf, artRootOf } = require('./lunasworkAssetPipel
 const { imageKind } = require('./lunasworkComfy');
 const { classifyLicense, ripReason, withLedgerLock } = require('./lunasworkLicenses');
 const { SOURCE_IDS, NO_API_SOURCES, RESOLUTIONS, TYPES, redact } = require('./lunasworkFreeSources');
-const { ALL_SOURCES, SKIPPED_NO_KEY, SOURCE_TIMEOUT_MS, eligibleSources, withTimeout, mergeResults } = require('./lunasworkAssetFanout');
+const { ALL_SOURCES, SKIPPED_NO_KEY, SOURCE_TIMEOUT_MS, MAX_MERGED_RESULTS, eligibleSources, withTimeout, mergeResults } = require('./lunasworkAssetFanout');
 const { readZip, isSafeName } = require('./lunasworkZip');
 
 const MAX_QUERY_CHARS = 100;
@@ -122,7 +122,8 @@ function foldersOf(root, rels) {
  * @param {{shared:{repoPath?:string, files:object, importToUnity:Function, importNote:Function, log:Function, updateLedger:Function},
  *   artRoot?:string, sources:Record<string, object>, download:(url:string)=>Promise<Buffer>,
  *   secrets?:()=>string[], hasKey?:(source:string)=>boolean, sourceTimeoutMs?:number}} deps
- *   hasKey = whether a library's key is stored (source "all" skips a keyed library without one)
+ *   hasKey = whether a library's key is stored; source "all" skips a keyed library without one
+ *   (no hasKey -> every keyed library counts as keyless)
  * @returns {{search:(raw:object)=>Promise<object>, importAsset:(raw:object)=>Promise<object>}}
  */
 function createFreeAssets(deps) {
@@ -241,11 +242,15 @@ function createFreeAssets(deps) {
       else errors.push({ source: client.id, error: failed.error, detail: failed.detail || '' });
     }
     if (!searched.length) return fail('allFailed', 'no library answered', { skipped, errors });
+    // Ranked in full first, so the answer can say how many were cut.
+    const ranked = mergeResults(found, query, Infinity);
     return {
       ok: true,
       source: ALL_SOURCES,
       searched,
-      results: mergeResults(found, query),
+      results: ranked.slice(0, MAX_MERGED_RESULTS),
+      total: ranked.length,
+      truncated: ranked.length > MAX_MERGED_RESULTS,
       refused,
       skipped,
       errors,

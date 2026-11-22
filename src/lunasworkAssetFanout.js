@@ -8,7 +8,8 @@
 //                    for search and has none stored is skipped with a note
 //   withTimeout      one library that hangs must not hold up the others
 //   mergeResults     the per-library results as one list: duplicates dropped
-//                    (same source + id, or same name + page across libraries),
+//                    (same source + id, or same name + page when two libraries
+//                    list one page),
 //                    CC0 first, then CC-BY, then the rest, each group by how
 //                    many query words the name and tags share
 // ============================================================================
