@@ -932,7 +932,7 @@ function fakeFfmpeg(outcome, bytes) {
     if (outcome === 'enoent') return setImmediate(() => cb(Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' }), '', ''));
     if (outcome === 'fail') {
       fs.writeFileSync(out, Buffer.from('partial'));
-      return setImmediate(() => cb(Object.assign(new Error('Command failed'), { code: 1 }), '', 'header\nError while filtering: Invalid argument\n'));
+      return setImmediate(() => cb(Object.assign(new Error('Command failed'), { code: 1 }), '', `header\n${out}: Error while filtering: Invalid argument\n`));
     }
     fs.writeFileSync(out, outcome === 'empty' ? Buffer.alloc(0) : bytes);
     return setImmediate(() => cb(null, '', ''));
@@ -940,7 +940,7 @@ function fakeFfmpeg(outcome, bytes) {
   return { fn, calls };
 }
 
-const PROCESSED_OGG = Buffer.concat([Buffer.from('OggS', 'latin1'), Buffer.alloc(40, 7)]);
+const PROCESSED_OGG = Buffer.concat([Buffer.from('OggS', 'latin1'), Buffer.alloc(2048, 7)]);
 const SHELL_META_RE = /[;&|`$<>"'\n]/;
 
 /** A Freesound import of sound 201 ("Parry Clang", CC0) with the given fake ffmpeg. */
@@ -953,6 +953,8 @@ function freesoundImport(dir, ffmpeg) {
 }
 
 const tmpLeft = (dir) => fs.readdirSync(path.join(dir, ...`${ART}/Audio`.split('/'))).filter((n) => n.includes('.tmp'));
+// The fake's stderr names the temp file by its absolute path; the note must not.
+const noAbsPath = (dir, note) => assert.equal(note.includes(dir), false, note);
 
 test('audioPost on an audio import: ffmpeg gets plain argument tokens, no shell, and the result replaces the file', async () => {
   const dir = tempRepo();
@@ -969,9 +971,9 @@ test('audioPost on an audio import: ffmpeg gets plain argument tokens, no shell,
   const target = path.join(dir, ...rel.split('/'));
   const out = args[args.length - 1];
   assert.equal(path.dirname(out), path.dirname(target), 'the temp output sits next to the target');
-  assert.match(path.basename(out), /^parry-clang\.ogg\.[0-9a-f]{12}\.tmp\.ogg$/);
+  assert.match(path.basename(out), /^\.parry-clang\.ogg\.[0-9a-f]{12}\.tmp\.ogg$/, 'dot-prefixed: Unity ignores it');
   assert.deepEqual(args, [
-    '-hide_banner', '-nostdin', '-n', '-i', target, '-vn',
+    '-hide_banner', '-loglevel', 'error', '-nostdin', '-n', '-protocol_whitelist', 'file', '-i', target, '-vn',
     '-af', 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=1.2,loudnorm=I=-14:TP=-1.5:LRA=11',
     '-ar', '48000', out,
   ]);
@@ -996,18 +998,28 @@ test('audioPost: no ffmpeg on PATH (ENOENT) keeps the original bytes and adds a 
 });
 
 test('audioPost: a failing or empty ffmpeg run keeps the original bytes, removes its temp file and says why', async () => {
-  for (const [outcome, why] of [['fail', /ffmpeg failed \(Error while filtering: Invalid argument\)/], ['empty', /ffmpeg produced an empty file/]]) {
+  for (const [outcome, why] of [['fail', /ffmpeg failed \(\.[\\/]\.parry-clang\.ogg\.[0-9a-f]{12}\.tmp\.ogg: Error while filtering: Invalid argument\)/], ['empty', /ffmpeg produced an empty file/]]) {
     const dir = tempRepo();
     const { lib } = freesoundImport(dir, fakeFfmpeg(outcome));
     const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: { loudnorm: true } });
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.deepEqual(fs.readFileSync(path.join(dir, ...res.main.split('/'))), OGG, outcome);
     assert.match(res.note, why);
+    noAbsPath(dir, res.note);
     assert.deepEqual(tmpLeft(dir), [], outcome);
+  }
+  // A header-only output (an all-silent file trimmed to nothing) never replaces the audio.
+  {
+    const dir = tempRepo();
+    const { lib } = freesoundImport(dir, fakeFfmpeg('ok', Buffer.concat([Buffer.from('OggS', 'latin1'), Buffer.alloc(60)])));
+    const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: { trim: true } });
+    assert.deepEqual(fs.readFileSync(path.join(dir, ...res.main.split('/'))), OGG);
+    assert.match(res.note, /empty file \(64 bytes; all silence\?\)/);
+    assert.deepEqual(tmpLeft(dir), []);
   }
   // An output in another format than the file it replaces is refused too.
   const dir = tempRepo();
-  const { lib } = freesoundImport(dir, fakeFfmpeg('ok', WAV));
+  const { lib } = freesoundImport(dir, fakeFfmpeg('ok', Buffer.concat([WAV, Buffer.alloc(2048)])));
   const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: {} });
   assert.deepEqual(fs.readFileSync(path.join(dir, ...res.main.split('/'))), OGG);
   assert.match(res.note, /not a \.ogg file/);

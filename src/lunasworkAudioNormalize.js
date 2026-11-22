@@ -42,6 +42,8 @@ const FFMPEG_MAX_BUFFER = 4 * 1024 * 1024;
 const MAX_REASON_CHARS = 200;
 const AUDIO_EXTS = Object.freeze(['wav', 'ogg', 'mp3']);
 const HEAD_BYTES = 16;
+// Below this the output is a bare header (e.g. a file that was all silence and got trimmed to nothing).
+const MIN_OUTPUT_BYTES = 1024;
 const POST_FIELDS = Object.freeze(['trim', 'loudnorm', 'targetBpm', 'bpm']);
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -121,9 +123,23 @@ function audioFilter(post) {
   return filters.join(',');
 }
 
-/** The ffmpeg argument tokens: never overwrite (-n), no stdin, audio only, the format from the output's extension. */
+/**
+ * The ffmpeg argument tokens: errors only on stderr, never overwrite (-n), no
+ * stdin, local files only (an input that declares a playlist cannot fetch
+ * URLs), audio only, the output format from the output's extension.
+ */
 function ffmpegArgs(input, output, post) {
-  return ['-hide_banner', '-nostdin', '-n', '-i', input, '-vn', '-af', audioFilter(post), '-ar', String(OUTPUT_SAMPLE_RATE), output];
+  return ['-hide_banner', '-loglevel', 'error', '-nostdin', '-n', '-protocol_whitelist', 'file', '-i', input, '-vn', '-af', audioFilter(post), '-ar', String(OUTPUT_SAMPLE_RATE), output];
+}
+
+/**
+ * The temp output next to `rel`: dot-prefixed, so a running Unity editor
+ * ignores it, and ending in the extension, so ffmpeg picks the format from it.
+ */
+function tempRelOf(rel, ext) {
+  const dir = path.posix.dirname(rel);
+  const name = `.${path.posix.basename(rel)}.${crypto.randomBytes(6).toString('hex')}.tmp.${ext}`;
+  return dir === '.' ? name : `${dir}/${name}`;
 }
 
 /** The steps a post applies, for the answer. */
@@ -158,11 +174,11 @@ function createAudioNormalizer(deps) {
     });
   }
 
-  /** Why ffmpeg did not produce an output, as a short reason. */
-  function failReason(res) {
+  /** Why ffmpeg did not produce an output, as a short reason without the machine's folders in it. */
+  function failReason(res, dir) {
     if (res.err && res.err.code === 'ENOENT') return 'ffmpeg was not found on PATH';
     const lastLine = res.stderr.trim().split(/\r?\n/).pop() || errText(res.err);
-    return `ffmpeg failed (${oneLine(lastLine, 120)})`;
+    return `ffmpeg failed (${oneLine(lastLine.split(dir).join('.'), 120)})`;
   }
 
   /** Removes our temp file; a failure to remove it becomes part of the note. */
@@ -187,7 +203,17 @@ function createAudioNormalizer(deps) {
       // A missing or unreadable output counts as no output; the caller keeps the original.
       return null;
     } finally {
-      if (fd !== undefined) fsx.closeSync(fd);
+      closeQuietly(fd);
+    }
+  }
+
+  /** A failed close of a read-only handle loses nothing; it must not make normalize throw. */
+  function closeQuietly(fd) {
+    if (fd === undefined) return;
+    try {
+      fsx.closeSync(fd);
+    } catch {
+      // Read-only descriptor: nothing to flush, the OS reclaims it.
     }
   }
 
@@ -198,10 +224,17 @@ function createAudioNormalizer(deps) {
    * failure the original file stays untouched and the answer carries a note.
    */
   async function normalize(rel, post) {
+    try {
+      return await normalizeOne(rel, post);
+    } catch (err) {
+      return kept(rel, `unexpected error (${oneLine(errText(err), 120)})`);
+    }
+  }
+
+  async function normalizeOne(rel, post) {
     const ext = extOf(rel);
     if (!AUDIO_EXTS.includes(ext)) return kept(rel, `.${ext} is not ${AUDIO_EXTS.join(' / ')}`);
-    // The temp name keeps the extension: ffmpeg picks the output format from it.
-    const tmpRel = `${rel}.${crypto.randomBytes(6).toString('hex')}.tmp.${ext}`;
+    const tmpRel = tempRelOf(rel, ext);
     let target;
     let tmp;
     try {
@@ -211,11 +244,14 @@ function createAudioNormalizer(deps) {
       return kept(rel, errText(err));
     }
     const res = await run(ffmpegArgs(target, tmp, post));
-    if (!res.ok) return kept(rel, failReason(res) + dropTmp(tmp, tmpRel));
+    if (!res.ok) return kept(rel, failReason(res, path.dirname(target)) + dropTmp(tmp, tmpRel));
     const out = outputHead(tmp);
-    if (!out || out.size === 0) return kept(rel, `ffmpeg produced an empty file${dropTmp(tmp, tmpRel)}`);
+    if (!out || out.size < MIN_OUTPUT_BYTES) return kept(rel, `ffmpeg produced an empty file (${out ? out.size : 0} bytes; all silence?)${dropTmp(tmp, tmpRel)}`);
     if (!AUDIO_MAGIC[ext](out.head)) return kept(rel, `ffmpeg output is not a .${ext} file${dropTmp(tmp, tmpRel)}`);
     try {
+      // Again right before the rename: a link planted while ffmpeg ran is refused.
+      deps.guard(tmpRel);
+      deps.guard(rel);
       fsx.renameSync(tmp, target);
     } catch (err) {
       return kept(rel, `the processed file could not replace it (${oneLine(errText(err), 80)})${dropTmp(tmp, tmpRel)}`);

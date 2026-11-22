@@ -726,7 +726,7 @@ test('the script report is validated; junk is null; the PNG header tells a turnt
 // ---- the optional ffmpeg audio post-process on ComfyUI audio drafts ---------------------
 
 const DRAFT_WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(16, 1)]);
-const NORMALIZED_WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(32, 9)]);
+const NORMALIZED_WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(2048, 9)]);
 
 /** A fake execFile for ffmpeg: 'ok' writes `bytes` to the last token, 'enoent' / 'fail' fail. */
 function fakeFfmpeg(outcome, bytes) {
@@ -760,7 +760,7 @@ test('ComfyUI audio draft with audioPost: ffmpeg argument array, no shell, norma
   const out = args[args.length - 1];
   assert.equal(path.dirname(out), path.dirname(target));
   assert.deepEqual(args, [
-    '-hide_banner', '-nostdin', '-n', '-i', target, '-vn',
+    '-hide_banner', '-loglevel', 'error', '-nostdin', '-n', '-protocol_whitelist', 'file', '-i', target, '-vn',
     '-af', 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=0.5,atempo=0.5,loudnorm=I=-14:TP=-1.5:LRA=11',
     '-ar', '48000', out,
   ]);
