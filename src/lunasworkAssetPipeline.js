@@ -9,7 +9,9 @@
 //                    open scene is saved to art/blender/<slug>.blend and
 //                    exported as FBX for Unity (-Z forward, Y up, scale
 //                    applied) to <artRoot>/<Kind>/<slug>.fbx, then imported
-//                    and turned into <artRoot>/<Kind>/<slug>.prefab
+//                    and turned into <artRoot>/<Kind>/<slug>.prefab; an
+//                    optional toon pass and the Critic's turntable sheet
+//                    (src/lunasworkAssetBlender.js)
 //   comfyDraft       a local ComfyUI draft: an API-format workflow from the
 //                    game repo's art/comfyui/, seeded and prompted, run through
 //                    src/lunasworkComfy.js; the images go to <artRoot>/<Kind>/
@@ -53,6 +55,8 @@ const crypto = require('crypto');
 const { isWritablePath } = require('./lunasworkToolkit');
 const comfyLib = require('./lunasworkComfy');
 const licenses = require('./lunasworkLicenses');
+const { blenderExportScript } = require('./lunasworkBlenderScript');
+const { createBlenderModel } = require('./lunasworkAssetBlender');
 const { UNITY_PIPELINE_ASSETS, pipelineCall } = require('../helpers/playtest-bridge/unity');
 
 const DEFAULT_ART_ROOT = 'Assets/BladeBullet/Art';
@@ -189,23 +193,6 @@ const isBlend = (buf) => BLEND_MAGICS.some((m) => startsWith(buf, m));
 /** The file extension a Higgsfield result's bytes prove: png / jpg / webp / glb, else null. */
 function resultExt(buf) {
   return comfyLib.imageKind(buf) || (startsWith(buf, GLB_MAGIC) ? 'glb' : null);
-}
-
-/**
- * The Python the Blender MCP add-on runs: save the open scene as a copy, then
- * export FBX for Unity. Paths go in as JSON string literals (valid Python).
- */
-function blenderExportScript(blendAbs, fbxAbs) {
-  const lit = (p) => JSON.stringify(p.split(path.sep).join('/'));
-  return [
-    'import bpy',
-    `bpy.ops.wm.save_as_mainfile(filepath=${lit(blendAbs)}, copy=True)`,
-    `bpy.ops.export_scene.fbx(filepath=${lit(fbxAbs)}, use_selection=False,`,
-    "    object_types={'ARMATURE', 'MESH', 'EMPTY'}, apply_unit_scale=True, apply_scale_options='FBX_SCALE_ALL',",
-    "    axis_forward='-Z', axis_up='Y', bake_space_transform=True, add_leaf_bones=False,",
-    "    mesh_smooth_type='FACE', use_mesh_modifiers=True, bake_anim=True, path_mode='COPY', embed_textures=True)",
-    "print('LUNACORE_EXPORT_OK')",
-  ].join('\n');
 }
 
 // ---- the asset log ------------------------------------------------------------------------
@@ -460,49 +447,21 @@ function createAssetPipeline(deps) {
 
   // ---- Blender -------------------------------------------------------------------------
 
-  /** Throws unless Blender wrote `rel` now (new, or changed since `before`) with the right header. */
-  function checkExport(rel, before, isKind, what) {
-    const after = statOf(rel);
-    if (!after || !after.isFile()) throw new Error(`${rel} was not written`);
-    if (before && after.mtimeMs === before.mtimeMs && after.size === before.size) throw new Error(`${rel} is the earlier file, not a new export`);
-    if (!isKind(readHead(rel))) throw new Error(`${rel} is not ${what}`);
-  }
-
-  /**
-   * Saves the open Blender scene and exports it to Unity as FBX + prefab. A
-   * model of the same name is exported again in place (the editor keeps its
-   * GUID), unlike a paid Higgsfield final.
-   */
-  async function blenderModel(raw) {
-    const job = cleanJob(raw, MODEL_KINDS);
-    if (!job.ok) return job;
-    if (!d.blender || typeof d.blender.executeCode !== 'function') return fail('toolDown', 'blender not connected');
-    const blendRel = `${SOURCE_DIRS.blender}/${job.slug}.blend`;
-    const fbxRel = assetPath(artRoot, job.kind, job.slug, 'fbx');
-    let before;
-    try {
-      for (const rel of [blendRel, fbxRel]) {
-        guardPath(rel);
-        fsx.mkdirSync(path.dirname(abs(rel)), { recursive: true });
-      }
-      // statOf guards again after mkdir (a junction made meanwhile).
-      before = [statOf(blendRel), statOf(fbxRel)];
-      await d.blender.executeCode(blenderExportScript(abs(blendRel), abs(fbxRel)));
-    } catch (err) {
-      return fail('blenderFailed', errText(err));
-    }
-    try {
-      checkExport(blendRel, before[0], isBlend, 'a .blend file');
-      checkExport(fbxRel, before[1], isFbx, 'an FBX file');
-    } catch (err) {
-      return fail('blenderFailed', `Blender did not write the files: ${errText(err)}`);
-    }
-    const ledgerNote = await ledgerGenerated('Blender', job, [fbxRel], blendRel);
-    const imp = await importToUnity(fbxRel, job.kind);
-    log({ tool: 'blender', kind: job.kind, name: job.name, prompt: job.prompt, seed: null, costUsd: 0, path: fbxRel, sources: [blendRel], imported: imp.ok });
-    const note = [importNote(imp), ledgerNote].filter(Boolean).join(' ') || null;
-    return { ok: true, files: [fbxRel], sources: [blendRel], prefab: imp.ok ? fbxRel.replace(/\.fbx$/, '.prefab') : null, unity: imp, ledger: ledgerNote ? null : licenses.LEDGER_FILE, note };
-  }
+  // The Blender step lives in src/lunasworkAssetBlender.js, on these guarded pieces.
+  const blenderModel = createBlenderModel({
+    blender: d.blender,
+    cleanJob: (raw) => cleanJob(raw, MODEL_KINDS),
+    paths: (job) => ({ blend: `${SOURCE_DIRS.blender}/${job.slug}.blend`, fbx: assetPath(artRoot, job.kind, job.slug, 'fbx') }),
+    isBlend,
+    isFbx,
+    abs,
+    files: { guard: guardPath, mkdirFor: (rel) => fsx.mkdirSync(path.dirname(abs(rel)), { recursive: true }), stat: statOf, head: readHead, remove: removeRepoFile },
+    ledgerGenerated,
+    importToUnity,
+    importNote,
+    log,
+    ledgerFile: licenses.LEDGER_FILE,
+  });
 
   // ---- ComfyUI -------------------------------------------------------------------------
 
