@@ -24,8 +24,12 @@
 //               needs an OAuth2 login, so the preview is what is imported
 //   smithsonian api.si.edu/openaccess/api/v1.0 /search, /content/<id>
 //               (api.data.gov key in X-Api-Key header) -> CC0 3D GLB / glTF zip
-//   blenderkit  www.blenderkit.com/api/v1 /search/, /assets/<id>/ (free assets,
-//               optional Bearer token for account-linked downloads) -> GLB / HDR / textures
+//   blenderkit  www.blenderkit.com/api/v1 /search/ (filters inside query=:
+//               asset_type:, is_free:true) -> the record's /downloads/<uuid>/
+//               endpoint with a scene_uuid -> a signed link on BlenderKit's
+//               file hosts -> glTF (.glb) models and EXR HDRIs. Free assets
+//               need no key; a stored one is sent as a Bearer token. No
+//               materials (they ship only as .blend)
 //   lotsofsounds api.lotsofsounds.com/api/v1 /sounds (with x-api-key) or
 //               /sounds/sample (no key) -> CC0 WAV / OGG / MP3 sounds
 //
@@ -42,8 +46,10 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const { readCappedBody } = require('./lunasworkComfy');
 const { isSafeName } = require('./lunasworkZip');
+const { BLENDERKIT_ROYALTY_FREE } = require('./lunasworkLicenses');
 
 const USER_AGENT = 'LunaCore-asset-worker/1.0';
 const API_TIMEOUT_MS = 30 * 1000;
@@ -114,6 +120,16 @@ async function getJson({ fetch: fetchFn, url, label, headers = {}, secrets = [],
   }
 }
 
+/**
+ * The license text of an item. classifyLicense passes the BlenderKit label even
+ * from library text, so only the BlenderKit client may carry it: another
+ * library stating it verbatim gets no license (refused as "none stated").
+ */
+function licenseFor(source, raw) {
+  const text = oneLine(raw, MAX_TEXT);
+  return text === BLENDERKIT_ROYALTY_FREE && source !== 'blenderkit' ? '' : text;
+}
+
 /** A validated item; null when a required field is missing. */
 function makeItem(source, raw) {
   const item = {
@@ -122,7 +138,7 @@ function makeItem(source, raw) {
     name: oneLine(raw.name, MAX_TEXT) || oneLine(raw.id, 100),
     author: oneLine(raw.author, MAX_TEXT),
     sourceUrl: isHttps(raw.sourceUrl) ? raw.sourceUrl : '',
-    license: oneLine(raw.license, MAX_TEXT),
+    license: licenseFor(source, raw.license),
     tags: tagList(raw.tags),
     // Only for the rip check (lunasworkLicenses.ripReason); never shown to the worker.
     description: oneLine(raw.description, MAX_DESCRIPTION),
@@ -517,22 +533,80 @@ function createSmithsonian({ fetch: fetchFn, key }) {
 
 const BLENDERKIT_API = 'https://www.blenderkit.com/api/v1';
 const BLENDERKIT_ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
-const BLENDERKIT_TYPES = Object.freeze({ model: 'model', texture: 'material', hdri: 'hdr' });
-const BLENDERKIT_TYPE_OF = Object.freeze({ model: 'model', material: 'texture', hdr: 'hdri' });
-const BLENDERKIT_LICENSES = Object.freeze({ cc0: 'CC0', roy_free: 'CC0', cc_by: 'CC-BY 4.0' });
-const BLENDERKIT_EXT_BY_TYPE = Object.freeze({ model: 'glb', texture: 'zip', hdri: 'hdr' });
+// Search filters go inside query= (the add-on's syntax): the API ignores
+// &asset_type= and &is_free= URL params. Materials are left out on purpose:
+// BlenderKit ships them only as .blend, which Unity cannot import.
+const BLENDERKIT_TYPES = Object.freeze({ model: 'model', hdri: 'hdr' });
+const BLENDERKIT_TYPE_OF = Object.freeze({ model: 'model', hdr: 'hdri' });
+// royalty_free: commercial use without credit, higher-level derivative works
+// (a shipped game) may be sold; only resale of the asset itself is barred
+// (blenderkit.com/docs/licenses, read 2026-11-22).
+const BLENDERKIT_LICENSES = Object.freeze({ cc0: 'CC0', cc_zero: 'CC0', cc_by: 'CC-BY 4.0', royalty_free: BLENDERKIT_ROYALTY_FREE, roy_free: BLENDERKIT_ROYALTY_FREE });
+const BLENDERKIT_EXT_BY_TYPE = Object.freeze({ model: 'glb', hdri: 'exr' });
+const BLENDERKIT_EXTS = Object.freeze({ model: ['glb'], hdri: ['exr', 'hdr'] });
+// The per-file download endpoint of a search record; the Bearer key may go to it, so it is pinned.
+const BLENDERKIT_DOWNLOAD_RE = /^https:\/\/www\.blenderkit\.com\/api\/v1\/downloads\/[A-Za-z0-9-]{8,64}\/?$/;
+// Where the signed file links of the download endpoint may point.
+const BLENDERKIT_FILE_HOSTS = Object.freeze(['assets.blendkit.com', 'assets.blenderkit.com']);
+// HDRI file types, lowest first; 8K is never taken.
+const BLENDERKIT_HDRI_RES = Object.freeze(['0_5K', '1K', '2K', '4K']);
+const BLENDERKIT_FILE_TYPE_RE = /^[a-z0-9_]{1,40}$/i;
+const MAX_BLENDERKIT_FILES = 40;
+const MAX_SIGNED_PATHS = 10;
 
-function blenderKitFileOf(raw, type) {
-  const direct = pick(raw, ['downloadUrl', 'download_url', 'fileUrl', 'file_url']);
-  if (isHttps(direct)) return direct;
-  const list = Array.isArray(raw.files) ? raw.files : [];
-  for (const f of list) {
-    if (!isObj(f)) continue;
-    const u = pick(f, ['downloadUrl', 'download_url', 'fileUrl', 'file_url', 'filePath']);
-    if (isHttps(u)) return u;
+/** fileType -> download endpoint of a search record (only pinned endpoints). */
+function blenderKitFilesOf(raw) {
+  const out = new Map();
+  for (const f of Array.isArray(raw.files) ? raw.files.slice(0, MAX_BLENDERKIT_FILES) : []) {
+    if (!isObj(f) || typeof f.fileType !== 'string' || !BLENDERKIT_FILE_TYPE_RE.test(f.fileType)) continue;
+    const url = pick(f, ['downloadUrl', 'download_url']);
+    if (typeof url === 'string' && BLENDERKIT_DOWNLOAD_RE.test(url) && !out.has(f.fileType)) out.set(f.fileType, url);
   }
-  return type ? null : null;
+  return out;
 }
+
+/** The download endpoint to call: a model's glTF, an HDRI's EXR at the resolution or the nearest lower one. */
+function blenderKitPick(item, byType, resolution) {
+  if (item.type === 'model') {
+    const url = byType.get('gltf');
+    if (!url) throw sourceError('noFile', 'this BlenderKit model has no glTF file');
+    return url;
+  }
+  const want = resolutionOf(resolution).toUpperCase();
+  for (let i = BLENDERKIT_HDRI_RES.indexOf(want); i >= 0; i -= 1) {
+    const url = byType.get(`resolution_${BLENDERKIT_HDRI_RES[i]}`);
+    if (url) return url;
+  }
+  throw sourceError('noFile', `this BlenderKit HDRI has no EXR at ${want} or lower`);
+}
+
+/** The normalized URL when `u` is https on one of BlenderKit's file hosts (no credentials, no port); else null. */
+function blenderKitFileUrl(u) {
+  if (!isHttps(u)) return null;
+  let p;
+  try {
+    p = new URL(u);
+  } catch {
+    return null; // not a URL at all: the caller tries the next candidate
+  }
+  const ok = p.protocol === 'https:' && !p.username && !p.password && !p.port && BLENDERKIT_FILE_HOSTS.includes(p.hostname.toLowerCase());
+  // The parsed form is returned, so the downloader and the name check see the same URL that was checked.
+  return ok && isHttps(p.href) ? p.href : null;
+}
+
+/** The signed file URL of a download-endpoint reply: filePath, else the first allowed filePaths[].url. */
+function blenderKitSignedUrl(json, label) {
+  if (!isObj(json)) throw sourceError('badReply', `${label} answered an unusable download record`);
+  const paths = Array.isArray(json.filePaths) ? json.filePaths.slice(0, MAX_SIGNED_PATHS) : [];
+  for (const candidate of [json.filePath, ...paths.map((p) => (isObj(p) ? p.url : null))]) {
+    const url = blenderKitFileUrl(candidate);
+    if (url) return url;
+  }
+  throw sourceError('badReply', `${label} gave no download link on its file hosts (${BLENDERKIT_FILE_HOSTS.join(', ')})`);
+}
+
+/** The search words without ':' - a word like "is_free:false" must not become a BlenderKit search operator. */
+const blenderKitWords = (query) => String(query).replace(/:/g, ' ').replace(/\s+/g, ' ').trim();
 
 function createBlenderKit({ fetch: fetchFn, key }) {
   const label = 'BlenderKit';
@@ -544,49 +618,58 @@ function createBlenderKit({ fetch: fetchFn, key }) {
     if (!isObj(raw)) return null;
     const id = pick(raw, ['assetBaseId', 'asset_base_id', 'id']);
     if (typeof id !== 'string' || !BLENDERKIT_ID_RE.test(id)) return null;
-    const type = BLENDERKIT_TYPE_OF[raw.assetType || raw.asset_type] || 'model';
+    // Unknown types (material, scene, brush...) have no importable file: makeItem drops them.
+    const rawType = raw.assetType || raw.asset_type;
+    const type = typeof rawType === 'string' && Object.hasOwn(BLENDERKIT_TYPE_OF, rawType) ? BLENDERKIT_TYPE_OF[rawType] : null;
     const author = isObj(raw.author) ? raw.author.fullName || raw.author.firstName || '' : raw.author;
-    const licRaw = String(raw.license || (raw.isFree === true ? 'cc0' : '')).toLowerCase();
+    const licRaw = typeof raw.license === 'string' ? raw.license.trim().toLowerCase() : '';
     const item = makeItem('blenderkit', {
       id,
       name: raw.displayName || raw.name || id,
       author,
       sourceUrl: `https://www.blenderkit.com/asset-gallery-detail/${encodeURIComponent(id)}/`,
-      license: BLENDERKIT_LICENSES[licRaw] || raw.license || '',
+      // An unmapped license keeps its own text, so classifyLicense refuses it with a reason.
+      license: Object.hasOwn(BLENDERKIT_LICENSES, licRaw) ? BLENDERKIT_LICENSES[licRaw] : raw.license || '',
       tags: raw.tags,
       description: raw.description,
       type,
     });
-    const url = blenderKitFileOf(raw, type);
-    if (item && url) downloads.set(id, url);
+    if (item) downloads.set(id, blenderKitFilesOf(raw));
     return item;
   };
 
+  // Without a type there is no asset_type: filter, so results of other types
+  // (dropped by itemOf) can take page slots and the list may come back short.
   async function search(query, { type, limit } = {}) {
-    const assetType = type && BLENDERKIT_TYPES[type] ? `&asset_type=${BLENDERKIT_TYPES[type]}` : '';
-    const json = await call(`/search/?query=${encodeURIComponent(query)}${assetType}&is_free=True&page_size=${clampLimit(limit)}`);
+    const assetType = type && BLENDERKIT_TYPES[type] ? ` asset_type:${BLENDERKIT_TYPES[type]}` : '';
+    const json = await call(`/search/?query=${encodeURIComponent(`${blenderKitWords(query)}${assetType} is_free:true`)}&page_size=${clampLimit(limit)}`);
     if (!isObj(json) || !Array.isArray(json.results)) throw sourceError('badReply', `${label} answered without a result list`);
     return json.results.map(itemOf).filter(Boolean).slice(0, clampLimit(limit));
   }
 
   async function info(id) {
     if (!BLENDERKIT_ID_RE.test(id)) throw sourceError('badId', 'a BlenderKit id is 4-64 letters, digits, _ and -');
-    const json = await call(`/search/?query=${encodeURIComponent(`asset_base_id:${id}`)}&is_free=True&page_size=1`);
+    const json = await call(`/search/?query=${encodeURIComponent(`asset_base_id:${id} is_free:true`)}&page_size=1`);
     const raw = isObj(json) && Array.isArray(json.results) ? json.results.find((r) => isObj(r) && pick(r, ['assetBaseId', 'asset_base_id', 'id']) === id) : json;
     const item = itemOf(raw);
     if (!item || item.id !== id) throw sourceError('badReply', `${label} answered an unusable asset record`);
     return item;
   }
 
-  async function files(item) {
-    const url = downloads.get(item.id);
-    if (!url) throw sourceError('noFile', `${label} offers no direct file URL for ${item.id}${key ? '' : ' (store a BlenderKit API key in Settings -> Luna\'s Work -> Asset library keys)'}`);
-    const ext = (url.split('?')[0].match(/\.(glb|fbx|hdr|exr|png|jpg|zip)$/i) || [null, BLENDERKIT_EXT_BY_TYPE[item.type] || 'glb'])[1].toLowerCase();
-    if (ext === 'zip') return { files: [], archive: fileEntry(url, `${item.id}.zip`, false) };
+  // Two steps: the record's download endpoint answers 403 without scene_uuid;
+  // with one it answers a signed file link (free assets, with or without a key).
+  async function files(item, { resolution } = {}) {
+    const byType = downloads.get(item.id);
+    if (!byType) throw sourceError('noFile', `${label} offers no download for ${item.id}`);
+    const endpoint = blenderKitPick(item, byType, resolution);
+    const json = await getJson({ fetch: fetchFn, url: `${endpoint}?scene_uuid=${crypto.randomUUID()}`, label: `${label} download`, headers, secrets });
+    const url = blenderKitSignedUrl(json, `${label} download`);
+    const found = new URL(url).pathname.toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+    const ext = found && BLENDERKIT_EXTS[item.type].includes(found[1]) ? found[1] : BLENDERKIT_EXT_BY_TYPE[item.type];
     return { files: [fileEntry(url, `${item.id}.${ext}`, true)], archive: null };
   }
 
-  return { id: 'blenderkit', label, types: ['model', 'texture', 'hdri'], needsKey: { search: false, import: false }, search, info, files };
+  return { id: 'blenderkit', label, types: ['model', 'hdri'], needsKey: { search: false, import: false }, search, info, files };
 }
 
 // ---- Lots of Sounds -------------------------------------------------------------------
