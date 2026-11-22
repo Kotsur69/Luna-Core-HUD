@@ -118,7 +118,7 @@ const NO_HIGGSFIELD_KINDS = Object.freeze(['animation', 'audio', 'material']);
 // An import error that means no Unity editor in this worktree (pipeline-http.js /
 // lunasworkAssetPipeline.importToUnity texts), not a failed import.
 const UNITY_UNAVAILABLE_RE = /unity not connected|Unity editor not open|Unity Pipeline port file/i;
-const UNITY_DEFERRED_NOTE = 'No Unity editor in this worktree: the Unity import / prefab step is deferred to the scene-worker package, which imports these files after this package is merged. This is expected for an asset-prep worker; the files are saved and ledgered. (The scene-worker itself: open the editor and import them with your Unity MCP.)';
+const UNITY_DEFERRED_NOTE = 'No Unity editor in this worktree: the Unity import / prefab step is deferred to the scene-worker package, which imports these files after this package is merged. For an asset-prep worker this is expected; the files are saved and ledgered. For the scene-worker itself it is a FAILURE: open the Unity editor on this project and import the files with your Unity MCP.';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
@@ -239,7 +239,8 @@ function withDeferredImport(res) {
   if (!failed.length || !failed.every((imp) => typeof imp.error === 'string' && UNITY_UNAVAILABLE_RE.test(imp.error))) return res;
   const mark = (imp) => (isObj(imp) && imp.ok !== true ? { ...imp, deferred: true } : imp);
   const before = typeof res.note === 'string' ? res.note : '';
-  const rest = failed.reduce((note, imp) => note.split(importFailedNote(imp)).join(''), before).replace(/\s+/g, ' ').trim();
+  // Only the spaces the removed text leaves behind are collapsed; other notes keep their layout.
+  const rest = failed.reduce((note, imp) => note.split(importFailedNote(imp)).join(''), before).replace(/ {2,}/g, ' ').trim();
   return {
     ...res,
     unity: Array.isArray(res.unity) ? res.unity.map(mark) : mark(res.unity),

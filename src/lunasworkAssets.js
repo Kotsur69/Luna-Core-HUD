@@ -16,11 +16,10 @@
 //              any other. The card tells the builder to generate through a
 //              generation API (e.g. Higgsfield, image-to-3D), Blender MCP or an
 //              asset library, and save the raw file under the art root. Its
-//              `files` name only that raw file and the asset bookkeeping, so
-//              src/lunasworkScene.js keeps it an asset-prep card that runs in
-//              a parallel worktree, without the Unity editor. The Unity
-//              import / prefab step is deferred to the scene worker (the only
-//              one with the editor), which depends on the asset-prep packages.
+//              `files` are that file and the asset bookkeeping only, so it is
+//              an asset-prep card (src/lunasworkScene.js): a parallel worker
+//              without the Unity editor. The import / prefab step is deferred
+//              to the scene worker, which depends on the asset-prep packages.
 //              On a Unity run the card carries the asset pipeline's brief
 //              (src/lunasworkAssetPipeline.js unityAssetBrief): files under
 //              Assets/<game>/Art/<Kind>/, sources under art/, the lunacore
@@ -73,9 +72,7 @@ const REFERENCES_DIR = 'references';
 const ASSET_TAG = 'asset';
 // The art folder of a non-Unity-adapter run's asset cards.
 const UNITY_ART_DIR = 'Assets/Art';
-// The raw file an asset card expects, by ASSETS.md type (a planning hint: the
-// tools may save another format, e.g. a GLB). Never a prefab: that would route
-// the card to the scene worker.
+// The raw file an asset card expects, by type (a hint; never a prefab, which would route it to the scene worker).
 const RAW_EXT_BY_TYPE = Object.freeze({ model: 'fbx', animation: 'fbx', audio: 'wav' });
 const DEFAULT_RAW_EXT = 'png';
 // The pipeline brief's paragraph that has the worker import into Unity itself; an asset-prep card defers that.
@@ -347,8 +344,7 @@ const HOW = Object.freeze({
  * The builder card for one asset row (Critic card shape, lunasworkCritic.applyCards).
  * A Unity run's card names the asset pipeline (src/lunasworkAssetPipeline.js):
  * its folders under the art root, its lunacore tools, the art direction.
- * It is an asset-prep card (src/lunasworkScene.js isAssetPrepCard): raw files
- * only, the Unity import / prefab step deferred to the scene worker.
+ * An asset-prep card (lunasworkScene.isAssetPrepCard): import / prefab deferred.
  * @param {object} row
  * @param {{unity?:boolean, artRoot?:string}} [opts]
  */

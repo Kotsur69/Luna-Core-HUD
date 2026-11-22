@@ -57,7 +57,8 @@ const SCENE_GLOBS = Object.freeze(['**/*.unity', '**/*.prefab']);
 // Raw asset files an asset-prep package makes without the Unity editor, with their .meta.
 const RAW_ASSET_RE = /\.(?:fbx|glb|gltf|obj|blend|png|jpe?g|tga|exr|hdr|ogg|wav|mp3)(?:\.meta)?$/i;
 // Where they live: Assets/**/Art/ (the Unity art root) or art/ (the sources).
-const ART_PATH_RE = /^(?:Assets\/(?:[^/]+\/)*Art|art)\/[^/]/;
+// Case-insensitive: Windows and macOS checkouts do not tell Art from art.
+const ART_PATH_RE = /^(?:Assets\/(?:[^/]+\/)*Art|art)\/[^/]/i;
 // The asset bookkeeping an asset-prep package updates next to its files.
 const ASSET_BOOKKEEPING = Object.freeze(new Set(['design/ASSET_LICENSES.md', 'design/ASSETS.md']));
 const ASSET_RENDER_RE = /^design\/asset-renders\/[^/]+\.(?:png|jpe?g)$/i;
@@ -73,6 +74,7 @@ const SCENE_WORKER_BRIEF = [
   'You are the SCENE WORKER of this build: the only worker allowed to open the Unity editor (through Unity MCP) and to change scenes and prefabs (*.unity, *.prefab).',
   'One editor = one Unity MCP connection, so every scene and prefab change of this build is yours. Other packages run in parallel and change code only.',
   'Save every scene / prefab you change in the editor and commit them with your work.',
+  'A luna_asset_* answer that says the Unity import is deferred means YOUR editor is not connected: that is a failure for you, not for an asset-prep worker. Open the Unity editor on this project and import the files with your Unity MCP before you finish.',
 ].join('\n');
 const CODE_WORKER_NOTE =
   `Do not open the Unity editor and do not edit *.unity or *.prefab files: the ${SCENE_WORKER_ID} package owns all scene and prefab work in this build.`;
@@ -146,11 +148,13 @@ function isSceneCard(card) {
 /**
  * An asset-prep package (not scene work, checked first): its files are all
  * asset-prep files, or it lists no files and covers asset-prep cards only.
+ * A package that also covers a code card (one listing other files) is not.
  */
-function isAssetPrepPackage(pkg, assetAts) {
+function isAssetPrepPackage(pkg, assetAts, codeAts) {
+  const ats = list(pkg.todoAts);
+  if (ats.some((at) => codeAts.has(at))) return false;
   const files = list(pkg.files);
   if (files.length) return files.every(isAssetPrepFile);
-  const ats = list(pkg.todoAts);
   return ats.length > 0 && ats.every((at) => assetAts.has(at));
 }
 
@@ -230,10 +234,12 @@ function mergeScenePackages(members, memberIds, feeders) {
  * The asset-prep packages the scene worker waits for: not merged into it,
  * and not waiting for it themselves (that edge would close a cycle).
  */
-function feederPackages(plain, memberIds, assetAts) {
+function feederPackages(plain, memberIds, cards) {
+  const assetAts = new Set(cards.filter(isAssetPrepCard).map((c) => c.at));
+  const codeAts = new Set(cards.filter((c) => isObj(c) && list(c.files).length > 0 && !isAssetPrepCard(c)).map((c) => c.at));
   const depsOf = new Map(plain.map((p) => [p.id, list(p.dependsOn)]));
   const waitsForScene = (p) => [...closure(list(p.dependsOn), depsOf)].some((id) => id === SCENE_WORKER_ID || memberIds.has(id));
-  return plain.filter((p) => !memberIds.has(p.id) && isAssetPrepPackage(p, assetAts) && !waitsForScene(p));
+  return plain.filter((p) => !memberIds.has(p.id) && isAssetPrepPackage(p, assetAts, codeAts) && !waitsForScene(p));
 }
 
 /**
@@ -246,7 +252,6 @@ function feederPackages(plain, memberIds, assetAts) {
 function routeScenePackages(packages, cards) {
   if (!Array.isArray(packages)) return packages;
   const sceneAts = new Set(list(cards).filter(isSceneCard).map((c) => c.at));
-  const assetAts = new Set(list(cards).filter(isAssetPrepCard).map((c) => c.at));
   const plain = packages.filter(isObj);
   const isScenePackage = (p) =>
     p.id === SCENE_WORKER_ID || list(p.files).some(isSceneFile) || list(p.todoAts).some((at) => sceneAts.has(at));
@@ -255,7 +260,7 @@ function routeScenePackages(packages, cards) {
 
   const memberIds = foldCycles(plain, seeds);
   const members = plain.filter((p) => memberIds.has(p.id));
-  const feeders = feederPackages(plain, memberIds, assetAts);
+  const feeders = feederPackages(plain, memberIds, list(cards));
   const feederIds = new Set(feeders.map((p) => p.id));
   const scene = mergeScenePackages(members, memberIds, feeders);
   const out = [];

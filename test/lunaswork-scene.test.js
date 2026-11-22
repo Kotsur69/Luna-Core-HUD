@@ -184,3 +184,25 @@ test('the scene ownership map still gives only scenes and prefabs to the scene w
   assert.equal(map['Assets/BladeBullet/Art/Models/hero-ship.fbx'], 'ship');
   assert.equal(map['Assets/Scenes/Level1.unity'], SCENE_WORKER_ID);
 });
+
+test('the Art folder is matched case-insensitively (Windows and macOS checkouts)', () => {
+  assert.equal(Scene.isAssetPrepFile('Assets/Game/art/Props/crate.fbx'), true);
+  assert.equal(Scene.isAssetPrepFile('Art/blender/crate.blend'), true);
+});
+
+test('a package that also covers a code card is not asset-prep, so the scene worker does not wait for it', () => {
+  const packages = [
+    { id: 'level', todoAts: [3], files: CARDS[2].files, dependsOn: [], prompt: 'level' },
+    // The planner listed only the art file, but the package also owns the score code card.
+    { id: 'mixed', todoAts: [1, 4], files: CARDS[0].files, dependsOn: [], prompt: 'mixed' },
+  ];
+  const out = Scene.routeScenePackages(packages, CARDS);
+  const byId = Object.fromEntries(out.map((p) => [p.id, p]));
+  assert.deepEqual(byId[SCENE_WORKER_ID].dependsOn, []);
+  assert.ok(byId.mixed.prompt.endsWith(Scene.CODE_WORKER_NOTE));
+});
+
+test('the scene worker is told that a deferred import is a failure for it', () => {
+  const out = Scene.routeScenePackages(plan(), CARDS);
+  assert.match(out.find((p) => p.id === SCENE_WORKER_ID).prompt, /deferred means YOUR editor is not connected/);
+});
