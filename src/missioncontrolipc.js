@@ -86,6 +86,8 @@ function defaultBriefSources({ getLedger, gcal, weather, projectNames }) {
 
 /** Minimum gap between two links opened from the renderer. */
 const OPEN_GAP_MS = 500;
+/** Min gap between two brief runs of one kind started from the renderer. */
+const BRIEF_GAP_MS = 60 * 1000;
 
 const TIMEOUTS = { preview: 300000, apply: 180000, parse: 60000, news: 180000, describe: 90000 };
 
@@ -344,10 +346,18 @@ function registerMissionIpc({
 
   // req: {kind: 'weekly' | 'daily', overwrite}. 'exists' until the renderer
   // confirms a Regenerate. One call per kind at a time (brief's own guard).
+  // A brief is a paid call with Gmail tools: one start per kind per minute,
+  // whatever the renderer sends.
+  const lastBriefAt = new Map();
   ipcMain.handle('mission:brief-run', async (_event, req) => {
     const kind = req && BRIEF_KINDS.includes(req.kind) ? req.kind : null;
     if (!kind) return { ok: false, reason: 'bad-input' };
+    if (req.overwrite !== true && brief.has(kind)) return { ok: false, reason: 'exists' };
+    const at = Date.now();
+    if (at - (lastBriefAt.get(kind) || -Infinity) < BRIEF_GAP_MS) return { ok: false, reason: 'rate-limited' };
     const res = await brief.generate(kind, { overwrite: req.overwrite === true });
+    // 'exists' / 'busy' never reached the model, so they do not start the cooldown.
+    if (res.ok || !['exists', 'busy'].includes(res.reason)) lastBriefAt.set(kind, at);
     return res.ok ? safeBriefView({}) : res;
   });
 

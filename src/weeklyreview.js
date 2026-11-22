@@ -20,9 +20,11 @@
 // History: config/mission-weekly.local.json, one entry per ISO week, the
 // newest MAX_WEEKS kept. Schedule: once the current week's Sunday 20:00 has
 // passed its review is due; before that, a missing review of LAST week is
-// caught up on launch. A week that has an entry is never generated again by
-// the scheduler (never a duplicate); "Generate now" over an existing week
-// answers 'exists' until the renderer confirms with overwrite: true.
+// caught up on launch. Once the scheduled run for a week has succeeded it is
+// never run again (never a duplicate); a failed one is retried up to
+// MAX_ATTEMPTS times, and a manual "Generate now" mid-week does not stand in
+// for the Sunday run. "Generate now" over an existing week answers 'exists'
+// until the renderer confirms with overwrite: true (throttled in weeklyipc.js).
 //
 // The data is untrusted in the prompt (to-do texts, commit subjects, goal
 // texts are all typed by someone): it sits in a <data> block with its angle
@@ -44,6 +46,8 @@ const JOB_TIMEOUT_MS = 180000;
 const TICK_MS = 5 * 60 * 1000;
 const FIRST_TICK_MS = 90 * 1000;
 const MAX_DATA_CHARS = 200 * 1024;
+/** A scheduled run that failed is retried up to this many times (a transient CLI or network error). */
+const MAX_ATTEMPTS = 3;
 const VERDICTS = ['done', 'partly', 'not yet'];
 const REASON_RE = /^[a-z0-9-]{1,40}$/;
 const CAP = { headline: 200, summary: 600, status: 300, todo: 140, evidence: 200, suggestion: 300, more: 200 };
@@ -331,6 +335,8 @@ function entryOf(week, raw) {
     failure: review ? null : reasonOf(raw.failure) || 'bad-json',
     data,
     mail: mailOf(raw.mail),
+    scheduled: raw.scheduled === true,
+    attempts: Number.isInteger(raw.attempts) && raw.attempts >= 0 ? Math.min(raw.attempts, MAX_ATTEMPTS) : 0,
   };
 }
 
@@ -383,7 +389,11 @@ function reviewTime(day) {
 function dueWeek(nowMs, weeks) {
   const today = ymd(nowMs);
   const week = nowMs >= reviewTime(today) ? isoWeek(today) : isoWeek(addDays(today, -7));
-  return weeks && weeks[week] ? null : week;
+  const e = weeks && weeks[week];
+  // A manual "Generate now" mid-week does not count: the Sunday run still
+  // happens (with the whole week). A failed scheduled run is retried a few times.
+  if (!e || !e.scheduled) return week;
+  return !e.review && (e.attempts || 0) < MAX_ATTEMPTS ? week : null;
 }
 
 /** Weeks "Generate now" may (re)build: this week so far, or last week. */
@@ -417,7 +427,7 @@ function createWeeklyReview(deps) {
     busy = true;
     try {
       const prev = deps.store.get(week);
-      if (prev && !overwrite) return { ok: false, reason: 'exists' };
+      if (prev && !overwrite && !scheduled) return { ok: false, reason: 'exists' };
       const data = await deps.collect(week);
       if (!data) return { ok: false, reason: 'bad-week' };
       const model = normalizeReportModel(deps.store.load().model);
@@ -429,7 +439,8 @@ function createWeeklyReview(deps) {
       const failure = review ? null : (res && res.ok ? 'bad-json' : reasonOf(res && res.reason) || 'generic');
       const costUsd = res && typeof res.costUsd === 'number' ? res.costUsd : null;
       // A regenerated week keeps its mail state: dedupe is per ISO week.
-      const entry = { week, at: now(), model, costUsd, review, failure, data, mail: prev ? prev.mail : null };
+      const attempts = scheduled ? (prev && prev.scheduled && !prev.review ? prev.attempts || 0 : 0) + 1 : (prev && prev.attempts) || 0;
+      const entry = { week, at: now(), model, costUsd, review, failure, data, mail: prev ? prev.mail : null, scheduled: scheduled || Boolean(prev && prev.scheduled), attempts };
       deps.store.put(entry);
       if (deps.writeHtml) {
         try {
@@ -438,7 +449,8 @@ function createWeeklyReview(deps) {
           console.error('[weekly] html report failed:', err && err.message);
         }
       }
-      if (scheduled && deps.mailer) {
+      // Raw numbers are only mailed once the retries are used up.
+      if (scheduled && deps.mailer && (review || attempts >= MAX_ATTEMPTS)) {
         try {
           await deps.mailer.afterScheduled(week);
         } catch (err) {
@@ -497,4 +509,5 @@ module.exports = {
   normalize,
   VERDICTS,
   MAX_WEEKS,
+  MAX_ATTEMPTS,
 };

@@ -30,6 +30,8 @@ const { weeklyEmailOn } = require('./mailprefs');
 
 /** 'Email it' sends a real mail: no bursts. */
 const EMAIL_GAP_MS = 30 * 1000;
+/** 'Generate now' is a paid model call: at most one start per minute, whatever the renderer sends. */
+const GENERATE_GAP_MS = 60 * 1000;
 
 /**
  * @param {{ipcMain:object, review:{generate:Function, isBusy:Function}, store:object,
@@ -38,6 +40,7 @@ const EMAIL_GAP_MS = 30 * 1000;
  */
 function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = Date.now, agyModels = sharedAgyModels() }) {
   let lastEmailAt = -Infinity;
+  let lastGenerateAt = -Infinity;
   const weekOf = (req) => (req && typeof req === 'object' && isWeek(req.week) ? req.week : null);
 
   function view(week) {
@@ -75,6 +78,11 @@ function registerWeeklyIpc({ ipcMain, review, store, mail, sender, prefs, now = 
   ipcMain.handle('life:week-generate', async (_event, req) => {
     const week = weekOf(req);
     if (!week || !generatable(now()).includes(week)) return { ok: false, reason: 'bad-week' };
+    // 'exists' costs nothing, so only a call that can reach the model is throttled.
+    if (store.get(week) && req.overwrite !== true) return { ok: false, reason: 'exists' };
+    const at = now();
+    if (at - lastGenerateAt < GENERATE_GAP_MS) return { ok: false, reason: 'rate-limited' };
+    lastGenerateAt = at;
     const res = await review.generate(week, { overwrite: req.overwrite === true });
     return res.ok ? safeView(week) : res;
   });

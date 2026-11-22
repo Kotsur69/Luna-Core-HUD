@@ -17,7 +17,7 @@ const os = require('os');
 const path = require('path');
 
 const {
-  createWeeklyReview, createWeeklyStore, buildReviewPrompt, validateReview, dueWeek, reviewText, MAX_WEEKS,
+  createWeeklyReview, createWeeklyStore, buildReviewPrompt, validateReview, dueWeek, reviewText, MAX_WEEKS, MAX_ATTEMPTS,
 } = require('../src/weeklyreview.js');
 const { createWeeklyMail } = require('../src/weeklymail.js');
 const { registerWeeklyIpc } = require('../src/weeklyipc.js');
@@ -76,12 +76,18 @@ test('dueWeek: Sunday 20:00 for this week, catch-up for last week, never twice',
   const sun1959 = new Date(2026, 9, 25, 19, 59).getTime();
   const sun2000 = new Date(2026, 9, 25, 20, 0).getTime();
   const wed = new Date(2026, 9, 28, 9).getTime();
+  const done = { scheduled: true, review: {}, attempts: 1 };
   assert.equal(dueWeek(sun1959, {}), '2026-W42');
-  assert.equal(dueWeek(sun1959, { '2026-W42': {} }), null);
-  assert.equal(dueWeek(sun2000, { '2026-W42': {} }), '2026-W43');
-  assert.equal(dueWeek(sun2000, { '2026-W43': {} }), null);
-  assert.equal(dueWeek(wed, { '2026-W43': {} }), null);
+  assert.equal(dueWeek(sun1959, { '2026-W42': done }), null);
+  assert.equal(dueWeek(sun2000, { '2026-W42': done }), '2026-W43');
+  assert.equal(dueWeek(sun2000, { '2026-W43': done }), null);
+  assert.equal(dueWeek(wed, { '2026-W43': done }), null);
   assert.equal(dueWeek(wed, {}), '2026-W43');
+  // A manual "Generate now" mid-week does not stand in for the Sunday run.
+  assert.equal(dueWeek(sun2000, { '2026-W43': { scheduled: false, review: {} } }), '2026-W43');
+  // A failed scheduled run is retried, up to MAX_ATTEMPTS.
+  assert.equal(dueWeek(sun2000, { '2026-W43': { scheduled: true, review: null, attempts: 2 } }), '2026-W43');
+  assert.equal(dueWeek(sun2000, { '2026-W43': { scheduled: true, review: null, attempts: MAX_ATTEMPTS } }), null);
 });
 
 function setup({ answer = GOOD, ok = true, clock = new Date(2026, 9, 25, 20, 30).getTime(), sendFails = false, connected = true, weeklyEmail = null, writeHtml = null } = {}) {
@@ -133,6 +139,17 @@ test('tick generates the due week once, lean + Haiku, then mails it once', async
   assert.equal(h.sent.length, 1);
 });
 
+test('a manual review before Sunday 20:00 is replaced by the scheduled one, mailed once', async () => {
+  const h = setup({ clock: new Date(2026, 9, 23, 12).getTime() }); // Friday
+  assert.equal((await h.review.generate('2026-W43')).ok, true);
+  assert.equal(h.sent.length, 0);
+  h.setNow(new Date(2026, 9, 25, 20, 1).getTime());
+  assert.equal((await h.review.tick()).ok, true);
+  assert.equal(h.store.get('2026-W43').scheduled, true);
+  assert.equal(h.sent.length, 1);
+  assert.equal(await h.review.tick(), null);
+});
+
 test('Generate now over an existing week answers exists until overwrite; a changed review is not re-mailed', async () => {
   const h = setup();
   await h.review.tick();
@@ -146,9 +163,12 @@ test('Generate now over an existing week answers exists until overwrite; a chang
   assert.equal(h.sent.length, 2);
 });
 
-test('unusable model output keeps the raw numbers and still mails them', async () => {
+test('unusable model output is retried, then the raw numbers are kept and mailed once', async () => {
   const h = setup({ answer: { nope: 1 } });
-  await h.review.tick();
+  for (let i = 0; i < MAX_ATTEMPTS; i++) await h.review.tick();
+  assert.equal(h.runs.length, MAX_ATTEMPTS);
+  assert.equal(await h.review.tick(), null);
+  assert.equal(h.sent.length, 1);
   const e = h.store.get('2026-W43');
   assert.equal(e.review, null);
   assert.equal(e.failure, 'bad-json');
@@ -224,6 +244,9 @@ test('life:week-generate takes this week or last week only, and confirms overwri
   assert.deepEqual(res.generatable, ['2026-W43', '2026-W42']);
   assert.equal(h.sent.length, 0, 'Generate now never mails on its own');
   assert.equal((await call('life:week-generate', { week: '2026-W42' })).reason, 'exists');
+  // A confirmed overwrite right after a call is throttled; a minute later it runs.
+  assert.deepEqual(await call('life:week-generate', { week: '2026-W42', overwrite: true }), { ok: false, reason: 'rate-limited' });
+  h.setNow(h.now() + 61 * 1000);
   assert.equal((await call('life:week-generate', { week: '2026-W42', overwrite: true })).ok, true);
 });
 
