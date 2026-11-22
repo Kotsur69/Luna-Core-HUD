@@ -19,7 +19,9 @@
 //
 // Screenshots come back as an image the model sees AND a PNG written into
 // --evidence-dir under the sanitized name - the file validateReport() later
-// accepts as evidence. Nothing else touches the disk.
+// accepts as evidence. Nothing else touches the disk. `burst` takes several
+// screenshots through the same backend call and saves ONE labeled contact
+// sheet the same way (burst.js).
 //
 // Run with ELECTRON_RUN_AS_NODE=1 under LunaCore's own binary (helpers/** is
 // asar-unpacked). createBridge() is exported so the tests drive it directly.
@@ -35,6 +37,7 @@ const { callControl } = require('./control');
 const { createMcpHttpClient, isLoopbackHttpUrl } = require('./mcp-http');
 const { createPipelineClient } = require('./pipeline-http');
 const { UNITY_TRANSPORTS, withCombatFeelLog } = require('./unity');
+const { captureBurst, buildSheet, burstSummary } = require('./burst');
 
 const SERVER_NAME = 'lunacore-playtest';
 const SERVER_VERSION = '1.0.0';
@@ -121,16 +124,38 @@ const textItem = (value) => {
 const toolError = (message) => ({ content: [{ type: 'text', text: String(message).slice(0, 2000) }], isError: true });
 
 /**
- * @param {{backend:string, evidenceDir:string, invoke:(tool:string, args:object)=>Promise<unknown>}} opts
+ * @param {{backend:string, evidenceDir:string, invoke:(tool:string, args:object)=>Promise<unknown>,
+ *   now?:()=>number, sleep?:(ms:number)=>Promise<unknown>}} opts now / sleep pace `burst` (tests inject fakes)
  * @returns {{handle:(msg:unknown)=>Promise<object|null>, callTool:Function}}
  */
-function createBridge({ backend, evidenceDir, invoke }) {
+function createBridge({ backend, evidenceDir, invoke, now = Date.now, sleep = realSleep }) {
   if (!BACKENDS.includes(backend)) throw new Error(`unknown backend '${String(backend)}'`);
   if (typeof evidenceDir !== 'string' || !path.isAbsolute(evidenceDir)) throw new Error('evidence dir must be an absolute path');
+
+  /** N frames through the backend's own screenshot call, saved as one contact sheet. */
+  async function burstTool({ name, frames, durationMs, windowId }) {
+    // The screenshot call validates its own args (the electron wrapper does): a valid name, the window.
+    const shotArgs = windowId === undefined ? { name } : { name, windowId };
+    try {
+      const shots = await captureBurst({ capture: () => invoke('screenshot', shotArgs), frames, durationMs, now, sleep });
+      const sheet = buildSheet(shots);
+      const data = sheet.png.toString('base64');
+      saveScreenshot(evidenceDir, name, data);
+      return {
+        content: [
+          { type: 'text', text: burstSummary(name, sheet, durationMs) },
+          { type: 'image', data, mimeType: 'image/png' },
+        ],
+      };
+    } catch (err) {
+      return toolError(errText(err));
+    }
+  }
 
   async function callTool(name, rawArgs) {
     const checked = checkArgs(backend, name, rawArgs);
     if (!checked.ok) return toolError(checked.error);
+    if (name === 'burst') return burstTool(checked.args);
     let result;
     try {
       result = await invoke(name, checked.args);

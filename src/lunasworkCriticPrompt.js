@@ -19,6 +19,8 @@
 
 const { isStepBack, MAX_TEXT_CHARS } = require('./lunasworkRules');
 const { MAX_SUMMARY_CHARS: MAX_COMBAT_FEEL_CHARS } = require('./lunasworkCombatFeel');
+const { BURST_PREFIX } = require('../helpers/playtest-bridge/tools');
+const { BURST_CAPTION } = require('../helpers/playtest-bridge/burst');
 
 // Playtester scores are 0-10; a gate item passes at this score or above.
 const GATE_PASS_SCORE = 8;
@@ -59,6 +61,17 @@ function reportBrief(report) {
     errors: list('errors'),
     ...feel,
   };
+}
+
+const fileName = (p) => (typeof p === 'string' ? p.split(/[\\/]/).pop() : '');
+
+/** True when a finding or score of the brief cites a burst contact sheet (burst-*.png). */
+function citesBurst(brief) {
+  const shots = [
+    ...brief.findings.map((f) => isObj(f) && f.screenshot),
+    ...brief.scores.map((s) => isObj(s) && isObj(s.evidence) && s.evidence.screenshot),
+  ];
+  return shots.some((p) => fileName(p).toLowerCase().startsWith(BURST_PREFIX));
 }
 
 function gateLines(gate) {
@@ -116,6 +129,7 @@ function buildCriticPrompt({ iteration, docs, report, history, gitLog, openCards
     ...(reportBrief(report).combatFeel
       ? ['- combatFeel in the playtest report is measured frame timing from the game (hit-stop, Time.timeScale changes, input latency, hitbox -> VFX). Its "Out of spec" values are evidence for feel or bug cards that screenshots cannot give.']
       : []),
+    ...(citesBurst(reportBrief(report)) ? [`- A cited image named ${BURST_PREFIX}*.png is a burst contact sheet. ${BURST_CAPTION}`] : []),
     '- logEntry: played = what the Playtester exercised; good / bad / broken / missing = short bullets; scores = one line per milestone; verdict = one or two sentences on why.',
     '- architecture: the full new design/ARCHITECTURE.md (modules, data flow, conventions) as the code is now. Read the code to keep it true; keep what is still right from the current one.',
     '- decisions: choices made this iteration (yours, or visible in the git log) as {choice, because}; empty when none.',

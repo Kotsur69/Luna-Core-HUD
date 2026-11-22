@@ -78,6 +78,9 @@ const { DESIGN_DIR, readPackFile } = require('./lunasworkPack');
 const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
 const designMatch = require('./lunasworkDesignMatch');
+const {
+  BURST_MIN_FRAMES, BURST_MAX_FRAMES, BURST_MIN_DURATION_MS, BURST_MAX_DURATION_MS, BURST_PREFIX,
+} = require('../helpers/playtest-bridge/tools');
 const variants = require('./lunasworkVariants');
 const { summarizeCombatFeel } = require('./lunasworkCombatFeel');
 const { argsUseAgy, execAgy } = require('./agyexec');
@@ -422,6 +425,9 @@ const REPORT_RULES = [
 // asks for persona / engine / width: fixed values keep the report valid.
 const NON_WEB_FINDING_FIELDS = `- Every finding: persona "${CORE_PERSONA.id}", engine "chromium", width ${DESKTOP.width}, engineOnly false (fixed values: these report fields do not apply to this app).`;
 
+// The bridge's burst tool (helpers/playtest-bridge/burst.js): motion as one labeled contact sheet.
+const BURST_RULE = `- For motion a single screenshot cannot show (animations, transitions, hit-stop freezes, afterimages), use burst: ${BURST_MIN_FRAMES}-${BURST_MAX_FRAMES} frames over ${BURST_MIN_DURATION_MS}-${BURST_MAX_DURATION_MS} ms stitched into one sheet, each tile labeled with its ms offset. It is saved as "${BURST_PREFIX}<name>.png" and counts as a screenshot for findings and scores.`;
+
 // LW 3.35: a desktop (Electron) app through the bridge's desktop tools.
 const DESKTOP_RULES = [
   `- Check every window at a wide size (resize_window ${WINDOW_WIDE.width}x${WINDOW_WIDE.height}) AND a compact size (resize_window ${WINDOW_COMPACT.width}x${WINDOW_COMPACT.height}): nothing cut off, overlapping or out of reach. Where a rule below says "both widths", it means these two sizes.`,
@@ -430,6 +436,7 @@ const DESKTOP_RULES = [
   '- If list_menu shows an application menu (menu bar or tray-style entries), exercise its items with click_menu or their accelerators.',
   '- Read console_errors after every journey and screen; put the errors that belong to a finding in its consoleErrors.',
   '- Every finding needs a screenshot: screenshot with a short, unique name (for example "f3-settings-compact.png"). Put exactly that name in "screenshot".',
+  BURST_RULE,
   '- Judge only what you see in the app windows. You have no access to the source code or the file system; do not ask for them or guess at them.',
   ...REPORT_RULES,
   NON_WEB_FINDING_FIELDS,
@@ -441,6 +448,7 @@ const UNITY_RULES = [
   '- A criterion passes only if the screenshot and game_state agree (score, health, current scene, open menu...). Where a rule below says "both widths", the one Game view counts as both.',
   '- Read console_errors after every journey; put the errors that belong to a finding in its consoleErrors.',
   '- Every finding needs a screenshot: screenshot with a short, unique name (for example "f3-pause-menu.png"). Put exactly that name in "screenshot".',
+  BURST_RULE,
   '- Judge only what you see and what game_state reports. You have no access to the source code or the project files; do not ask for them or guess at them.',
   ...REPORT_RULES,
   NON_WEB_FINDING_FIELDS,
@@ -452,7 +460,7 @@ const TARGET_PROMPTS = {
   electron: {
     what: 'a desktop app (Electron)',
     tester: 'test it like a real, careful user',
-    reach: 'The app is running on this computer. You see and drive its windows only through your tools (list_windows, screenshot, click, type_text, press_key, resize_window, read_text, console_errors, wait_for_text, list_menu, click_menu).',
+    reach: 'The app is running on this computer. You see and drive its windows only through your tools (list_windows, screenshot, burst, click, type_text, press_key, resize_window, read_text, console_errors, wait_for_text, list_menu, click_menu).',
     explore: 'Then explore freely: empty and invalid input, edge cases, double clicks, long text, closing and reopening windows and dialogs, resizing while working.',
     rules: DESKTOP_RULES,
     screens: '- screens: the start screen and the main screen of every journey, at both window sizes, named "<screen>-wide" / "<screen>-compact". Use the same names every run - they are compared with the previous run.',
@@ -461,7 +469,7 @@ const TARGET_PROMPTS = {
   unity: {
     what: 'a Unity game running in play mode',
     tester: 'play it like a real, careful player',
-    reach: 'The game is running in the Unity editor on this computer. You see and drive it only through your tools (screenshot, game_state, send_input, console_errors, wait).',
+    reach: 'The game is running in the Unity editor on this computer. You see and drive it only through your tools (screenshot, burst, game_state, send_input, console_errors, wait).',
     explore: 'Then explore freely: unexpected input orders, mashing buttons, pausing and resuming, losing on purpose, going where the level does not expect you.',
     rules: UNITY_RULES,
     screens: '- screens: the start screen and the main screen of every journey, named "<screen>". Use the same names every run - they are compared with the previous run.',
@@ -1186,6 +1194,8 @@ module.exports = {
   TARGETS,
   WINDOW_WIDE,
   WINDOW_COMPACT,
+  MAX_PNG_BYTES,
+  MAX_PNG_PIXELS,
   playtestModel,
   passPlan,
   loadPlaytestInputs,
