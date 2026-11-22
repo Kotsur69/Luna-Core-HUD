@@ -659,6 +659,18 @@ test("LW 2.26: onRunEnd puts the repo's legal drafts into the saved and the mail
   assert.ok(!attached.content.includes(repo), 'repo-relative, never a local path');
 });
 
+test('the asset cost estimate gets its own section (md and HTML); none without an estimate', () => {
+  const assetEstimate = { iteration: 3, library: 2, local: 1, paid: 4, credits: 40, usd: 4, usdPerCredit: 0.1, unknownModels: ['mystery-9'], thresholdUsd: 2, gated: true, decisionId: 17 };
+  const md = buildRunReport({ ...makeRun('plateau'), assetEstimate });
+  assert.match(md, /## Asset cost estimate/);
+  assert.match(md, /Iteration 3: 2 free library import\(s\), 1 free local generation\(s\) \(ComfyUI \/ Blender\), 4 paid Higgsfield final\(s\)\./);
+  assert.match(md, /40 credits = \$4\.00 at \$0\.1 per credit/);
+  assert.match(md, /remaining Higgsfield budget of \$2\.00: the paid finals waited for decision 17/);
+  assert.match(md, /Unknown model\(s\).*mystery-9/);
+  assert.match(renderRunReportHtml({ ...makeRun('plateau'), assetEstimate }), /<h2>Asset cost estimate<\/h2>/);
+  assert.doesNotMatch(buildRunReport(makeRun('plateau')), /Asset cost estimate/);
+});
+
 test('the HTML report leads with the verdict and keeps every section', () => {
   const html = renderRunReportHtml(makeRun('plateau'));
   assert.match(html, /<p class="eyebrow">LunaCore Luna&#39;s Work report<\/p>/);
