@@ -238,3 +238,115 @@ test('meteredPass: a Playtester pass outside a run gets its own claude -p tokens
   assert.deepEqual(none, { ok: false, error: 'limit', usage: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 } });
   assert.equal(await meteredPass(async () => null), null);
 });
+
+// ---- the account reserve gate on headless steps ------------------------------------
+
+const { createHeadlessRunner, createPlaytestOn } = require('../src/lunasworkWiring');
+const { ACCOUNT_ENV } = require('../src/claudeaccounts');
+
+const GATE_NOW = Date.UTC(2026, 10, 22, 12, 0, 0);
+const RESERVE_RESET = GATE_NOW + 2 * 60 * 60 * 1000;
+const HELD = 'acct-held';
+const FREE = 'acct-free';
+/** The reserve dep main builds: the held account until its window resets, null otherwise. */
+const reserveUntil = (accountId) => (accountId === HELD ? RESERVE_RESET : null);
+const envOn = (accountId) => ({ PATH: 'x', [ACCOUNT_ENV]: accountId });
+
+/** A fake execClaude that records every call it was asked to spawn. */
+function fakeExec(answer = { stdout: '{"result":"ok"}' }) {
+  const calls = [];
+  const exec = async (call) => {
+    calls.push(call);
+    return answer;
+  };
+  return { calls, exec };
+}
+
+test('runHeadless: an account held by its reserve spawns nothing and answers a limit with the reserve reset', async () => {
+  const fake = fakeExec();
+  const run = createHeadlessRunner({ exec: fake.exec, reserveUntil, now: () => GATE_NOW });
+  const res = await run({ args: ['-p', '--model', 'sonnet'], prompt: 'hi', cwd: os.tmpdir(), env: envOn(HELD) });
+  assert.equal(fake.calls.length, 0, 'no claude -p was spawned');
+  assert.equal(res.error, 'limit');
+  assert.equal(res.resumeAt, RESERVE_RESET);
+  assert.equal(typeof res.detail, 'string');
+  assert.match(res.detail, /reserve/);
+});
+
+test('runHeadless: a free account, an env without an account and a missing dep all spawn as before', async () => {
+  const fake = fakeExec();
+  const gated = createHeadlessRunner({ exec: fake.exec, reserveUntil, now: () => GATE_NOW });
+  assert.deepEqual(await gated({ args: ['-p'], env: envOn(FREE) }), { stdout: '{"result":"ok"}' });
+  assert.deepEqual(await gated({ args: ['-p'], env: { PATH: 'x' } }), { stdout: '{"result":"ok"}' });
+  const ungated = createHeadlessRunner({ exec: fake.exec, now: () => GATE_NOW });
+  assert.deepEqual(await ungated({ args: ['-p'], env: envOn(HELD) }), { stdout: '{"result":"ok"}' });
+  assert.equal(fake.calls.length, 3);
+});
+
+test('runHeadless: a reserve that already reset, or a dep that throws, does not hold the step', async () => {
+  const fake = fakeExec();
+  const past = createHeadlessRunner({ exec: fake.exec, reserveUntil: () => GATE_NOW - 1, now: () => GATE_NOW });
+  await past({ args: ['-p'], env: envOn(HELD) });
+  const lines = [];
+  const broken = createHeadlessRunner({
+    exec: fake.exec,
+    reserveUntil: () => { throw new Error('readings gone'); },
+    now: () => GATE_NOW,
+    log: (line) => lines.push(line),
+  });
+  await broken({ args: ['-p'], env: envOn(HELD) });
+  assert.equal(fake.calls.length, 2);
+  assert.match(lines.join('\n'), /readings gone/, 'the failed check is logged, not swallowed');
+});
+
+test('runHeadless: an agy call is never held by a Claude account reserve and gets the agy env', async () => {
+  const fake = fakeExec();
+  const agyEnv = { AGY: '1' };
+  const run = createHeadlessRunner({ exec: fake.exec, agyEnv: () => agyEnv, reserveUntil, now: () => GATE_NOW });
+  await run({ args: ['-p', '--model', 'agy'], env: envOn(HELD) });
+  assert.equal(fake.calls.length, 1);
+  assert.equal(fake.calls[0].agyEnv, agyEnv);
+});
+
+test('a role wrapper keeps the reserve resumeAt: the Director over the gated runner', async () => {
+  const fake = fakeExec();
+  const runClaude = createHeadlessRunner({ exec: fake.exec, reserveUntil, now: () => GATE_NOW });
+  const { runDirector } = require('../src/lunasworkDirector');
+  const Pack = require('../src/lunasworkPack');
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-wiring-dir-'));
+  try {
+    assert.equal(Pack.scaffoldPack(repoDir).ok, true);
+    const list = [{ text: 'Card 1', done: false, at: 1, tags: ['run:gate-1', 'kind:feel', 'sev:medium'] }];
+    const res = await runDirector({
+      repoDir, runId: 'gate-1', iteration: 2, env: envOn(HELD), runClaude, log: () => {},
+      todoStore: { read: () => list, write: () => assert.fail('no writes') },
+    });
+    assert.equal(fake.calls.length, 0);
+    assert.equal(res.error, 'limit');
+    assert.equal(res.resumeAt, RESERVE_RESET);
+  } finally {
+    await removeDir(repoDir);
+  }
+});
+
+test('playtestOn: the Playtester call carries the reserve gate for its env', async () => {
+  const seen = [];
+  const runPlaytestImpl = async (opts) => {
+    seen.push(opts);
+    return { ok: true };
+  };
+  const meter = { exec: (_role, impl) => impl };
+  const on = createPlaytestOn({
+    env: () => envOn(HELD), freeEnv: () => ({ PATH: 'free' }), agyEnv: () => null,
+    reserveUntil, now: () => GATE_NOW, run: runPlaytestImpl,
+  });
+  await on(meter)({ free: false, mode: 'explore' });
+  await on(meter)({ free: true, mode: 'explore' });
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].env[ACCOUNT_ENV], HELD);
+  const held = seen[0].gate(seen[0].env);
+  assert.equal(held.error, 'limit');
+  assert.equal(held.resumeAt, RESERVE_RESET);
+  assert.equal(seen[1].gate(seen[1].env), null, 'the free providers have no Claude account to hold');
+  assert.equal(seen[0].gate(envOn(FREE)), null);
+});

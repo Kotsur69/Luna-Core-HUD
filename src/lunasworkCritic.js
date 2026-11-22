@@ -675,10 +675,12 @@ async function runCritic(opts) {
     costUsd: null,
   };
   let state = base;
-  const fail = (error, detail) => {
+  // `resumeAt` (epoch ms) rides along on a usage limit that knows its reset.
+  const fail = (error, detail, resumeAt) => {
     log(`critic failed: ${error}`, detail);
     const note = { code: error, ...(detail ? { detail } : {}) };
-    return { ...state, ok: false, error, ...(detail ? { detail } : {}), errors: [...state.errors, note], durationMs: now() - started };
+    const reset = Number.isFinite(resumeAt) ? { resumeAt } : {};
+    return { ...state, ok: false, error, ...(detail ? { detail } : {}), ...reset, errors: [...state.errors, note], durationMs: now() - started };
   };
 
   try {
@@ -723,7 +725,9 @@ async function runCritic(opts) {
       env: o.env || process.env,
       timeoutMs: o.timeoutMs || CRITIC_TIMEOUT_MS,
     });
-    if (!isObj(call) || call.error) return fail((isObj(call) && call.error) || 'failed', isObj(call) ? call.detail : undefined);
+    if (!isObj(call) || call.error) {
+      return fail((isObj(call) && call.error) || 'failed', isObj(call) ? call.detail : undefined, isObj(call) ? call.resumeAt : undefined);
+    }
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
     state = { ...state, costUsd: parsed.costUsd };

@@ -110,6 +110,7 @@ const { registerClaudeAccountsIpc } = require('./claudeaccountsipc');
 const { createAccountUsage } = require('./claudeaccountusage');
 const { reserveLimits } = require('./accountreserve');
 const { createReserveEnforcer } = require('./reserveenforce');
+const { accountReserveUntil } = require('./lunasworkReserveGate');
 const { claudePath } = require('./hostchat');
 const { createTabFailover } = require('./claudefailover');
 // Project switcher: session working directories (cwd) from config/projects.json.
@@ -1769,6 +1770,8 @@ const lunaswork = createLunasWorkRuntime({
   agyEnv: () => lunasworkAgyEnv(),
   usageLimits: () => (latestUsage && Array.isArray(latestUsage.limits) ? latestUsage.limits : []),
   accountFailover: (resetsAt) => claudeAccounts.failoverActive(resetsAt),
+  // A headless step never starts on an account held by its reserve (src/lunasworkReserveGate.js).
+  reserveUntil: (accountId) => accountReserveUntil(accountId, claudeAccounts.usageTargets(), accountUsage.readings(), Date.now()),
   // Every iteration merges into the base branch: Mati confirms it natively,
   // with the commands the run will use (pinned in the run from here on).
   confirmStart: async ({ repoPath, profile, checkCommand, scaffold }) => {
