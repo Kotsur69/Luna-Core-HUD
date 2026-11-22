@@ -41,6 +41,8 @@ const {
 // touches and an ESTIMATED context fill (agy logs no token counts).
 const { transcriptKindFor, conversationIdFromCommand } = require('./agytranscript');
 const { AgyTranscriptWatcher } = require('./agywatcher');
+const { snapshotSessionProcs } = require('./sessionProcs');
+const { SessionProcsHub, registerSessionProcsIpc } = require('./sessionProcsIpc');
 // Session -> Markdown export: pure transcript renderer. The disk read + save
 // dialog live here in main; the parsing is all in the module (unit-tested).
 const { transcriptToMarkdown } = require('./sessionExport');
@@ -2236,10 +2238,11 @@ function spawnInto(session, profile, launch = null) {
   );
   if (session.watcher) session.watcher.start();
 
-  // An agy tab: Active files, Skill Tracker and an estimated context fill from
-  // agy's transcript (src/agywatcher.js). Its tool events also make the tab
-  // count as active for the git attribution below, which needs them to claim
-  // anything. No token booking for God Mode: agy logs no real token counts.
+  // An agy tab: Active files, Skill Tracker, MCP calls and an estimated
+  // context fill from agy's transcript and its subagents' (src/agywatcher.js).
+  // Its tool events also make the tab count as active for the git attribution
+  // below, which needs them to claim anything. No token booking for God Mode
+  // yet: only planner steps log token counts, and the window is assumed.
   if (session.agyWatcher) session.agyWatcher.stop();
   session.agyWatcher = transcriptKind !== 'agy' ? null : new AgyTranscriptWatcher(
     (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
@@ -2251,6 +2254,9 @@ function spawnInto(session, profile, launch = null) {
         statusBoard.activity(session.id);
         send('metrics:tools', { sessionId: session.id, events });
       },
+      // call_mcp_tool / read_resource / list_resources, in the Claude path's shape.
+      onMcp: (events) => send('metrics:mcp', { sessionId: session.id, events }),
+      // Turns of the tab's own conversation only: a subagent's finished turn is not this tab's.
       onTurnStart: ({ at } = {}) => {
         send('godmode:signal', { sessionId: session.id, type: 'turnStarted', at });
         statusBoard.turnStart(session.id);
@@ -3606,6 +3612,18 @@ function registerIpc() {
   require('./claudesetupipc').registerClaudeSetupIpc({ ipcMain, getEnv: () => withClaudeOnPath({ ...process.env }) });
   // Settings -> Host mode: host mode inside this HUD, no restart (src/hostswitch.js).
   require('./hostmodeipc').registerHostModeIpc({ ipcMain, control: require('./hostmain').hostControl() });
+  // OS processes + listening ports under each tab's PTY (src/sessionProcs.js), polled
+  // only while a renderer view subscribes; only this window may subscribe.
+  registerSessionProcsIpc({
+    ipcMain,
+    hub: new SessionProcsHub({
+      snapshot: snapshotSessionProcs,
+      listRoots: () => [...sessions.values()]
+        .filter((s) => s && s.proc && Number.isInteger(s.proc.pid))
+        .map((s) => ({ sessionId: s.id, pid: s.proc.pid })),
+    }),
+    isTrustedSender: (event) => Boolean(mainWindow && !mainWindow.isDestroyed() && event && event.sender === mainWindow.webContents),
+  });
   // Settings -> Luna's Work -> Asset library keys: status (booleans) and set only.
   registerAssetKeyIpc({ ipcMain, keys: lunasworkAssetKeys });
   registerLunasworkIpc({

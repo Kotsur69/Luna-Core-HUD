@@ -21,6 +21,8 @@ const { contextLimitFor, modelLabel, DEFAULT_CONTEXT_LIMIT } = require('./models
 const { loadRates, rateFor, estimateCost } = require('./rates');
 // Diff-stat extraction for the Active-Files Heatmap (DONE_ACTIVE_FILES_HEATMAP_PLAN.md).
 const { fileStatFromEntry, estimateTokens } = require('./filestat');
+// A short sanitized `detail` on tool start events (shell summary, agent type, search pattern).
+const { claudeToolDetail } = require('./tooldetail');
 
 // ---- 1. Tool detection from stdout -----------------------------------------
 
@@ -452,7 +454,9 @@ function toolEventsFromLines(text) {
           // start means its end is later ignored as an orphan, which is correct.
           if (tile) {
             const file = part.input && typeof part.input.file_path === 'string' ? part.input.file_path : '';
-            events.push({ phase: 'start', id: part.id, tile, at, file });
+            // At most 80 characters, scrubbed of secrets (src/tooldetail.js); none for most tools.
+            const detail = claudeToolDetail(part.name, part.input);
+            events.push(detail ? { phase: 'start', id: part.id, tile, at, file, detail } : { phase: 'start', id: part.id, tile, at, file });
           }
         } else if (part.type === 'tool_result' && typeof part.tool_use_id === 'string') {
           events.push({
@@ -509,7 +513,8 @@ function foldToolEvents(open, events) {
       if (open.has(ev.id)) continue; // already counted - re-read of the same line
       const file = ev.file || '';
       open.set(ev.id, { tile: ev.tile, file });
-      out.push({ phase: 'start', id: ev.id, tile: ev.tile, at: ev.at, file });
+      const start = { phase: 'start', id: ev.id, tile: ev.tile, at: ev.at, file };
+      out.push(ev.detail ? { ...start, detail: ev.detail } : start);
     } else {
       const opened = open.get(ev.id);
       if (!opened) continue; // orphan: started before we attached, or has no tile

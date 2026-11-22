@@ -79,6 +79,14 @@ test('stationForTile covers every tile observer.js sends', () => {
   assert.equal(stationForTile(null), 'other');
 });
 
+test('stationForMcp puts an agy tab\'s lunacore-<sessionId> memory tools on the Memory station', () => {
+  assert.equal(stationForMcp('lunacore-s3', 'memory_search'), 'memory');
+  assert.equal(stationForMcp('lunacore', 'memory_get'), 'memory');
+  assert.equal(stationForMcp('lunacore-s3', 'luna_todo_list'), 'mcp');
+  assert.equal(stationForMcp('lunacore2', 'memory_search'), 'mcp');
+  assert.equal(stationForMcp('my-lunacore-s3', 'memory_search'), 'mcp');
+});
+
 test('stationForMcp without a server name is other', () => {
   assert.equal(stationForMcp('', 'x'), 'other');
   assert.equal(stationForMcp(undefined, undefined), 'other');
