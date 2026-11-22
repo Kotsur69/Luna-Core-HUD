@@ -29,6 +29,8 @@
 
 'use strict';
 
+const unityAnimation = require('./unityAnimation');
+
 const UNITY_MCP_TOOLS = Object.freeze({
   editor: 'manage_editor',
   scene: 'manage_scene',
@@ -164,6 +166,19 @@ const UNITY_TRANSPORTS = Object.freeze({
   mcp: Object.freeze({ calls: UNITY_MCP, invoke: unityCall }),
 });
 
+// ---- animation frame sync (unityAnimation.js) ---------------------------------------
+// AttackStep frame data vs. AnimationClip: Pipeline only, for scene / asset
+// workers, never the Playtester (baking writes assets).
+
+/**
+ * animation_frame_sync through one Pipeline client.
+ * @param {{exec:Function}} client pipeline-http.js
+ * @param {unknown} payload the worker's {clipPath, attackStepPath, fps?, bake?, characterPath?}
+ */
+function animationFrameSync(client, payload) {
+  return unityAnimation.runAnimationFrameSync(payload, (call) => pipelineCall(client, call));
+}
+
 module.exports = {
   UNITY_MCP_TOOLS,
   UNITY_MCP,
@@ -177,4 +192,7 @@ module.exports = {
   isPlaying,
   unityCall,
   pipelineCall,
+  UNITY_PIPELINE_ANIMATION: unityAnimation.UNITY_PIPELINE_ANIMATION,
+  ANIMATION_FRAME_SYNC_TOOL: unityAnimation.ANIMATION_FRAME_SYNC_TOOL,
+  animationFrameSync,
 };

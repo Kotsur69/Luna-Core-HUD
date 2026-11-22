@@ -726,3 +726,189 @@ test('a screenshot that is not a PNG is refused and nothing is written', async (
     flag: '',
   });
 });
+
+// ---- animation_frame_sync (unityAnimation.js) ---------------------------------------
+
+const UA = require('../helpers/playtest-bridge/unityAnimation.js');
+
+const CLIP = 'Assets/Characters/Blade/Anim/Slash1.anim';
+const STEP = 'Assets/Combat/AttackSteps/Slash1.asset';
+// startup 6 + active 3 + recovery 12 = 21 frames at 60 fps.
+const FRAMES = Object.freeze({ startup: 6, active: 3, recovery: 12 });
+const inspectAnswer = (over = {}) => ({
+  clip: { length: 21 / 60, frameRate: 60 },
+  attackStep: { ...FRAMES },
+  rootMotion: false,
+  ...over,
+});
+
+test('animation_frame_sync payload: good paths pass, defaults fill in, unknown keys are dropped', () => {
+  const ok = UA.checkFrameSyncPayload({ clipPath: CLIP, attackStepPath: STEP, extra: 'x' });
+  assert.deepEqual(ok, { ok: true, args: { clipPath: CLIP, attackStepPath: STEP, fps: 60, bake: false } });
+  const fbx = UA.checkFrameSyncPayload({ clipPath: 'Assets/Models/Blade.FBX', attackStepPath: STEP, fps: 30, bake: true, characterPath: 'Assets/Prefabs/Blade.prefab' });
+  assert.deepEqual(fbx.args, { clipPath: 'Assets/Models/Blade.FBX', attackStepPath: STEP, fps: 30, bake: true, characterPath: 'Assets/Prefabs/Blade.prefab' });
+});
+
+test('animation_frame_sync payload: bad paths are refused', () => {
+  const bad = (over, re) => {
+    const res = UA.checkFrameSyncPayload({ clipPath: CLIP, attackStepPath: STEP, ...over });
+    assert.equal(res.ok, false, JSON.stringify(over));
+    assert.match(res.error, re);
+  };
+  bad({ clipPath: 'Packages/x/Slash.anim' }, /start with Assets\//);
+  bad({ clipPath: 'C:/Game/Assets/Slash.anim' }, /start with Assets\//);
+  bad({ clipPath: '/Assets/Slash.anim' }, /start with Assets\//);
+  bad({ clipPath: 'Assets/../ProjectSettings/x.anim' }, /'\.\.'/);
+  bad({ clipPath: 'Assets/Anim/..hidden.anim' }, /'\.\.'/);
+  bad({ clipPath: 'Assets/Anim/Slash.controller' }, /\.anim or \.fbx/);
+  bad({ clipPath: 'Assets/.anim' }, /\.anim or \.fbx/);
+  bad({ attackStepPath: 'Assets/Combat/Slash.anim' }, /\.asset/);
+  bad({ clipPath: 'Assets//Slash.anim' }, /empty segment/);
+  bad({ clipPath: 'Assets/Anim\\Slash.anim' }, /cannot hold/);
+  bad({ clipPath: 'Assets/Anim/Sl\nash.anim' }, /cannot hold/);
+  bad({ clipPath: 'Assets/Anim/C:Slash.anim' }, /cannot hold/);
+  bad({ clipPath: `Assets/${'a'.repeat(300)}.anim` }, /longer than/);
+  bad({ clipPath: 42 }, /non-empty string/);
+  bad({ attackStepPath: undefined }, /non-empty string/);
+  bad({ characterPath: 'Assets/Prefabs/Blade.asset' }, /\.prefab/);
+  bad({ bake: 'true' }, /bake must be true or false/);
+  assert.deepEqual(UA.checkFrameSyncPayload(null), { ok: false, error: 'payload must be an object' });
+  assert.equal(UA.checkFrameSyncPayload([CLIP]).ok, false);
+});
+
+test('animation_frame_sync payload: fps must be a whole number in a sane range', () => {
+  for (const fps of [0, -60, 9, 241, 1000, 29.97, '60', NaN, Infinity, true]) {
+    const res = UA.checkFrameSyncPayload({ clipPath: CLIP, attackStepPath: STEP, fps });
+    assert.equal(res.ok, false, String(fps));
+    assert.match(res.error, /fps must be a whole number from 10 to 240/);
+  }
+  for (const fps of [10, 24, 30, 60, 120, 240]) {
+    assert.equal(UA.checkFrameSyncPayload({ clipPath: CLIP, attackStepPath: STEP, fps }).args.fps, fps);
+  }
+});
+
+test('frame validator: an exact match passes and gives the event frames', () => {
+  const res = UA.validateAttackFrames({ clipFrames: 21, clipFps: 60, ...FRAMES, rootMotion: false });
+  assert.deepEqual(res, { ok: true, fps: 60, mismatches: [], events: { hitOpen: 6, hitClose: 9, recoveryEnd: 21 } });
+  const parry = UA.validateAttackFrames({ clipFrames: 21, clipFps: 59.99994, ...FRAMES, rootMotion: false, parryStart: 2, parryEnd: 7 });
+  assert.equal(parry.ok, true, 'float clip frame rates within tolerance count as equal');
+  assert.deepEqual(parry.events, { hitOpen: 6, hitClose: 9, recoveryEnd: 21, parryOpen: 2, parryClose: 7 });
+});
+
+test('frame validator: too short, too long, wrong fps, root motion on, parry past the end', () => {
+  const codes = (input) => UA.validateAttackFrames({ clipFrames: 21, clipFps: 60, ...FRAMES, rootMotion: false, ...input }).mismatches.map((m) => m.code);
+  const short = UA.validateAttackFrames({ clipFrames: 18, clipFps: 60, ...FRAMES, rootMotion: false });
+  assert.equal(short.ok, false);
+  assert.deepEqual(short.mismatches, [{ code: UA.MISMATCH.tooShort, message: 'clip has 18 frames, AttackStep needs 21 (3 short)', expected: 21, actual: 18 }]);
+  assert.deepEqual(short.events, { hitOpen: 6, hitClose: 9, recoveryEnd: 21 }, 'event frames still come from the AttackStep');
+  const long = UA.validateAttackFrames({ clipFrames: 25, clipFps: 60, ...FRAMES, rootMotion: false });
+  assert.deepEqual(long.mismatches, [{ code: UA.MISMATCH.tooLong, message: 'clip has 25 frames, AttackStep needs 21 (4 too many)', expected: 21, actual: 25 }]);
+  assert.deepEqual(codes({ clipFps: 30 }), [UA.MISMATCH.fps]);
+  assert.deepEqual(codes({ fps: 30 }), [UA.MISMATCH.fps], 'expected fps from the payload');
+  assert.deepEqual(codes({ rootMotion: true }), [UA.MISMATCH.rootMotion]);
+  assert.deepEqual(codes({ parryStart: 18, parryEnd: 24 }), [UA.MISMATCH.parry]);
+  assert.deepEqual(codes({ clipFrames: 10, clipFps: 24, rootMotion: true }), [UA.MISMATCH.tooShort, UA.MISMATCH.fps, UA.MISMATCH.rootMotion]);
+});
+
+test('frame validator: malformed input throws instead of guessing', () => {
+  const base = { clipFrames: 21, clipFps: 60, ...FRAMES, rootMotion: false };
+  assert.throws(() => UA.validateAttackFrames(null), /needs an object/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, startup: -1 }), /startup/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, active: 0 }), /active/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, recovery: 2.5 }), /recovery/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, clipFrames: '21' }), /clipFrames/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, clipFps: 0 }), /clipFps/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, rootMotion: 'no' }), /rootMotion/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, fps: 5 }), /fps/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, parryStart: 4 }), /parryEnd/);
+  assert.throws(() => UA.validateAttackFrames({ ...base, parryStart: 5, parryEnd: 5 }), /after parryStart/);
+});
+
+test('event timeline: time = frame / fps, in frame order, parry included when present', () => {
+  const timeline = UA.eventTimeline({ hitOpen: 6, hitClose: 9, recoveryEnd: 21, parryOpen: 2, parryClose: 7 }, 60);
+  assert.deepEqual(timeline, [
+    { functionName: 'OnParryWindowOpen', frame: 2, time: 2 / 60 },
+    { functionName: 'OnHitWindowOpen', frame: 6, time: 6 / 60 },
+    { functionName: 'OnParryWindowClose', frame: 7, time: 7 / 60 },
+    { functionName: 'OnHitWindowClose', frame: 9, time: 9 / 60 },
+    { functionName: 'OnRecoveryEnd', frame: 21, time: 21 / 60 },
+  ]);
+  assert.equal(UA.eventTimeline({ hitOpen: 3, hitClose: 6, recoveryEnd: 15 }, 30)[1].time, 0.2);
+  assert.throws(() => UA.eventTimeline({ hitOpen: 1 }, 0), /fps/);
+});
+
+test('animation Pipeline calls: inspect and bake payload shapes', () => {
+  const AN = UN.UNITY_PIPELINE_ANIMATION;
+  assert.equal(AN, UA.UNITY_PIPELINE_ANIMATION, 'unity.js re-exports the table');
+  assert.deepEqual(AN.inspect({ clipPath: CLIP, attackStepPath: STEP }), ['animation inspect', { clip: CLIP, attackStep: STEP }]);
+  assert.deepEqual(
+    AN.inspect({ clipPath: CLIP, attackStepPath: STEP, characterPath: 'Assets/Prefabs/Blade.prefab' }),
+    ['animation inspect', { clip: CLIP, attackStep: STEP, character: 'Assets/Prefabs/Blade.prefab' }],
+  );
+  const events = UA.eventTimeline({ hitOpen: 6, hitClose: 9, recoveryEnd: 21 }, 60);
+  const [command, params] = AN.bake({ clipPath: CLIP }, events);
+  assert.equal(command, 'animation bake_events');
+  assert.deepEqual(Object.keys(params).sort(), ['applyRootMotion', 'clip', 'events']);
+  assert.equal(params.clip, CLIP);
+  assert.equal(params.applyRootMotion, false);
+  assert.equal(typeof params.events, 'string', 'events travel as a JSON string, like PlaytestDriver steps');
+  assert.deepEqual(JSON.parse(params.events), [
+    { functionName: 'OnHitWindowOpen', frame: 6, time: 0.1 },
+    { functionName: 'OnHitWindowClose', frame: 9, time: 0.15 },
+    { functionName: 'OnRecoveryEnd', frame: 21, time: 0.35 },
+  ]);
+  assert.throws(() => AN.bake({ clipPath: CLIP }, []), /at least one event/);
+  assert.equal(UN.ANIMATION_FRAME_SYNC_TOOL.name, 'animation_frame_sync');
+  assert.deepEqual(UN.ANIMATION_FRAME_SYNC_TOOL.inputSchema.required, ['clipPath', 'attackStepPath']);
+  assert.ok(!T.toolNames('unity').includes('animation_frame_sync'), 'the Playtester never gets an asset-writing tool');
+});
+
+test('inspect answer: read into validator input, malformed answers throw', () => {
+  assert.deepEqual(UA.readInspectResult(inspectAnswer()), { clipFrames: 21, clipFps: 60, ...FRAMES, rootMotion: false });
+  const parry = UA.readInspectResult(inspectAnswer({ attackStep: { ...FRAMES, parryStart: 1, parryEnd: 4 } }));
+  assert.equal(parry.parryStart, 1);
+  assert.equal(parry.parryEnd, 4);
+  assert.throws(() => UA.readInspectResult('oops'), /clip and attackStep/);
+  assert.throws(() => UA.readInspectResult(inspectAnswer({ clip: { length: -1, frameRate: 60 } })), /clip length/);
+  assert.throws(() => UA.readInspectResult(inspectAnswer({ clip: { length: 1, frameRate: 0 } })), /frameRate/);
+  assert.throws(() => UA.readInspectResult(inspectAnswer({ rootMotion: 'off' })), /rootMotion/);
+  assert.throws(() => UA.readInspectResult(inspectAnswer({ attackStep: { ...FRAMES, startup: '6' } })), /bad startup/);
+  assert.throws(() => UA.readInspectResult(inspectAnswer({ attackStep: { ...FRAMES, parryEnd: 4 } })), /bad parryStart/);
+});
+
+test('animationFrameSync: inspects, bakes only when asked and every check passes', async () => {
+  const run = async (payload, answer, bakeReply = 'baked') => {
+    const sent = [];
+    const client = {
+      exec: async (command, parameters) => {
+        sent.push([command, parameters]);
+        return command === 'animation inspect' ? JSON.stringify(answer) : bakeReply;
+      },
+    };
+    return { res: await UN.animationFrameSync(client, payload), sent };
+  };
+  const checkOnly = await run({ clipPath: CLIP, attackStepPath: STEP }, inspectAnswer());
+  assert.equal(checkOnly.res.ok, true);
+  assert.equal(checkOnly.res.baked, false);
+  assert.deepEqual(checkOnly.sent.map(([c]) => c), ['animation inspect']);
+  assert.deepEqual(checkOnly.res.events.map((e) => e.frame), [6, 9, 21]);
+
+  const baked = await run({ clipPath: CLIP, attackStepPath: STEP, bake: true }, inspectAnswer());
+  assert.equal(baked.res.baked, true);
+  assert.equal(baked.res.bakeResult, 'baked');
+  assert.deepEqual(baked.sent.map(([c]) => c), ['animation inspect', 'animation bake_events']);
+  assert.equal(baked.sent[1][1].applyRootMotion, false);
+
+  const refused = await run({ clipPath: CLIP, attackStepPath: STEP, bake: true }, inspectAnswer({ rootMotion: true }));
+  assert.equal(refused.res.ok, false);
+  assert.equal(refused.res.baked, false);
+  assert.deepEqual(refused.res.mismatches.map((m) => m.code), [UA.MISMATCH.rootMotion]);
+  assert.deepEqual(refused.sent.map(([c]) => c), ['animation inspect'], 'nothing is baked over a failed check');
+
+  const badPayload = await run({ clipPath: '../x.anim', attackStepPath: STEP, bake: true }, inspectAnswer());
+  assert.equal(badPayload.res.ok, false);
+  assert.match(badPayload.res.error, /Assets\//);
+  assert.deepEqual(badPayload.sent, [], 'a bad payload never reaches the editor');
+
+  await assert.rejects(run({ clipPath: CLIP, attackStepPath: STEP }, { nope: 1 }), /clip and attackStep/);
+});
