@@ -89,7 +89,7 @@ function isTurntableSheet(buf) {
   if (!isPng(buf) || buf.length < IHDR_HEIGHT_AT + 4) return false;
   const width = buf.readUInt32BE(IHDR_WIDTH_AT);
   const height = buf.readUInt32BE(IHDR_HEIGHT_AT);
-  return height > 0 && width === height * TURNTABLE_VIEWS.length;
+  return height === TURNTABLE_PANEL_PX && width === TURNTABLE_PANEL_PX * TURNTABLE_VIEWS.length;
 }
 
 // ---- the Python ---------------------------------------------------------------------------
@@ -105,6 +105,13 @@ LUNA_REPORT = {'warnings': []}
 
 def luna_warn(text):
     LUNA_REPORT['warnings'].append(str(text)[:200])
+
+def luna_step(label, fn, *args):
+    # A failed pass is a warning: the FBX is still exported.
+    try:
+        fn(*args)
+    except Exception as err:
+        luna_warn('%s failed: %s' % (label, err))
 
 def luna_meshes():
     return [o for o in bpy.context.scene.objects if o.type == 'MESH' and not o.name.startswith('LunaTurntable')]
@@ -157,6 +164,11 @@ def luna_decimate(objs):
             mod = o.modifiers.new(name='LunaDecimate', type='DECIMATE')
             mod.decimate_type = 'COLLAPSE'
             mod.ratio = ratio
+            if any(m != mod and m.name != 'LunaOutline' for m in o.modifiers):
+                # The ratio comes from the evaluated mesh: on a modifier stack it stays the last
+                # modifier (before the outline) and the FBX export applies it (use_mesh_modifiers).
+                luna_warn('decimate kept as the last modifier on %s (it has other modifiers)' % o.name)
+                continue
             try:
                 with luna_override(o):
                     bpy.ops.object.modifier_move_to_index(modifier=mod.name, index=0)
@@ -188,6 +200,9 @@ def luna_roots():
                 bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
         except Exception as err:
             luna_warn('scale not applied on %s: %s' % (r.name, err))
+            continue
+        if tuple(round(s, 6) for s in r.scale) != (1.0, 1.0, 1.0):
+            luna_warn('scale of %s is still %s after applying it' % (r.name, tuple(round(s, 4) for s in r.scale)))
     bpy.context.view_layer.update()
 
 def luna_height(objs):
@@ -225,6 +240,10 @@ def luna_outline(objs):
         mod = o.modifiers.get('LunaOutline')
         if mod is None:
             mod = o.modifiers.new(name='LunaOutline', type='SOLIDIFY')
+        elif o.modifiers[-1].name != 'LunaOutline':
+            # An earlier run's outline stays last: the hull wraps the final (decimated) mesh.
+            with luna_override(o):
+                bpy.ops.object.modifier_move_to_index(modifier='LunaOutline', index=len(o.modifiers) - 1)
         mod.thickness = -OUTLINE_THICKNESS
         mod.offset = -1.0
         mod.use_flip_normals = True
@@ -234,6 +253,9 @@ def luna_outline(objs):
         mod.show_render = True
         done += 1
     LUNA_REPORT['outlined'] = done
+    bpy.context.view_layer.update()
+    # What the FBX carries: the hull roughly doubles the model's triangles.
+    LUNA_REPORT['trisExported'] = luna_tris(objs)
 
 def luna_turntable(objs):
     import numpy as np
@@ -308,12 +330,12 @@ def luna_turntable(objs):
 const PY_TOON = String.raw`
 LUNA_REPORT['stylePass'] = STYLE_PASS
 luna_objs = luna_meshes()
-luna_outline_shown(luna_objs, False)
-luna_decimate(luna_objs)
-luna_roots()
+luna_step('hiding the outline', luna_outline_shown, luna_objs, False)
+luna_step('poly budget', luna_decimate, luna_objs)
+luna_step('root transform', luna_roots)
 if KIND == 'character':
-    luna_height(luna_objs)
-luna_outline(luna_objs)
+    luna_step('height check', luna_height, luna_objs)
+luna_step('outline', luna_outline, luna_objs)
 `;
 
 const PY_RENDER = String.raw`
@@ -414,12 +436,12 @@ const int = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
  *   height:number|null, heightTarget:number|null, heightOk:boolean|null, render:string|null, warnings:string[]}}
  */
 function parseScriptReport(result) {
-  const text = outputText(result).slice(-MAX_REPORT_CHARS);
-  const at = text.lastIndexOf(REPORT_MARK);
-  if (at < 0) return null;
+  // Only a line that starts with the mark: a scene object name inside the JSON can never pose as one.
+  const line = outputText(result).slice(-MAX_REPORT_CHARS).split(/\r?\n/).reverse().find((l) => l.startsWith(REPORT_MARK));
+  if (!line) return null;
   let raw;
   try {
-    raw = JSON.parse(text.slice(at + REPORT_MARK.length).split('\n')[0]);
+    raw = JSON.parse(line.slice(REPORT_MARK.length));
   } catch {
     return null;
   }
@@ -429,6 +451,7 @@ function parseScriptReport(result) {
     polyBudget: int(raw.polyBudget),
     trisBefore: int(raw.trisBefore),
     trisAfter: int(raw.trisAfter),
+    trisExported: int(raw.trisExported),
     decimateRatio: num(raw.decimateRatio),
     roots: int(raw.roots),
     rootZeroed: typeof raw.rootZeroed === 'string' ? oneLine(raw.rootZeroed, 80) : null,

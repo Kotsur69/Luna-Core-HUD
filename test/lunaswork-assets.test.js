@@ -440,7 +440,7 @@ test('style check: a turntable render gets silhouette and palette scores, which 
   assert.match(prompt, /Midnight or Golden Hour/);
   const schema = JSON.parse(args[args.indexOf('--json-schema') + 1]);
   const item = schema.properties.scores.items;
-  assert.deepEqual(item.required, ['name', 'score', 'reference', 'notes']);
+  assert.deepEqual(item.required, ['name', 'score', 'reference', 'notes', 'silhouette', 'palette']);
   assert.deepEqual(Object.keys(item.properties), ['name', 'score', 'reference', 'notes', 'silhouette', 'palette', 'paletteSlot']);
 
   // 9 overall but an unreadable silhouette (4): not approved, a feel card instead.
@@ -470,11 +470,14 @@ test('style check: a turntable asset is approved only with both extra scores at 
   assert.equal(rowOf(dir, 'Hero Ship').status, 'approved');
 });
 
-test('style check: a plain render gets no turntable rules', async () => {
+test('style check: a plain render gets no turntable layout, and its extra scores never gate it', async () => {
   const dir = styledRepo();
-  const critic = fakeCritic([]);
+  const ref = 'design/references/neon-drift/hud.png';
+  const critic = fakeCritic([{ name: 'Hero Ship', score: 8, reference: ref, notes: 'Fits.', silhouette: 2, palette: 1 }]);
   await makeStep(memStore(), { styleCheck: (opts) => A.runStyleCheck({ ...opts, runClaude: critic.run }) }).step.beforeDirecting(baseRun(dir));
-  assert.doesNotMatch(critic.calls[0].prompt, /turntable sheet|silhouette \(0-10\)/);
+  assert.doesNotMatch(critic.calls[0].prompt, /four panels left to right|\(turntable sheet\)/);
+  assert.match(critic.calls[0].prompt, /silhouette \(0-10\)/);
+  assert.equal(rowOf(dir, 'Hero Ship').status, 'approved');
 });
 
 test('validateStyle: turntable scores are clamped, the slot is pinned to the list, the score capped', () => {

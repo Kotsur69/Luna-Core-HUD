@@ -493,13 +493,14 @@ const STYLE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'score', 'reference', 'notes'],
+        // silhouette and palette are required, so a turntable asset never comes back without them.
+        required: ['name', 'score', 'reference', 'notes', 'silhouette', 'palette'],
         properties: {
           name: { type: 'string' },
           score: { type: 'number' },
           reference: { type: 'string' },
           notes: { type: 'string' },
-          // Turntable assets only: silhouette readability and palette compliance.
+          // Silhouette readability and palette compliance: they gate turntable assets only.
           silhouette: { type: 'number' },
           palette: { type: 'number' },
           paletteSlot: { type: 'string', enum: [...PALETTE_SLOTS] },
@@ -523,13 +524,14 @@ function buildStyleArgs({ model = FALLBACK_MODEL, budgetUsd = STYLE_BUDGET_USD }
   ];
 }
 
-// The extra checks a turntable sheet (luna_asset_blender) gets.
-const TURNTABLE_RULES = [
-  'A render marked "turntable sheet" is four panels left to right: front orthographic, right side orthographic, 3/4 perspective, and a flat black silhouette on gray. For each of those assets also give:',
-  '- silhouette (0-10): is the black silhouette panel alone readable and distinct at gameplay size (clear pose, weapon and head shapes, no blob)?',
+// The turntable sheet (luna_asset_blender) and the extra scores; they cap a sheet's score only.
+const TURNTABLE_LAYOUT = 'A render marked "turntable sheet" is four panels left to right: front orthographic, right side orthographic, 3/4 perspective, and a flat black silhouette on gray.';
+const EXTRA_SCORE_RULES = [
+  'Also give every asset:',
+  '- silhouette (0-10): is its silhouette alone readable and distinct at gameplay size (clear pose, weapon and head shapes, no blob)? For a turntable sheet, judge its black silhouette panel.',
   '- palette (0-10): Blade & Bullet palette compliance - the emissive accents sit in ONE emission slot, Midnight or Golden Hour, as the art direction (docs/ART_DIRECTION.md, the references, the look and feel) defines them; mixing both slots or off-palette emission scores low.',
   `- paletteSlot: the slot it reads as - ${PALETTE_SLOTS.join(', ')}.`,
-  'Its score must not be higher than its silhouette or palette score.',
+  'The score of a turntable sheet must not be higher than its silhouette or palette score.',
 ];
 
 function buildStylePrompt({ assets, references, look }) {
@@ -544,10 +546,11 @@ function buildStylePrompt({ assets, references, look }) {
     'New assets - open every render with Read:',
     ...assets.map((a) => `- "${a.name}" (${a.type}): ${a.spec || a.name}. Render: ${a.render}${sheet(a)}`),
     '',
-    ...(assets.some((a) => a.turntable === true) ? [...TURNTABLE_RULES, ''] : []),
+    ...(assets.some((a) => a.turntable === true) ? [TURNTABLE_LAYOUT, ''] : []),
     'Score every asset from 0 to 10 for how consistent it is with the art direction: palette, shape language, level of detail, rendering style, proportions.',
     `10 = it could come from the reference game; below ${STYLE_PASS_SCORE} = it would look out of place.`,
-    'Answer with JSON. scores: one entry per asset - name (exactly as listed), score, reference (the path of the reference image it should look closest to, from the list above), notes (what differs and what to change, one or two sentences).',
+    ...EXTRA_SCORE_RULES,
+    'Answer with JSON. scores: one entry per asset - name (exactly as listed), score, reference (the path of the reference image it should look closest to, from the list above), notes (what differs and what to change, one or two sentences), silhouette, palette, paletteSlot.',
   ].join('\n');
 }
 

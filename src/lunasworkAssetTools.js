@@ -135,7 +135,7 @@ const ASSET_TOOLS = Object.freeze([
         kind: { type: 'string', enum: [...MODEL_KINDS] },
         prompt: PROMPT_PROP,
         stylePass: { type: 'string', enum: [...STYLE_PASSES], default: DEFAULT_STYLE_PASS, description: 'The style pass before the export: "blade-bullet-toon" (poly budget, outline, zeroed root, character height check) or "none".' },
-        polyBudget: { type: 'integer', minimum: MIN_POLY_BUDGET, maximum: MAX_POLY_BUDGET, description: `Triangle budget of the toon pass (default ${PROP_POLY_BUDGET} for props, ${CHARACTER_POLY_BUDGET} for characters).` },
+        polyBudget: { type: 'integer', minimum: MIN_POLY_BUDGET, maximum: MAX_POLY_BUDGET, description: `Triangle budget of the model in the toon pass (default ${PROP_POLY_BUDGET} for props, ${CHARACTER_POLY_BUDGET} for characters); the outline hull on top roughly doubles the exported count (style.report.trisExported).` },
       },
     },
   },

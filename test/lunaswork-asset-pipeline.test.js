@@ -525,7 +525,7 @@ test('blenderExportScript: stylePass none vs. blade-bullet-toon', () => {
   const none = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'none', render });
   assert.match(none, /^STYLE_PASS = "none"$/m);
   // The helpers are defined, but no pass is called.
-  assert.doesNotMatch(none, /^luna_decimate\(|^luna_outline\(|^luna_roots\(/m);
+  assert.doesNotMatch(none, /^luna_step\(/m);
   assert.match(none, /^ {4}luna_turntable\(luna_meshes\(\)\)$/m);
 
   const toon = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'blade-bullet-toon', render });
@@ -537,6 +537,10 @@ test('blenderExportScript: stylePass none vs. blade-bullet-toon', () => {
   assert.match(toon, /mod\.ratio = ratio/);
   assert.match(toon, /bpy\.ops\.object\.modifier_apply\(modifier=mod\.name\)/);
   assert.match(toon, /len\(me\.loop_triangles\)/);
+  // On a modifier stack the Decimate stays (the export applies it); a failed pass is a warning, never a lost FBX.
+  assert.match(toon, /if any\(m != mod and m\.name != 'LunaOutline' for m in o\.modifiers\):/);
+  assert.match(toon, /def luna_step\(label, fn, \*args\):\n {4}# [^\n]*\n {4}try:\n {8}fn\(\*args\)\n {4}except Exception as err:/);
+  assert.match(toon, /LUNA_REPORT\['trisExported'\] = luna_tris\(objs\)/);
   // (2) inverted-hull outline: negative Solidify, flipped normals, offset to a black backface-culled material.
   assert.match(toon, /modifiers\.new\(name='LunaOutline', type='SOLIDIFY'\)/);
   assert.match(toon, /mod\.thickness = -OUTLINE_THICKNESS/);
@@ -551,8 +555,8 @@ test('blenderExportScript: stylePass none vs. blade-bullet-toon', () => {
   assert.match(toon, /transform_apply\(location=False, rotation=False, scale=True\)/);
   // Order: the .blend source is saved first, the passes and the render run before the FBX export.
   const saved = idx(toon, 'bpy.ops.wm.save_as_mainfile(');
-  const decimate = idx(toon, '\nluna_decimate(luna_objs)');
-  const outline = idx(toon, '\nluna_outline(luna_objs)');
+  const decimate = idx(toon, "\nluna_step('poly budget', luna_decimate, luna_objs)");
+  const outline = idx(toon, "\nluna_step('outline', luna_outline, luna_objs)");
   const rendered = idx(toon, '\n    luna_turntable(luna_meshes())');
   const exported = idx(toon, 'bpy.ops.export_scene.fbx(');
   assert.ok(saved < decimate && decimate < outline && outline < rendered && rendered < exported);
@@ -576,7 +580,7 @@ test('blenderExportScript: a character is measured against 1.6 m; the kind canno
   const character = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'character', stylePass: 'blade-bullet-toon' });
   assert.match(character, /^KIND = "character"$/m);
   assert.match(character, /^CHARACTER_HEIGHT = 1\.6$/m);
-  assert.match(character, /^if KIND == 'character':\n {4}luna_height\(luna_objs\)$/m);
+  assert.match(character, /^if KIND == 'character':\n {4}luna_step\('height check', luna_height, luna_objs\)$/m);
   assert.match(character, /LUNA_REPORT\['heightOk'\] = abs\(height - CHARACTER_HEIGHT\) <= HEIGHT_TOLERANCE/);
   assert.match(character, /LUNA_REPORT\['height'\] = height/);
   assert.match(B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'blade-bullet-toon' }), /^KIND = "prop"$/m);
@@ -706,9 +710,14 @@ test('the script report is validated; junk is null; the PNG header tells a turnt
   const r = B.parseScriptReport('LUNACORE_REPORT {"trisBefore": -3, "height": "tall", "heightOk": "yes", "render": "rm -rf", "warnings": ["a\\tb", 5]}');
   assert.deepEqual([r.trisBefore, r.height, r.heightOk, r.render, r.warnings], [null, null, null, null, ['a b', '5']]);
   assert.deepEqual(B.reportNotes(null), []);
+  // A scene object named like the mark (inside the JSON warnings) cannot hide the real report.
+  const named = B.parseScriptReport('LUNACORE_REPORT {"heightOk": false, "height": 2.1, "warnings": ["scale not applied on x LUNACORE_REPORT {"]}\r\nLUNACORE_EXPORT_OK');
+  assert.deepEqual([named.heightOk, named.height], [false, 2.1]);
 
   assert.equal(B.isTurntableSheet(pngOf(2048, 512)), true);
   assert.equal(B.isTurntableSheet(pngOf(1024, 1024)), false);
+  // Only the sheet luna_asset_blender renders, not any 4:1 banner.
+  assert.equal(B.isTurntableSheet(pngOf(4096, 1024)), false);
   assert.equal(B.isTurntableSheet(pngOf(0, 0)), false);
   assert.equal(B.isTurntableSheet(PNG.subarray(0, 8)), false);
   assert.equal(B.isTurntableSheet(Buffer.from('not a png at all, really not')), false);
