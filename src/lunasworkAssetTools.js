@@ -55,6 +55,7 @@ const { createAssetPipeline, KINDS, MODEL_KINDS, COMFY_KINDS } = require('./luna
 const { createComfyClient, readCappedBody } = require('./lunasworkComfy');
 const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-http');
 const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
+const { ALL_SOURCES } = require('./lunasworkAssetFanout');
 const { createFreeSources, SOURCE_IDS, TYPES: LIBRARY_TYPES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
 
 const BLENDER_TOOL = 'luna_asset_blender';
@@ -164,15 +165,15 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: SEARCH_TOOL,
-    description: "Luna's Work asset library search: FREE assets through official APIs - polyhaven (CC0 HDRIs, textures, models), ambientcg (CC0 textures, HDRIs), blenderkit (free CC0 / CC-BY models, textures, HDRIs), lotsofsounds (CC0 sounds), sketchfab (downloadable models, per-model license), polypizza (CC0 / CC-BY low-poly models), freesound (CC0 / CC-BY sounds), smithsonian (CC0 3D museum scans). Results whose license is not CC0 / CC-BY / free for commercial use, or that look like a rip of a commercial game, come back under `refused` with the reason. Kenney and OpenGameArt have no official API and are not searchable.",
+    description: "Luna's Work asset library search: FREE assets through official APIs - polyhaven (CC0 HDRIs, textures, models), ambientcg (CC0 textures, HDRIs), blenderkit (free CC0 / CC-BY models, textures, HDRIs), lotsofsounds (CC0 sounds), sketchfab (downloadable models, per-model license), polypizza (CC0 / CC-BY low-poly models), freesound (CC0 / CC-BY sounds), smithsonian (CC0 3D museum scans). Results whose license is not CC0 / CC-BY / free for commercial use, or that look like a rip of a commercial game, come back under `refused` with the reason. Kenney and OpenGameArt have no official API and are not searchable. source \"all\" searches every library that has the type at once (keyed ones without a key are skipped): results are merged, deduplicated and ranked CC0 first, each keeps its `source` for luna_asset_import; a library that fails is listed under `errors`, one skipped under `skipped`.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['source', 'query'],
       properties: {
-        source: { type: 'string', enum: [...SOURCE_IDS] },
+        source: { type: 'string', enum: [ALL_SOURCES, ...SOURCE_IDS], description: 'One library, or "all" for every library at once.' },
         query: { type: 'string', description: 'A few words, e.g. "rusty metal" or "katana slash".' },
-        type: { type: 'string', enum: [...LIBRARY_TYPES], description: 'Optional: only this asset type (polyhaven and ambientcg have several).' },
+        type: { type: 'string', enum: [...LIBRARY_TYPES], description: 'Optional: only this asset type (polyhaven and ambientcg have several; with "all" it picks the libraries).' },
         limit: { type: 'integer', minimum: 1, maximum: 10 },
       },
     },
@@ -520,6 +521,7 @@ function createAssetToolsFor(deps) {
         sources: createFreeSources({ fetch: deps.fetch, keys }),
         download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
         secrets: () => keys.secrets(),
+        hasKey: (source) => !!keys.get(source),
       });
     };
     const pipeline = () => {
