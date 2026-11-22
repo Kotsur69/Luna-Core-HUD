@@ -350,3 +350,21 @@ test('playtestOn: the Playtester call carries the reserve gate for its env', asy
   assert.equal(seen[1].gate(seen[1].env), null, 'the free providers have no Claude account to hold');
   assert.equal(seen[0].gate(envOn(FREE)), null);
 });
+
+test('createHookDeps: Lighthouse runs its claude -p through the injected (reserve-gated) runner', async () => {
+  const calls = [];
+  const runClaude = async (call) => {
+    calls.push(call);
+    return { error: 'limit', detail: 'the Claude account is at its usage reserve', resumeAt: RESERVE_RESET };
+  };
+  const deps = createHookDeps({ env: () => envOn(HELD), settings: () => ({ secondOpinionOrder: [] }), runClaude });
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-wiring-lh-'));
+  try {
+    const res = await deps.lighthouse({ projectId: 'p', repoPath, url: 'http://localhost:3000' });
+    assert.equal(calls.length, 1, 'the injected runner, never the default execClaude');
+    assert.equal(calls[0].env[ACCOUNT_ENV], HELD);
+    assert.deepEqual(res.results, []);
+  } finally {
+    await removeDir(repoPath);
+  }
+});
