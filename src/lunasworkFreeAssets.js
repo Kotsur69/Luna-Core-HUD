@@ -40,6 +40,7 @@ const { classifyLicense, ripReason, withLedgerLock } = require('./lunasworkLicen
 const { SOURCE_IDS, NO_API_SOURCES, RESOLUTIONS, TYPES, redact } = require('./lunasworkFreeSources');
 const { ALL_SOURCES, SKIPPED_NO_KEY, SOURCE_TIMEOUT_MS, MAX_MERGED_RESULTS, eligibleSources, withTimeout, mergeResults } = require('./lunasworkAssetFanout');
 const { readZip, isSafeName } = require('./lunasworkZip');
+const { cleanAudioPost } = require('./lunasworkAudioNormalize');
 
 const MAX_QUERY_CHARS = 100;
 const MAX_ID_CHARS = 100;
@@ -119,7 +120,8 @@ function foldersOf(root, rels) {
 }
 
 /**
- * @param {{shared:{repoPath?:string, files:object, importToUnity:Function, importNote:Function, log:Function, updateLedger:Function},
+ * @param {{shared:{repoPath?:string, files:object, importToUnity:Function, importNote:Function, log:Function, updateLedger:Function,
+ *     normalizeAudio?:(rels:string[], post:object)=>Promise<{processed:string[], note:string|null}>},
  *   artRoot?:string, sources:Record<string, object>, download:(url:string)=>Promise<Buffer>,
  *   secrets?:()=>string[], hasKey?:(source:string)=>boolean, sourceTimeoutMs?:number}} deps
  *   hasKey = whether a library's key is stored; source "all" skips a keyed library without one
@@ -354,7 +356,10 @@ function createFreeAssets(deps) {
     if (!id) return fail('badId', 'id must be the id a luna_asset_search result gave');
     if (typeof raw.kind !== 'string' || !Object.hasOwn(KINDS, raw.kind)) return fail('badKind', `kind must be one of ${Object.keys(KINDS).join(', ')}`);
     if (raw.resolution !== undefined && !RESOLUTIONS.includes(raw.resolution)) return fail('badResolution', `resolution must be one of ${RESOLUTIONS.join(', ')}`);
-    return { ok: true, id, kind: raw.kind, resolution: raw.resolution };
+    const audio = cleanAudioPost(raw.audioPost);
+    if (!audio.ok) return fail(audio.error, audio.detail);
+    if (audio.post && raw.kind !== 'audio') return fail('badAudioPost', 'audioPost is only for kind "audio"');
+    return { ok: true, id, kind: raw.kind, resolution: raw.resolution, audioPost: audio.post };
   }
 
   /** One import per repo at a time: two imports must never pick the same free name. */
@@ -392,6 +397,21 @@ function createFreeAssets(deps) {
     return saveAndLedger({ job, client, item, lic, name, slug, files });
   }
 
+  /**
+   * The opted-in ffmpeg pass over imported audio, before the Unity import.
+   * Never fails the import: a skipped or failed pass keeps the downloaded,
+   * validated bytes and comes back as a note.
+   */
+  async function postProcessAudio(job, item, written) {
+    if (!job.audioPost || item.type !== 'audio') return null;
+    if (typeof shared.normalizeAudio !== 'function') return 'Audio post-process is not available here; the original audio was kept.';
+    try {
+      return (await shared.normalizeAudio(written, job.audioPost)).note;
+    } catch (err) {
+      return `Audio post-process failed (${oneLine(errText(err), 120)}); the original audio was kept.`;
+    }
+  }
+
   /** Write -> ledger row + credits (or take the files out again) -> Unity import -> run report. */
   async function saveAndLedger({ job, client, item, lic, name, slug, files }) {
     const written = [];
@@ -411,6 +431,7 @@ function createFreeAssets(deps) {
       const left = removeAll(written, placed);
       return fail('ledgerFailed', `the license row could not be written (${errText(err)}), so the files were taken out again${left.length ? `; delete by hand: ${left.join(', ')}` : ''}`);
     }
+    const audioNote = await postProcessAudio(job, item, written);
     const mainAt = files.findIndex((f) => f.main);
     const imports = [];
     // Textures and buffers first, so a model finds them when it is imported.
@@ -418,7 +439,7 @@ function createFreeAssets(deps) {
     const mainImport = await shared.importToUnity(written[mainAt], job.kind);
     shared.log({ tool: 'library', kind: job.kind, name, prompt: `${client.label} ${item.id} (${lic.license})`, seed: null, costUsd: 0, path: written[mainAt], sources: [item.sourceUrl], imported: mainImport.ok });
     const failed = [mainImport, ...imports].find((imp) => !imp.ok);
-    const notes = [failed ? shared.importNote(failed) : null, lic.attribution ? `CC-BY: credited in ${ledger.credits}.` : null, client.id === 'freesound' ? FREESOUND_NOTE : null];
+    const notes = [failed ? shared.importNote(failed) : null, lic.attribution ? `CC-BY: credited in ${ledger.credits}.` : null, client.id === 'freesound' ? FREESOUND_NOTE : null, audioNote];
     return {
       ok: true,
       files: written,

@@ -66,10 +66,10 @@ function tempRepo() {
 }
 
 /** The real executor over a temp repo, a fake Unity and the given fake fetch. */
-function library(dir, fetch, { keys = KEYS } = {}) {
+function library(dir, fetch, { keys = KEYS, execFile } = {}) {
   const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return { ok: true }; } };
   const logged = [];
-  const pipe = P.createAssetPipeline({ repoPath: dir, artRoot: ART, unity, recordSpend: () => ({ ok: true }), logAsset: (e) => logged.push(e), now: () => 1 });
+  const pipe = P.createAssetPipeline({ repoPath: dir, artRoot: ART, unity, recordSpend: () => ({ ok: true }), logAsset: (e) => logged.push(e), now: () => 1, execFile });
   const keyStore = { get: (s) => keys[s] || null, secrets: () => Object.values(keys) };
   const lib = F.createFreeAssets({
     shared: pipe.shared,
@@ -915,4 +915,144 @@ test('fan-out helpers: withTimeout rejects with code timeout, mergeResults caps 
   assert.equal(A.mergeResults(many, 'n').length, A.MAX_MERGED_RESULTS);
   assert.equal(A.relevance(['red', 'brick'], { name: 'Red red wall', tags: ['brick'] }), 2);
   assert.deepEqual(['CC0', 'CC-BY 4.0', 'checked on import'].map(A.licenseRank), [0, 1, 2]);
+});
+
+// ---- the optional ffmpeg audio post-process ---------------------------------------------
+
+/**
+ * A fake child_process.execFile for ffmpeg. `outcome`: 'ok' writes `bytes` to
+ * the output (the last token), 'enoent' fails like a missing binary, 'fail'
+ * exits non-zero after leaving a partial output, 'empty' writes 0 bytes.
+ */
+function fakeFfmpeg(outcome, bytes) {
+  const calls = [];
+  const fn = (cmd, args, opts, cb) => {
+    calls.push({ cmd, args, opts });
+    const out = args[args.length - 1];
+    if (outcome === 'enoent') return setImmediate(() => cb(Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' }), '', ''));
+    if (outcome === 'fail') {
+      fs.writeFileSync(out, Buffer.from('partial'));
+      return setImmediate(() => cb(Object.assign(new Error('Command failed'), { code: 1 }), '', 'header\nError while filtering: Invalid argument\n'));
+    }
+    fs.writeFileSync(out, outcome === 'empty' ? Buffer.alloc(0) : bytes);
+    return setImmediate(() => cb(null, '', ''));
+  };
+  return { fn, calls };
+}
+
+const PROCESSED_OGG = Buffer.concat([Buffer.from('OggS', 'latin1'), Buffer.alloc(40, 7)]);
+const SHELL_META_RE = /[;&|`$<>"'\n]/;
+
+/** A Freesound import of sound 201 ("Parry Clang", CC0) with the given fake ffmpeg. */
+function freesoundImport(dir, ffmpeg) {
+  const routes = {
+    [`${FS}/sounds/201/?fields=${FIELDS}`]: fsSound(201, 'Parry Clang', 'http://creativecommons.org/publicdomain/zero/1.0/'),
+    'https://cdn.freesound.org/previews/201-hq.ogg': () => reply(OGG),
+  };
+  return library(dir, fakeFetch(routes).fn, { execFile: ffmpeg.fn });
+}
+
+const tmpLeft = (dir) => fs.readdirSync(path.join(dir, ...`${ART}/Audio`.split('/'))).filter((n) => n.includes('.tmp'));
+
+test('audioPost on an audio import: ffmpeg gets plain argument tokens, no shell, and the result replaces the file', async () => {
+  const dir = tempRepo();
+  const ffmpeg = fakeFfmpeg('ok', PROCESSED_OGG);
+  const { lib, unity } = freesoundImport(dir, ffmpeg);
+  const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: { targetBpm: 120, bpm: 100 } });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const rel = `${ART}/Audio/parry-clang.ogg`;
+  assert.deepEqual(res.files, [rel]);
+  assert.equal(ffmpeg.calls.length, 1);
+  const { cmd, args, opts } = ffmpeg.calls[0];
+  assert.equal(cmd, 'ffmpeg');
+  assert.equal(opts.shell, undefined, 'never a shell');
+  const target = path.join(dir, ...rel.split('/'));
+  const out = args[args.length - 1];
+  assert.equal(path.dirname(out), path.dirname(target), 'the temp output sits next to the target');
+  assert.match(path.basename(out), /^parry-clang\.ogg\.[0-9a-f]{12}\.tmp\.ogg$/);
+  assert.deepEqual(args, [
+    '-hide_banner', '-nostdin', '-n', '-i', target, '-vn',
+    '-af', 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=1.2,loudnorm=I=-14:TP=-1.5:LRA=11',
+    '-ar', '48000', out,
+  ]);
+  for (const a of args.filter((t) => t !== target && t !== out)) assert.equal(SHELL_META_RE.test(a), false, `plain token: ${a}`);
+  assert.deepEqual(fs.readFileSync(target), PROCESSED_OGG);
+  assert.deepEqual(tmpLeft(dir), []);
+  assert.match(res.note, /Audio post-process \(leading silence trimmed, tempo 100 -> 120 BPM, -14 LUFS\) applied/);
+  // The ledger row and the Unity import still point at the final file.
+  assert.equal(ledgerRows(dir)[0].path, rel);
+  assert.equal(unity.calls[0].parameters.path, rel);
+});
+
+test('audioPost: no ffmpeg on PATH (ENOENT) keeps the original bytes and adds a note', async () => {
+  const dir = tempRepo();
+  const ffmpeg = fakeFfmpeg('enoent');
+  const { lib } = freesoundImport(dir, ffmpeg);
+  const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: { trim: true } });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(fs.readFileSync(path.join(dir, ...res.main.split('/'))), OGG);
+  assert.match(res.note, /ffmpeg was not found on PATH; the original audio was kept/);
+  assert.deepEqual(tmpLeft(dir), []);
+});
+
+test('audioPost: a failing or empty ffmpeg run keeps the original bytes, removes its temp file and says why', async () => {
+  for (const [outcome, why] of [['fail', /ffmpeg failed \(Error while filtering: Invalid argument\)/], ['empty', /ffmpeg produced an empty file/]]) {
+    const dir = tempRepo();
+    const { lib } = freesoundImport(dir, fakeFfmpeg(outcome));
+    const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: { loudnorm: true } });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.deepEqual(fs.readFileSync(path.join(dir, ...res.main.split('/'))), OGG, outcome);
+    assert.match(res.note, why);
+    assert.deepEqual(tmpLeft(dir), [], outcome);
+  }
+  // An output in another format than the file it replaces is refused too.
+  const dir = tempRepo();
+  const { lib } = freesoundImport(dir, fakeFfmpeg('ok', WAV));
+  const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: {} });
+  assert.deepEqual(fs.readFileSync(path.join(dir, ...res.main.split('/'))), OGG);
+  assert.match(res.note, /not a \.ogg file/);
+});
+
+test('audioPost validation: BPM must be a finite number within 40..300, paired, and only for audio; nothing is run', async () => {
+  const dir = tempRepo();
+  const ffmpeg = fakeFfmpeg('ok', PROCESSED_OGG);
+  const { lib } = freesoundImport(dir, ffmpeg);
+  const bad = [
+    { targetBpm: 120 },
+    { bpm: 120 },
+    { targetBpm: 30, bpm: 120 },
+    { targetBpm: 120, bpm: 301 },
+    { targetBpm: Infinity, bpm: 120 },
+    { targetBpm: NaN, bpm: 120 },
+    { targetBpm: '120', bpm: 100 },
+    { targetBpm: '120;touch pwned', bpm: 100 },
+    { trim: 'yes' },
+    { filter: 'volume=9' },
+    'trim',
+  ];
+  for (const audioPost of bad) {
+    const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost });
+    assert.equal(res.error, 'badAudioPost', JSON.stringify(audioPost));
+  }
+  const notAudio = await lib.importAsset({ source: 'polyhaven', id: 'x', kind: 'texture', audioPost: { trim: true } });
+  assert.equal(notAudio.error, 'badAudioPost');
+  assert.equal(ffmpeg.calls.length, 0);
+  // Without audioPost an audio import never runs ffmpeg.
+  const plain = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio' });
+  assert.equal(plain.ok, true, JSON.stringify(plain));
+  assert.equal(ffmpeg.calls.length, 0);
+});
+
+test('atempo chains filters when the tempo ratio is outside 0.5..2.0', () => {
+  const N = require('../src/lunasworkAudioNormalize.js');
+  const product = (xs) => xs.reduce((a, b) => a * b, 1);
+  for (const [target, source] of [[300, 40], [40, 300], [240, 60], [60, 240], [90, 120]]) {
+    const chain = N.atempoChain(target / source);
+    assert.ok(chain.every((f) => f >= 0.5 && f <= 2), `${target}/${source}: ${chain}`);
+    assert.ok(Math.abs(product(chain) - target / source) < 1e-9);
+  }
+  assert.equal(N.audioFilter({ trim: false, loudnorm: false, targetBpm: 300, bpm: 40 }), 'atempo=2,atempo=2,atempo=1.875');
+  assert.equal(N.audioFilter({ trim: false, loudnorm: true, targetBpm: 40, bpm: 300 }), 'atempo=0.5,atempo=0.5,atempo=0.533333,loudnorm=I=-14:TP=-1.5:LRA=11');
+  assert.equal(N.TARGET_LUFS, -14);
+  assert.deepEqual(N.cleanAudioPost({ trim: false, loudnorm: false, targetBpm: 120, bpm: 120 }), { ok: true, post: null });
 });
