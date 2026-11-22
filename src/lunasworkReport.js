@@ -19,6 +19,8 @@
 //        ## Evidence          the evidence folder of every iteration
 //        ## Generated assets  every asset the pipeline made: tool, prompt,
 //                             seed, cost, path (only when there are any)
+//        ## Asset cost estimate  the latest Asset Manifest Estimate: free
+//                             imports, free local, paid finals and the gate
 //        ## Timeline
 //   2. emails it, under God Mode's "Email me when a run finishes" setting
 //      (mailprefs.godmodeEmailOn). PLATEAU and RED mails carry the tail of
@@ -74,6 +76,7 @@ const { buildReturnPack } = require('./lunasworkReturn');
 const { createMilestoneMailer, screenshotAttachments } = require('./lunasworkMail');
 const { findDraftFiles } = require('./lunasworkLegal');
 const { assetReportLines, assetSpendUsd } = require('./lunasworkAssetPipeline');
+const { estimateLines } = require('./lunasworkAssetCost');
 
 // The run email carries the HTML report and the return pack: room for three screenshots (gmailsend caps at 5).
 const RUN_MAIL_IMAGES = 3;
@@ -260,6 +263,12 @@ function assetSection(run) {
   return { intro: `Paid generation this run: $${assetSpendUsd(run.assets).toFixed(2)}.`, items };
 }
 
+/** ## Asset cost estimate: the latest dry-run estimate; null when the run made none. */
+function estimateSection(run) {
+  const items = estimateLines(run.assetEstimate);
+  return items.length ? { intro: null, items } : null;
+}
+
 // ---- media: launch assets (C10) and demo videos (B13) -------------------------------
 
 /** A demo video: its full path locally, its place under LunaCore's runs/ in an email. */
@@ -389,6 +398,7 @@ function buildRunReport(run, extra = {}) {
     ...bullets(evidence(r, forEmail)),
     '',
     ...sectionMarkdown('Generated assets', assetSection(r)),
+    ...sectionMarkdown('Asset cost estimate', estimateSection(r)),
     ...sectionMarkdown('Launch assets', launchSection(extra.media)),
     ...sectionMarkdown('Demo videos', demoSection(r, extra.media, forEmail)),
     '## Timeline',
@@ -462,6 +472,7 @@ function renderRunReportHtml(run, extra = {}) {
     h.section('Notes', h.list(hookNotes(r), 'No notes')),
     h.section('Evidence', h.list(evidence(r, false), 'No evidence folder')),
     mediaHtml('Generated assets', assetSection(r), 'No assets'),
+    mediaHtml('Asset cost estimate', estimateSection(r), 'No estimate'),
     mediaHtml('Launch assets', launchSection(extra.media), 'No files'),
     mediaHtml('Demo videos', demoSection(r, extra.media, false), 'No video'),
   ].filter(Boolean).join('\n');

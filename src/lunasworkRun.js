@@ -38,6 +38,7 @@ const { appendResult } = require('./lunasworkLighthouse');
 const { cleanLedger } = require('./lunasworkUsage');
 const { cleanTargets, cleanVariants } = require('./lunasworkVariants');
 const { cleanGuardFields } = require('./lunasworkToolGuard');
+const { cleanAssetEstimate } = require('./lunasworkAssetCost');
 const { WORKER_MODEL_CHOICES, isWorkerModelChoice } = require('./claudeModels');
 
 const PREPROD = 'preprod';
@@ -754,6 +755,8 @@ function restoreRun(raw) {
     prototype: cleanPrototype(raw.prototype),
     // Tool kit: spend caps pinned at start, the paid-tool spend, the tools past their cap.
     ...cleanGuardFields(raw),
+    // The latest Asset Manifest Estimate (src/lunasworkAssetCost.js): dashboard and report.
+    assetEstimate: cleanAssetEstimate(raw.assetEstimate),
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),

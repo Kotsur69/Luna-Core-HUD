@@ -14,6 +14,8 @@
 //                run folder, only when they sit inside it; the picture
 //                itself comes through lunaswork:screenshot (screenshotFile)
 //   lighthouse   the worst score per category per iteration, when measured
+//   assetEstimate the latest Asset Manifest Estimate (lunasworkAssetCost):
+//                free library / free local / paid counts, credits, USD, gate
 //   shipEstimate time to SHIP in ms, and `ship` = {iterations, low, high}
 //                (hours) - lunasworkRules.timeToShip via lunasworkEta (LW 2.22b)
 //
@@ -32,6 +34,7 @@ const { ALL_PHASES, keyScreens } = require('./lunasworkRun');
 const { trend } = require('./lunasworkLighthouse');
 const { cleanLedger, cardsSeries, phaseTotals } = require('./lunasworkUsage');
 const { RUN_ID_RE } = require('./lunasworkWheel');
+const { cleanAssetEstimate } = require('./lunasworkAssetCost');
 
 const VERDICTS = ['ship', 'plateau', 'red', 'stop'];
 const MAX_TEXT = 200;
@@ -137,6 +140,7 @@ function dashboardView(run, { runsRoot, isKnownProject, shipEstimate = null }) {
     cards: cardsSeries(run.laps),
     screenshots: screenshotsOf(run.laps, runsRoot, run.id),
     lighthouse: trend(run.lighthouse),
+    assetEstimate: cleanAssetEstimate(run.assetEstimate),
     // LW 2.22b: time to SHIP (ms) for the KPI, with its range in `ship`.
     shipEstimate: ship && ship.hours !== null ? Math.round(ship.hours * MS_PER_HOUR) : null,
     ship,

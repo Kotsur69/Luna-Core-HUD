@@ -395,6 +395,10 @@ function createLunasWork(deps) {
     ask: (spec) => ask(spec),
     styleCheck: deps.styleCheck,
     artRoot: deps.assetArtRoot,
+    // The Asset Manifest Estimate: priced at the per-PC credit rate, kept on the run for the dashboard / report.
+    usdPerCredit: deps.assetUsdPerCredit,
+    recordEstimate: (assetEstimate) => update({ assetEstimate }),
+    now,
     logEvent: (text) => logEvent(text),
     logModel: (role, model, reason) => logModel(role, model, reason),
   });
