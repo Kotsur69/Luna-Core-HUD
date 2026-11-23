@@ -712,6 +712,7 @@ module.exports = {
   captureStats,
   usage,
   rejectedTitles,
+  MAX_REJECTED_TITLES,
   openDisputes,
   lastChecks,
   openChecks,

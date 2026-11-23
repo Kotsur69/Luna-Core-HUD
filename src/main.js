@@ -4649,6 +4649,8 @@ app.whenReady().then(() => {
     configDir: userDir(),
     // Another PC's memories or inbox decisions arrived: an open inbox repaints.
     onChanged: () => send('memory:changed', {}),
+    // This PC's rejections, disputes and reads go out as its _signals unit (src/memorysignals.js).
+    log: memoryLogOf(),
   });
   // A --luna-probe instance shares userData with the live LunaCore - often the
   // very one running the God Mode self-check that started it. Resuming the

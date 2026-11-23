@@ -564,3 +564,49 @@ test('a "still true" at the same moment as an outcome settles it; the window edg
   assert.equal(s.list({ events: [edge(windowStart, 'q1'), edge(windowStart, 'q2'), edge(windowStart, 'q3')] }).total, 1);
   assert.equal(s.list({ events: [edge(windowStart - 1, 'q1'), edge(windowStart, 'q2'), edge(windowStart, 'q3')] }).total, 0);
 });
+
+// ---- disputes from the other PCs (src/memorysignals.js) ----------------------------
+
+test('another PC open dispute puts a memory on the list, marked with its machine', (t) => {
+  const s = setup(t, [rec('remote-wrong'), rec('fine')]);
+  const peers = [{ machine: 'pc-b', at: NOW, rejected: [], disputes: [{ key: key('remote-wrong'), note: 'flag renamed', at: NOW - 1000 }], reads: {}, settled: {} }];
+
+  const { items } = s.list({ peers });
+
+  assert.deepEqual(
+    items.map((i) => [i.id, i.flags]),
+    [['remote-wrong', [{ kind: 'disputed', at: NOW - 1000, note: 'flag renamed', machine: 'pc-b' }]]],
+  );
+});
+
+test('a cross-PC dispute clears when the memory is verified on this PC or the other, or retired', (t) => {
+  const s = setup(t, [rec('here'), rec('there'), rec('gone')]);
+  const dispute = (id) => ({ key: key(id), note: 'wrong', at: NOW - 1000 });
+  const peers = (settled = {}) => [{ machine: 'pc-b', at: NOW, rejected: [], disputes: [dispute('here'), dispute('there'), dispute('gone')], reads: {}, settled }];
+  assert.equal(s.list({ peers: peers() }).items.length, 3);
+
+  // "Still true" on this PC, after the report.
+  assert.deepEqual(verify(s.dir, key('here'), TODAY, { log: s.log, roots: {} }), { ok: true, key: key('here') });
+  // "Still true" on the other PC: its signals carry the settle.
+  const settledThere = { [key('there')]: NOW - 500 };
+  // Retired here: the file is gone on every PC.
+  assert.deepEqual(retire(s.dir, key('gone'), { log: s.log }), { ok: true, key: key('gone') });
+
+  assert.deepEqual(s.list({ peers: peers(settledThere) }).items, []);
+  // A settle older than the report does not clear it.
+  assert.deepEqual(
+    s.list({ peers: peers({ [key('there')]: NOW - 2000 }) }).items.map((i) => i.id),
+    ['there'],
+  );
+});
+
+test('the review list reads the registered peer source when no peers are passed', (t) => {
+  const { setPeerSource } = require('../src/memorysignals.js');
+  t.after(() => setPeerSource(null));
+  const s = setup(t, [rec('via-source')]);
+  setPeerSource(() => [{ machine: 'pc-c', at: NOW, rejected: [], disputes: [{ key: key('via-source'), note: 'n', at: NOW - 1 }], reads: {}, settled: {} }]);
+  assert.deepEqual(
+    s.list().items.map((i) => i.flags[0].machine),
+    ['pc-c'],
+  );
+});

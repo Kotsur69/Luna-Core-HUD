@@ -2,9 +2,10 @@
 // LunaCore - memory between PCs: the mirror <-> the cloud's `memory` scope (main)
 // ----------------------------------------------------------------------------
 // docs/untouched_docs/rag-stylememory.md, decisions 7-9, 14, 15. The engine is
-// configsync.js with three providers: the markdown mirror (src/memorystore.js),
-// the per-PC heartbeats (src/memoryhealth.js) and the per-project "where we
-// stopped" notes (src/memorynote.js). The transport is the
+// configsync.js with four providers: the markdown mirror (src/memorystore.js),
+// the per-PC heartbeats (src/memoryhealth.js), the per-PC review signals
+// (rejections, disputes, reads: src/memorysignals.js) and the per-project
+// "where we stopped" notes (src/memorynote.js). The transport is the
 // `memory` scope of src/cloudsync.js. No cloud, no sync: the mirror and the
 // search keep working on this PC alone.
 //
@@ -12,6 +13,7 @@
 //   memory/                      the mirror (markdown, one file per memory)
 //   memory-sync.local.json       the last sync's snapshot (configsync meta)
 //   memory-health.local.json     every PC's heartbeat
+//   memory-signals.local.json    every PC's review signals
 //   memory-projects.local.json   the projects with memory switched on
 //
 // Before a memory leaves the machine it goes through the secret scanner
@@ -30,6 +32,7 @@ const { readEnabled } = require('./memoryprojects');
 const { splitKey, extraFields } = require('./memoryrecord');
 const { createNoteProvider, projectOfNoteKey } = require('./memorynote');
 const { scrub } = require('./hostscrub');
+const { createSignalsProvider, publishSignals, collectSignals, readPeers, setPeerSource } = require('./memorysignals');
 
 const SCOPE = 'memory';
 const SYNC_INTERVAL_MS = 60 * 1000;
@@ -42,6 +45,7 @@ function memoryPaths(configDir) {
     dir: path.join(configDir, 'memory'),
     meta: path.join(configDir, 'memory-sync.local.json'),
     health: path.join(configDir, 'memory-health.local.json'),
+    signals: path.join(configDir, 'memory-signals.local.json'),
     projects: path.join(configDir, 'memory-projects.local.json'),
     // The per-type auto-accept switches (src/memoryautoaccept.js), synced in the config scope.
     autoAccept: path.join(configDir, 'memory-autoaccept.local.json'),
@@ -112,10 +116,14 @@ function localStatus(configDir, machine, now = Date.now()) {
 /**
  * The real thing for main.js: a sync every minute, soon() after a local change,
  * and one soon after the cloud brings another PC's memories.
- * @param {{cloud: object, machine: string, configDir: string, onChanged?: () => void}} opts
- *   cloud = startCloud()'s result; onChanged fires when the mirror's files changed
+ * It also registers the other PCs' review signals as memorysignals.peerSignals(),
+ * and publishes this PC's (from `log`) when they are due.
+ * @param {{cloud: object, machine: string, configDir: string, onChanged?: () => void,
+ *   log?: {read: () => object[]}|null}} opts
+ *   cloud = startCloud()'s result; onChanged fires when the mirror's files changed;
+ *   log = the memory log (src/memorylog.js); none = this PC publishes no signals
  */
-function startMemory({ cloud, machine, configDir, onChanged = () => {} }) {
+function startMemory({ cloud, machine, configDir, onChanged = () => {}, log = null }) {
   const p = memoryPaths(configDir);
   const hooks = cloud.hooks(SCOPE);
   let broken = 0; // memory files that do not parse: the sync is paused while > 0
@@ -127,6 +135,8 @@ function startMemory({ cloud, machine, configDir, onChanged = () => {} }) {
         },
       }),
       createHealthProvider(p.health),
+      // This PC's rejections, open disputes and reads, and the other PCs' (src/memorysignals.js).
+      createSignalsProvider(p.signals),
       // One "where we stopped" note per project, in the same folder (src/memorynote.js).
       createNoteProvider(p.dir),
     ],
@@ -152,9 +162,24 @@ function startMemory({ cloud, machine, configDir, onChanged = () => {} }) {
       console.error('[memory] heartbeat not written:', (err && (err.code || err.message)) || 'error');
     }
   }
+  setPeerSource(() => readPeers(p.signals, machine));
+
+  /** This PC's signals into the file, when due; they travel with this sync. A failure here must not stop the sync. */
+  function signal() {
+    if (!log || typeof log.read !== 'function') return;
+    try {
+      const now = Date.now();
+      publishSignals(p.signals, machine, () => collectSignals(log.read() || [], now), now);
+    } catch (err) {
+      console.error('[memory] signals not written:', (err && (err.code || err.message)) || 'error');
+    }
+  }
   const run = () => {
     try {
-      const changed = sync.syncOnce().includes('memory');
+      signal();
+      const names = sync.syncOnce();
+      // Another PC's signals can add or settle a dispute on the review list.
+      const changed = names.includes('memory') || names.includes('memory-signals');
       beat();
       if (changed) onChanged();
     } catch (err) {
@@ -176,6 +201,7 @@ function startMemory({ cloud, machine, configDir, onChanged = () => {} }) {
     stop() {
       clearTimeout(timer);
       clearInterval(interval);
+      setPeerSource(null);
     },
     /** localStatus() plus the transport's {ready, lastSync, pending, error}. */
     status: () => ({ ...localStatus(configDir, machine), transport: cloud.memoryStatus() }),

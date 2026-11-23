@@ -19,7 +19,9 @@
 //             reads the answer). Compared by UTC day: a commit made later on
 //             the day of a "still true" is not flagged.
 //   disputed  a session reported through `memory_verify` that the memory was
-//             wrong (src/memorylog.js keeps the report).
+//             wrong (src/memorylog.js keeps the report), on this PC or on
+//             another (its `_signals/<machine>` unit, src/memorysignals.js).
+//             A user's "still true" on any PC settles it; retiring deletes it.
 //   checked   "Check if still true" (src/memorycheck.js) found it fixed, partly
 //             true or fixable, and nobody has acted on that yet.
 //   failing   its God Mode brief injection went into MIN_FAILED_BRIEFS or more
@@ -50,6 +52,7 @@ const path = require('path');
 const { splitKey, scoreOf, DATE_RE } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord, fileFor } = require('./memorystore');
 const { openDisputes, openChecks, acceptedMissing, DAY_MS } = require('./memorylog');
+const { allDisputes, peerSignals } = require('./memorysignals');
 const { lastOpened, oldestRead, failingBriefs } = require('./memoryuse');
 const { FULL_AREA_IDS } = require('./memorycard');
 
@@ -203,12 +206,13 @@ function unopenedCheck(events, today) {
  *   records = memorystore.scan().records; events = the memory log;
  *   roots = {<project>: its folder on this PC}, for the anchor check;
  *   changes = {<project>: Map<anchorPath, newestCommitISO>} (src/memorychanges.js);
- *   a project without an entry gets no 'changed' flags
+ *   a project without an entry gets no 'changed' flags;
+ *   peers = the other PCs' signals (default memorysignals.peerSignals()): their open disputes count too
  * @returns {{items: object[], total: number, urgent: number}} worst first: disputed, checked,
  *   anchors, changed, expired, failing, stale, then unopened; urgent = how many carry more than a low-priority flag
  */
-function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
-  const disputes = openDisputes(events);
+function reviewList({ records, today, events = [], roots = {}, changes = {}, peers = peerSignals() }) {
+  const disputes = allDisputes(events, peers);
   const checks = openChecks(events);
   const accepted = acceptedMissing(events);
   const gone = supersededKeys(records);
@@ -223,7 +227,16 @@ function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
     const flags = [];
     const dispute = disputes.get(key);
     // run = the God Mode run that reported it obsolete (src/memoryrunstale.js), when one did.
-    if (dispute) flags.push({ kind: 'disputed', at: dispute.at, note: dispute.note, ...(dispute.run ? { run: dispute.run } : {}) });
+    // machine = the other PC whose session reported it, when it was not this one.
+    if (dispute) {
+      flags.push({
+        kind: 'disputed',
+        at: dispute.at,
+        note: dispute.note,
+        ...(dispute.run ? { run: dispute.run } : {}),
+        ...(dispute.machine ? { machine: dispute.machine } : {}),
+      });
+    }
     const check = checks.get(key);
     if (check) flags.push({ kind: 'checked', at: check.at, verdict: check.verdict, note: check.note });
     const seen = accepted.get(key) || new Set();

@@ -330,7 +330,7 @@ const STATUS_LINES = [
 /**
  * @param {{digest: string, project: string, today: string, existing: object[], notWanted?: string[], subject?: 'session'|'run'}} ctx
  *   existing = records of this project and of `global`;
- *   notWanted = titles the user rejected lately (src/memorylog.js rejectedTitles);
+ *   notWanted = titles the user rejected lately, on any PC (src/memorysignals.js notWantedTitles);
  *   subject = what the digest is of (SUBJECTS); a session is also asked for its status;
  *   extra = more prompt lines, placed before the digest (a run's obsolete memories,
  *   src/memoryrunstale.js); none = the prompt is exactly what it was without them
