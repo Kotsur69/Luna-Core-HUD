@@ -70,8 +70,12 @@ export function createConsolidateFlow(w) {
     if (starting) return;
     starting = true;
     startError = null;
-    const res = await w.call('memoryConsolidate', project);
-    starting = false;
+    let res = null;
+    try {
+      res = await w.call('memoryConsolidate', project);
+    } finally {
+      starting = false;
+    }
     if (!res || !res.ok) startError = consolidateStartKey(res && res.reason);
     w.load();
   }

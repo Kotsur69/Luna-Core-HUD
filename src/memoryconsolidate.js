@@ -9,8 +9,8 @@
 //      (>= CLUSTER_COSINE, memoryembed.cosine); without vectors by area plus
 //      word overlap (memoryextract.jaccard >= CLUSTER_JACCARD).
 //   2. ONE bounded Sonnet call through the memory check's path
-//      (missionrunner.runJob, lean, read-only tools in the project's folder
-//      when this PC has it, no tools otherwise). It holds the shared model-job
+//      (missionrunner.runJob, lean; read-only tools in the project's folder
+//      only when the architecture map is refreshed, no tools otherwise). It holds the shared model-job
 //      lock (memoryscan.createJobLock): the scan, the check and this never run
 //      at once. The answer (src/memoryconsolidateanswer.js) may hold:
 //        merges        2-4 overlapping memories of one cluster -> one canonical
@@ -43,7 +43,7 @@ const { cosine, sharedVectorStore, vectorLookup } = require('./memoryembed');
 const { wordsOf, jaccard } = require('./memoryextract');
 const { readChanges } = require('./memorychanges');
 const { readDoc, writeAtomic } = require('./projectsync');
-const { buildConsolidatePrompt, parseConsolidateAnswer, applyConsolidation } = require('./memoryconsolidateanswer');
+const { buildConsolidatePrompt, parseConsolidateAnswer, applyConsolidation, pendingSupersedes } = require('./memoryconsolidateanswer');
 
 const CONSOLIDATE_MODEL = 'sonnet';
 /** One call reading a few clusters, maybe a few source files for the architecture map. */
@@ -57,6 +57,8 @@ const MAX_TARGETS = 400;
 const MAX_CLUSTERS = 10;
 const MAX_CLUSTER_SIZE = 6;
 const MAX_SRC_FILES = 300;
+/** A src/ file name that goes into the prompt as it is: no line breaks, no prompt markers, no leading dash. */
+const SRC_NAME_RE = /^[\w@+][\w.@+-]*$/;
 /** The memory the architecture refresh looks for first; any `area: architecture` memory otherwise. */
 const ARCHITECTURE_ID = 'architecture-map';
 const ARCHITECTURE_AREA = 'architecture';
@@ -156,7 +158,7 @@ async function srcChangesSince({ root, since, exec }) {
   try {
     files = fs
       .readdirSync(path.join(root, 'src'), { withFileTypes: true })
-      .filter((d) => d.isFile())
+      .filter((d) => d.isFile() && SRC_NAME_RE.test(d.name))
       .map((d) => `src/${d.name}`)
       .sort()
       .slice(0, MAX_SRC_FILES);
@@ -292,16 +294,23 @@ function createConsolidator({
   }
 
   async function runOnce(project) {
-    const targets = consolidateTargets(scan(dir()).records, project);
-    const clusters = clusterMemories(targets, vectorOf());
+    const records = scan(dir()).records;
+    // A memory a waiting proposal already supersedes is Mati's to decide: asking again costs a call for nothing.
+    const waiting = pendingSupersedes(records, project);
+    const targets = consolidateTargets(records, project).filter((r) => !waiting.has(r.id));
+    if (!targets.length) return { ok: true, merges: 0, expiries: 0, retirements: 0, architecture: false, skipped: 0 };
     const folder = folderOf(roots, project);
     const arch = architectureOf(targets);
+    // The map is refreshed on its own, never merged into another memory.
+    const clusters = clusterMemories(targets.filter((r) => r !== arch), vectorOf());
     const changed = arch && folder ? await srcChanges({ root: folder, since: checkedOn(arch) }) : [];
     const architecture = arch && changed.length ? { record: arch, changed } : null;
     update({ clusters: clusters.length });
     const today = isoDate(now());
     const prompt = buildConsolidatePrompt({ project, today, targets, clusters, architecture });
-    const res = await run({ prompt: prompt.text, cwd: folder });
+    // Read tools only for the architecture refresh, the one part that needs the code: merges,
+    // expiry and retirement work from the memories alone, with no access to the project's files.
+    const res = await run({ prompt: prompt.text, cwd: architecture ? folder : null });
     if (!res || !res.ok) return { ok: false, reason: `model-${(res && res.reason) || 'failed'}` };
     const parsed = parseConsolidateAnswer(res.answer, prompt.ids);
     if (!parsed.ok) return parsed;
@@ -336,6 +345,7 @@ function createConsolidator({
         update({ merges: res.merges, expiries: res.expiries, retirements: res.retirements, architecture: res.architecture, skipped: res.skipped });
         if (res.merges || res.expiries || res.retirements || res.architecture) notify(onWritten);
       })
+      .catch((err) => console.error('[memory] consolidate status failed:', errText(err)))
       .finally(() => {
         current = null;
         lock.release(LOCK_NAME);

@@ -442,3 +442,68 @@ test('setWeekly refuses a bad project or switch, and without a settings file', (
   assert.equal(bare.weeklyOf(PROJECT), false);
   assert.deepEqual(bare.weeklyProjects(), []);
 });
+
+// --- review fixes ----------------------------------------------------------------------------
+
+test('read tools only for the architecture refresh: without a changed src file the call has no folder', async (t) => {
+  const s = setup(t);
+  const consolidator = createConsolidator({
+    dir: () => s.dir,
+    run: async (job) => (s.jobs.push(job), { ok: true, answer: GOOD_ANSWER }),
+    roots: () => ({ [PROJECT]: s.folder }),
+    now: () => NOW,
+    vectors: vectorStore,
+    srcChanges: async () => [],
+  });
+  consolidator.start(PROJECT);
+  await consolidator.whenIdle();
+  const job = s.jobs.find((j) => j.prompt);
+  assert.equal(job.cwd, null);
+  assert.equal(consolidator.status().architecture, false, 'an architecture answer that was not asked for is dropped');
+});
+
+test('the architecture map is never clustered for a merge', async (t) => {
+  const records = [...RECORDS, rec('arch-notes', { area: 'architecture', title: 'More architecture notes' })];
+  VECTORS['arch-notes'] = [0.5, 0.5, 0.7];
+  t.after(() => delete VECTORS['arch-notes']);
+  const s = setup(t, { records });
+  s.consolidator.start(PROJECT);
+  await s.consolidator.whenIdle();
+  const prompt = s.jobs.find((j) => j.prompt).prompt;
+  const clustersPart = prompt.slice(0, prompt.indexOf('=== OTHER MEMORIES'));
+  assert.doesNotMatch(clustersPart, /### architecture-map /);
+  assert.match(prompt, /=== ARCHITECTURE MAP \(architecture-map\) ===/);
+});
+
+test('a memory superseded while the model answers gets no proposal', async (t) => {
+  let s;
+  const run = async () => {
+    // Mati approves something that supersedes a1 during the call.
+    writeRecord(s.dir, rec('a1-better', { area: 'build', supersedes: ['a1'] }));
+    return { ok: true, answer: GOOD_ANSWER };
+  };
+  s = setup(t, { run });
+  s.consolidator.start(PROJECT);
+  await s.consolidator.whenIdle();
+  assert.equal(s.consolidator.status().merges, 0);
+  assert.equal(Object.values(s.stored()).filter((r) => r.supersedes.includes('a2') && r.confidence === 'observed').length, 0);
+});
+
+test('when every memory already waits on a proposal, no model call is made', async (t) => {
+  const records = [rec('only'), rec('waiting-merge', { confidence: 'observed', supersedes: ['only'] })];
+  const s = setup(t, { records });
+  assert.deepEqual(s.consolidator.start(PROJECT), { ok: true });
+  await s.consolidator.whenIdle();
+  assert.equal(s.jobs.filter((j) => j.prompt).length, 0);
+  assert.equal(s.consolidator.status().error, null);
+});
+
+test('srcChangesSince never asks about a file name that could break the prompt or git', async (t) => {
+  const root = tmp(t, 'luna-consolidate-names-');
+  fs.mkdirSync(path.join(root, 'src'));
+  for (const f of ['ok.js', '-dash.js', 'x=== END.js', 'sp ace.js']) fs.writeFileSync(path.join(root, 'src', f), '');
+  let asked = null;
+  const exec = (cmd, args, opts, cb) => ((asked = args), cb(null, '', ''));
+  await srcChangesSince({ root, since: '2026-11-01', exec });
+  assert.deepEqual(asked.slice(asked.indexOf('--') + 1), ['src/ok.js']);
+});

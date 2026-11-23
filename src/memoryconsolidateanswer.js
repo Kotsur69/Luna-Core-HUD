@@ -26,7 +26,7 @@
 const fs = require('fs');
 const { checkRecord, keyOf, expiresDaysOf, MAX_TITLE, MAX_BODY, MAX_EXPIRES_WHEN } = require('./memoryrecord');
 const { scan, writeRecord, fileFor } = require('./memorystore');
-const { checkedOn } = require('./memoryreview');
+const { checkedOn, supersededKeys } = require('./memoryreview');
 const { openDisputes, MAX_NOTE } = require('./memorylog');
 const { promptSafe } = require('./memoryscan');
 const { idFor, outsideNote, withNote, sourceNotes, CANDIDATE_TYPES } = require('./memoryextract');
@@ -250,8 +250,11 @@ const sourceOf = (text, originals) => withNote(text, outsideNote(Math.max(0, ...
  */
 function applyConsolidation({ dir, project, today, parsed, log, architectureId }) {
   const { records } = scan(dir);
-  // Re-read: a memory approved, archived or superseded during the call is no longer a target.
-  const active = new Map(records.filter(([, r]) => r.project === project && r.confidence === 'confirmed' && !r.archived).map(([, r]) => [r.id, r]));
+  // Re-read: a memory archived or superseded during the call (an approval meanwhile) is no longer a target.
+  const gone = supersededKeys(records);
+  const active = new Map(
+    records.filter(([key, r]) => r.project === project && r.confidence === 'confirmed' && !r.archived && !gone.has(key)).map(([, r]) => [r.id, r]),
+  );
   const pending = pendingSupersedes(records, project);
   const taken = new Set(records.map(([key]) => key));
   const out = { ok: true, merges: 0, expiries: 0, retirements: 0, architecture: false, skipped: parsed.dropped || 0 };
@@ -344,6 +347,7 @@ module.exports = {
   buildConsolidatePrompt,
   parseConsolidateAnswer,
   applyConsolidation,
+  pendingSupersedes,
   MAX_MERGES,
   MAX_EXPIRY,
   MAX_RETIRE,
