@@ -172,3 +172,68 @@ test('a pull of the memory scope schedules a sync, other scopes do not', (t) => 
   t.mock.timers.tick(5000);
   assert.equal(cloud.state.published.length, before + 1);
 });
+
+// ---- review signals (src/memorysignals.js) ------------------------------------------
+
+test('the run loop publishes this PC signals, pulls a peer and registers it for the consumers', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const { peerSignals } = require('../src/memorysignals.js');
+  const dir = configDir(t);
+  const at = Date.now();
+  const peerUnit = {
+    at,
+    rejected: [{ project: PROJECT, title: 'Not wanted over there', at: at - 10 }],
+    disputes: [{ key: `${PROJECT}/wrong`, note: 'wrong on the other PC', at: at - 5 }],
+    reads: { [`${PROJECT}/read`]: 3 },
+    settled: {},
+  };
+  const cloud = fakeCloud({ units: [{ k: '_signals/pc-b', v: peerUnit, u: at - 1 }], gone: {} });
+  const events = [{ ev: 'rejected', key: `${PROJECT}/mine`, type: 'gotcha', title: `Mine ${FAKE_KEY}`, at: at - 100 }];
+  let changed = 0;
+
+  const memory = startMemory({ cloud, machine: 'pc-a', configDir: dir, log: { read: () => events }, onChanged: () => changed++ });
+  t.after(() => memory.stop());
+  t.mock.timers.tick(10_000);
+
+  // The peer unit landed in the file, counts as a change, and the consumers see it.
+  assert.equal(changed, 1);
+  assert.deepEqual(
+    peerSignals().map((p) => [p.machine, p.rejected[0].title, p.disputes[0].key]),
+    [['pc-b', 'Not wanted over there', `${PROJECT}/wrong`]],
+  );
+  // This PC's own unit went out in the same sync, scrubbed.
+  const mine = cloud.state.published.at(-1).units.find((x) => x.k === '_signals/pc-a');
+  assert.ok(mine, 'own signals published');
+  assert.equal(mine.v.rejected.length, 1);
+  assert.ok(!JSON.stringify(mine.v).includes(FAKE_KEY));
+  assert.ok(cloud.state.published.at(-1).units.some((x) => x.k === '_signals/pc-b'));
+
+  // stop() unregisters the source.
+  memory.stop();
+  assert.deepEqual(peerSignals(), []);
+});
+
+test('a malformed peer signals unit is not taken and does not stop the sync', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const { peerSignals } = require('../src/memorysignals.js');
+  const dir = configDir(t);
+  const cloud = fakeCloud({
+    units: [
+      { k: '_signals/pc-b', v: { at: 'yesterday', rejected: 'all of them' }, u: 5 },
+      { k: '_signals/../evil', v: { at: 1 }, u: 5 },
+      { k: `${PROJECT}/fine`, v: record('fine'), u: 6 },
+    ],
+    gone: {},
+  });
+  const memory = startMemory({ cloud, machine: 'pc-a', configDir: dir });
+  t.after(() => memory.stop());
+  t.mock.timers.tick(10_000);
+
+  assert.deepEqual(peerSignals(), []);
+  assert.deepEqual(
+    scan(memoryPaths(dir).dir).records.map(([k]) => k),
+    [`${PROJECT}/fine`],
+  );
+  // Without a log this PC publishes no signals of its own.
+  assert.ok(!cloud.state.published.at(-1).units.some((x) => x.k.startsWith('_signals/')));
+});

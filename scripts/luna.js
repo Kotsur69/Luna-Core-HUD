@@ -53,11 +53,12 @@ const { localStatus, memoryPaths } = require('../src/memorysync');
 const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
 const { saveNote } = require('../src/memorynote');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
-const { createLog, logPath, captureStats, usage, rejectedTitles, decisionEvent, memoryNotes, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
+const { createLog, logPath, captureStats, usage, decisionEvent, memoryNotes, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
 const { cardSessions, cardSessionLines } = require('../src/memoryuse');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { changeQueries, readChanges } = require('../src/memorychanges');
 const { machineName } = require('../src/missionledgersync');
+const { notWantedTitles, readPeers, setPeerSource } = require('../src/memorysignals');
 const { exportAll } = require('../src/memoryexport');
 
 const USAGE = `Usage: node scripts/luna.js memory <command> [options]
@@ -351,7 +352,7 @@ async function cmdCapture({ configDir, dir, project, values, positionals }) {
   if (!file) throw new UsageError('capture needs a transcript file (~/.claude/projects/<folder>/<session>.jsonl)');
   const log = createLog(logPath(configDir));
   const res = await extractPiece({
-    notWanted: rejectedTitles(log.read(), project),
+    notWanted: notWantedTitles(log.read(), project),
     text: fs.readFileSync(path.resolve(file), 'utf8'),
     project,
     dir,
@@ -620,6 +621,8 @@ function main(argv) {
     return values.help ? 0 : 1;
   }
   const configDir = resolveConfigDir(values.dir);
+  // The other PCs' rejections, disputes and reads, as the app last synced them (src/memorysignals.js).
+  setPeerSource(() => readPeers(memoryPaths(configDir).signals, machineName(os.hostname())));
   const done = COMMANDS[command]({ configDir, dir: memoryPaths(configDir).dir, project: resolveProject(values.project), values, positionals: rest });
   // `capture`, `search` and `eval` call a model, `notes` asks git: they are asynchronous.
   return done && typeof done.then === 'function' ? done.then(() => process.exitCode || 0) : process.exitCode || 0;

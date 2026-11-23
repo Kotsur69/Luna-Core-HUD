@@ -22,7 +22,9 @@
 //                 packages and never into a clean one (src/memoryreview.js).
 //
 // The log is this PC's only and trims reads first, so every number here is a
-// lower bound for this PC, never a fact about the other one.
+// lower bound for this PC, never a fact about the other one. recentUsage alone
+// adds the other PCs' reads (their `_signals/<machine>` units, src/memorysignals.js),
+// so the final score and auto-accept see the reads of every PC.
 // ============================================================================
 
 'use strict';
@@ -69,14 +71,21 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The usage the final score of every memory needs (memoryrecord.finalScore):
- * this PC's reads of the last RECENT_READ_DAYS, and today's date for the
- * `last_used` rule.
+ * the reads of the last RECENT_READ_DAYS, this PC's plus the other PCs'
+ * (memorysignals.mergeReads), and today's date for the `last_used` rule.
  * @param {object[]} events memorylog readLog()
  * @param {number} now ms
+ * @param {object[]} [peers] the other PCs' signals; default memorysignals.peerSignals()
+ *   (none registered = this PC's reads alone)
  * @returns {{reads: Map<string, number>, today: string}}
  */
-function recentUsage(events, now) {
-  return { reads: readCounts(events, { since: now - RECENT_READ_DAYS * DAY_MS }), today: new Date(now).toISOString().slice(0, 10) };
+function recentUsage(events, now, peers) {
+  // Lazy: memoryrecord requires this file, and memorysignals requires memoryrecord.
+  const { peerSignals, mergeReads } = require('./memorysignals');
+  const others = Array.isArray(peers) ? peers : peerSignals();
+  const own = readCounts(events, { since: now - RECENT_READ_DAYS * DAY_MS });
+  const reads = others.length ? mergeReads(own, others, { now, days: RECENT_READ_DAYS }) : own;
+  return { reads, today: new Date(now).toISOString().slice(0, 10) };
 }
 
 /**
