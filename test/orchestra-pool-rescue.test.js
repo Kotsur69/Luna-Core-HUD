@@ -248,12 +248,26 @@ test('limit: Claude out and nothing else ticked -> the package waits for the res
 });
 
 test('limit: an agy weekly quota at 100% moves a not-started Argon package to the stronger ticked Opus', async () => {
-  const usage = { others: [{ providerId: 'antigravity', status: 'ok', limits: [{ model: 'Argon', window: 'weekly', percentUsed: 100 }] }] };
+  const usage = { others: [{ providerId: 'antigravity', status: 'ok', updatedAt: 1_000_000, limits: [{ model: 'Argon', window: 'weekly', percentUsed: 100 }] }] };
   const s = await started({ pool: [e('opus'), e('agy-argon')], packages: [pkg('a', 'agy-argon')], usage });
   const a = s.view('a');
   assert.deepEqual([a.state, a.model, a.effort, a.emergency], ['launched', 'opus', 'high', false]);
   assert.deepEqual([s.log.sessions[0].profileId, s.log.sessions[0].task.model], ['cloud', 'opus']);
   assert.deepEqual(a.rescues.map((r) => r.text), ['Argon (agy) limit -> Opus']);
+});
+
+test('limit: a stale 100% or a rounded-up 99.5% agy reading does not move a not-started Argon package', async () => {
+  const MAX_AGE = require('../src/orchestraRescue').MAX_READING_AGE_MS;
+  const argon = (percentUsed, updatedAt) => ({ others: [{ providerId: 'antigravity', status: 'ok', updatedAt, limits: [{ model: 'Argon', window: 'weekly', percentUsed }] }] });
+  for (const [label, usage] of [
+    ['stale 100%', argon(100, 1_000_000 - MAX_AGE - 1)],
+    ['99.5% fresh', argon(99.5, 1_000_000)],
+    ['100% with no time', argon(100, undefined)],
+  ]) {
+    const s = await started({ pool: [e('opus'), e('agy-argon')], packages: [pkg('a', 'agy-argon')], usage });
+    const a = s.view('a');
+    assert.deepEqual([a.state, a.model, a.rescues], ['launched', 'agy:gemini-4-argon-medium', undefined], label);
+  }
 });
 
 // ---- free hand-over ----------------------------------------------------------------
@@ -292,7 +306,7 @@ test('hand-over: Hydrogen (stronger than free) takes it; with Hydrogen out, Opus
   assert.deepEqual(s.view('c').rescues.map((r) => r.text), ['handed over: free -> Hydrogen (agy)']);
 
   // Hydrogen shares the Gemini quota: at 100% it is out.
-  const usage = { others: [{ providerId: 'antigravity', status: 'ok', limits: [{ model: 'Gemini', window: 'daily', percentUsed: 100 }] }] };
+  const usage = { others: [{ providerId: 'antigravity', status: 'ok', updatedAt: 1_000_000, limits: [{ model: 'Gemini', window: 'daily', percentUsed: 100 }] }] };
   const t = await started({
     pool: [e('agy-hydrogen'), e('free:freellm-chain')],
     workers: 'hybrid',

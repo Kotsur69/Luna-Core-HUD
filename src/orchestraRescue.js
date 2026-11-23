@@ -16,7 +16,8 @@
 //              (src/orchestraWeakGuard.js): the next stronger ticked model,
 //              else emergency Opus.
 //   limit      a package that has not started yet whose model is out (its
-//              backend is paused, or its own quota reads 100%): the nearest
+//              backend is paused, or its own quota truly reads 100% in a
+//              fresh reading - see outKeys): the nearest
 //              stronger ticked model, else one of the same tier, else
 //              emergency Opus while a Claude account has headroom; nothing
 //              -> it waits for the reset as before.
@@ -30,6 +31,16 @@
 // effort, capped at max - today's escalation rule) or a fixed level. 'low'
 // is offered but God Mode never runs below medium (src/efforts.js), so it
 // runs at medium, like any lower ask on a pool entry.
+//
+// This holds even when the user ticked Opus in the pool with a fixed effort
+// of its own: a ticked Opus that takes over a package planned for another
+// model still runs at the Emergency Opus effort, not at its pool entry's
+// level. The pool entry's level was chosen for the work the planner gives
+// Opus; a takeover is a rescue of a package that stalled, hit a limit or
+// broke a guard on a weaker model, and the rescue brief asks one setting to
+// decide every takeover's effort, so the user has one place that controls
+// how hard Opus tries when it steps in. A package planned for Opus keeps the
+// effort it was planned with.
 //
 // Runs without a pool never get here: their escalation is today's
 // Sonnet -> Opus in src/orchestra.js. Pure, no I/O.
@@ -65,8 +76,19 @@ const OPUS = 'opus';
 const RESCUE_KINDS = Object.freeze(['escalate', 'handOver', 'limit', 'guard']);
 /** A package keeps this many rescue entries (a ladder has at most six rungs). */
 const MAX_RESCUES = 8;
-/** A quota reading at or above this is out. */
+/** A quota reading at or above this (unrounded) is out. */
 const OUT_PERCENT = 100;
+/**
+ * A quota reading older than this never counts as out. The agy and free
+ * readings live in the usage meter's `others`, re-read at most every 5 min
+ * (src/usage.js OTHERS_EVERY_MS) and only on a meter tick, which waits up to
+ * 5 min more under 429 backoff (src/usage.js MAX_BACKOFF_MS): a healthy
+ * reading is at most about 10 min old. 15 min leaves headroom for a slow
+ * read; anything older is a stale one (a failed agy read keeps showing the
+ * last good reading with its old updatedAt), and a stale 100% must not move
+ * packages to emergency Opus after the quota has reset.
+ */
+const MAX_READING_AGE_MS = 15 * 60 * 1000;
 const MAX_REASON_CHARS = 120;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -112,18 +134,33 @@ function rescueKeyOf(pkg) {
 }
 
 /**
+ * True for a reading that says its quota is used up: the unrounded percent is
+ * at the limit (99.5% is not out, though it shows as 100%) and the reading
+ * was taken no more than MAX_READING_AGE_MS before `now`. A reading without
+ * a time, from the future, or older than that is never out.
+ */
+function readingAtLimit(r, now) {
+  if (!isObj(r) || !Number.isFinite(r.rawPercent) || r.rawPercent < OUT_PERCENT) return false;
+  if (!Number.isFinite(now) || !Number.isFinite(r.at) || r.at <= 0) return false;
+  const age = now - r.at;
+  return age >= 0 && age <= MAX_READING_AGE_MS;
+}
+
+/**
  * The ticked keys that cannot take work now.
- * @param {{ticked:string[], pauses?:object, readings?:{key:string, percent:number}[], freeWaiting?:boolean}} input
+ * @param {{ticked:string[], pauses?:object, readings?:{key:string, rawPercent:number, at:number|null}[],
+ *   freeWaiting?:boolean, now?:number}} input
  *   pauses: src/orchestraPauses.js pausesOf(); readings: src/orchestraPoolUsage.js
- *   poolUsageReadings(); freeWaiting: a hybrid free package waits on free limits
+ *   poolLimitReadings(); freeWaiting: a hybrid free package waits on free limits;
+ *   now: the run's clock, to age the readings (none = no reading counts)
  * @returns {string[]}
  */
-function outKeys({ ticked, pauses = {}, readings = [], freeWaiting = false }) {
+function outKeys({ ticked, pauses = {}, readings = [], freeWaiting = false, now = NaN }) {
   const p = isObj(pauses) ? pauses : {};
   const full = new Set(
     (Array.isArray(readings) ? readings : [])
       // Claude has two accounts behind one reading: only its pause says it is out.
-      .filter((r) => isObj(r) && runsOnOf(r.key) !== 'claude' && Number.isFinite(r.percent) && r.percent >= OUT_PERCENT)
+      .filter((r) => isObj(r) && runsOnOf(r.key) !== 'claude' && readingAtLimit(r, now))
       .map((r) => r.key),
   );
   return (Array.isArray(ticked) ? ticked : []).filter((k) => {
@@ -296,9 +333,13 @@ function rescueFields(pkg, move) {
 
 /**
  * The model and --effort a package runs on at a target key. Opus taking over
- * a package not planned for it runs at the Emergency Opus effort; Sonnet at
- * its pool entry's level; an agy family on its entry's variant, else the
- * live variant nearest the package's effort. Null for a free key.
+ * a package not planned for it runs at the Emergency Opus effort - also when
+ * Opus is ticked in the pool with a fixed effort of its own: that level is
+ * for the work planned for Opus, while every takeover follows the one
+ * Emergency Opus effort setting (see the header). A package planned for Opus
+ * keeps its own effort. Sonnet runs at its pool entry's level; an agy family
+ * on its entry's variant, else the live variant nearest the package's effort.
+ * Null for a free key.
  * @param {{pkg:object, key:string, pool:unknown, agyList:object[], effort:string|null, emergencySetting:unknown}} input
  *   effort: the package's worker effort now (src/orchestra.js effortFor)
  * @returns {{model:string|null, effort:string|null}|null}
@@ -348,6 +389,7 @@ module.exports = {
   EMERGENCY_EFFORTS,
   OPUS,
   MAX_RESCUES,
+  MAX_READING_AGE_MS,
   normalizeEmergencyEffort,
   emergencyEffort,
   resolveTarget,
