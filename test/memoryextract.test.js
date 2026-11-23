@@ -20,6 +20,16 @@ const {
   AUTO_REJECT_BELOW,
   AUTO_SAVE_FROM,
   LOW_USEFULNESS,
+  DUPLICATE,
+  rubricScore,
+  lengthPenalty,
+  RUBRIC_AXES,
+  RUBRIC_BASE,
+  RUBRIC_POINTS,
+  LENGTH_FREE_WORDS,
+  LENGTH_STEP_WORDS,
+  LENGTH_PENALTY,
+  MAX_LENGTH_PENALTY,
 } = require('../src/memoryextract.js');
 const { finalScore } = require('../src/memoryrecord.js');
 
@@ -405,13 +415,250 @@ test('a dropped low-usefulness candidate does not use up a place among MAX_CANDI
   assert.ok(rejected.every((r) => r.reason === LOW_USEFULNESS));
 });
 
-test('the prompt asks for a usefulness score judged by the keep rule, and names the floor', () => {
-  const prompt = buildPrompt({ digest: 'd', project: PROJECT, today: '2026-11-11', existing: [] });
+// ---- the 5-axis rubric ------------------------------------------------------------
 
-  assert.match(prompt, /"usefulness":75/);
-  assert.match(prompt, /- usefulness: a whole number 0-100/);
-  assert.match(prompt, /applicable \(would it change what the assistant/);
-  assert.match(prompt, new RegExp(`Under ${AUTO_REJECT_BELOW} is set aside unread`));
-  // The auto-save bar is not the model's business: naming it would invite inflated scores.
-  assert.doesNotMatch(prompt, new RegExp(`\b${AUTO_SAVE_FROM}\b`));
+/** A rubric with exactly the named axes true. */
+const rubricWith = (...yes) => Object.fromEntries(RUBRIC_AXES.map((axis) => [axis, yes.includes(axis)]));
+const ALL_YES = rubricWith(...RUBRIC_AXES);
+/** A body of exactly `n` words. */
+const wordsBody = (n) => Array.from({ length: n }, (_, i) => `w${i}`).join(' ');
+
+test('the rubric names its five axes, and the score is 25 plus 15 per true axis', () => {
+  assert.deepEqual(RUBRIC_AXES, ['durable', 'actionable', 'specific', 'non_obvious', 'verified']);
+  assert.equal(RUBRIC_BASE, 25);
+  assert.equal(RUBRIC_POINTS, 15);
+  assert.equal(rubricScore({ rubric: rubricWith() }), 25);
+  assert.equal(rubricScore({ rubric: rubricWith('durable') }), 40);
+  assert.equal(rubricScore({ rubric: rubricWith('durable', 'verified') }), 55);
+  assert.equal(rubricScore({ rubric: rubricWith('actionable', 'specific', 'non_obvious') }), 70);
+  assert.equal(rubricScore({ rubric: rubricWith('durable', 'actionable', 'specific', 'verified') }), 85);
+  assert.equal(rubricScore({ rubric: ALL_YES }), 100);
+});
+
+test('every axis counts the same, whichever it is', () => {
+  for (const axis of RUBRIC_AXES) assert.equal(rubricScore({ rubric: rubricWith(axis) }), 40, axis);
+});
+
+test('the rubric wins over the model\'s own usefulness number', () => {
+  assert.equal(rubricScore({ rubric: rubricWith(), usefulness: 99 }), 25);
+  assert.equal(rubricScore({ rubric: ALL_YES, usefulness: 3 }), 100);
+});
+
+test('a body over 150 words loses 10 per started 50 words over, at most 30', () => {
+  assert.equal(LENGTH_FREE_WORDS, 150);
+  assert.equal(LENGTH_STEP_WORDS, 50);
+  assert.equal(LENGTH_PENALTY, 10);
+  assert.equal(MAX_LENGTH_PENALTY, 30);
+  const cases = [
+    [150, 0],
+    [151, 10],
+    [200, 10],
+    [201, 20],
+    [250, 20],
+    [251, 30],
+    [300, 30],
+    [1000, 30],
+  ];
+  for (const [words, penalty] of cases) {
+    assert.equal(lengthPenalty(wordsBody(words)), penalty, `${words} words`);
+    assert.equal(rubricScore({ rubric: ALL_YES, body: wordsBody(words) }), 100 - penalty, `${words} words`);
+  }
+  assert.equal(lengthPenalty(undefined), 0);
+  // Any whitespace separates words; markdown and newlines do not add any.
+  assert.equal(lengthPenalty(`${wordsBody(100)}\n\n  ${wordsBody(50)}`), 0);
+});
+
+test('the rubric score is clamped to 0-100', () => {
+  // 25 - 30 = -5 before clamping.
+  assert.equal(rubricScore({ rubric: rubricWith(), body: wordsBody(400) }), 0);
+  assert.equal(rubricScore({ rubric: ALL_YES, body: 'short' }), 100);
+});
+
+test('only real booleans count: a malformed rubric falls back to the model\'s usefulness number', () => {
+  const malformed = [
+    null,
+    'all true',
+    [true, true, true, true, true],
+    { ...ALL_YES, verified: 'true' },
+    { ...ALL_YES, durable: 1 },
+    { ...ALL_YES, specific: null },
+    (({ non_obvious, ...rest }) => rest)(ALL_YES),
+  ];
+  for (const rubric of malformed) {
+    assert.equal(rubricScore({ rubric, usefulness: 62 }), 62, JSON.stringify(rubric));
+    assert.equal(rubricScore({ rubric }), undefined, `${JSON.stringify(rubric)} without a number is unknown`);
+  }
+  // An inherited axis is not an answer.
+  assert.equal(rubricScore({ rubric: Object.create(ALL_YES), usefulness: 62 }), 62);
+});
+
+test('the legacy fallback rounds and clamps the number, and a 0-1 fraction or junk is unknown', () => {
+  assert.equal(rubricScore({ usefulness: 72.6 }), 73);
+  assert.equal(rubricScore({ usefulness: 140 }), 100);
+  assert.equal(rubricScore({ usefulness: -20 }), 0);
+  assert.equal(rubricScore({ usefulness: 0.85 }), undefined);
+  assert.equal(rubricScore({ usefulness: 'very' }), undefined);
+  assert.equal(rubricScore({}), undefined);
+  assert.equal(rubricScore(null), undefined);
+});
+
+test('rubric candidates go to the three lanes: under 50 graveyard, 50-89 inbox, 90+ auto-save eligible', () => {
+  const { records, rejected } = candidatesFrom(
+    {
+      candidates: [
+        cand('Retry says busy after a sleep', { rubric: rubricWith('durable') }),
+        cand('Package times out on battery power', { rubric: rubricWith('durable', 'verified') }),
+        cand('Release assets need dashes in the name', { rubric: rubricWith('durable', 'actionable', 'specific', 'verified') }),
+        cand('Do not junction node_modules into a worktree', { rubric: ALL_YES }),
+      ],
+    },
+    CTX,
+  );
+
+  assert.deepEqual(
+    rejected.map((r) => [r.title, r.reason, r.usefulness]),
+    [['Retry says busy after a sleep', LOW_USEFULNESS, 40]],
+  );
+  assert.deepEqual(
+    records.map((r) => [r.title, r.usefulness, scoreLane(captureScore(r))]),
+    [
+      ['Package times out on battery power', 55, 'inbox'],
+      ['Release assets need dashes in the name', 85, 'inbox'],
+      ['Do not junction node_modules into a worktree', 100, 'auto-save'],
+    ],
+  );
+  assert.ok(records.every((r) => r.confidence === 'observed'));
+  // The rubric itself is not a field of the record.
+  assert.ok(records.every((r) => !('rubric' in r)));
+});
+
+test('the length penalty can move a candidate down a lane', () => {
+  const long = wordsBody(260);
+  const { records, rejected } = candidatesFrom(
+    {
+      candidates: [
+        // 100 - 30 = 70: out of the auto-save lane.
+        cand('Release assets need dashes in the name', { rubric: ALL_YES, body: long }),
+        // 70 - 30 = 40: into the graveyard.
+        cand('Package times out on battery power', { rubric: rubricWith('durable', 'actionable', 'verified'), body: `Other ${long}` }),
+      ],
+    },
+    CTX,
+  );
+
+  assert.deepEqual(records.map((r) => [r.title, r.usefulness]), [['Release assets need dashes in the name', 70]]);
+  assert.deepEqual(rejected.map((r) => [r.title, r.reason, r.usefulness]), [['Package times out on battery power', LOW_USEFULNESS, 40]]);
+});
+
+test('a legacy answer without a rubric is scored by its usefulness number, as before', () => {
+  const { records, rejected } = candidatesFrom(
+    {
+      candidates: [
+        cand('Retry says busy after a sleep', { usefulness: 30 }),
+        cand('Package times out on battery power', { usefulness: 75 }),
+        cand('Release assets need dashes in the name', { rubric: { durable: 'yes' }, usefulness: 92 }),
+        cand('Do not junction node_modules into a worktree'),
+      ],
+    },
+    CTX,
+  );
+
+  assert.deepEqual(rejected.map((r) => [r.title, r.usefulness]), [['Retry says busy after a sleep', 30]]);
+  assert.deepEqual(
+    records.map((r) => [r.title, r.usefulness, scoreLane(captureScore(r))]),
+    [
+      ['Package times out on battery power', 75, 'inbox'],
+      ['Release assets need dashes in the name', 92, 'auto-save'],
+      ['Do not junction node_modules into a worktree', undefined, 'inbox'],
+    ],
+  );
+});
+
+test('the prompt asks for the five rubric booleans and no raw usefulness number', () => {
+  for (const subject of ['session', 'run']) {
+    const prompt = buildPrompt({ digest: 'd', project: PROJECT, today: '2026-11-11', existing: [], subject });
+
+    assert.match(prompt, /"rubric":\{"durable":true,"actionable":true,"specific":true,"non_obvious":true,"verified":true\}/);
+    for (const axis of RUBRIC_AXES) assert.match(prompt, new RegExp(`^  - ${axis}: `, 'm'), `${subject}: ${axis}`);
+    assert.match(prompt, /each true or false \(JSON booleans\)/);
+    assert.match(prompt, /A body over 150 words scores lower/);
+    assert.doesNotMatch(prompt, /"usefulness"/);
+    assert.doesNotMatch(prompt, /- usefulness:/);
+    // The thresholds are not the model's business: naming them would invite gaming the answers.
+    assert.doesNotMatch(prompt, new RegExp(`\\b(${AUTO_REJECT_BELOW}|${AUTO_SAVE_FROM})\\b`));
+  }
+});
+
+// ---- duplicates ----------------------------------------------------------------------
+
+test('a duplicate carries duplicateOf (the matched title) and its record, for the graveyard', () => {
+  const ctx = { ...CTX, existing: [existing('junction', 'Do not junction node_modules into a worktree')] };
+
+  const { records, rejected } = candidatesFrom(
+    {
+      candidates: [
+        cand('Never junction node_modules into a worktree', { rubric: rubricWith('durable', 'actionable', 'specific') }),
+        cand('Upload the installer with dashes in its name'),
+        cand('Upload the installer with dashes in the name'),
+      ],
+    },
+    ctx,
+  );
+
+  assert.deepEqual(records.map((r) => r.title), ['Upload the installer with dashes in its name']);
+  assert.deepEqual(
+    rejected.map((r) => [r.title, r.reason, r.duplicateOf, r.usefulness, r.record.confidence]),
+    [
+      ['Never junction node_modules into a worktree', DUPLICATE, 'Do not junction node_modules into a worktree', 70, 'observed'],
+      ['Upload the installer with dashes in the name', DUPLICATE, 'Upload the installer with dashes in its name', undefined, 'observed'],
+    ],
+  );
+  assert.equal(DUPLICATE, 'duplicate');
+});
+
+// ---- expiry hints --------------------------------------------------------------------
+
+test('a candidate keeps valid expiry hints', () => {
+  const { records } = candidatesFrom(
+    { candidates: [cand('Do not bump electron until the v40 crash is fixed', { expires_after_days: 30, expires_when: 'until electron 40.1 ships' })] },
+    CTX,
+  );
+
+  assert.equal(records[0].expires_after_days, 30);
+  assert.equal(records[0].expires_when, 'until electron 40.1 ships');
+});
+
+test('bad expiry hints are dropped without losing the candidate', () => {
+  const { records, rejected } = candidatesFrom(
+    {
+      candidates: [
+        cand('Retry says busy after a sleep', { expires_after_days: 0, expires_when: 42 }),
+        cand('Package times out on battery power', { expires_after_days: 400, expires_when: '   ' }),
+        cand('Release assets need dashes in the name', { expires_after_days: 7.5, expires_when: `line one\nline two ${'x'.repeat(200)}` }),
+      ],
+    },
+    CTX,
+  );
+
+  assert.deepEqual(rejected, []);
+  assert.equal(records.length, 3);
+  assert.ok(records.every((r) => r.expires_after_days === undefined));
+  assert.equal(records[0].expires_when, undefined);
+  assert.equal(records[1].expires_when, undefined);
+  assert.equal(records[2].expires_when.length, 120);
+  assert.ok(records[2].expires_when.startsWith('line one line two '));
+});
+
+test('a candidate without expiry hints has no expiry fields', () => {
+  const { records } = candidatesFrom({ candidates: [cand('Retry says busy after a sleep')] }, CTX);
+  assert.ok(!('expires_after_days' in records[0]));
+  assert.ok(!('expires_when' in records[0]));
+});
+
+test('the prompt offers expiry hints for temporary constraints only, in both subjects', () => {
+  for (const subject of ['session', 'run']) {
+    const prompt = buildPrompt({ digest: 'd', project: PROJECT, today: '2026-11-11', existing: [], subject });
+    assert.match(prompt, /- expires_after_days: optional, a whole number 1-365\. Only for a temporary or in-progress constraint/);
+    assert.match(prompt, /- expires_when: optional, one line of at most 120 characters/);
+  }
 });

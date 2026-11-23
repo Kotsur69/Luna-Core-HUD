@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { isStale, isDecayed, anchorsOf, missingAnchors, reviewList, verify, retire, toolVerdict, STALE_DAYS, DIGEST_DAYS, FLAG_ORDER, LOW_FLAGS } = require('../src/memoryreview.js');
+const { isStale, isDecayed, anchorsOf, missingAnchors, reviewList, verify, retire, toolVerdict, expiredOn, STALE_DAYS, DIGEST_DAYS, FLAG_ORDER, LOW_FLAGS } = require('../src/memoryreview.js');
 const { createLog, logPath } = require('../src/memorylog.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { createIndex } = require('../src/memoryindex.js');
@@ -390,8 +390,80 @@ test('changed ranks after anchor and before stale, and counts toward the hub num
 
   const res = s.list({ changes, events: readsFrom(90) });
 
-  assert.deepEqual(FLAG_ORDER, ['disputed', 'checked', 'anchor', 'changed', 'stale', 'unopened']);
+  assert.deepEqual(FLAG_ORDER, ['disputed', 'checked', 'anchor', 'changed', 'expired', 'stale', 'unopened']);
   assert.equal(LOW_FLAGS.includes('changed'), false);
   assert.deepEqual(res.items.map((i) => i.id), ['c-anchor', 'b-changed', 'a-stale', 'd-quiet']);
   assert.equal(res.urgent, 3);
+});
+
+// ---- expiry ---------------------------------------------------------------------
+
+test('a confirmed memory expires once created + expires_after_days lies before today', () => {
+  // TODAY is 2026-11-11: 2026-11-01 + 9 days = 2026-11-10, before today.
+  assert.equal(expiredOn(rec('a', { expires_after_days: 9 }), TODAY), '2026-11-10');
+  // 2026-11-01 + 10 days = today: not before it yet.
+  assert.equal(expiredOn(rec('a', { expires_after_days: 10 }), TODAY), null);
+  assert.equal(expiredOn(rec('a'), TODAY), null, 'no expiry, no flag');
+  assert.equal(expiredOn(rec('a', { expires_after_days: 1, confidence: 'observed' }), TODAY), null, 'only confirmed memories');
+});
+
+test('the expiry counts from last_verified when it is newer than created', () => {
+  assert.equal(expiredOn(rec('a', { expires_after_days: 5, last_verified: '2026-11-08' }), TODAY), null);
+  assert.equal(expiredOn(rec('a', { expires_after_days: 5, last_verified: '2026-11-05' }), TODAY), '2026-11-10');
+  // An older last_verified (a hand edit) does not move the start back.
+  assert.equal(expiredOn(rec('a', { expires_after_days: 9, last_verified: '2026-10-01' }), TODAY), '2026-11-10');
+});
+
+test('an expired memory is flagged with its expires_when, ranked after changed and before stale', (t) => {
+  const s = setup(t, [
+    rec('a-stale', { created: '2026-01-01' }),
+    rec('b-expired', { created: '2026-10-01', expires_after_days: 30, expires_when: 'until the v2 release ships' }),
+    rec('c-changed', { body: 'See `src/here.js`.' }),
+    rec('d-fresh', { expires_after_days: 30 }),
+  ]);
+  const changes = new Map([['src/here.js', '2026-11-10T08:00:00.000Z']]);
+
+  const res = s.list({ changes: { [PROJECT]: changes } });
+
+  assert.deepEqual(res.items.map((i) => i.id), ['c-changed', 'b-expired', 'a-stale']);
+  assert.deepEqual(res.items[1].flags, [{ kind: 'expired', on: '2026-10-31', when: 'until the v2 release ships' }]);
+  assert.equal(res.urgent, 3, 'expired counts toward the hub number');
+});
+
+test('an expired flag without expires_when carries no when', (t) => {
+  const s = setup(t, [rec('a', { created: '2026-10-01', expires_after_days: 3 })]);
+  assert.deepEqual(s.list().items[0].flags, [{ kind: 'expired', on: '2026-10-04' }]);
+});
+
+test('Keep (still true) on an expired memory clears the expiry fields and moves last_verified', (t) => {
+  const s = setup(t, [rec('a', { created: '2026-10-01', expires_after_days: 3, expires_when: 'until the fix ships' })]);
+
+  assert.deepEqual(verify(s.dir, key('a'), TODAY, { log: s.log }), { ok: true, key: key('a') });
+
+  const stored = s.stored()[key('a')];
+  assert.equal(stored.last_verified, TODAY);
+  assert.equal(stored.expires_after_days, undefined);
+  assert.equal(stored.expires_when, undefined);
+  assert.equal(s.list().total, 0);
+});
+
+test('Keep on a memory whose expiry has not run out keeps the expiry fields', (t) => {
+  const s = setup(t, [rec('a', { created: '2026-01-01', expires_after_days: 365, expires_when: 'until the fix ships' })]);
+
+  verify(s.dir, key('a'), TODAY, { log: s.log });
+
+  const stored = s.stored()[key('a')];
+  assert.equal(stored.expires_after_days, 365);
+  assert.equal(stored.expires_when, 'until the fix ships');
+});
+
+test('a check that says it holds only moves the date: the expiry starts over', (t) => {
+  const s = setup(t, [rec('a', { created: '2026-10-01', expires_after_days: 3 })]);
+
+  verify(s.dir, key('a'), TODAY, { log: s.log, by: 'check' });
+
+  const stored = s.stored()[key('a')];
+  assert.equal(stored.last_verified, TODAY);
+  assert.equal(stored.expires_after_days, 3);
+  assert.equal(s.list().total, 0);
 });

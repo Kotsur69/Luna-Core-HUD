@@ -12,7 +12,9 @@
 //   -> small model -> the same filter as a session (memoryextract.candidatesFrom:
 //   checkRecord, secret scan, near-duplicates, usefulness floor, at most five,
 //   rejected titles as "not wanted") -> `observed` memories in the inbox.
-//   A candidate under the floor goes to the local graveyard (src/memorygraveyard.js).
+//   The usefulness is the extractor's 5-axis rubric score (memoryextract.rubricScore).
+//   A candidate under the floor, or a near-duplicate of a memory, goes to the
+//   local graveyard (src/memorygraveyard.js).
 //
 // Their source is `captured from God Mode run <runId> on <machine>`, plus the
 // outside-content note when the workers read web, subagent or foreign MCP
@@ -21,7 +23,8 @@
 // Each run's failures also go into the repeat-failure ledger
 // (src/memoryfailures.js). A failure seen in 3+ runs within 30 days that no
 // confirmed memory covers is named in the digest as REPEATED FAILURE, and the
-// candidate about it is saved with usefulness of at least 80.
+// candidate about it is saved with usefulness of at least 80, whatever its
+// rubric scored (memoryfailures.floorRepeated).
 //
 // The same call also names the confirmed memories the run made obsolete
 // (src/memoryrunstale.js): each becomes one `disputed` line of the memory log,
@@ -46,7 +49,7 @@ const { memoryPaths } = require('./memorysync');
 const { readEnabled } = require('./memoryprojects');
 const { buildPrompt, candidatesFrom, outsideNote, withNote } = require('./memoryextract');
 const { pendingCount } = require('./memoryinbox');
-const { rejectedTitles } = require('./memorylog');
+const { rejectedTitles, duplicateEvents } = require('./memorylog');
 const { droppedEvents, MAX_PENDING } = require('./memorycapture');
 const { runDigest, countRunOutside, runFailureSignatures } = require('./memoryrundigest');
 const { recordFailures, repeatedFailures, uncoveredRepeats, floorRepeated, FAILURE_LEDGER_FILE } = require('./memoryfailures');
@@ -270,6 +273,8 @@ function createRunCapture({
       bury(graveyardFile, res.rejected, now());
       if (log) {
         for (const event of droppedEvents(res.rejected, project)) log.add(event);
+        // A near-duplicate is logged with the memory it repeats (and buried above, as "duplicate of: <title>").
+        for (const event of duplicateEvents(res.rejected, project)) log.add(event);
         log.add({ ev: 'capture', project, reason: res.reason, kept: res.saved, dropped: countReasons(res.rejected) });
       }
       if (res.saved) onSaved(res.saved);

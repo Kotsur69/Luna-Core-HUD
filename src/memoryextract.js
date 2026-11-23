@@ -20,8 +20,12 @@
 //     the local graveyard instead, src/memorygraveyard.js),
 //   - repeats a memory that exists, or an earlier candidate of the same answer.
 //
-// `usefulness` (0-100) is the model's own judgement of the keep rule. The
-// score thresholds all live here (captureScore, scoreLane):
+// `usefulness` (0-100) is worked out here from the model's 5-axis `rubric`
+// (rubricScore): the model only answers yes/no questions, because asked for a
+// raw 0-100 number it put almost every candidate between 55 and 72. An answer
+// without a valid rubric (an older model answer, a mocked one) falls back to
+// the model's own `usefulness` number. The score thresholds all live here
+// (captureScore, scoreLane):
 //
 //   under AUTO_REJECT_BELOW   graveyard: never in the inbox, restorable by hand
 //   AUTO_REJECT_BELOW to 89   inbox, as every candidate
@@ -32,6 +36,15 @@
 //
 // A high score alone never approves anything. A candidate without a score is
 // kept, as "unknown", and never auto-saved.
+//
+// A candidate dropped as a near-duplicate carries `duplicateOf` (the title of
+// the memory it repeats) and its record: the graveyard keeps it as
+// "duplicate of: <title>" (src/memorygraveyard.js), so a wrong match can be
+// restored by hand.
+//
+// A candidate may carry expiry hints (`expires_after_days`, `expires_when`)
+// for a temporary or in-progress constraint; checkRecord validates them and
+// the review list flags the memory 'expired' once they run out (src/memoryreview.js).
 //
 // What is kept is saved as `observed`: searchable, labelled "not verified",
 // never on the project card (decision 5). `supersedes` on an observed memory
@@ -46,7 +59,21 @@
 
 'use strict';
 
-const { TYPES, GLOBAL, MAX_BODY, MAX_TITLE, MAX_SOURCE, checkRecord, keyOf, slug, finalScore } = require('./memoryrecord');
+const {
+  TYPES,
+  GLOBAL,
+  MAX_BODY,
+  MAX_TITLE,
+  MAX_SOURCE,
+  MAX_EXPIRES_DAYS,
+  MAX_EXPIRES_WHEN,
+  USEFULNESS_MAX,
+  checkRecord,
+  keyOf,
+  slug,
+  finalScore,
+  usefulnessOf,
+} = require('./memoryrecord');
 const { hasSecret } = require('./memorysync');
 const { MAX_NOTE_CHARS: MAX_STATUS_CHARS } = require('./memorynote');
 
@@ -59,6 +86,8 @@ const AUTO_REJECT_BELOW = 50;
 const AUTO_SAVE_FROM = 90;
 /** The rejection reason of a graveyard candidate, as the memory log records it. */
 const LOW_USEFULNESS = 'low usefulness';
+/** The rejection reason of a near-duplicate candidate; it carries `duplicateOf` and its record. */
+const DUPLICATE = 'duplicate';
 /** Candidates of one answer that are looked at at all. */
 const MAX_RAW_CANDIDATES = 12;
 /** Existing memories listed in the prompt so the model does not repeat them. */
@@ -84,6 +113,56 @@ const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
  * AUTO_REJECT_BELOW and bury a candidate that may be good, so it counts as unknown.
  */
 const modelScore = (v) => (typeof v === 'number' && v > 0 && v < 1 ? undefined : v);
+
+/** The rubric's yes/no axes, as the prompt names them. */
+const RUBRIC_AXES = ['durable', 'actionable', 'specific', 'non_obvious', 'verified'];
+/** A rubric score: RUBRIC_BASE plus RUBRIC_POINTS per axis answered true (5 axes: 100 at most). */
+const RUBRIC_BASE = 25;
+const RUBRIC_POINTS = 15;
+/** A body longer than this many words loses LENGTH_PENALTY per started LENGTH_STEP_WORDS over it, at most MAX_LENGTH_PENALTY. */
+const LENGTH_FREE_WORDS = 150;
+const LENGTH_STEP_WORDS = 50;
+const LENGTH_PENALTY = 10;
+const MAX_LENGTH_PENALTY = 30;
+
+/**
+ * The rubric's axes when it is well formed: an object whose five axes are all
+ * real booleans. A string "true", a number or a missing axis makes the whole
+ * rubric malformed (it is LLM output), never a true answer.
+ * @param {unknown} rubric
+ * @returns {boolean[]|null}
+ */
+function rubricAxes(rubric) {
+  if (!isObject(rubric)) return null;
+  const axes = RUBRIC_AXES.map((axis) => (Object.hasOwn(rubric, axis) ? rubric[axis] : undefined));
+  return axes.every((v) => typeof v === 'boolean') ? axes : null;
+}
+
+/** The words of a body, as the length penalty counts them. */
+const wordCount = (body) => (typeof body === 'string' ? body.split(/\s+/).filter(Boolean).length : 0);
+
+/** The length penalty of a body: 0, or LENGTH_PENALTY per started LENGTH_STEP_WORDS over LENGTH_FREE_WORDS, capped. */
+function lengthPenalty(body) {
+  const over = wordCount(body) - LENGTH_FREE_WORDS;
+  return over > 0 ? Math.min(MAX_LENGTH_PENALTY, Math.ceil(over / LENGTH_STEP_WORDS) * LENGTH_PENALTY) : 0;
+}
+
+/**
+ * A candidate's usefulness, 0-100. Pure.
+ * With a well-formed rubric: RUBRIC_BASE + RUBRIC_POINTS per true axis, minus
+ * the body's length penalty, clamped to 0-100. Without one (an older or a
+ * mocked answer): the model's own `usefulness`, rounded and clamped as
+ * memoryrecord.usefulnessOf does, or undefined (unknown) when it gave none.
+ * @param {unknown} candidate one raw candidate of the model's answer
+ * @returns {number|undefined}
+ */
+function rubricScore(candidate) {
+  const c = isObject(candidate) ? candidate : {};
+  const axes = rubricAxes(c.rubric);
+  if (!axes) return usefulnessOf(modelScore(c.usefulness));
+  const raw = RUBRIC_BASE + RUBRIC_POINTS * axes.filter((v) => v === true).length - lengthPenalty(c.body);
+  return Math.min(USEFULNESS_MAX, Math.max(0, raw));
+}
 
 /**
  * A candidate's final score at capture time: the usefulness part of
@@ -207,6 +286,29 @@ const SUBJECTS = {
   },
 };
 
+/** The rubric in the answer's example shape. */
+const RUBRIC_EXAMPLE = `"rubric":{${RUBRIC_AXES.map((axis) => `"${axis}":true`).join(',')}}`;
+
+/** The prompt lines that explain the rubric: five yes/no questions, never a number. */
+const RUBRIC_LINES = [
+  '- rubric: five yes/no answers about the memory, each true or false (JSON booleans). Be honest, not generous: a memory that is',
+  '  not clearly a yes on an axis gets false there. A memory with few true answers is set aside unread.',
+  '  - durable: it will still matter weeks or months from now, not only for this task',
+  '  - actionable: it changes what the assistant does next time',
+  '  - specific: it is tied to this stack or repository and names a concrete command, file or error string',
+  '  - non_obvious: it is not obvious from the code or from a CLAUDE.md',
+  '  - verified: the session confirmed it; it is not a guess',
+  `  A body over ${LENGTH_FREE_WORDS} words scores lower: keep it short.`,
+];
+
+/** The prompt lines that allow expiry hints on a temporary constraint. */
+const EXPIRY_LINES = [
+  `- expires_after_days: optional, a whole number 1-${MAX_EXPIRES_DAYS}. Only for a temporary or in-progress constraint (a workaround`,
+  '  until a fix ships, a freeze, a migration under way): after that many days it is shown for review. Leave it out otherwise.',
+  `- expires_when: optional, one line of at most ${MAX_EXPIRES_WHEN} characters saying what ends the constraint ("until v2 ships").`,
+  '  Only together with expires_after_days: on its own it never brings the memory back for review.',
+];
+
 /** The prompt lines that ask a session for its "where we stopped" status. */
 const STATUS_LINES = [
   '',
@@ -269,7 +371,7 @@ function buildPrompt({ digest, project, today, existing, notWanted = [], subject
         ]
       : []),
     'Answer with JSON only, in this shape:',
-    `{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[],"usefulness":75}]${about.status ? ',"status":"..."' : ''}}`,
+    `{"candidates":[{"type":"gotcha","scope":"project","title":"...","body":"...","area":"...","supersedes":[],${RUBRIC_EXAMPLE}}]${about.status ? ',"status":"..."' : ''}}`,
     `- type: one of ${CANDIDATE_TYPES.join(', ')}`,
     '- scope: "project", or "global" when the fact holds in every project (a tool, a language, the user)',
     `- title: one line, at most ${MAX_TITLE} characters, a full statement ("Do not junction node_modules into a worktree")`,
@@ -277,8 +379,8 @@ function buildPrompt({ digest, project, today, existing, notWanted = [], subject
     '  command, file or error string. At most 1500 characters.',
     '- area: optional, one lower-case tag (worktrees, release, sync, feature, ...)',
     '- supersedes: ids from the list above that this memory replaces, usually empty',
-    '- usefulness: a whole number 0-100, how well the memory meets BOTH rules above: applicable (would it change what the assistant',
-    `  does next time) and durable (does it matter beyond this task). Under ${AUTO_REJECT_BELOW} is set aside unread; be honest, not generous.`,
+    ...RUBRIC_LINES,
+    ...EXPIRY_LINES,
     `No candidates: {"candidates":[]${about.status ? ',"status":"..."' : ''}}`,
     ...(about.status ? STATUS_LINES : []),
     ...(Array.isArray(extra) && extra.length ? ['', ...extra] : []),
@@ -306,9 +408,10 @@ function idFor(title, project, taken) {
  * @param {unknown} answer the parsed JSON the model returned
  * @param {{project: string, today: string, source: string, existing: object[]}} ctx
  *   existing = every record of this project and of `global` in the mirror
- * @returns {{records: object[], rejected: {title: string, reason: string, type?: string, usefulness?: number}[]}}
- *   type, usefulness and record (the checked record) are set on a LOW_USEFULNESS rejection only:
- *   the record goes to the graveyard (src/memorygraveyard.js), never to the log
+ * @returns {{records: object[], rejected: {title: string, reason: string, type?: string, usefulness?: number, duplicateOf?: string}[]}}
+ *   type, usefulness and record (the checked record) are set on a LOW_USEFULNESS or a DUPLICATE
+ *   rejection only: the record goes to the graveyard (src/memorygraveyard.js), never to the log;
+ *   duplicateOf = the title of the memory a DUPLICATE repeats
  */
 function candidatesFrom(answer, { project, today, source, existing }) {
   const raw = isObject(answer) && Array.isArray(answer.candidates) ? answer.candidates.filter(isObject).slice(0, MAX_RAW_CANDIDATES) : [];
@@ -347,8 +450,11 @@ function candidatesFrom(answer, { project, today, source, existing }) {
       supersedes: Array.isArray(c.supersedes) ? c.supersedes.filter((x) => sameScope.has(x)) : [],
       links: [],
       body: typeof c.body === 'string' ? c.body.slice(0, MAX_BODY + 1) : '',
-      // checkRecord rounds and clamps it; anything else is left unknown.
-      usefulness: modelScore(c.usefulness),
+      // The rubric's score, or the model's own number when it gave no valid rubric; none = unknown.
+      usefulness: rubricScore(c),
+      // checkRecord drops a bad expiry hint without failing the candidate.
+      expires_after_days: c.expires_after_days,
+      expires_when: c.expires_when,
     });
     if (!res.record) {
       reject(c, res.error);
@@ -368,7 +474,8 @@ function candidatesFrom(answer, { project, today, source, existing }) {
     const replaced = new Set(record.supersedes);
     const twin = [...existing, ...records].find((r) => !(r.project === scope && replaced.has(r.id)) && nearDuplicate(r, record));
     if (twin) {
-      reject(c, 'duplicate');
+      // The record rides along so the graveyard can keep it as "duplicate of: <title>".
+      rejected.push({ title: record.title, reason: DUPLICATE, type: record.type, usefulness: record.usefulness, duplicateOf: twin.title || keyOf(twin), record });
       continue;
     }
     taken.add(keyOf(record));
@@ -392,6 +499,16 @@ module.exports = {
   SUGGESTED_GLOBAL,
   captureScore,
   scoreLane,
+  rubricScore,
+  lengthPenalty,
+  RUBRIC_AXES,
+  RUBRIC_BASE,
+  RUBRIC_POINTS,
+  LENGTH_FREE_WORDS,
+  LENGTH_STEP_WORDS,
+  LENGTH_PENALTY,
+  MAX_LENGTH_PENALTY,
+  DUPLICATE,
   CANDIDATE_TYPES,
   MAX_CANDIDATES,
   AUTO_REJECT_BELOW,

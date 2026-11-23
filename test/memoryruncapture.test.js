@@ -729,3 +729,95 @@ test('the review line names the run, in Polish and English', () => {
   assert.match(lines, /flag\.kind === 'disputed' && flag\.run/);
   assert.match(lines, /mem\.inbox\.review\.disputedRun/);
 });
+
+// ---- rubric scoring and duplicates ------------------------------------------------
+
+/** A rubric with `yes` of its five axes true, in RUBRIC_AXES order. */
+const rubricOf = (yes) => Object.fromEntries(['durable', 'actionable', 'specific', 'non_obvious', 'verified'].map((axis, i) => [axis, i < yes]));
+
+test('run candidates are scored by their rubric, into the same three lanes as a session', async (t) => {
+  const s = setup(t);
+  s.state.reply = reply(
+    // 25 + 15 = 40: graveyard, whatever usefulness the model also wrote.
+    candidate('Weak note about the weather', { rubric: rubricOf(1), usefulness: 95 }),
+    // 25 + 45 = 70: inbox.
+    candidate('Kept gotcha about ledgers', { rubric: rubricOf(3) }),
+    // 25 + 75 = 100: inbox too, auto-save eligible only with its switch on (off here).
+    candidate('Do not junction node_modules into a worktree', { rubric: rubricOf(5) }),
+  );
+
+  const res = await s.capture.capture(finished());
+
+  assert.equal(res.saved, 2);
+  const byTitle = Object.fromEntries(scan(s.dir).records.map(([, r]) => [r.title, r]));
+  assert.equal(byTitle['Kept gotcha about ledgers'].usefulness, 70);
+  assert.equal(byTitle['Do not junction node_modules into a worktree'].usefulness, 100);
+  assert.equal(byTitle['Do not junction node_modules into a worktree'].confidence, 'observed');
+  const graves = readGraveyard(graveyardPath(s.configDir), NOW);
+  assert.deepEqual(graves.map((g) => [g.reason, g.score]), [['low usefulness', 40]]);
+});
+
+test('a run candidate dropped as a duplicate is logged with duplicateOf and buried as "duplicate of: <title>"', async (t) => {
+  const s = setup(t);
+  writeRecord(s.dir, {
+    id: 'ledger-keeps-order',
+    type: 'gotcha',
+    project: PROJECT,
+    title: 'Kept gotcha about ledgers',
+    created: '2026-10-01',
+    confidence: 'confirmed',
+    supersedes: [],
+    links: [],
+    body: 'Kept gotcha about ledgers. Unique body for Kept gotcha about ledgers.',
+  });
+  s.state.reply = reply(candidate('Kept gotcha about ledgers', { rubric: rubricOf(3) }));
+
+  const res = await s.capture.capture(finished());
+
+  assert.equal(res.saved, 0);
+  const events = s.log.read().map(({ at, ...e }) => e);
+  assert.deepEqual(events.find((e) => e.ev === 'dropped'), {
+    ev: 'dropped',
+    project: PROJECT,
+    reason: 'duplicate',
+    type: 'gotcha',
+    title: 'Kept gotcha about ledgers',
+    usefulness: 70,
+    duplicateOf: 'Kept gotcha about ledgers',
+  });
+  const graves = readGraveyard(graveyardPath(s.configDir), NOW);
+  assert.equal(graves.length, 1);
+  assert.equal(graves[0].reason, 'duplicate of: Kept gotcha about ledgers');
+  assert.equal(graves[0].score, 70);
+  assert.equal(graves[0].record.confidence, 'observed');
+});
+
+test('the REPEATED FAILURE floor holds over a low rubric score; other candidates keep their rubric score', async (t) => {
+  const s = setup(t);
+  // 25 + 15 = 40 on its own: it would go to the graveyard without the floor.
+  const gotcha = candidate('Ledger keeps order test fails in parallel verify', { rubric: rubricOf(1) });
+  const other = candidate('Do not junction node_modules into a worktree', { rubric: rubricOf(4) });
+  s.state.reply = () => (s.state.prompts.length < 3 ? reply() : reply(gotcha, other));
+  for (const id of ['prun1', 'prun2', 'prun3']) await s.capture.capture(runOf(id, ledgerFailure()));
+
+  const byTitle = Object.fromEntries(scan(s.dir).records.map(([, r]) => [r.title, r]));
+  assert.equal(byTitle[gotcha.title].usefulness, 80);
+  assert.equal(byTitle[other.title].usefulness, 85);
+});
+
+test('the REPEATED FAILURE floor never lowers a higher rubric score', async (t) => {
+  const s = setup(t);
+  const gotcha = candidate('Ledger keeps order test fails in parallel verify', { rubric: rubricOf(5) });
+  s.state.reply = () => (s.state.prompts.length < 3 ? reply() : reply(gotcha));
+  for (const id of ['prun1', 'prun2', 'prun3']) await s.capture.capture(runOf(id, ledgerFailure()));
+
+  const [[, record]] = scan(s.dir).records;
+  assert.equal(record.usefulness, 100);
+});
+
+test('without a repeated failure a low rubric score is still dropped', async (t) => {
+  const s = setup(t);
+  s.state.reply = reply(candidate('Ledger keeps order test fails in parallel verify', { rubric: rubricOf(1) }));
+  await s.capture.capture(runOf('prun1', ledgerFailure()));
+  assert.equal(scan(s.dir).records.length, 0);
+});

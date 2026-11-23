@@ -25,7 +25,7 @@
 
 const { readDoc, writeAtomic } = require('./projectsync');
 const { GLOBAL, projectFromRepoKey } = require('./memoryrecord');
-const { nearDuplicate, wordsOf } = require('./memoryextract');
+const { nearDuplicate, wordsOf, rubricScore } = require('./memoryextract');
 const { normalizeFailure, MAX_SIGNATURE_CHARS } = require('./memoryrundigest');
 const { RUN_ID_RE } = require('./orchestraReport');
 
@@ -167,6 +167,9 @@ function mentionShare(candidate, signature) {
  * score). Applied before the extractor's filter, so a low model score cannot
  * drop the gotcha the digest asked for. The score only sorts the inbox: it
  * never approves anything.
+ * The candidate's own score is the extractor's (memoryextract.rubricScore: the
+ * rubric, or the model's number without one). The floored candidate carries
+ * the result as `usefulness` and no rubric, so the extractor keeps the floor.
  * @param {unknown} answer the parsed model answer
  * @param {{signature: string}[]} repeats the failures the digest named
  * @returns {unknown} a new answer (the input is not changed)
@@ -188,9 +191,9 @@ function floorRepeated(answer, repeats) {
   }
   const candidates = answer.candidates.map((c, i) => {
     if (!floored.has(i)) return c;
-    // A fraction (0-1 scale) or a missing score counts as no score at all.
-    const score = typeof c.usefulness === 'number' && Number.isFinite(c.usefulness) && c.usefulness >= 1 ? c.usefulness : 0;
-    return { ...c, usefulness: Math.max(REPEATED_USEFULNESS_FLOOR, score) };
+    // A missing score (or a 0-1 fraction, which rubricScore leaves unknown) counts as no score at all.
+    const score = rubricScore(c) ?? 0;
+    return { ...c, rubric: undefined, usefulness: Math.max(REPEATED_USEFULNESS_FLOOR, score) };
   });
   return { ...answer, candidates };
 }

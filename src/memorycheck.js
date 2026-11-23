@@ -38,7 +38,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { validProject, splitKey, checkRecord, DATE_RE, MAX_BODY, GLOBAL } = require('./memoryrecord');
 const { scan, writeRecord } = require('./memorystore');
-const { supersededKeys, findConfirmed, verify, anchorsOf, checkedOn, changedSince } = require('./memoryreview');
+const { supersededKeys, findConfirmed, verify, anchorsOf, checkedOn, changedSince, expiredOn, withoutExpiry } = require('./memoryreview');
 const { openDisputes, openChecks, lastChecks, CHECK_VERDICTS, MAX_EVIDENCE, MAX_EVIDENCE_CHARS, DAY_MS } = require('./memorylog');
 const { createJobLock, promptSafe } = require('./memoryscan');
 const { scrub } = require('./hostscrub');
@@ -192,8 +192,9 @@ function applyCheck({ dir, key, checked, result, today, log, roots = {} }) {
 /**
  * "Edit" after a `partly` answer: the user's corrected text replaces the
  * memory's, and it counts as verified today. Only a memory whose open check
- * says partly may be edited this way: the channel is no way to rewrite any
- * confirmed memory.
+ * says partly, or whose expiry ran out (the review list's 'expired' flag), may
+ * be edited this way: the channel is no way to rewrite any confirmed memory.
+ * Editing an expired memory rewrites it as current: its expiry fields go.
  * @param {{dir: string, key: string, title: string, body: string, today: string,
  *   log: {add: Function, read: Function}}} ctx
  * @returns {{ok: true, key: string}|{ok: false, reason: string}} reason = 'not-partly' or what checkRecord refused
@@ -205,8 +206,10 @@ function editChecked({ dir, key, title, body, today, log }) {
   // Archived since the answer (decay, or the other PC): an edit must not bring it back silently.
   if (found.record.archived) return { ok: false, reason: 'not-found' };
   const open = openChecks(log.read()).get(key);
-  if (!open || open.verdict !== 'partly') return { ok: false, reason: 'not-partly' };
-  const res = checkRecord({ ...found.record, title, body, last_verified: today });
+  const expired = Boolean(expiredOn(found.record, today));
+  if (!expired && (!open || open.verdict !== 'partly')) return { ok: false, reason: 'not-partly' };
+  const base = expired ? withoutExpiry(found.record) : found.record;
+  const res = checkRecord({ ...base, title, body, last_verified: today });
   if (!res.record) return { ok: false, reason: res.error };
   if (`${res.record.project}/${res.record.id}` !== key) return { ok: false, reason: 'bad-key' };
   writeRecord(dir, res.record);

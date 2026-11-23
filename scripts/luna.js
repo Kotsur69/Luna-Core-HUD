@@ -395,6 +395,7 @@ const FLAG_TEXT = {
   checked: (f) => `"Check if still true" said ${f.verdict}${f.note ? `: ${f.note}` : ''}`,
   anchor: (f) => `names a file that is gone: ${f.missing.join(', ')}`,
   changed: (f) => `files it names changed since it was checked: ${f.files.join(', ')} (last change ${f.last})`,
+  expired: (f) => `temporary constraint expired on ${f.on}${f.when ? ` (it was meant to last: ${f.when})` : ''}`,
   stale: (f) => `not verified since ${f.since}`,
   unopened: (f) => `never opened in ${f.days} days (low priority)`,
 };

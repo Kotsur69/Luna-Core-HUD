@@ -534,3 +534,46 @@ test('git history is read by main without a shell; a failure is an empty history
   assert.equal(await readGitLog({ root, since: '2026-10-01', exec: (c, a, o, cb) => cb(new Error('no git')) }), '');
   assert.equal(seen.length, 1);
 });
+
+// --- Edit on an expired memory (src/memoryreview.js 'expired' flag) ------------------
+
+test('Edit is allowed on an expired memory without a check, and the edit clears its expiry', (t) => {
+  // TODAY is 2026-11-15: 2026-10-01 + 30 days = 2026-10-31, before today.
+  const ctx = setup(t, [rec('a', { expires_after_days: 30, expires_when: 'until the fix ships' })]);
+  const key = `${PROJECT}/a`;
+
+  assert.deepEqual(editChecked({ dir: ctx.dir, key, title: 'Still a constraint', body: 'Rewritten body.', today: TODAY, log: ctx.log }), { ok: true, key });
+
+  const after = stored(ctx.dir)[key];
+  assert.equal(after.title, 'Still a constraint');
+  assert.equal(after.body, 'Rewritten body.');
+  assert.equal(after.last_verified, TODAY);
+  assert.equal(after.expires_after_days, undefined);
+  assert.equal(after.expires_when, undefined);
+  assert.equal(reviewList({ records: scan(ctx.dir).records, today: TODAY }).total, 0);
+});
+
+test('Edit is still refused on a memory whose expiry has not run out', (t) => {
+  const ctx = setup(t, [rec('a', { expires_after_days: 60 })]);
+  const key = `${PROJECT}/a`;
+
+  assert.deepEqual(editChecked({ dir: ctx.dir, key, title: 'T', body: 'B', today: TODAY, log: ctx.log }), { ok: false, reason: 'not-partly' });
+  assert.equal(stored(ctx.dir)[key].body, 'Body of a.');
+});
+
+test('the To check tab words the expired flag, with expires_when, in pl and en, through textContent only', () => {
+  const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  const i18n = read('src/renderer/i18n.js');
+  for (const key of ['mem.inbox.review.expiredOn', 'mem.inbox.review.expiredWhen']) {
+    const lines = i18n.split('\n').filter((l) => l.includes(`'${key}':`));
+    assert.equal(lines.length, 2, `${key} must exist once in pl and once in en`);
+    assert.doesNotMatch(lines[0], /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, `${key}: Polish UI strings carry no diacritics`);
+    assert.match(lines[0], /\{date\}/);
+  }
+  const lines = read('src/renderer/modules/memoryinboxlines.js');
+  assert.match(lines, /flag\.kind === 'expired' && flag\.when/);
+  assert.match(lines, /mem\.inbox\.review\.expiredWhen', \{ date: flag\.on \|\| '-', when: flag\.when \}/);
+  // The Edit button of the check flow is offered on an expired entry too.
+  assert.match(read('src/renderer/modules/memorycheckview.js'), /verdict === 'partly' \|\| expired/);
+  for (const f of ['memoryinboxlines', 'memorycheckview', 'memoryinbox']) assert.doesNotMatch(read(`src/renderer/modules/${f}.js`), /innerHTML/, f);
+});
