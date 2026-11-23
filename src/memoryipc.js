@@ -72,11 +72,11 @@
 'use strict';
 
 const { listInbox, approve, reject, update, makeGlobal } = require('./memoryinbox');
-const { MAX_BODY, MAX_TITLE, finalScore, splitKey } = require('./memoryrecord');
+const { MAX_BODY, MAX_TITLE, finalScore, usageRecommendation, splitKey } = require('./memoryrecord');
 const { recentUsage } = require('./memoryuse');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
-const { captureStats, decisionEvent, lastChecks, DAY_MS } = require('./memorylog');
+const { captureStats, decisionEvent, lastChecks, openDisputes, DAY_MS } = require('./memorylog');
 const { checkOf } = require('./memorycheck');
 const auto = require('./memoryautoaccept');
 const { readAutoRecall, setAutoRecall } = require('./memoryrecallhook');
@@ -84,13 +84,13 @@ const { CANDIDATE_TYPES } = require('./memoryextract');
 
 /** The id the memory window's auto-recall switch goes by (memoryautopanel.js). */
 const RECALL_SWITCH = 'recall';
-const { listConflicts } = require('./memoryconflict');
+const { listConflicts, conflictedKeys } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
 const { cachedChanges, currentChanges } = require('./memorychanges');
-const { exportAll } = require('./memoryexport');
 const { sharedVectorStore, vectorLookup, docText } = require('./memoryembed');
 const { rememberRejected, forgetSimilar } = require('./memoryshield');
+const { exportAll } = require('./memoryexport');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -121,15 +121,30 @@ function cleanEdits(raw) {
 
 /**
  * A listed memory with its final score (memoryrecord.finalScore), read from
- * the record of its key; an item whose record is gone is left as it is.
+ * the record of its key, and what this PC's use recommends for it
+ * (memoryrecord.usageRecommendation); an item whose record is gone is left as it is.
  * @param {{key: string}} item
  * @param {Map<string, object>} byKey the mirror's records
- * @param {{reads: Map<string, number>, today: string}} usage memoryuse.recentUsage()
+ * @param {{reads: Map<string, number>, today: string, conflicted?: Set<string>, disputed?: {has: Function}}} usage
+ *   memoryuse.recentUsage(), with the keys in an open conflict and those with an open dispute
  */
 function withFinal(item, byKey, usage) {
   const record = byKey.get(item.key);
-  return record ? { ...item, final: finalScore(record, { reads: usage.reads.get(item.key) || 0, today: usage.today }) } : item;
+  if (!record) return item;
+  const reads = usage.reads.get(item.key) || 0;
+  const disputed = Boolean(usage.disputed && usage.disputed.has(item.key));
+  const conflicted = Boolean(usage.conflicted && usage.conflicted.has(item.key));
+  return {
+    ...item,
+    last_used: record.last_used || null,
+    boosted_at: record.boosted_at || null,
+    final: finalScore(record, { reads, today: usage.today, conflicted, disputed }),
+    recommend: usageRecommendation({ ...record, reads, disputed }, usage.today),
+  };
 }
+
+/** recentUsage() with the flags that take points off the final score. */
+const scoredUsage = (evs, records, now) => ({ ...recentUsage(evs, now), conflicted: conflictedKeys(records), disputed: openDisputes(evs) });
 
 /** The inbox's conflict pairs, each side with its final score. */
 const conflictsWithFinal = (conflicts, byKey, usage) => ({
@@ -167,9 +182,9 @@ function cleanSearchMode(raw) {
  *   todoProjects = LunaCore's projects ({id, path}); memoryProjectOf = a folder -> its memory
  *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js);
  *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none;
- *   chooseFolder = main's folder dialog for "Export all": (event) => Promise<string|null>, null = cancelled;
  *   vectors = the vector store (src/memoryembed.js): near-duplicates by meaning, and the
- *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield
+ *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield;
+ *   chooseFolder = main's folder dialog for "Export all": (event) => Promise<string|null>, null = cancelled
  */
 function registerMemoryIpc({
   ipcMain,
@@ -188,8 +203,8 @@ function registerMemoryIpc({
   memoryProjectOf = () => null,
   todos = null,
   changes = null,
-  chooseFolder = null,
   vectors = sharedVectorStore,
+  chooseFolder = null,
 }) {
   /** The vector store right now, or null; a failure there means "by words", never a failed call. */
   const store = () => {
@@ -307,8 +322,9 @@ function registerMemoryIpc({
     try {
       const evs = events();
       const { captures, proposed, approved, rejected, edited, rate } = captureStats(evs, { since: now() - STATS_DAYS * DAY_MS });
-      const usage = recentUsage(evs, now());
       const { records } = scan(dir());
+      // Reads, and the conflicts and open disputes that take points off the final score.
+      const usage = scoredUsage(evs, records, now());
       snapshot(records);
       return {
         ok: true,
@@ -341,7 +357,7 @@ function registerMemoryIpc({
       const rootsHere = knownRoots();
       const res = reviewList({ records, today: isoDate(now()), events: evs, roots: rootsHere, changes: changesFor(records, rootsHere) });
       const byKey = new Map(records);
-      const usage = recentUsage(evs, now());
+      const usage = scoredUsage(evs, records, now());
       // Each entry's last "Check if still true" answer on this PC (src/memorycheck.js), or null.
       const checks = lastChecks(evs);
       return { ok: true, ...res, items: res.items.map((item) => ({ ...withFinal(item, byKey, usage), check: checkOf(checks, item.key) })) };

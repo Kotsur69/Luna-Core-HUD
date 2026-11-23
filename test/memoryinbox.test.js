@@ -398,7 +398,7 @@ test('the inbox sorts by final score: reads on this PC lift an entry, a tie fall
       ['unrated', null],
     ],
   );
-  assert.deepEqual(items[0].final.parts, { usefulness: 60, confidence: 'observed', usage: 5 });
+  assert.deepEqual(items[0].final.parts, { usefulness: 60, confidence: 'observed', usage: 5, penalties: { conflict: 0, dispute: 0 } });
   // Without usage (the CLI, the phone) the order is the usefulness order.
   assert.deepEqual(
     listInbox(dir).items.map((i) => i.id),

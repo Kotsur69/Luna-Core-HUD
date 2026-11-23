@@ -549,6 +549,12 @@ contextBridge.exposeInMainWorld('lunacore', {
       title: edits && typeof edits.title === 'string' ? edits.title : '',
       body: edits && typeof edits.body === 'string' ? edits.body : '',
     }),
+  /** One lean model call drafts the merge of a listed pair. Read only. Promise<{ok, title, body} | {ok:false, reason}>. */
+  memoryMergeDraft: (a, b) =>
+    ipcRenderer.invoke('memory:merge-draft', {
+      a: typeof a === 'string' ? a : '',
+      b: typeof b === 'string' ? b : '',
+    }),
   // "Check if still true" (src/memorycheck.js): Sonnet reads the project's code,
   // read-only. Keys and projects only; main checks them and the project folder.
   /** Checks one confirmed memory. Promise<{ok, total} | {ok:false, reason}>; the answer arrives as memory:changed. */
