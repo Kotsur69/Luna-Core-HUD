@@ -550,3 +550,17 @@ test('an unconfirmed, archived or superseded memory is never flagged failing', (
 
   assert.equal(s.list({ events }).total, 0);
 });
+
+test('a "still true" at the same moment as an outcome settles it; the window edges hold', (t) => {
+  const s = setup(t, [rec('edge')]);
+  const failures = [1, 2, 3].map((n) => outcome([key('edge')], 'failed', { pkgId: `p${n}`, daysAgo: 1 }));
+  const settled = { at: failures[2].at, ev: 'verified', key: key('edge'), by: 'user' };
+  assert.equal(s.list({ events: [...failures, settled] }).total, 0);
+
+  // Exactly at the window start still counts; one millisecond older does not.
+  const endOfToday = Date.parse(TODAY) + 86400000;
+  const windowStart = endOfToday - FAILING_BRIEF_DAYS * 86400000;
+  const edge = (at, pkgId) => ({ ...failures[0], at, pkgId });
+  assert.equal(s.list({ events: [edge(windowStart, 'q1'), edge(windowStart, 'q2'), edge(windowStart, 'q3')] }).total, 1);
+  assert.equal(s.list({ events: [edge(windowStart - 1, 'q1'), edge(windowStart, 'q2'), edge(windowStart, 'q3')] }).total, 0);
+});

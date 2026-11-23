@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { recallForPrompt, createRecaller, promptText, MAX_RECALLED, MIN_RECALL_COSINE, RECALL_TIMEOUT_MS, MAX_RECALL_BODY_CHARS } = require('../src/memoryrecall.js');
+const { recallForPrompt, createRecaller, promptText, MAX_RECALLED, MIN_RECALL_COSINE, RECALL_TIMEOUT_MS, MAX_RECALL_BODY_CHARS, RECORDS_TTL_MS } = require('../src/memoryrecall.js');
 const { DATA_NOTE } = require('../src/memorytools.js');
 const { writeRecord } = require('../src/memorystore.js');
 const { createLog, logPath } = require('../src/memorylog.js');
@@ -218,4 +218,26 @@ test('a tab gets one recall at a time; the next prompt is answered again', async
   assert.equal(second, null);
   assert.deepEqual(other.keys, [key('a')]);
   assert.deepEqual((await ask('s1')).keys, [key('a')]);
+});
+
+test('the recaller reads the mirror at most every few seconds', async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-recall-ttl-'));
+  t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const dir = path.join(base, 'memory');
+  writeRecord(dir, rec('first'));
+  const clock = { at: NOW };
+  const vectors = store(
+    new Map([
+      [key('first'), at(0.8)],
+      [key('later'), at(0.9)],
+    ]),
+  );
+  const recaller = createRecaller({ dir: () => dir, vectors: () => vectors, now: () => clock.at });
+  const ask = () => recaller({ project: PROJECT, prompt: PROMPT, session: 's1' });
+
+  assert.deepEqual((await ask()).keys, [key('first')]);
+  writeRecord(dir, rec('later'));
+  assert.deepEqual((await ask()).keys, [key('first')], 'within the window: the same read');
+  clock.at += RECORDS_TTL_MS;
+  assert.deepEqual((await ask()).keys, [key('later'), key('first')]);
 });

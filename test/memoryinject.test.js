@@ -397,3 +397,41 @@ test('God Mode warms the query before the brief and keeps the injected keys on t
   assert.deepEqual(calls, [['warm', '/repo', 'deps'], ['select', '/repo', 'deps']]);
   assert.deepEqual(saved.packages[0].briefMemory, { project: PROJECT, keys });
 });
+
+test('a worker that never got its brief leaves no brief memory on the package', async () => {
+  let saved = null;
+  const orch = createOrchestra({
+    now: () => 1700000000000,
+    readTodos: () => [{ at: 1, text: 'one', done: false }],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({ ok: true, raw: { packages: [{ ...PKG, todoAts: [1], dependsOn: [], model: 'sonnet' }], notes: '' }, costUsd: 0 }),
+    addWorktree: async (repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+    briefDir: () => '/cfg/tasks',
+    writeBrief: () => false,
+    createSession: () => ({ id: 's1' }),
+    saveState: (data) => {
+      saved = data;
+    },
+    projectMemory: () => ({ text: `${SECTION_HEADING}\nintro\n- x`, keys: [`${PROJECT}/worktree-junction`], project: PROJECT }),
+  });
+  const { plan } = await orch.makePlan({ projectId: 'p1', repoPath: '/repo', profileId: 'claude-cloud', env: {} });
+  const res = await orch.launch({ planId: plan.id });
+
+  assert.equal(res.plan.packages[0].state, 'failed');
+  assert.equal(saved.packages[0].briefMemory || null, null);
+});
+
+test('one embedding per query at a time, and a cached query is dropped when the model changes', async (t) => {
+  const store = fakeStore(meaningVectors(), { delayMs: 30 });
+  let model = 'qwen3-embedding-4b';
+  store.status = () => ({ model, count: 5 });
+  const { inject } = injector(t, store);
+
+  const [a, b] = await Promise.all([inject.warm('/repo', PKG), inject.warm('/repo', PKG)]);
+  assert.deepEqual([a, b], [true, true]);
+  assert.equal(store.asked, 1);
+  assert.equal(inject.select('/repo', PKG).search, 'meaning');
+
+  model = 'another-model';
+  assert.equal(inject.select('/repo', PKG).search, 'keywords');
+});

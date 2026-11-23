@@ -72,6 +72,21 @@ function withInjected(prev, next) {
 }
 
 /**
+ * The package fields after one more brief (orchestra.js projectMemoryFor):
+ * the merged brief memory, and a cleared `briefOutcome` when the memories
+ * changed, so the next settle logs a line that names all of them.
+ * @param {unknown} prev the package's stored briefMemory
+ * @param {{project: string, keys: string[]}} next
+ * @returns {{briefMemory: object, briefOutcome?: null}}
+ */
+function injectedFields(prev, next) {
+  const merged = withInjected(prev, next);
+  const old = normalizeBriefMemory(prev);
+  const same = old && old.project === merged.project && old.keys.length === merged.keys.length && old.keys.every((k, i) => k === merged.keys[i]);
+  return same ? { briefMemory: merged } : { briefMemory: merged, briefOutcome: null };
+}
+
+/**
  * How a package ended, for the memories of its brief.
  * @param {{state: string, stalls?: number, autoRetries?: number, verifyRounds?: number, stallHistory?: object[]}} pkg
  * @returns {'clean'|'retried'|'stalled'|'failed'|null} null = not settled, or closed / killed by hand
@@ -88,17 +103,21 @@ function briefOutcomeOf(pkg) {
 /**
  * The `brief-outcome` lines a settled run still owes the memory log: one per
  * package with brief memories whose outcome is new or changed since it was
- * last logged (`briefOutcome` on the package).
+ * last logged (`briefOutcome` on the package). A pushed package the
+ * integration did not land (`held`: skipped at its merge verify, or the
+ * whole pass failed) is not logged yet: its push alone is not a clean pass.
  * @param {{id: string, packages: object[]}} plan
+ * @param {{held?: Set<string>}} [opts] held = ids of pushed packages to leave for a later pass
  * @returns {{pkgId: string, outcome: string, event: object}[]} event = a memorylog add() argument
  */
-function briefOutcomeUpdates(plan) {
+function briefOutcomeUpdates(plan, { held = new Set() } = {}) {
   const packages = plan && Array.isArray(plan.packages) ? plan.packages : [];
   const out = [];
   for (const pkg of packages) {
     const memory = isObject(pkg) ? normalizeBriefMemory(pkg.briefMemory) : null;
     const outcome = memory ? briefOutcomeOf(pkg) : null;
     if (!outcome || pkg.briefOutcome === outcome) continue;
+    if (pkg.state === 'pushed' && held.has(pkg.id)) continue;
     out.push({
       pkgId: pkg.id,
       outcome,
@@ -113,12 +132,13 @@ function briefOutcomeUpdates(plan) {
  * logged package with its outcome, so a later pass logs only what changed.
  * A line the log refused (add() answered false) is tried again next pass.
  * @param {{id: string, packages: object[]}} plan
- * @param {{log: (event: object) => boolean|void, patch: (id: string, fields: object) => void}} io
+ * @param {{log: (event: object) => boolean|void, patch: (id: string, fields: object) => void, held?: Set<string>}} io
+ *   held = pushed packages the integration did not land (briefOutcomeUpdates)
  * @returns {number} lines logged
  */
-function logBriefOutcomes(plan, { log, patch }) {
+function logBriefOutcomes(plan, { log, patch, held }) {
   let logged = 0;
-  for (const { pkgId, outcome, event } of briefOutcomeUpdates(plan)) {
+  for (const { pkgId, outcome, event } of briefOutcomeUpdates(plan, { held })) {
     if (log(event) === false) continue;
     patch(pkgId, { briefOutcome: outcome });
     logged += 1;
@@ -144,6 +164,7 @@ module.exports = {
   normalizeBriefMemory,
   readInjection,
   withInjected,
+  injectedFields,
   briefOutcomeOf,
   briefOutcomeUpdates,
   logBriefOutcomes,

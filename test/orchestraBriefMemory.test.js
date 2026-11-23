@@ -156,3 +156,71 @@ test('a refused or throwing log never breaks the finalize; a refused line is tri
   assert.equal(throwing.plan.integration.state, 'done');
   assert.ok(throwing.events.some(([kind, data]) => kind === 'error' && data.where === 'briefOutcome'));
 });
+
+test('a brief with other memories clears the logged outcome, the same memories keep it', () => {
+  assert.deepEqual(brief.injectedFields(MEMORY, MEMORY), { briefMemory: MEMORY });
+  assert.deepEqual(brief.injectedFields(MEMORY, { project: PROJECT, keys: [key('c')] }), {
+    briefMemory: { project: PROJECT, keys: [key('a'), key('b'), key('c')] },
+    briefOutcome: null,
+  });
+  assert.deepEqual(brief.injectedFields(undefined, MEMORY), { briefMemory: MEMORY, briefOutcome: null });
+});
+
+test('a pushed package the integration did not land waits; stalled and failed ones are logged anyway', () => {
+  const plan = { id: 'run1', packages: [pkg('a', { briefMemory: MEMORY }), pkg('b', { state: 'failed', briefMemory: MEMORY })] };
+  assert.deepEqual(
+    brief.briefOutcomeUpdates(plan, { held: new Set(['a', 'b']) }).map((u) => u.pkgId),
+    ['b'],
+  );
+});
+
+/** A merge-mode run whose integrateMerge answers `res`. */
+function mergeFinalizer(t, packages, res) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-briefmerge-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  const log = createLog(logPath(dir), { now: () => 1700000000000 });
+  const plan = { id: 'run2', repoPath: '/r', baseBranch: 'main', integrationMode: 'merge', integration: { state: 'idle' }, approvalLog: [], packages };
+  const fin = createFinalizer({
+    getPlan: () => plan,
+    patch: (id, fields) => {
+      plan.packages = plan.packages.map((p) => (p.id === id ? { ...p, ...fields } : p));
+    },
+    commit: () => {},
+    view: () => ({ id: plan.id, packages: plan.packages, integration: plan.integration, overlaps: [] }),
+    onRunEvent: () => {},
+    now: () => 1,
+    sleep: async () => {},
+    integrateMerge: async () => res,
+    logBriefOutcome: (event) => log.add(event),
+  });
+  return { plan, fin, log };
+}
+
+test('a package skipped at its merge verify is not logged clean; the landed one is', async (t) => {
+  const f = mergeFinalizer(t, [pkg('a', { briefMemory: MEMORY }), pkg('b', { briefMemory: MEMORY })], {
+    ok: true,
+    merged: ['a'],
+    skipped: [{ id: 'b', stage: 'verify', detail: 'red', files: [] }],
+    headSha: 'a'.repeat(40),
+  });
+
+  await f.fin.finalize();
+
+  assert.deepEqual(
+    f.log.read().map((e) => [e.pkgId, e.outcome]),
+    [['a', 'clean']],
+  );
+  assert.equal('briefOutcome' in f.plan.packages.find((p) => p.id === 'b'), false);
+});
+
+test('a failed integration pass logs no pushed package, but still its stalled ones', async (t) => {
+  const f = mergeFinalizer(t, [pkg('a', { briefMemory: MEMORY }), pkg('s', { state: 'stalled', briefMemory: MEMORY })], { ok: false, stage: 'conflict', detail: 'x' });
+
+  await f.fin.finalize();
+
+  assert.equal(f.plan.integration.state, 'failed');
+  assert.deepEqual(
+    f.log.read().map((e) => [e.pkgId, e.outcome]),
+    [['s', 'stalled']],
+  );
+});

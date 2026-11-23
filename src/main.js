@@ -301,7 +301,7 @@ const { conflictCount: memoryConflictCount } = require('./memoryconflict');
 const { createDecayTimer: createMemoryDecay, createReferenceRecorder: createMemoryReferences } = require('./memorydecay');
 const { createInjector: createMemoryInjector } = require('./memoryinject');
 const { createRecaller: createMemoryRecaller } = require('./memoryrecall');
-const { recallProject, prepareRecallHook, removeRecallHook, withRecallHook } = require('./memoryrecallhook');
+const { recallProject, prepareRecallHook, removeRecallHook, recallHookLaunch } = require('./memoryrecallhook');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
@@ -1926,11 +1926,16 @@ const memoryRecaller = createMemoryRecaller({
   onHits: (keys) => memoryReferences.note(keys),
 });
 
-/** The intake store's `recall` for one tab, or undefined: God Mode workers and tabs with recall off get none. */
+/**
+ * The intake store's `recall` for one tab; God Mode workers get none. Whether
+ * recall is on is read per /recall, not per MCP request: a tab with it off gets {}.
+ */
 function recallFor(session) {
   if (orchestraRuns.ownsSession(session.id)) return undefined;
-  const project = recallProjectOf(session);
-  return project ? (prompt) => memoryRecaller({ project, prompt, session: session.id }) : undefined;
+  return (prompt) => {
+    const project = recallProjectOf(session);
+    return project ? memoryRecaller({ project, prompt, session: session.id }) : null;
+  };
 }
 
 /**
@@ -2358,8 +2363,10 @@ function spawnInto(session, profile, launch = null) {
         const hasTools = intakeState(startCommand, launched, Boolean(agyServer)) === 'ready';
         const claude = !isOverride && isClaudeCommand(startCommand);
         const carded = claude || agy ? withMemoryCard(launched, prepareCard(session, hasTools)) : launched;
-        // Auto-recall's hook settings, when prepareIntake wrote them for this tab.
-        proc.write(`${claude ? withRecallHook(carded, session.recallHook) : carded}\r`);
+        // Auto-recall's hook settings, when prepareIntake wrote them; a file the command cannot carry is deleted.
+        const recalled = recallHookLaunch(carded, { claude, file: session.recallHook, dir: userDir(), sessionId: session.id });
+        session.recallHook = recalled.file;
+        proc.write(`${recalled.command}\r`);
         session.todoTools = intakeState(startCommand, launched, Boolean(agyServer));
         // An override agy command gets no server, but ✨ still words its state for agy.
         session.todoCli = isAgyCommand(startCommand) ? 'agy' : null;

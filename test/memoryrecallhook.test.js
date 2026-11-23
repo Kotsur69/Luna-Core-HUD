@@ -161,7 +161,7 @@ test('preload exposes the switch with a boolean guard, and the window routes it 
 test('main wires the hook, the store recall and the cleanup', () => {
   const main = read('src/main.js');
   assert.match(main, /prepareRecallHook\(\{ dir: userDir\(\), sessionId: session\.id, url: intakeServer\.recallUrl\(\), token,/);
-  assert.match(main, /withRecallHook\(carded, session\.recallHook\)/);
+  assert.match(main, /recallHookLaunch\(carded, \{ claude, file: session\.recallHook, dir: userDir\(\), sessionId: session\.id \}\)/);
   assert.match(main, /recall: recallFor\(session\)/);
   assert.equal(main.split('removeRecallHook(userDir(),').length - 1, 2);
   assert.match(main, /recallFile: \(\) => memoryPaths\(userDir\(\)\)\.recall/);
@@ -178,4 +178,30 @@ test('a hook file left from an earlier start is replaced, never written into', (
   assert.equal(file, old);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).hooks.UserPromptSubmit[0].hooks[0].headers.Authorization, `Bearer ${TOKEN}`);
   if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+test('recallHookLaunch keeps the file only when the command carries it, and deletes it otherwise', (t) => {
+  const dir = tmp(t);
+  const make = () => hook.prepareRecallHook({ dir, sessionId: 's5', url: URL, token: TOKEN, on: true });
+
+  const used = hook.recallHookLaunch('claude', { claude: true, file: make(), dir, sessionId: 's5' });
+  assert.match(used.command, /^claude --settings '.+recall-hook-s5\.local\.json'$/);
+  assert.ok(fs.existsSync(used.file));
+
+  for (const [command, claude] of [
+    ['agy --mode plan', false],
+    ['claude --settings mine.json', true],
+    ['my-override', false],
+  ]) {
+    const res = hook.recallHookLaunch(command, { claude, file: make(), dir, sessionId: 's5' });
+    assert.deepEqual(res, { command, file: null }, command);
+    assert.equal(fs.existsSync(hook.hookSettingsPath(dir, 's5')), false, command);
+  }
+  assert.deepEqual(hook.recallHookLaunch(' claude ', { claude: true, file: null, dir, sessionId: 's5' }), { command: ' claude ', file: null });
+});
+
+test('the review window says why a memory is flagged failing', () => {
+  const lines = read('src/renderer/modules/memoryinboxlines.js');
+  assert.match(lines, /flag\.kind === 'failing'\) return t\('mem\.inbox\.review\.failing', \{ count: /);
+  assert.ok(lines.indexOf("flag.kind === 'failing'") < lines.indexOf("t('mem.inbox.review.stale'"));
 });

@@ -680,11 +680,16 @@ function createFinalizer(deps) {
     }
   }
 
-  /** Brief-outcome memory-log lines of the settled packages (src/orchestraBriefMemory.js); never breaks the finalize. */
-  function recordBriefOutcomes(plan) {
+  /**
+   * Brief-outcome memory-log lines of the settled packages (src/orchestraBriefMemory.js);
+   * a pushed package skipped at its merge verify, or every one of a failed pass,
+   * waits for a later pass. Never breaks the finalize.
+   */
+  function recordBriefOutcomes(plan, res) {
     if (typeof deps.logBriefOutcome !== 'function') return;
     try {
-      logBriefOutcomes(plan, { log: deps.logBriefOutcome, patch: deps.patch });
+      const held = new Set(res.ok ? (res.skipped || []).map((s) => s && s.id) : plan.packages.map((p) => p.id));
+      logBriefOutcomes(plan, { log: deps.logBriefOutcome, patch: deps.patch, held });
     } catch (err) {
       deps.onRunEvent('error', { where: 'briefOutcome', message: errText(err) });
     }
@@ -716,7 +721,7 @@ function createFinalizer(deps) {
     );
     // The base head this run landed: "Release now" checks it reached the checkout.
     if (res.landed && res.headSha) setIntegration(plan, { headSha: res.headSha });
-    recordBriefOutcomes(plan);
+    recordBriefOutcomes(plan, { ...res, skipped });
     deps.commit();
     try {
       await cleanup(plan);

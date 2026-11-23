@@ -2040,12 +2040,21 @@ function createOrchestra(deps) {
    * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
    */
   function startWorker(pkg, where) {
+    // The brief's memories count for the package only once a worker got it (src/orchestraBriefMemory.js).
+    const known = findPkg(pkg.id);
+    const unseen = { briefMemory: (known && known.briefMemory) || null, briefOutcome: (known && known.briefOutcome) || null };
     if (!where.briefPath || !deps.writeBrief(where.briefPath, runBrief(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
-      return { ...where, state: 'failed', error: 'briefFailed' };
+      return { ...where, ...unseen, state: 'failed', error: 'briefFailed' };
     }
     // Same folder briefPathFor() used: the first message names the brief relative to it.
-    const session = openTab(pkg, where.cwd || where.root, where.branch, where.briefPath);
-    if (!session) return { ...where, state: 'failed', error: 'noTab' };
+    let session;
+    try {
+      session = openTab(pkg, where.cwd || where.root, where.branch, where.briefPath);
+    } catch (err) {
+      patch(pkg.id, unseen);
+      throw err;
+    }
+    if (!session) return { ...where, ...unseen, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
   }
 
@@ -2096,7 +2105,7 @@ function createOrchestra(deps) {
     try {
       const { text, briefMemory } = briefMemoryRules.readInjection(deps.projectMemory(plan.repoPath, pkg));
       const current = briefMemory ? findPkg(pkg.id) : null;
-      if (current) patch(pkg.id, { briefMemory: briefMemoryRules.withInjected(current.briefMemory, briefMemory) });
+      if (current) patch(pkg.id, briefMemoryRules.injectedFields(current.briefMemory, briefMemory));
       return text;
     } catch (err) {
       log(`project memory unavailable for ${pkg.id}: ${(err && err.message) || err}`);

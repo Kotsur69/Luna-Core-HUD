@@ -184,6 +184,23 @@ function withRecallHook(command, settingsPath) {
   return `${cmd} --settings '${settingsPath}'`;
 }
 
+/**
+ * The start command with the tab's hook attached, and the hook file still in
+ * use. A file the command cannot carry (not a plain `claude`, its own
+ * --settings, --bare) is deleted at once: it would only keep a live token on disk.
+ * @param {string} command what the tab is about to run
+ * @param {{claude: boolean, file: string|null, dir: string, sessionId: string}} ctx
+ *   claude = a `claude` start (not an override command); file = prepareRecallHook()'s
+ * @returns {{command: string, file: string|null}}
+ */
+function recallHookLaunch(command, { claude, file, dir, sessionId }) {
+  if (!file) return { command, file: null };
+  const hooked = claude ? withRecallHook(command, file) : command;
+  if (claude && hooked.endsWith(` --settings '${file}'`)) return { command: hooked, file };
+  removeRecallHook(dir, sessionId);
+  return { command, file: null };
+}
+
 module.exports = {
   readAutoRecall,
   setAutoRecall,
@@ -194,6 +211,7 @@ module.exports = {
   prepareRecallHook,
   removeRecallHook,
   withRecallHook,
+  recallHookLaunch,
   SETTINGS_KEY,
   UNIT_KEY,
   HOOK_TIMEOUT_S,

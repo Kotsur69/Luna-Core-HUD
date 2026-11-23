@@ -237,12 +237,24 @@ function withTimeout(promise, ms) {
  *   vectors = the vector store of src/memoryembed.js, read lazily; null = keywords only
  */
 function createInjector({ configDir, projectOf, now = Date.now, onInjected = () => {}, vectors = null, queryTimeoutMs = QUERY_TIMEOUT_MS }) {
-  /** query text -> its unit vector; oldest dropped first. */
+  /** query text -> {vector, model}; oldest dropped first. */
   const queries = new Map();
-  const remember = (text, vector) => {
+  /** query text -> its embedding in flight: a second ask shares it. */
+  const pending = new Map();
+  /** The model of the store's memory vectors (src/memoryembed.js status), or null when it does not say. */
+  const modelOf = (store) => {
+    const status = typeof store.status === 'function' ? store.status() : null;
+    return (status && status.model) || null;
+  };
+  const remember = (text, vector, model) => {
     if (queries.has(text)) queries.delete(text);
     else if (queries.size >= QUERY_CACHE_SIZE) queries.delete(queries.keys().next().value);
-    queries.set(text, vector);
+    queries.set(text, { vector, model });
+  };
+  /** A kept query vector, only while the store holds vectors of the model that made it. */
+  const cachedVector = (store, text) => {
+    const entry = store && text ? queries.get(text) : null;
+    return entry && entry.model === modelOf(store) ? entry.vector : null;
   };
 
   /** The vector store, or null: a broken store leaves keyword search working. */
@@ -264,17 +276,22 @@ function createInjector({ configDir, projectOf, now = Date.now, onInjected = () 
     return project && enabled.includes(project) ? { paths, project, enabled } : null;
   }
 
-  /** Starts embedding a query; the vector is kept whenever it arrives, also after a timeout. */
+  /** Starts embedding a query (once at a time); the vector is kept whenever it arrives, also after a timeout. */
   function embed(store, text) {
-    return Promise.resolve(store.queryVector(text))
+    if (pending.has(text)) return pending.get(text);
+    const asked = Promise.resolve()
+      .then(() => store.queryVector(text))
       .then((vector) => {
-        if (vector) remember(text, vector);
+        if (vector) remember(text, vector, modelOf(store));
         return vector || null;
       })
       .catch((err) => {
         console.error('[memory] brief query not embedded:', errText(err));
         return null;
-      });
+      })
+      .finally(() => pending.delete(text));
+    pending.set(text, asked);
+    return asked;
   }
 
   async function warm(repoPath, pkg) {
@@ -283,7 +300,7 @@ function createInjector({ configDir, projectOf, now = Date.now, onInjected = () 
       const ctx = store ? contextOf(repoPath) : null;
       const text = queryText(pkg);
       if (!ctx || !text) return false;
-      if (queries.has(text)) return true;
+      if (cachedVector(store, text)) return true;
       // The memories start embedding too (in the background, src/memoryembed.js).
       store.prepare(scan(ctx.paths.dir).records);
       return Boolean(await withTimeout(embed(store, text), queryTimeoutMs));
@@ -300,7 +317,7 @@ function createInjector({ configDir, projectOf, now = Date.now, onInjected = () 
       const records = scan(ctx.paths.dir).records;
       const store = storeOf();
       const text = queryText(pkg);
-      const vector = text ? queries.get(text) || null : null;
+      const vector = cachedVector(store, text);
       // Not embedded in time: keywords now, and the vector is ready for a later brief of the same package.
       if (store && text && !vector) embed(store, text);
       // Also starts embedding memories that have no vector yet (src/memoryembed.js prepare).
