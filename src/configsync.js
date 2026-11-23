@@ -182,6 +182,7 @@ function startConfigSync({ cloud, onChanged, extraProviders = [] }) {
   const { lifeProviders } = require('./lifedailysync');
   const { createMemoryProjectsProvider } = require('./memoryprojects');
   const { createAutoAcceptProvider } = require('./memoryautoaccept');
+  const { createAutoRecallProvider } = require('./memoryrecallhook');
   const { memoryPaths } = require('./memorysync');
   paths.ensureUserDir();
   const sync = createConfigSync({
@@ -196,6 +197,8 @@ function startConfigSync({ cloud, onChanged, extraProviders = [] }) {
       createMemoryProjectsProvider(memoryPaths(paths.userDir()).projects),
       // Which memory types are auto-accepted (src/memoryautoaccept.js), the same way.
       createAutoAcceptProvider(memoryPaths(paths.userDir()).autoAccept),
+      // Whether prompts get auto-recalled memories (src/memoryrecallhook.js), the same way.
+      createAutoRecallProvider(memoryPaths(paths.userDir()).recall),
       ...(Array.isArray(extraProviders) ? extraProviders : []),
     ],
     metaFile: paths.local('config-sync.local.json'),
