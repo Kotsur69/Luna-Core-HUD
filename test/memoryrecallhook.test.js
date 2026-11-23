@@ -166,3 +166,16 @@ test('main wires the hook, the store recall and the cleanup', () => {
   assert.equal(main.split('removeRecallHook(userDir(),').length - 1, 2);
   assert.match(main, /recallFile: \(\) => memoryPaths\(userDir\(\)\)\.recall/);
 });
+
+test('a hook file left from an earlier start is replaced, never written into', (t) => {
+  const dir = tmp(t);
+  const old = hook.hookSettingsPath(dir, 's4');
+  fs.writeFileSync(old, 'stale token');
+  if (process.platform !== 'win32') fs.chmodSync(old, 0o644);
+
+  const file = hook.prepareRecallHook({ dir, sessionId: 's4', url: URL, token: TOKEN, on: true });
+
+  assert.equal(file, old);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).hooks.UserPromptSubmit[0].hooks[0].headers.Authorization, `Bearer ${TOKEN}`);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});

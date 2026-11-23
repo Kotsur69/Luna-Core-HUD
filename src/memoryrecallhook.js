@@ -158,8 +158,10 @@ function prepareRecallHook({ dir, sessionId, url, token, on, fsImpl = fs }) {
     return null;
   }
   const file = hookSettingsPath(dir, sessionId);
+  // Created fresh, never overwritten: a mode applies only to a new file.
+  removeRecallHook(dir, sessionId, fsImpl);
   try {
-    fsImpl.writeFileSync(file, JSON.stringify(hookSettings(url, token)), { encoding: 'utf8', mode: 0o600 });
+    fsImpl.writeFileSync(file, JSON.stringify(hookSettings(url, token)), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     return file;
   } catch (err) {
     console.error('[memory] recall hook not written:', errText(err));

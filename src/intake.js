@@ -23,13 +23,9 @@
 // The tool logic (applyAdd / applyUpdate / listView) is pure and exported so
 // it is unit-testable without a socket; IntakeServer only does HTTP + auth.
 //
-// POST /recall (opt-in auto-recall, src/memoryrecall.js): the tab's
-// UserPromptSubmit hook (src/memoryrecallhook.js) posts its hook input here
-// with the same bearer token. The answer is the hook's JSON output: up to two
-// memories of the tab's project as additionalContext, or {} for nothing.
-// A God Mode token gets no recall (its memory is in the brief). A tab whose
-// store has no `recall` (switched off, memory off for its project) gets {}:
-// the hook of a tab started earlier stays quiet instead of failing.
+// POST /recall (opt-in auto-recall): the tab's UserPromptSubmit hook posts
+// its hook input with the same bearer token; src/intakerecall.js answers it.
+// A God Mode token gets no recall (its memory is in the brief).
 // ============================================================================
 
 'use strict';
@@ -42,16 +38,9 @@ const { normalizeTodo, normalizeTodos, MAX_ITEMS, MAX_TAGS } = require('./todo')
 const { EFFORTS } = require('./efforts');
 const { MEMORY_TOOLS, callMemoryTool } = require('./memorytools');
 const { ASSET_TOOLS, callAssetTool } = require('./lunasworkAssetTools');
+const { answerRecall, recallRequestOf, recallReply, RECALL_PATH, RECALL_HOOK_EVENT, MAX_RECALL_CONTEXT_CHARS } = require('./intakerecall');
 
 const MCP_PATH = '/mcp';
-/** Auto-recall's hook endpoint (see the header). */
-const RECALL_PATH = '/recall';
-/** The one hook event /recall answers. */
-const RECALL_HOOK_EVENT = 'UserPromptSubmit';
-/** A prompt is cut to this before it is handed on; recall embeds its start only. */
-const MAX_RECALL_PROMPT_CHARS = 8000;
-/** The additionalContext /recall returns at most (two short memory lines fit many times over). */
-const MAX_RECALL_CONTEXT_CHARS = 4000;
 const MAX_BODY_BYTES = 256 * 1024;
 /** JSON-RPC messages one POST may carry; the CLI sends one, sometimes a handful. */
 const MAX_BATCH_MESSAGES = 50;
@@ -453,35 +442,6 @@ function handleRpc(msg, store, version = '0.0.0', scoped = null) {
   }
 }
 
-// --- auto-recall (POST /recall) -----------------------------------------------
-
-/**
- * A /recall body (Claude Code's UserPromptSubmit hook input) -> the prompt.
- * Other hook fields (session_id, cwd, transcript_path) are ignored: the tab
- * is known from the token, never from the body.
- * @param {unknown} raw parsed JSON
- * @returns {{ok: true, prompt: string}|{ok: false, error: string}}
- */
-function recallRequestOf(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'body must be an object' };
-  if (raw.hook_event_name !== undefined && raw.hook_event_name !== RECALL_HOOK_EVENT) {
-    return { ok: false, error: `hook_event_name must be ${RECALL_HOOK_EVENT}` };
-  }
-  if (typeof raw.prompt !== 'string') return { ok: false, error: 'prompt must be a string' };
-  return { ok: true, prompt: raw.prompt.slice(0, MAX_RECALL_PROMPT_CHARS) };
-}
-
-/**
- * The hook output for a recall result: its text as additionalContext, or {}
- * (nothing to add, which the hook treats as success).
- * @param {{text?: string|null}|null} hit
- * @returns {object}
- */
-function recallReply(hit) {
-  const text = hit && typeof hit.text === 'string' ? hit.text.slice(0, MAX_RECALL_CONTEXT_CHARS) : '';
-  return text ? { hookSpecificOutput: { hookEventName: RECALL_HOOK_EVENT, additionalContext: text } } : {};
-}
-
 // --- HTTP ---------------------------------------------------------------------
 
 function hashToken(token) {
@@ -667,42 +627,11 @@ class IntakeServer {
     if (recall) {
       // A God Mode session's memory is in its brief: a scoped token never recalls.
       if (entry.scope) refuse(403, -32000, 'Forbidden');
-      else this.readBody(req, res, (body) => this.answerRecall(res, body, store), { error: 'Request body too large' });
+      else this.readBody(req, res, (body) => answerRecall(body, store, (status, reply) => !res.headersSent && sendJson(res, status, reply)), { error: 'Request body too large' });
       return;
     }
     const scoped = entry.scope ? { scope: entry.scope, channel: this.channel } : null;
     this.readBody(req, res, (body) => this.answer(res, body, store, scoped));
-  }
-
-  /**
-   * One /recall: validates the hook input, asks the tab's store, answers the
-   * hook output. A failing recall is logged and answered {}, so the prompt
-   * goes on without memories instead of with a hook error.
-   */
-  answerRecall(res, body, store) {
-    let parsed;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      sendJson(res, 400, { error: 'Parse error' });
-      return;
-    }
-    const request = recallRequestOf(parsed);
-    if (!request.ok) {
-      sendJson(res, 400, { error: request.error });
-      return;
-    }
-    if (typeof store.recall !== 'function') {
-      sendJson(res, 200, {});
-      return;
-    }
-    Promise.resolve()
-      .then(() => store.recall(request.prompt))
-      .then((hit) => sendJson(res, 200, recallReply(hit)))
-      .catch((err) => {
-        console.error('[intake] recall failed:', (err && (err.code || err.message)) || 'error');
-        if (!res.headersSent) sendJson(res, 200, {});
-      });
   }
 
   readBody(req, res, done, tooLarge = rpcError(null, -32000, 'Request body too large')) {

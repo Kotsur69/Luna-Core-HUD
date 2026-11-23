@@ -193,3 +193,29 @@ test('the recaller never throws: no store is null, a broken mirror is a logged n
   assert.equal(await broken({ project: PROJECT, prompt: PROMPT }), null);
   assert.equal(quiet.mock.callCount(), 1);
 });
+
+test('an auto-accepted memory is never recalled: a switch confirmed it, no person did', async () => {
+  const records = [rec('by-hand'), rec('by-switch', { source: 'session s1 on PC-A, auto-accepted' })];
+  const byKey = new Map(records.map((r) => [key(r.id), at(0.95)]));
+
+  const res = await recall(records, store(byKey));
+
+  assert.deepEqual(res.keys, [key('by-hand')]);
+});
+
+test('a tab gets one recall at a time; the next prompt is answered again', async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-recall-busy-'));
+  t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const dir = path.join(base, 'memory');
+  writeRecord(dir, rec('a'));
+  const vectors = store(new Map([[key('a'), at(0.9)]]), { delayMs: 40 });
+  const recaller = createRecaller({ dir: () => dir, vectors: () => vectors, now: () => NOW });
+  const ask = (session) => recaller({ project: PROJECT, prompt: PROMPT, session });
+
+  const [first, second, other] = await Promise.all([ask('s1'), ask('s1'), ask('s2')]);
+
+  assert.deepEqual(first.keys, [key('a')]);
+  assert.equal(second, null);
+  assert.deepEqual(other.keys, [key('a')]);
+  assert.deepEqual((await ask('s1')).keys, [key('a')]);
+});

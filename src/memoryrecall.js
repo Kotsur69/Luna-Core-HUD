@@ -12,7 +12,9 @@
 //     waited for at most RECALL_TIMEOUT_MS; no vector in time = nothing,
 //     never a keyword guess, and the prompt is never held up longer;
 //   - only `confirmed` memories of the tab's project and of global, not
-//     archived, not superseded, not expired, not a decayed digest;
+//     archived, not superseded, not expired, not a decayed digest, and not
+//     auto-accepted (src/memoryautoaccept.js): a switch confirmed those, no
+//     person did, and a recalled line sits in the prompt unasked;
 //   - only at cosine MIN_RECALL_COSINE or above, at most MAX_RECALLED.
 //
 // The text is data, not instruction, and says so (memorytools.js DATA_NOTE):
@@ -26,6 +28,7 @@ const { scan } = require('./memorystore');
 const { supersededKeys, isStale, isDecayed, expiredOn } = require('./memoryreview');
 const { DATA_NOTE } = require('./memorytools');
 const { oneLine, cut } = require('./memoryinject');
+const { isAutoAccepted } = require('./memoryautoaccept');
 
 /** The prompt's embedding is waited for this long; then the prompt goes without memories. */
 const RECALL_TIMEOUT_MS = 400;
@@ -81,7 +84,7 @@ function promptText(prompt) {
  * @param {{project: string, today: string, gone: Set<string>}} ctx gone = superseded keys
  */
 function recallable(key, record, { project, today, gone }) {
-  if (record.confidence !== 'confirmed' || record.archived || gone.has(key)) return false;
+  if (record.confidence !== 'confirmed' || record.archived || gone.has(key) || isAutoAccepted(record)) return false;
   if (record.project !== project && record.project !== GLOBAL) return false;
   return !isDecayed(record, today) && !expiredOn(record, today);
 }
@@ -141,15 +144,21 @@ async function recallForPrompt({ prompt, project, reader, vectors, now = Date.no
 /**
  * The recall main hands the intake server: one call per prompt of a tab.
  * Hits are logged (`recall`, src/memorylog.js) and reported (they hold off
- * usefulness decay, src/memorydecay.js). Never throws: a failure is logged
- * and the prompt goes without memories.
+ * usefulness decay, src/memorydecay.js). One recall per tab at a time: a
+ * second one while the first runs answers null. Never throws: a failure is
+ * logged and the prompt goes without memories.
  * @param {{dir: () => string, vectors: () => object|null, log?: {add: Function}|null,
  *   now?: () => number, onHits?: (keys: string[]) => void, timeoutMs?: number}} deps
  *   dir = the mirror folder; vectors = the vector store, read lazily
  * @returns {(request: {project: string, prompt: string, session?: string}) => Promise<object|null>}
  */
 function createRecaller({ dir, vectors, log = null, now = Date.now, onHits = () => {}, timeoutMs = RECALL_TIMEOUT_MS }) {
+  /** Tabs with a recall in flight: a second one at the same time is answered with nothing. */
+  const busy = new Set();
   return async ({ project, prompt, session }) => {
+    const tab = typeof session === 'string' && session ? session : null;
+    if (tab && busy.has(tab)) return null;
+    if (tab) busy.add(tab);
     try {
       const store = vectors();
       if (!store) return null;
@@ -162,6 +171,8 @@ function createRecaller({ dir, vectors, log = null, now = Date.now, onHits = () 
     } catch (err) {
       console.error('[memory] recall failed:', errText(err));
       return null;
+    } finally {
+      if (tab) busy.delete(tab);
     }
   };
 }

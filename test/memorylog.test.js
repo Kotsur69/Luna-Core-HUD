@@ -518,3 +518,9 @@ test('recall lines are trimmed with the reads, before a brief outcome', (t) => {
   assert.equal(events[0].ev, 'brief-outcome');
   assert.equal(events.at(-1).key, key('newest'));
 });
+
+test('a brief-outcome line needs the canonical project form', () => {
+  const line = { at: NOW, ev: 'brief-outcome', project: `git:${PROJECT}`, runId: 'r1', pkgId: 'p1', keys: [key('a')], outcome: 'clean' };
+  assert.equal(cleanEvent(line), null);
+  assert.equal(cleanEvent({ ...line, project: PROJECT }).project, PROJECT);
+});

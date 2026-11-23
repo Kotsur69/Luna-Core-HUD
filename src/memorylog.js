@@ -154,7 +154,7 @@ const block = (v, max) =>
 
 /** A `brief-outcome` line rebuilt from untrusted input, or null (src/orchestraBriefMemory.js). */
 function briefOutcomeEvent(at, raw) {
-  const project = projectFromRepoKey(raw.project);
+  const project = projectFromRepoKey(raw.project) === raw.project ? raw.project : null;
   const keys = Array.isArray(raw.keys) ? [...new Set(raw.keys.filter((k) => splitKey(k)))].slice(0, MAX_BRIEF_KEYS) : [];
   const ids = typeof raw.runId === 'string' && RUN_ID_RE.test(raw.runId) && typeof raw.pkgId === 'string' && PKG_ID_RE.test(raw.pkgId);
   if (!project || !ids || !keys.length || !BRIEF_OUTCOMES.includes(raw.outcome)) return null;
