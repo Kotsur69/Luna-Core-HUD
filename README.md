@@ -7,7 +7,14 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.36.0 — Asset manifest cost estimate with a spend gate.**
+> **Current release: v0.37.0 — God Mode Live Web and a livelier Sessions map.**
+> - Canvas 2D God Mode Live Web in God Mode and the #orchestra board
+> - Sessions map bursts, ripples, afterglow, satellites, switcher, ticker and
+>   inspector
+> - agy Orchestrator telemetry: subagents, MCP calls, safe details, session
+>   processes and ports
+>
+> **v0.36.0 — Asset manifest cost estimate with a spend gate.**
 > - asset manifest cost estimate with a spend gate
 > - run asset-prep cards in parallel; scene-worker only wires scenes
 > - opt-in ffmpeg trim, -14 LUFS and BPM post-process for game audio
