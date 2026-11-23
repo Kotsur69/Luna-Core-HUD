@@ -7,7 +7,41 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.37.0 — God Mode Live Web and a livelier Sessions map.**
+> **Current release: v0.38.0 — Luna memory audit quality-gate report.**
+> - luna memory audit quality-gate report
+> - weekly Sleep Pass consolidation with clustering and architecture-map
+>   refresh
+> - use boost, conflict/dispute penalties, LLM merge draft and inline usage
+>   evidence
+> - sync review signals (rejections, disputes, reads) across PCs
+> - opt-in memoryAutoRecall switch and the tab's UserPromptSubmit hook
+> - per-prompt auto-recall and the intake POST /recall endpoint
+> - vector-assisted God Mode brief memory and brief-outcome tracking
+> - semantic dedup by Qwen3 embeddings and a Rejected-Embedding Shield
+> - Hooks station, tool error pulses and the Skill tool on the Live Work Map
+> - local-only repo doc chunks in memory_search
+> - memory search, reject reason chips and inbox swipe gestures
+> - phone memory.search, originSessionId and rejection reasons
+> - origin-session drawer with Interrogate, and Export all backup
+> - 5-axis rubric capture scoring and memory expiry
+> - capture Antigravity (agy) sessions for candidates and where-we-stopped
+> - Fix: narrow the Sleep Pass's tools and skip work already waiting in the
+>   inbox
+> - Fix: review fixes for penalties, merge draft scrubbing and the draft
+>   flow
+> - Fix: keep cross-PC settles, bound peer clocks, heal a broken signals
+>   file
+> - Fix: count brief outcomes only for briefs a worker got and runs that
+>   landed
+> - Fix: harden auto-recall after the security review
+> - Fix: harden the rejected-embedding shield after review
+> - Fix: doc chunk review fixes (slice keys, read failures, root reuse)
+> - Fix: harden origin snippet, export copy and the origin drawer
+> - Fix: pair expires_when with days in the prompt; keep a cut expires_when
+>   well formed
+> - Fix: harden agy capture after review
+>
+> **v0.37.0 — God Mode Live Web and a livelier Sessions map.**
 > - Canvas 2D God Mode Live Web in God Mode and the #orchestra board
 > - Sessions map bursts, ripples, afterglow, satellites, switcher, ticker and
 >   inspector
