@@ -16,8 +16,8 @@ const path = require('path');
 const g = require('../src/memorygraveyard.js');
 const { listInbox } = require('../src/memoryinbox.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
-const { createLog, logPath } = require('../src/memorylog.js');
-const { LOW_USEFULNESS } = require('../src/memoryextract.js');
+const { createLog, logPath, duplicateEvents } = require('../src/memorylog.js');
+const { LOW_USEFULNESS, DUPLICATE } = require('../src/memoryextract.js');
 
 const PROJECT = 'github.com/acme/hud';
 const NOW = Date.parse('2026-11-11T12:00:00Z');
@@ -227,4 +227,55 @@ test('the graveyard is local: its file name is per PC and nothing syncs it', () 
   assert.match(g.GRAVEYARD_FILE, /\.local\.json$/);
   const sources = ['memorysync.js', 'memorycard.js', 'memoryindex.js', 'memoryinject.js', 'memorytools.js'].map((f) => fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8'));
   for (const text of sources) assert.ok(!/memorygraveyard|memory-graveyard/.test(text));
+});
+
+// ---- near-duplicates ------------------------------------------------------------
+
+test('bury keeps a near-duplicate as "duplicate of: <title>", with the whole title', (t) => {
+  const s = setup(t);
+  const longTitle = `Do not junction node_modules into a worktree ${'x'.repeat(140)}`;
+  const dup = (id, duplicateOf) => ({ title: `Title of ${id}`, reason: DUPLICATE, type: 'gotcha', usefulness: 70, duplicateOf, record: record(id, { usefulness: 70 }) });
+
+  const written = g.bury(
+    s.file,
+    [
+      dup('short', 'Release assets need dashes'),
+      dup('long', longTitle),
+      // Without duplicateOf or without its record, a duplicate is not kept.
+      dup('no-match', ''),
+      { title: 'No record', reason: DUPLICATE, duplicateOf: 'Release assets need dashes' },
+    ],
+    NOW,
+  );
+
+  assert.equal(written, 2);
+  const reasons = Object.fromEntries(g.readGraveyard(s.file, NOW).map((e) => [e.record.id, [e.reason, e.score]]));
+  assert.deepEqual(reasons.short, ['duplicate of: Release assets need dashes', 70]);
+  assert.deepEqual(reasons.long, [`duplicate of: ${longTitle}`, 70]);
+  assert.equal(reasons['no-match'], undefined);
+});
+
+test('a buried duplicate is listed with its reason and can be restored to the inbox', (t) => {
+  const s = setup(t);
+  g.bury(s.file, [{ title: 'Title of twin', reason: DUPLICATE, duplicateOf: 'Original title', record: record('twin') }], NOW);
+
+  const { items } = g.listGraveyard(s.file, NOW);
+  assert.deepEqual(items.map((i) => i.reason), ['duplicate of: Original title']);
+  const res = g.restoreEntry({ file: s.file, dir: s.dir, id: items[0].key, now: NOW, log: s.log });
+  assert.equal(res.ok, true);
+  assert.deepEqual(listInbox(s.dir).items.map((i) => i.title), ['Title of twin']);
+});
+
+test('duplicateEvents logs each duplicate with the memory it repeats, and nothing else', (t) => {
+  const s = setup(t);
+  const rejected = [
+    { title: 'Twin', reason: DUPLICATE, type: 'gotcha', usefulness: 70, duplicateOf: 'Original title', record: record('twin') },
+    { title: 'Weak', reason: LOW_USEFULNESS, type: 'gotcha', usefulness: 12, record: record('weak') },
+    { title: 'Leaky', reason: 'secret' },
+  ];
+
+  for (const event of duplicateEvents(rejected, PROJECT)) s.log.add(event);
+
+  assert.deepEqual(s.logged(), [{ ev: 'dropped', project: PROJECT, reason: DUPLICATE, type: 'gotcha', title: 'Twin', usefulness: 70, duplicateOf: 'Original title' }]);
+  assert.deepEqual(duplicateEvents(null, PROJECT), []);
 });

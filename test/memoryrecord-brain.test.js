@@ -293,3 +293,49 @@ test('a harmless field whose name only mentions a secret word does not hold the 
     assert.equal(hasSecret(normalizeRecord({ ...base, extra: [[key, value]] })), false, key);
   }
 });
+
+
+// ---- expiry hints ---------------------------------------------------------------
+
+test('expiry hints are kept, serialized after the brain fields and read back unchanged', () => {
+  const record = normalizeRecord({ ...base, usefulness: 70, expires_after_days: 30, expires_when: 'until the "v2" release: ships' });
+
+  assert.equal(record.expires_after_days, 30);
+  assert.equal(record.expires_when, 'until the "v2" release: ships');
+  const text = serializeRecord(record);
+  assert.ok(text.includes('\nusefulness: 70\nexpires_after_days: 30\nexpires_when: "until the \\"v2\\" release: ships"\nsupersedes:'), text);
+  assert.deepEqual(recordFromFile(text, where).record, record);
+});
+
+test('a record without expiry hints writes no expiry lines', () => {
+  const text = serializeRecord(normalizeRecord(base));
+  assert.doesNotMatch(text, /expires_/);
+});
+
+test('expires_after_days must be a whole number 1-365; a bad one is dropped, never failing the record', () => {
+  const days = (v) => checkRecord({ ...base, expires_after_days: v }).record.expires_after_days;
+
+  assert.equal(days(1), 1);
+  assert.equal(days(365), 365);
+  assert.equal(days('45'), 45, 'a frontmatter value is text');
+  for (const bad of [0, 366, -3, 2.5, '2.5', '12 days', true, null, NaN, Infinity, [], {}]) {
+    assert.equal(days(bad), undefined, String(bad));
+  }
+});
+
+test('expires_when is one clean line of at most 120 characters', () => {
+  const when = (v) => checkRecord({ ...base, expires_when: v }).record.expires_when;
+
+  assert.equal(when('  until\nthe   fix​ ships  '), 'until the fix ships');
+  assert.equal(when('x'.repeat(200)).length, 120);
+  assert.equal(when(''), undefined);
+  assert.equal(when('   '), undefined);
+  assert.equal(when(42), undefined);
+});
+
+test('a file with a hand-broken expiry still loads, without it', () => {
+  const text = serializeRecord(normalizeRecord(base)).replace('confidence: confirmed', 'confidence: confirmed\nexpires_after_days: soon');
+  const res = recordFromFile(text, where);
+  assert.ok(res.record);
+  assert.equal(res.record.expires_after_days, undefined);
+});

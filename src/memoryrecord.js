@@ -18,6 +18,9 @@
 //
 // Optional, only once something set them (brainFields()): usefulness (0-100),
 // usefulness_note, usefulness_at, last_used, archived, conflicts, compatible.
+// Optional expiry hints of a temporary or in-progress constraint (expiryFields()):
+// expires_after_days (1-365, counted from last_verified or created) and
+// expires_when (one line: what ends it). src/memoryreview.js flags it 'expired'.
 //
 // The same record travels three ways: as that file in the local mirror
 // (src/memorystore.js), as the `value` of a sync unit in the cloud's `memory`
@@ -74,12 +77,17 @@ const NUMBER_TEXT_RE = /^\s*-?\d+(\.\d+)?\s*$/;
 /** The usefulness scan's score runs 0-100 (the same field as the extractor's guess); its reason is one short line. */
 const MAX_USEFULNESS = USEFULNESS_MAX;
 const MAX_USEFULNESS_NOTE = 200;
+/** An expiry hint: whole days, and one short line saying what ends the constraint. */
+const MIN_EXPIRES_DAYS = 1;
+const MAX_EXPIRES_DAYS = 365;
+const MAX_EXPIRES_WHEN = 120;
+const INTEGER_TEXT_RE = /^\s*\d+\s*$/;
 
 /** Every field this version reads or writes. Anything else in a file is carried in `extra`. */
 const KNOWN_FIELDS = new Set([
   'id', 'type', 'project', 'area', 'title', 'created', 'last_verified', 'source', 'confidence',
   'usefulness', 'usefulness_note', 'usefulness_at', 'last_used', 'archived', 'conflicts', 'compatible',
-  'supersedes', 'links', 'body', 'extra',
+  'expires_after_days', 'expires_when', 'supersedes', 'links', 'body', 'extra',
 ]);
 /** A carried field's name: plain snake_case, as every field of a memory file is. */
 const EXTRA_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
@@ -215,6 +223,7 @@ function checkRecord(raw) {
     ...(source ? { source } : {}),
     confidence: raw.confidence,
     ...brainFields(raw),
+    ...expiryFields(raw),
     supersedes: refs(raw.supersedes),
     links: refs(raw.links).filter((x) => x !== raw.id),
     body,
@@ -251,6 +260,31 @@ function brainFields(raw) {
     const ids = refs(raw[field]).filter((x) => x !== raw.id);
     if (ids.length) out[field] = ids;
   }
+  return out;
+}
+
+/**
+ * Whole days until a memory expires: an integer (or its text, as a frontmatter
+ * value is read) in MIN_EXPIRES_DAYS..MAX_EXPIRES_DAYS. Anything else is unset.
+ * @param {unknown} raw
+ * @returns {number|undefined}
+ */
+function expiresDaysOf(raw) {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && INTEGER_TEXT_RE.test(raw) ? Number(raw) : NaN;
+  return Number.isSafeInteger(n) && n >= MIN_EXPIRES_DAYS && n <= MAX_EXPIRES_DAYS ? n : undefined;
+}
+
+/**
+ * The optional expiry hints. Like brainFields(), a bad value is dropped and
+ * never fails the record: a record without them loads and syncs as before.
+ * expires_when is one clean line; a longer one is cut to MAX_EXPIRES_WHEN.
+ */
+function expiryFields(raw) {
+  const out = {};
+  const days = expiresDaysOf(raw.expires_after_days);
+  if (days !== undefined) out.expires_after_days = days;
+  const when = typeof raw.expires_when === 'string' ? cleanLine(raw.expires_when).slice(0, MAX_EXPIRES_WHEN).trim() : '';
+  if (when) out.expires_when = when;
   return out;
 }
 
@@ -405,6 +439,8 @@ function serializeRecord(record) {
     ['usefulness_at', record.usefulness_at],
     ['last_used', record.last_used],
     ['archived', record.archived],
+    ['expires_after_days', record.expires_after_days === undefined ? undefined : String(record.expires_after_days)],
+    ['expires_when', record.expires_when],
   ]
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => `${k}: ${emit(v)}`);
@@ -520,6 +556,10 @@ module.exports = {
   USAGE_SATURATION_READS,
   USAGE_WINDOW_DAYS,
   usefulnessOf,
+  expiresDaysOf,
+  MIN_EXPIRES_DAYS,
+  MAX_EXPIRES_DAYS,
+  MAX_EXPIRES_WHEN,
   validProject,
   projectFromRepoKey,
   keyOf,

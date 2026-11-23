@@ -2,7 +2,9 @@
 // LunaCore - the memory graveyard: candidates auto-rejected for a low score
 // ----------------------------------------------------------------------------
 // A candidate whose capture score is under AUTO_REJECT_BELOW
-// (src/memoryextract.js, LOW_USEFULNESS) never reaches the inbox. Session capture (memorycapture.js)
+// (src/memoryextract.js, LOW_USEFULNESS) never reaches the inbox, nor does one
+// dropped as a near-duplicate of a memory (DUPLICATE: its entry's reason is
+// "duplicate of: <title>", so a wrong match can be restored by hand). Session capture (memorycapture.js)
 // and God Mode run capture (memoryruncapture.js) keep it here instead, so the
 // floor can be checked by hand and a wrongly dropped memory brought back:
 //
@@ -30,10 +32,10 @@
 const crypto = require('crypto');
 const path = require('path');
 const { readDoc, writeAtomic } = require('./projectsync');
-const { checkRecord, keyOf } = require('./memoryrecord');
+const { checkRecord, keyOf, MAX_TITLE } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord } = require('./memorystore');
 const { hasSecret } = require('./memorysync');
-const { idFor, LOW_USEFULNESS } = require('./memoryextract');
+const { idFor, LOW_USEFULNESS, DUPLICATE } = require('./memoryextract');
 const { scrub } = require('./hostscrub');
 
 const GRAVEYARD_FILE = 'memory-graveyard.local.json';
@@ -45,7 +47,9 @@ const MAX_RAW_ENTRIES = MAX_GRAVEYARD_ENTRIES * 2;
 const GRAVEYARD_KEEP_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GRAVEYARD_KEEP_MS = GRAVEYARD_KEEP_DAYS * DAY_MS;
-const MAX_REASON_CHARS = 40;
+/** Long enough for "duplicate of: " and a whole title (memoryrecord MAX_TITLE). */
+const DUPLICATE_PREFIX = 'duplicate of: ';
+const MAX_REASON_CHARS = DUPLICATE_PREFIX.length + MAX_TITLE;
 const MAX_SCORE = 100;
 /** An entry id: base-36 time, a dash, 8 hex characters. Never a path. */
 const ENTRY_ID_RE = /^[a-z0-9]{1,12}-[0-9a-f]{8}$/;
@@ -126,19 +130,31 @@ function readGraveyard(file, now) {
 const save = (file, entries) => writeAtomic(file, `${JSON.stringify({ entries })}\n`);
 
 /**
- * Keeps the low-usefulness drops of one capture (memoryextract.candidatesFrom
- * `rejected`, the ones carrying their record). Never throws: the graveyard is
- * not worth a failed capture.
+ * The graveyard reason of one rejection of a capture, or '' when it is not
+ * kept: a low-usefulness drop as it is, a near-duplicate as "duplicate of: <title>".
+ */
+function buriedReason(r) {
+  if (!isObject(r) || !isObject(r.record)) return '';
+  if (r.reason === LOW_USEFULNESS) return r.reason;
+  if (r.reason === DUPLICATE && typeof r.duplicateOf === 'string' && r.duplicateOf) return reasonOf(`${DUPLICATE_PREFIX}${r.duplicateOf}`);
+  return '';
+}
+
+/**
+ * Keeps the low-usefulness and the near-duplicate drops of one capture
+ * (memoryextract.candidatesFrom `rejected`, the ones carrying their record).
+ * Never throws: the graveyard is not worth a failed capture.
  * @param {string} file
- * @param {{reason: string, record?: object, usefulness?: number}[]} rejected
+ * @param {{reason: string, record?: object, usefulness?: number, duplicateOf?: string}[]} rejected
  * @param {number} now ms
  * @returns {number} entries written
  */
 function bury(file, rejected, now) {
   try {
     const fresh = (Array.isArray(rejected) ? rejected : [])
-      .filter((r) => isObject(r) && r.reason === LOW_USEFULNESS && isObject(r.record))
-      .map((r) => ({ id: newId(now), at: now, reason: r.reason, score: r.record.usefulness, record: r.record }));
+      .map((r) => ({ r, reason: buriedReason(r) }))
+      .filter(({ reason }) => reason)
+      .map(({ r, reason }) => ({ id: newId(now), at: now, reason, score: r.record.usefulness, record: r.record }));
     if (!fresh.length) return 0;
     const kept = capped([...fresh, ...readGraveyard(file, now)], now);
     save(file, kept);

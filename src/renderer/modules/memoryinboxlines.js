@@ -23,6 +23,9 @@ export function flagLine(flag) {
   if (flag.kind === 'anchor') return t('mem.inbox.review.anchor', { files: (flag.missing || []).join(', ') });
   if (flag.kind === 'changed') return t('mem.inbox.review.changed', { files: (flag.files || []).join(', '), date: flag.last || '-' });
   if (flag.kind === 'unopened') return t('mem.inbox.review.unopened', { days: flag.days });
+  // flag.when is model-written text: it only ever reaches the page through textContent.
+  if (flag.kind === 'expired' && flag.when) return t('mem.inbox.review.expiredWhen', { date: flag.on || '-', when: flag.when });
+  if (flag.kind === 'expired') return t('mem.inbox.review.expiredOn', { date: flag.on || '-' });
   return t('mem.inbox.review.stale', { since: flag.since });
 }
 

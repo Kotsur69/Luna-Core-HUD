@@ -5,6 +5,10 @@
 // (src/memoryinbox.js) holds what is not confirmed yet. This file looks after
 // what IS confirmed, because a confidently wrong memory is worse than none:
 //
+//   expired   the memory was a temporary constraint (`expires_after_days`, set
+//             by capture, src/memoryextract.js) and that many days have passed
+//             since it was created or last verified. "Still true" keeps it for
+//             good: the expiry fields are cleared.
 //   stale     a `gotcha` or `how-to` nobody has verified for STALE_DAYS. It is
 //             still returned, ranked lower and labelled "not verified since".
 //   anchor    the memory names a file of its repository (`src/x.js`) and that
@@ -57,7 +61,7 @@ const MAX_ITEMS = 100;
 /** A confirmed memory checked longer ago than this and never opened since is flagged, at low priority. */
 const UNOPENED_DAYS = 60;
 /** Worst first. A flag listed in LOW_FLAGS alone does not count toward the hub's number. */
-const FLAG_ORDER = ['disputed', 'checked', 'anchor', 'changed', 'stale', 'unopened'];
+const FLAG_ORDER = ['disputed', 'checked', 'anchor', 'changed', 'expired', 'stale', 'unopened'];
 const LOW_FLAGS = ['unopened'];
 
 const daysBetween = (from, to) => Math.floor((Date.parse(to) - Date.parse(from)) / DAY_MS);
@@ -67,6 +71,25 @@ const checkedOn = (record) => record.last_verified || record.created;
 /** A confirmed gotcha or how-to that nobody has verified for STALE_DAYS. */
 function isStale(record, today) {
   return record.confidence === 'confirmed' && STALE_TYPES.includes(record.type) && daysBetween(checkedOn(record), today) > STALE_DAYS;
+}
+
+/**
+ * The day a confirmed memory's expiry ran out, or null when it has none or it
+ * has not run out by `today`. Counted from last_verified when that is newer
+ * than created, else from created: expired once that day + expires_after_days
+ * lies before today.
+ * @param {{confidence: string, created: string, last_verified?: string, expires_after_days?: number}} record
+ * @param {string} today YYYY-MM-DD
+ * @returns {string|null} YYYY-MM-DD
+ */
+function expiredOn(record, today) {
+  const days = record.expires_after_days;
+  if (record.confidence !== 'confirmed' || !Number.isSafeInteger(days) || days < 1) return null;
+  const from = record.last_verified && record.last_verified > record.created ? record.last_verified : record.created;
+  const start = Date.parse(from);
+  if (!DATE_RE.test(from) || !Number.isFinite(start) || !DATE_RE.test(today)) return null;
+  const end = new Date(start + days * DAY_MS).toISOString().slice(0, 10);
+  return end < today ? end : null;
 }
 
 /** A digest that is too old to be searched. */
@@ -178,7 +201,7 @@ function unopenedCheck(events, today) {
  *   changes = {<project>: Map<anchorPath, newestCommitISO>} (src/memorychanges.js);
  *   a project without an entry gets no 'changed' flags
  * @returns {{items: object[], total: number, urgent: number}} worst first: disputed, checked,
- *   anchors, changed, stale, then unopened; urgent = how many carry more than a low-priority flag
+ *   anchors, changed, expired, stale, then unopened; urgent = how many carry more than a low-priority flag
  */
 function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
   const disputes = openDisputes(events);
@@ -204,6 +227,8 @@ function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
     // A file that is gone is the anchor flag's: its deletion is not a second reason.
     const files = changed ? changed.files.filter((f) => !missing.includes(f)) : [];
     if (files.length) flags.push({ kind: 'changed', files, last: changed.last });
+    const expired = expiredOn(record, today);
+    if (expired) flags.push({ kind: 'expired', on: expired, ...(record.expires_when ? { when: record.expires_when } : {}) });
     if (isStale(record, today)) flags.push({ kind: 'stale', since: checkedOn(record) });
     if (unopened && unopened(key, record)) flags.push({ kind: 'unopened', days: UNOPENED_DAYS });
     if (!flags.length) continue;
@@ -238,6 +263,9 @@ function findConfirmed(dir, key) {
  * The user says a confirmed memory is still true: its flags clear. The memory
  * check (src/memorycheck.js) says the same with by 'check': the date moves,
  * but a dispute or a missing file is still the user's to accept.
+ * A user's "still true" on an expired memory also clears its expiry fields
+ * (expires_after_days, expires_when): it is no longer temporary. A check only
+ * moves the date, which starts the expiry over.
  * @param {string} dir the mirror folder
  * @param {string} key
  * @param {string} today YYYY-MM-DD
@@ -248,12 +276,18 @@ function verify(dir, key, today, { log = null, roots = {}, by = 'user', note = '
   const found = findConfirmed(dir, key);
   if (!found.record) return { ok: false, reason: found.reason };
   const { record } = found;
-  writeRecord(dir, { ...record, last_verified: today });
+  writeRecord(dir, by === 'user' && expiredOn(record, today) ? withoutExpiry({ ...record, last_verified: today }) : { ...record, last_verified: today });
   if (!log) return { ok: true, key };
   // The files missing today were seen and accepted by the user: they are not flagged again.
   if (by === 'user') log.add({ ev: 'verified', key, by: 'user', missing: missingAnchors(record, roots[record.project]) });
   else log.add({ ev: 'verified', key, by: 'check', note, evidence });
   return { ok: true, key };
+}
+
+/** The record without its expiry fields. */
+function withoutExpiry(record) {
+  const { expires_after_days: _days, expires_when: _when, ...rest } = record;
+  return rest;
 }
 
 /**
@@ -304,6 +338,8 @@ module.exports = {
   findConfirmed,
   isStale,
   isDecayed,
+  expiredOn,
+  withoutExpiry,
   checkedOn,
   anchorsOf,
   missingAnchors,

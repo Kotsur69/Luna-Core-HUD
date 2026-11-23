@@ -253,11 +253,16 @@ export function createCheckFlow(w) {
         onClick: () => check(item.key),
       });
     },
-    /** The verdict's own actions: Edit after partly; Retire after fixed when `retire` (the entry has none of its own). */
+    /**
+     * The verdict's own actions: Edit after partly, or on an expired memory (the
+     * review list's 'expired' flag: main lets an expired memory be edited too);
+     * Retire after fixed when `retire` (the entry has none of its own).
+     */
     actions(item, { off, retire = false }) {
       const verdict = item.check && item.check.verdict;
+      const expired = Array.isArray(item.flags) && item.flags.some((flag) => flag && flag.kind === 'expired');
       const out = [];
-      if (verdict === 'partly') {
+      if (verdict === 'partly' || expired) {
         const edit = button('port-btn mem-inbox__btn', t('mem.check.edit'), () => openEdit(item));
         edit.disabled = off;
         out.push(edit);

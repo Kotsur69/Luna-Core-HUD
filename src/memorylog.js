@@ -7,7 +7,9 @@
 //   memory-log.local.jsonl
 //   {"at": <ms>, "ev": "capture",  "project", "reason", "kept", "dropped": {"duplicate": 2}}
 //   {"at": <ms>, "ev": "proposed", "key", "type", "usefulness"?, "by"?: "session"}
-//   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?}
+//   {"at": <ms>, "ev": "dropped",  "project", "reason", "type"?, "title"?, "usefulness"?, "duplicateOf"?}
+//                                  reason 'duplicate' = a near-duplicate of the memory titled duplicateOf
+//                                  (duplicateEvents); both kinds of drop are kept in the graveyard
 //   {"at": <ms>, "ev": "approved" | "edited" | "rejected" | "retired" | "auto-accepted" | "superseded" | "restored", "key", "type", "title"?, "usefulness"?}
 //                                  restored = brought back from the graveyard into the inbox (src/memorygraveyard.js)
 //   {"at": <ms>, "ev": "merged",   "key", "type", "title"?, "from": ["<key>", ...]}   Mati merged a pair into `key`
@@ -172,7 +174,8 @@ function cleanEvent(raw) {
     const reason = line(raw.reason, MAX_REASON);
     if (!project || !reason) return null;
     const title = line(raw.title, MAX_TITLE);
-    return { at, ev, project, reason, ...(type ? { type } : {}), ...(title ? { title } : {}), ...scored(raw.usefulness) };
+    const duplicateOf = line(raw.duplicateOf, MAX_TITLE);
+    return { at, ev, project, reason, ...(type ? { type } : {}), ...(title ? { title } : {}), ...scored(raw.usefulness), ...(duplicateOf ? { duplicateOf } : {}) };
   }
   if (DECISIONS.includes(ev)) {
     if (!key || !type) return null;
@@ -657,8 +660,22 @@ function memoryNotes({ records, events, since, project = null, label = '' }) {
   return `${out.join('\n')}\n`;
 }
 
+/**
+ * The `dropped` lines of the candidates a capture dropped as near-duplicates
+ * (memoryextract.candidatesFrom: the rejections that carry `duplicateOf`), so
+ * the log says which memory each one repeated.
+ * @param {{title: string, reason: string, type?: string, usefulness?: number, duplicateOf?: string}[]} rejected
+ * @param {string} project
+ * @returns {object[]} events for log.add()
+ */
+const duplicateEvents = (rejected, project) =>
+  (Array.isArray(rejected) ? rejected : [])
+    .filter((r) => isObject(r) && typeof r.duplicateOf === 'string' && r.duplicateOf)
+    .map((r) => ({ ev: 'dropped', project, reason: r.reason, type: r.type, title: r.title, usefulness: r.usefulness, duplicateOf: r.duplicateOf }));
+
 module.exports = {
   memoryNotes,
+  duplicateEvents,
   createLog,
   readLog,
   logPath,
