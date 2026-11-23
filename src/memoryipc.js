@@ -88,9 +88,9 @@ const { listConflicts, conflictedKeys } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
 const { cachedChanges, currentChanges } = require('./memorychanges');
+const { exportAll } = require('./memoryexport');
 const { sharedVectorStore, vectorLookup, docText } = require('./memoryembed');
 const { rememberRejected, forgetSimilar } = require('./memoryshield');
-const { exportAll } = require('./memoryexport');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;

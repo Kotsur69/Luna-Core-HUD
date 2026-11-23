@@ -217,7 +217,95 @@ function cardSessionLines({ withCard, withoutCard }) {
   return [lineOf('with the card', withCard), lineOf('without the card', withoutCard)];
 }
 
+// ---- `luna memory audit` -------------------------------------------------------
+
+/** An approval rate under this share is flagged: the extractor is proposing more noise than keepers. */
+const AUDIT_RED_RATE = 1 / 3;
+/** The usefulness distribution's buckets, lowest first: [label, lowest score in it]. */
+const AUDIT_BUCKETS = Object.freeze([
+  ['<50', 0],
+  ['50-69', 50],
+  ['70-89', 70],
+  ['90+', 90],
+]);
+const HOUR_MS = 60 * 60 * 1000;
+
+const auditPct = (approved, rejected) => (approved + rejected ? `${Math.round((approved / (approved + rejected)) * 100)}%` : 'n/a');
+/** A decision rate line; `!` in front when the rate is under a third. */
+function rateLine(label, { approved, rejected }) {
+  const decided = approved + rejected;
+  const red = decided > 0 && approved / decided < AUDIT_RED_RATE;
+  return `${red ? '! ' : '  '}${label}: ${auditPct(approved, rejected)} (${approved} approved, ${rejected} rejected)${red ? '  <-- under 33%' : ''}`;
+}
+
+/** "3 h" / "2 d" / "just now" for a sync lag in ms. */
+function lagText(ms) {
+  if (ms < HOUR_MS) return `${Math.max(0, Math.round(ms / 60000))} min`;
+  return ms < 48 * HOUR_MS ? `${Math.round(ms / HOUR_MS)} h` : `${Math.round(ms / (24 * HOUR_MS))} d`;
+}
+
+/**
+ * The memory quality-gate report `luna memory audit` prints: approval rate,
+ * usefulness distribution, graveyard, tool use, brief outcomes and sync lag.
+ * Pure: it reads only the events (this PC's log) and the optional health list.
+ * @param {object[]} events memorylog readLog()
+ * @param {{days?: number, now?: number, machines?: {machine: string, at: number, self?: boolean, silent?: boolean}[]}} [opts]
+ *   machines = the sync health of every PC (memorysync.localStatus().machines); lag = now - at
+ * @returns {string} the report, one line per row
+ */
+function auditReport(events, { days = 30, now = Date.now(), machines = [] } = {}) {
+  const since = now - days * DAY_MS;
+  const inWindow = events.filter((e) => e.at >= since && e.at <= now);
+  const out = [`Memory audit: last ${days} day(s) (this PC's log)`];
+  if (!inWindow.length) out.push('  No memory-log events in this window.');
+
+  const total = { approved: 0, rejected: 0 };
+  const byType = {};
+  const buckets = AUDIT_BUCKETS.map(([label]) => ({ label, n: 0 }));
+  let unscored = 0;
+  const graveyard = {};
+  const calls = { cards: 0, search: 0, get: 0, propose: 0, recall: 0 };
+  const outcomes = emptyOutcomes();
+  for (const e of inWindow) {
+    if (e.ev === 'approved' || e.ev === 'rejected') {
+      byType[e.type] = byType[e.type] || { approved: 0, rejected: 0 };
+      byType[e.type][e.ev] += 1;
+      total[e.ev] += 1;
+    } else if (e.ev === 'proposed') {
+      if (e.usefulness === undefined) unscored += 1;
+      else buckets[AUDIT_BUCKETS.findLastIndex(([, min]) => e.usefulness >= min)].n += 1;
+      if (e.by === 'session') calls.propose += 1;
+    } else if (e.ev === 'dropped') graveyard[e.reason] = (graveyard[e.reason] || 0) + 1;
+    else if (e.ev === 'card') calls.cards += 1;
+    else if (e.ev === 'search' || e.ev === 'get' || e.ev === 'recall') calls[e.ev] += 1;
+    else if (e.ev === 'brief-outcome') outcomes[e.outcome] += 1;
+  }
+
+  out.push('Approval rate (approved / decided):', rateLine('overall', total));
+  for (const [type, c] of Object.entries(byType).sort(([a], [b]) => a.localeCompare(b))) out.push(rateLine(type, c));
+
+  out.push('Usefulness of proposed candidates:');
+  for (const b of buckets) out.push(`  ${b.label.padStart(5)}: ${b.n}`);
+  if (unscored) out.push(`  no score: ${unscored}`);
+
+  const dead = Object.entries(graveyard).sort(([, a], [, b]) => b - a);
+  out.push(dead.length ? `Graveyard (dropped before the inbox): ${dead.map(([r, n]) => `${r} ${n}`).join(', ')}` : 'Graveyard: empty');
+
+  out.push(`Tool use: ${calls.cards} card start(s), memory_search ${calls.search}, memory_get ${calls.get}, memory_propose ${calls.propose}, auto-recall ${calls.recall}`);
+
+  const briefs = outcomes.clean + outcomes.retried + outcomes.stalled + outcomes.failed;
+  out.push(`Brief outcomes: ${briefs} package(s): clean ${outcomes.clean}, retried ${outcomes.retried}, stalled ${outcomes.stalled}, failed ${outcomes.failed}`);
+
+  if (machines.length) {
+    out.push('Sync lag per PC:');
+    for (const m of machines) out.push(`  ${m.machine}${m.self ? ' (this PC)' : ''}: last sync ${lagText(Math.max(0, now - m.at))} ago${m.silent ? '  <-- silent' : ''}`);
+  } else out.push('Sync lag: no health data.');
+  return out.join('\n');
+}
+
 module.exports = {
+  auditReport,
+  AUDIT_RED_RATE,
   readCounts,
   recentUsage,
   lastOpened,

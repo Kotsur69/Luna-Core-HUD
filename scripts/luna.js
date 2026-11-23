@@ -13,6 +13,7 @@
 //   node scripts/luna.js memory capture <transcript.jsonl>   what capture would keep
 //   node scripts/luna.js memory review | verify <id> | retire <id>   confirmed memories that need a look
 //   node scripts/luna.js memory stats              what capture proposed, what was approved, what is read
+//   node scripts/luna.js memory audit [--days N]   quality-gate report of the memory log (default 30 days)
 //   node scripts/luna.js memory notes [--since <tag|date>]   what the memory gained and lost since a release
 //   node scripts/luna.js memory export <folder>    every memory copied to a backup folder (src/memoryexport.js)
 //
@@ -54,7 +55,7 @@ const { cardFor, MAX_CARD_CHARS } = require('../src/memorycard');
 const { saveNote } = require('../src/memorynote');
 const { createRepoKeys, findRepo } = require('../src/missionrepokey');
 const { createLog, logPath, captureStats, usage, decisionEvent, memoryNotes, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog');
-const { cardSessions, cardSessionLines } = require('../src/memoryuse');
+const { cardSessions, cardSessionLines, auditReport } = require('../src/memoryuse');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { changeQueries, readChanges } = require('../src/memorychanges');
 const { machineName } = require('../src/missionledgersync');
@@ -77,6 +78,7 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
                         (one small-model call; without --save nothing is written)
   review                confirmed memories that are stale, name a missing file, or were reported wrong
   verify | retire <id>  say one of them is still true, or delete it on every PC
+  audit                 quality-gate report: approval rate, usefulness buckets, graveyard, tool use, brief outcomes, sync lag   [--days n, default 30]
   stats                 approval rate of captured memories, per usefulness band, and how often memories are read   [--days n]
   notes                 markdown list of memories confirmed, superseded, archived and retired, titles only
                         [--since <tag|YYYY-MM-DD>] [--all]   default: the latest v* tag; tags are read
@@ -484,6 +486,23 @@ function cmdStats({ configDir, project, values }) {
   for (const text of cardSessionLines(cardSessions(events, { since, project: values.all ? null : project }))) out(`    ${text}`);
 }
 
+const AUDIT_DEFAULT_DAYS = 30;
+const AUDIT_MAX_DAYS = 365;
+
+/** `memory audit`: the quality-gate report; runs with LunaCore closed, from the local log. */
+function cmdAudit({ configDir, values }) {
+  let days = AUDIT_DEFAULT_DAYS;
+  if (values.days !== undefined) {
+    if (!/^[1-9]\d{0,3}$/.test(values.days) || Number(values.days) > AUDIT_MAX_DAYS) {
+      throw new UsageError(`--days must be a whole number from 1 to ${AUDIT_MAX_DAYS}`);
+    }
+    days = Number(values.days);
+  }
+  const now = Date.now();
+  const machines = localStatus(configDir, machineName(os.hostname()), now).machines;
+  out(auditReport(createLog(logPath(configDir)).read(), { days, now, machines }));
+}
+
 // ---- notes: what the memory gained and lost since a release ------------------------
 
 /** A tag name as typed: no path, glob, option or `..` (it is passed to git as a ref). */
@@ -590,6 +609,7 @@ const COMMANDS = {
   review: cmdReview,
   verify: (ctx) => cmdSettle(ctx, true),
   retire: (ctx) => cmdSettle(ctx, false),
+  audit: cmdAudit,
   stats: cmdStats,
   notes: cmdNotes,
   export: cmdExport,

@@ -1,7 +1,30 @@
 # Luna Core Memory: a RAG-style memory across all projects
 
-Status: **phases 1 to 5 built** (2026-11-11). Written 2026-11-10. Section 0 holds the
-decisions made so far; section 11 lists the questions they answer.
+Status: **phases 1 to 5 built** (2026-11-11), **#godmode5 built** (2026-11-23). Written
+2026-11-10. Section 0 holds the decisions made so far; section 11 lists the questions they
+answer.
+
+### Status after #godmode5 (2026-11-23)
+
+Every #godmode5 feature is built and covered by tests (hashes are the feature commits on
+the God Mode branch). The plan stays here until the last gate below is passed.
+
+| Feature | State | Where |
+|---------|-------|-------|
+| 5-axis rubric capture scoring and memory expiry | Built | `0230704` |
+| Antigravity (agy) session capture | Built | `f992137` |
+| Origin-session drawer with Interrogate, Export all backup | Built | `af3a86b`, `src/memoryexport.js`, `src/renderer/modules/memoryorigin.js` |
+| Local-only repo doc chunks in `memory_search` (decision 22) | Built | `c2fe699`, `src/memorydocs.js` |
+| Phone memory search, rejection reasons, inbox swipes | Built | `b4e654f`, `b79e520` |
+| Live Work Map: Hooks station, tool error pulses, Skill tool | Built | `e9f7c5d` |
+| Vector-assisted God Mode brief memory and brief-outcome events | Built | `6fa3d17`, `src/orchestraBriefMemory.js` |
+| Per-prompt auto-recall (phase 7 lite, opt-in `memoryAutoRecall`) | Built | `31aad40`, `12a10a8`, `src/memoryrecall.js`, `src/memoryrecallhook.js` |
+| Semantic dedup and the Rejected-Embedding Shield | Built | `ec6e8db`, `src/memoryshield.js` |
+| Use boost, conflict/dispute penalties, LLM merge draft | Built | `7fd0608` |
+| Cross-PC review signals (rejections, disputes, reads) | Built | `731c4d4`, `src/memorysignals.js` |
+| Weekly Sleep Pass consolidation and architecture-map refresh | Built | `c42fe52`, `src/memoryconsolidate.js` |
+| `luna memory audit [--days N]` quality-gate report | Built | `src/memoryuse.js`, `scripts/luna.js` |
+| **Mati's live check** in a running LunaCore on both PCs | **Open** | The only gate left before this plan moves to `docs/done_docs/` |
 
 ## 0. Decisions so far (2026-11-11)
 
