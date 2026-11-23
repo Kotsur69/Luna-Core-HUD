@@ -26,6 +26,8 @@ export function flagLine(flag) {
   // flag.when is model-written text: it only ever reaches the page through textContent.
   if (flag.kind === 'expired' && flag.when) return t('mem.inbox.review.expiredWhen', { date: flag.on || '-', when: flag.when });
   if (flag.kind === 'expired') return t('mem.inbox.review.expiredOn', { date: flag.on || '-' });
+  // God Mode packages its brief went into that failed or stalled (src/memoryuse.js failingBriefs).
+  if (flag.kind === 'failing') return t('mem.inbox.review.failing', { count: (Number(flag.failed) || 0) + (Number(flag.stalled) || 0), days: flag.days });
   return t('mem.inbox.review.stale', { since: flag.since });
 }
 

@@ -15,6 +15,11 @@
 //   cardSessions  sessions started with the project card against those
 //                 started without it, and the memory tool calls of each: the
 //                 with/without evidence of section 9 (`luna memory stats`).
+//   failingBriefs per memory, the God Mode packages its brief injection went
+//                 into lately and how they ended (`brief-outcome` lines,
+//                 src/orchestraBriefMemory.js): the review list flags a
+//                 confirmed memory that keeps going into failed or stalled
+//                 packages and never into a clean one (src/memoryreview.js).
 //
 // The log is this PC's only and trims reads first, so every number here is a
 // lower bound for this PC, never a fact about the other one.
@@ -147,6 +152,47 @@ function cardSessions(events, { since = 0, project = null } = {}) {
   };
 }
 
+/** The window brief outcomes are counted in. */
+const FAILING_BRIEF_DAYS = 30;
+/** Failed or stalled packages (and no clean one) that put a memory on the review list. */
+const MIN_FAILED_BRIEFS = 3;
+
+const emptyOutcomes = () => ({ clean: 0, retried: 0, stalled: 0, failed: 0 });
+
+/**
+ * The confirmed-memory candidates for the review list's 'failing' flag: memories
+ * whose brief injection went into at least MIN_FAILED_BRIEFS failed or stalled
+ * God Mode packages, and into no clean one, in the last FAILING_BRIEF_DAYS.
+ * The latest line of a package counts (a Retry after the run settled logs it
+ * again). What came before the memory's last "still true" (by the user or by
+ * "Check if still true") does not count: that answered the question.
+ * @param {object[]} events memorylog readLog(), oldest first
+ * @param {{now: number}} opts ms
+ * @returns {Map<string, {clean: number, retried: number, stalled: number, failed: number, days: number}>}
+ */
+function failingBriefs(events, { now }) {
+  const since = now - FAILING_BRIEF_DAYS * DAY_MS;
+  const settled = new Map();
+  const latest = new Map();
+  for (const e of events) {
+    if (e.ev === 'verified' && (e.by === 'user' || e.by === 'check')) settled.set(e.key, Math.max(settled.get(e.key) || 0, e.at));
+    else if (e.ev === 'brief-outcome' && e.at >= since && e.at <= now) latest.set(`${e.project}\n${e.runId}\n${e.pkgId}`, e);
+  }
+  const counts = new Map();
+  for (const e of latest.values()) {
+    for (const key of e.keys) {
+      if (e.at <= (settled.get(key) || 0)) continue;
+      const c = counts.get(key) || emptyOutcomes();
+      counts.set(key, { ...c, [e.outcome]: c[e.outcome] + 1 });
+    }
+  }
+  const failing = new Map();
+  for (const [key, c] of counts) {
+    if (c.failed + c.stalled >= MIN_FAILED_BRIEFS && c.clean === 0) failing.set(key, { ...c, days: FAILING_BRIEF_DAYS });
+  }
+  return failing;
+}
+
 /** Calls per session with one decimal, "n/a" for no session. */
 const perSessionText = (v) => (v === null ? 'n/a' : (Math.round(v * 10) / 10).toFixed(1));
 
@@ -162,4 +208,17 @@ function cardSessionLines({ withCard, withoutCard }) {
   return [lineOf('with the card', withCard), lineOf('without the card', withoutCard)];
 }
 
-module.exports = { readCounts, recentUsage, lastOpened, oldestRead, cardSessions, cardSessionLines, callOf, RECENT_READ_DAYS, TOOL_CALLS };
+module.exports = {
+  readCounts,
+  recentUsage,
+  lastOpened,
+  oldestRead,
+  cardSessions,
+  cardSessionLines,
+  callOf,
+  failingBriefs,
+  RECENT_READ_DAYS,
+  TOOL_CALLS,
+  FAILING_BRIEF_DAYS,
+  MIN_FAILED_BRIEFS,
+};

@@ -56,6 +56,13 @@
 //   memory:todo-draft (key)                         -> {ok, key, text, details} | {ok:false, reason}
 //   memory:to-todo    (key, {text, details?, size?}) -> {ok, key, projectId, at} | {ok:false, reason}
 //
+// "Export all" (src/memoryexport.js): every valid memory and note copied to a
+// backup folder. The renderer sends nothing: main asks for the folder in its
+// own dialog (chooseFolder), so no path ever crosses the bridge.
+//
+//   memory:export ()  -> {ok, folder, name, files, memories, notes, projects, skipped, skippedCount}
+//                        | {ok:false, reason: 'cancelled'|'no-memory-dir'|'bad-target'|'target-missing'|'inside-memory-dir'|'name-taken'|'failed'}
+//
 // The renderer names a memory only by its key. src/memoryinbox.js checks the
 // key (splitKey: never a path) and refuses anything that is not waiting, so
 // these channels cannot touch a confirmed memory. Edited text is rebuilt by
@@ -65,20 +72,25 @@
 'use strict';
 
 const { listInbox, approve, reject, update, makeGlobal } = require('./memoryinbox');
-const { MAX_BODY, MAX_TITLE, finalScore, splitKey } = require('./memoryrecord');
+const { MAX_BODY, MAX_TITLE, finalScore, usageRecommendation, splitKey } = require('./memoryrecord');
 const { recentUsage } = require('./memoryuse');
 const { scan } = require('./memorystore');
 const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
-const { captureStats, decisionEvent, lastChecks, DAY_MS } = require('./memorylog');
+const { captureStats, decisionEvent, lastChecks, openDisputes, DAY_MS } = require('./memorylog');
 const { checkOf } = require('./memorycheck');
 const auto = require('./memoryautoaccept');
+const { readAutoRecall, setAutoRecall } = require('./memoryrecallhook');
 const { CANDIDATE_TYPES } = require('./memoryextract');
-const { listConflicts } = require('./memoryconflict');
+
+/** The id the memory window's auto-recall switch goes by (memoryautopanel.js). */
+const RECALL_SWITCH = 'recall';
+const { listConflicts, conflictedKeys } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
 const { cachedChanges, currentChanges } = require('./memorychanges');
 const { sharedVectorStore, vectorLookup, docText } = require('./memoryembed');
 const { rememberRejected, forgetSimilar } = require('./memoryshield');
+const { exportAll } = require('./memoryexport');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -109,15 +121,30 @@ function cleanEdits(raw) {
 
 /**
  * A listed memory with its final score (memoryrecord.finalScore), read from
- * the record of its key; an item whose record is gone is left as it is.
+ * the record of its key, and what this PC's use recommends for it
+ * (memoryrecord.usageRecommendation); an item whose record is gone is left as it is.
  * @param {{key: string}} item
  * @param {Map<string, object>} byKey the mirror's records
- * @param {{reads: Map<string, number>, today: string}} usage memoryuse.recentUsage()
+ * @param {{reads: Map<string, number>, today: string, conflicted?: Set<string>, disputed?: {has: Function}}} usage
+ *   memoryuse.recentUsage(), with the keys in an open conflict and those with an open dispute
  */
 function withFinal(item, byKey, usage) {
   const record = byKey.get(item.key);
-  return record ? { ...item, final: finalScore(record, { reads: usage.reads.get(item.key) || 0, today: usage.today }) } : item;
+  if (!record) return item;
+  const reads = usage.reads.get(item.key) || 0;
+  const disputed = Boolean(usage.disputed && usage.disputed.has(item.key));
+  const conflicted = Boolean(usage.conflicted && usage.conflicted.has(item.key));
+  return {
+    ...item,
+    last_used: record.last_used || null,
+    boosted_at: record.boosted_at || null,
+    final: finalScore(record, { reads, today: usage.today, conflicted, disputed }),
+    recommend: usageRecommendation({ ...record, reads, disputed }, usage.today),
+  };
 }
+
+/** recentUsage() with the flags that take points off the final score. */
+const scoredUsage = (evs, records, now) => ({ ...recentUsage(evs, now), conflicted: conflictedKeys(records), disputed: openDisputes(evs) });
 
 /** The inbox's conflict pairs, each side with its final score. */
 const conflictsWithFinal = (conflicts, byKey, usage) => ({
@@ -156,7 +183,8 @@ function cleanSearchMode(raw) {
  *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js);
  *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none;
  *   vectors = the vector store (src/memoryembed.js): near-duplicates by meaning, and the
- *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield
+ *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield;
+ *   chooseFolder = main's folder dialog for "Export all": (event) => Promise<string|null>, null = cancelled
  */
 function registerMemoryIpc({
   ipcMain,
@@ -168,6 +196,7 @@ function registerMemoryIpc({
   roots = () => ({}),
   searchStatus = () => null,
   autoFile = () => null,
+  recallFile = () => null,
   onSettingsChanged = () => {},
   graveyardFile = () => null,
   todoProjects = () => [],
@@ -175,6 +204,7 @@ function registerMemoryIpc({
   todos = null,
   changes = null,
   vectors = sharedVectorStore,
+  chooseFolder = null,
 }) {
   /** The vector store right now, or null; a failure there means "by words", never a failed call. */
   const store = () => {
@@ -271,6 +301,8 @@ function registerMemoryIpc({
         types: auto.autoStatus(auto.readAuto(file), auto.typeStats(evs, now())),
         score: { id: auto.SCORE_SWITCH, on: auto.readScoreAuto(file), ...auto.scoreStats(evs, now()) },
         recent: auto.recentAutoAccepted(scan(dir()).records, isoDate(now())),
+        // Auto-recall into prompts (src/memoryrecallhook.js); absent without its file.
+        ...(recallFile() ? { recall: { id: RECALL_SWITCH, on: readAutoRecall(recallFile()) } } : {}),
         bar: {
           min: auto.AUTO_MIN_DECISIONS,
           days: auto.AUTO_WINDOW_DAYS,
@@ -290,8 +322,9 @@ function registerMemoryIpc({
     try {
       const evs = events();
       const { captures, proposed, approved, rejected, edited, rate } = captureStats(evs, { since: now() - STATS_DAYS * DAY_MS });
-      const usage = recentUsage(evs, now());
       const { records } = scan(dir());
+      // Reads, and the conflicts and open disputes that take points off the final score.
+      const usage = scoredUsage(evs, records, now());
       snapshot(records);
       return {
         ok: true,
@@ -324,7 +357,7 @@ function registerMemoryIpc({
       const rootsHere = knownRoots();
       const res = reviewList({ records, today: isoDate(now()), events: evs, roots: rootsHere, changes: changesFor(records, rootsHere) });
       const byKey = new Map(records);
-      const usage = recentUsage(evs, now());
+      const usage = scoredUsage(evs, records, now());
       // Each entry's last "Check if still true" answer on this PC (src/memorycheck.js), or null.
       const checks = lastChecks(evs);
       return { ok: true, ...res, items: res.items.map((item) => ({ ...withFinal(item, byKey, usage), check: checkOf(checks, item.key) })) };
@@ -377,6 +410,21 @@ function registerMemoryIpc({
       return { ok: true, type, on: req.on };
     } catch (err) {
       console.error('[memory] auto-accept switch failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  });
+  // Auto-recall (src/memoryrecallhook.js): opt-in, no numbers to earn; on or
+  // off is the whole request, and only a boolean is taken from the renderer.
+  ipcMain.handle('memory:recall-set', (_event, req) => {
+    if (!req || typeof req !== 'object' || typeof req.on !== 'boolean') return { ok: false, reason: 'bad-request' };
+    try {
+      const file = recallFile();
+      if (!file) return { ok: false, reason: 'failed' };
+      setAutoRecall(file, req.on);
+      onSettingsChanged();
+      return { ok: true, on: req.on };
+    } catch (err) {
+      console.error('[memory] auto-recall switch failed:', errText(err));
       return { ok: false, reason: 'failed' };
     }
   });
@@ -434,6 +482,26 @@ function registerMemoryIpc({
     // Some of a group's files may be gone even so: sync and repaint what is left.
     if (res.reason === 'remove-failed') onChanged();
     return res;
+  });
+
+  // "Export all". Takes no payload: the folder comes from main's own dialog.
+  // Writes outside the mirror only, so nothing syncs and nothing repaints.
+  let exporting = false;
+  ipcMain.handle('memory:export', async (event) => {
+    if (typeof chooseFolder !== 'function') return { ok: false, reason: 'failed' };
+    if (exporting) return { ok: false, reason: 'busy' };
+    exporting = true;
+    try {
+      const folder = await chooseFolder(event);
+      if (folder === null || folder === undefined) return { ok: false, reason: 'cancelled' };
+      if (typeof folder !== 'string') return { ok: false, reason: 'bad-target' };
+      return exportAll({ dir: dir(), destDir: folder, now: now() });
+    } catch (err) {
+      console.error('[memory] export failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    } finally {
+      exporting = false;
+    }
   });
 
   ipcMain.handle('memory:auto-undo', (_event, key) => {

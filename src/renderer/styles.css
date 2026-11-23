@@ -6311,6 +6311,25 @@ section.orchestra__planrun {
 .mem-brain__history-body h4 { margin: var(--space-3) 0 var(--space-1); font-size: inherit; }
 .mem-brain__history-body p { margin: var(--space-1) 0; }
 .mem-brain__chain, .mem-brain__chain ul, .mem-brain__timeline { margin: 0; padding-left: var(--space-4, 16px); }
+/* "Export all" bar above the list of all memories (memorybrain.js exportBar). */
+.mem-brain__export { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: var(--space-2) 0 var(--space-3); }
+.mem-brain__exportStatus { margin: 0; min-height: 1.2em; }
+/* Origin-session drawer (C key, memoryorigin.js): the excerpt beside the list. */
+.mem-origin-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 42%); gap: var(--space-3); align-items: start; }
+.mem-origin { position: sticky; top: 0; max-height: 70vh; overflow: auto; padding: var(--space-3); border: var(--border-w) solid var(--edge); border-radius: var(--radius-sm); background: var(--panel, transparent); }
+.mem-origin__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.mem-origin__title { margin: 0; font-size: inherit; }
+.mem-origin__memory { margin: var(--space-2) 0; font-weight: 600; overflow-wrap: anywhere; }
+.mem-origin__from { margin: var(--space-1) 0; }
+.mem-origin__excerpt { margin: var(--space-2) 0; padding: var(--space-2); border-left: 2px solid var(--edge); font-family: var(--font-mono); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mem-origin__answer { margin-top: var(--space-2); }
+.mem-origin__verdict { display: inline-block; margin: 0; padding: 0 var(--space-2); border: 1px solid currentColor; border-radius: var(--radius-sm); font-family: var(--font-mono); font-weight: 600; }
+.mem-origin__verdict.is-durable { color: var(--good); }
+.mem-origin__verdict.is-guess { color: var(--warn); }
+.mem-origin__verdict.is-unclear { color: var(--text); }
+.mem-origin__reply { margin: var(--space-2) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mem-origin__close:focus-visible, .mem-origin__ask:focus-visible { outline: 2px solid var(--edge-glow); outline-offset: 1px; }
+@media (max-width: 720px) { .mem-origin-split { grid-template-columns: minmax(0, 1fr); } .mem-origin { position: static; max-height: none; } }
 
 /* The brief's buttons inside the notification hub drawer (hub.css, hubpanel.js). */
 .mission-brief--hub .mc-btn {

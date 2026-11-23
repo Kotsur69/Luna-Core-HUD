@@ -516,6 +516,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   // a type on unless this PC's numbers offer it, and undoes only a recent auto-accept.
   /** Switches one type on or off. Promise<{ok, type, on} | {ok:false, reason}>. */
   memoryAutoSet: (type, on) => ipcRenderer.invoke('memory:auto-set', { type: typeof type === 'string' ? type : '', on: on === true }),
+  /** Auto-recall into prompts on or off (src/memoryrecallhook.js); a boolean only. Promise<{ok, on} | {ok:false, reason}>. */
+  memoryAutoRecallSet: (on) => ipcRenderer.invoke('memory:recall-set', { on: on === true }),
   /** Undoes one auto-accept: the memory is deleted on every PC. Promise<{ok, key} | {ok:false, reason}>. */
   memoryAutoUndo: (key) => ipcRenderer.invoke('memory:auto-undo', typeof key === 'string' ? key : ''),
   // The memory graveyard (src/memoryipc.js): candidates dropped under the
@@ -547,6 +549,12 @@ contextBridge.exposeInMainWorld('lunacore', {
       title: edits && typeof edits.title === 'string' ? edits.title : '',
       body: edits && typeof edits.body === 'string' ? edits.body : '',
     }),
+  /** One lean model call drafts the merge of a listed pair. Read only. Promise<{ok, title, body} | {ok:false, reason}>. */
+  memoryMergeDraft: (a, b) =>
+    ipcRenderer.invoke('memory:merge-draft', {
+      a: typeof a === 'string' ? a : '',
+      b: typeof b === 'string' ? b : '',
+    }),
   // "Check if still true" (src/memorycheck.js): Sonnet reads the project's code,
   // read-only. Keys and projects only; main checks them and the project folder.
   /** Checks one confirmed memory. Promise<{ok, total} | {ok:false, reason}>; the answer arrives as memory:changed. */
@@ -563,6 +571,12 @@ contextBridge.exposeInMainWorld('lunacore', {
     }),
   /** Read only: one memory's source, supersede chain, links and this PC's log about it. Promise<{ok, ...} | {ok:false, reason}>. */
   memoryProvenance: (key) => ipcRenderer.invoke('memory:provenance', typeof key === 'string' ? key : ''),
+  /** Read only: the scrubbed excerpt of the session or run a memory came from. Promise<{ok, excerpt, ...} | {ok:false, reason}>. */
+  memoryOriginSnippet: (key) => ipcRenderer.invoke('memory:origin-snippet', typeof key === 'string' ? key : ''),
+  /** One lean model call: why this memory was proposed from its excerpt. Promise<{ok, verdict, text} | {ok:false, reason}>. */
+  memoryInterrogate: (key) => ipcRenderer.invoke('memory:interrogate', typeof key === 'string' ? key : ''),
+  /** Copies every memory to a folder main asks for in its own dialog: no path crosses. Promise<{ok, folder, files, skipped} | {ok:false, reason}>. */
+  memoryExport: () => ipcRenderer.invoke('memory:export'),
   /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
   onMemoryChanged: (cb) => {
     if (typeof cb !== 'function') return () => {};

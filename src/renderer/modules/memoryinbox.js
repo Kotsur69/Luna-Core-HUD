@@ -25,12 +25,13 @@
 import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
 import { COMMANDS, keyCommand, typingIn, moveSelection, keepSelection } from './memoryinboxkeys.js';
-import { autoSection } from './memoryautopanel.js';
-import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft } from './memorybrain.js';
+import { autoSection, RECALL_SWITCH } from './memoryautopanel.js';
+import { finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft, scoreNote, scoreTooltip, recommendNote } from './memorybrain.js';
 import { clearHistory } from './memoryhistory.js';
 import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
 import { statsLine, captureLine, searchLine, flagLine, graveLine } from './memoryinboxlines.js';
 import { createCheckFlow, checkReasonKey } from './memorycheckview.js';
+import { createOriginDrawer } from './memoryorigin.js';
 
 export { statsLine, searchLine, flagLine, graveLine };
 
@@ -62,6 +63,11 @@ let autoError = null;
 let brainProject = '';
 /** An i18n key when main refused to start a scan, or null. */
 let scanError = null;
+/** pair id -> the merge form's start {title, body, fallback} after "Draft canonical merge"; the pair being drafted, or null. */
+const mergeDrafts = new Map();
+let draftingPair = null;
+/** Bumped by every draft and by closing the window: an answer for an older ticket is dropped. */
+let draftSeq = 0;
 
 /** What the to-do and check flows use of the window. Their open forms hold `editing`, so every draft lock applies. */
 const flowHooks = {
@@ -77,6 +83,8 @@ const flowHooks = {
 /** "Make a to-do" (memorytodoform.js) and "Check if still true" (memorycheckview.js). */
 const todo = createTodoFlow(flowHooks);
 const check = createCheckFlow(flowHooks);
+/** The origin-session drawer (C key, memoryorigin.js): read only, beside the inbox and review lists. */
+const origin = createOriginDrawer({ call: (...args) => call(...args), onClosed: () => load(selected === null ? undefined : selected) });
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
@@ -194,7 +202,8 @@ export function scoreLabel(item) {
 
 function scoreChip(item) {
   const chip = el('span', 'mem-inbox__score', scoreLabel(item));
-  chip.title = t('mem.inbox.usefulnessHint');
+  // The weights, then this entry's own parts, boost and penalties in words.
+  chip.title = [t('mem.inbox.usefulnessHint'), scoreTooltip(item)].filter(Boolean).join('\n');
   return chip;
 }
 
@@ -230,7 +239,7 @@ function entry(item) {
         }),
       );
     }
-    card.append(...notes(item), el('p', 'mem-inbox__note', usefulnessLine(item)));
+    card.append(...notes(item), scoreNote(item));
     if (item.source) card.append(el('p', 'hint', item.source));
     const off = busy.has(item.key);
     const approve = button('port-btn mem-inbox__btn mem-inbox__btn--approve', t('mem.inbox.approve'), () => decide(item.key, 'memoryInboxApprove'));
@@ -276,7 +285,9 @@ function reviewEntry(item) {
   // A 'checked' flag is drawn as the check's badge (memorycheckview.js), with its evidence.
   const flags = item.flags.filter((flag) => flag.kind !== 'checked').map((flag) => el('p', 'mem-inbox__note', flagLine(flag)));
   const badge = check.badge(item);
-  card.append(...flags, ...(badge ? [badge] : []), el('p', 'mem-inbox__note', usefulnessLine(item)));
+  // What this PC's use recommends: keep (read often) or retire (idle and never read).
+  const recommend = recommendNote(item);
+  card.append(...flags, ...(badge ? [badge] : []), scoreNote(item), ...(recommend ? [recommend] : []));
   const off = busy.has(item.key);
   const actions = el('div', 'mem-inbox__actions');
   const form = todo.formOf(item.key) || check.formOf(item.key);
@@ -364,6 +375,7 @@ function switchTab(name) {
   tab = name;
   confirming = null;
   selected = null;
+  origin.close();
   load(undefined, undefined, true);
 }
 
@@ -411,9 +423,13 @@ function refocus(list, key, index, fallback) {
  * id), prefilled with A's title and both bodies; saving writes one new memory.
  */
 function conflictItem(pair) {
+  // "Draft canonical merge" fills the form with the model's draft; plain Merge with A and B joined.
+  const draft = mergeDrafts.get(pair.id) || { ...mergeDraft(pair), fallback: false };
   const form =
     editing === pair.id
-      ? editForm({ key: pair.id, ...mergeDraft(pair) }, (title, body) => act(pair.id, 'memoryMerge', pair.a.key, pair.b.key, { title, body }))
+      ? editForm({ key: pair.id, title: draft.title, body: draft.body }, (title, body) =>
+          act(pair.id, 'memoryMerge', pair.a.key, pair.b.key, { title, body }).then((ok) => (ok && mergeDrafts.delete(pair.id), ok)),
+        )
       : null;
   return conflictEntry(pair, {
     off: busy.has(pair.id),
@@ -422,11 +438,33 @@ function conflictItem(pair) {
     onKeep: (keep) => decide(pair.id, 'memoryConflictResolve', pair.a.key, pair.b.key, keep),
     onMerge: () => {
       if (editing !== null) return;
+      mergeDrafts.delete(pair.id);
       editing = pair.id;
       load();
     },
+    onDraft: () => draftMerge(pair),
+    drafting: draftingPair === pair.id,
+    draftOff: draftingPair !== null || editing !== null,
+    draftFailed: Boolean(form && draft.fallback),
     form,
   });
+}
+
+/** One lean model call drafts the merge form (memory:merge-draft); any failure falls back to mergeDraft(pair). */
+async function draftMerge(pair) {
+  if (editing !== null || draftingPair !== null) return;
+  draftingPair = pair.id;
+  const ticket = ++draftSeq;
+  load(pair.id);
+  const res = await call('memoryMergeDraft', pair.a.key, pair.b.key);
+  // The window closed (and maybe opened again) while the model wrote: this draft is no one's now.
+  if (ticket !== draftSeq || !overlay || !overlay.isOpen()) return;
+  draftingPair = null;
+  const drafted = res && res.ok && typeof res.title === 'string' && typeof res.body === 'string';
+  mergeDrafts.set(pair.id, drafted ? { title: res.title, body: res.body, fallback: false } : { ...mergeDraft(pair), fallback: true });
+  // Another form opened while the model wrote: the draft waits for the next Draft click.
+  if (editing === null) editing = pair.id;
+  load();
 }
 
 /** The inbox (conflicts first), the review list or the graveyard. @returns {{nodes: HTMLElement[], list: HTMLElement|null}} */
@@ -529,6 +567,8 @@ function render(res, review, all, graves, focusKey, focusIndex, focusTab) {
   panel.setAttribute('role', 'tabpanel');
   panel.setAttribute('aria-labelledby', `mem-inbox-tab-${tab}`);
   const { nodes, list } = tab === 'all' ? allView(all) : listView(res, review, conflicts, graves);
+  // An entry approved, rejected or retired (here or on another PC) takes its drawer with it.
+  if (origin.isOpen() && !shownItems.some((i) => i.key === origin.openKey())) origin.close();
   panel.append(...nodes);
   const bar = tabBar({ inbox: waiting, review: review.total, graveyard: graves.total });
   const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));
@@ -540,7 +580,7 @@ function render(res, review, all, graves, focusKey, focusIndex, focusTab) {
   const keys = tab === 'all' || tab === 'graveyard' ? null : el('p', 'hint mem-inbox__keys', t(tab === 'review' ? 'mem.inbox.keys.review' : 'mem.inbox.keys.inbox'));
   // An open draft locks the section: its repaint would throw the typed text away.
   const autoPart = tab !== 'inbox' ? null : autoSection(res.auto, { onToggle: toggleAuto, onUndo: undoAuto, busy, switching: switching || editing !== null, error: autoError });
-  overlay.body.replaceChildren(bar, panel, ...(autoPart ? [autoPart] : []), foot, ...(stats ? [el('p', 'hint', stats)] : []), ...(searchNote ? [searchNote] : []), ...(keys ? [keys] : []));
+  overlay.body.replaceChildren(bar, tab === 'inbox' || tab === 'review' ? origin.wrap(panel) : panel, ...(autoPart ? [autoPart] : []), foot, ...(stats ? [el('p', 'hint', stats)] : []), ...(searchNote ? [searchNote] : []), ...(keys ? [keys] : []));
   const selectedTab = bar.querySelector('[aria-selected="true"]');
   if (focusTab) selectedTab.focus();
   else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0, selectedTab);
@@ -636,12 +676,12 @@ export function autoReasonKey(reason) {
   return 'mem.inbox.err.failed';
 }
 
-/** Switches auto-accept for one type; main re-checks that the numbers allow it. */
+/** Switches auto-accept for one type, or auto-recall; main re-checks that the numbers allow it. */
 async function toggleAuto(type, on) {
   // Like switchTab: never while a draft is open, a repaint would throw it away.
   if (switching || editing !== null) return;
   switching = true;
-  const res = await call('memoryAutoSet', type, on);
+  const res = type === RECALL_SWITCH ? await call('memoryAutoRecallSet', on) : await call('memoryAutoSet', type, on);
   switching = false;
   autoError = res && res.ok ? null : autoReasonKey(res && res.reason);
   load();
@@ -716,6 +756,8 @@ const ENTRY_ACTIONS = {
 function runCommand(cmd, item) {
   if (cmd === COMMANDS.NEXT || cmd === COMMANDS.PREV) return moveTo(cmd === COMMANDS.NEXT ? 1 : -1);
   if (cmd === COMMANDS.CLEAR) return clearSelection();
+  // Read only: opens or folds the drawer, the repaint keeps the keyboard on the entry.
+  if (cmd === COMMANDS.CONTEXT) return item ? (origin.toggle(item), load(item.key)) : undefined;
   if (cmd === COMMANDS.SAVE) {
     const form = overlay.body.querySelector('.mem-inbox__form');
     if (form && !busy.has(editing)) form.requestSubmit();
@@ -766,8 +808,13 @@ export async function openMemoryInbox() {
         if (stopListening) stopListening();
         stopListening = null;
         editing = null;
+        // A merge draft still on its way is dropped when it lands (draftMerge's ticket).
+        draftSeq++;
+        draftingPair = null;
+        mergeDrafts.clear();
         todo.reset();
         check.reset();
+        origin.close();
         confirming = null;
         selected = null;
         shownItems = [];
