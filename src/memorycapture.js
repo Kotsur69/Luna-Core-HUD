@@ -25,13 +25,28 @@
 // candidate scored under AUTO_REJECT_BELOW (src/memoryextract.js) never gets
 // there: it is logged (src/memorylog.js, `dropped`) with its score, and kept
 // whole in the local graveyard (src/memorygraveyard.js), where it can be
-// restored. One scored AUTO_SAVE_FROM or more may land confirmed when Mati
+// restored. With LM Studio serving the model of the local memory vectors, the
+// candidates are also compared by meaning, and one that means what a rejected
+// memory meant is buried as "similar to rejected: <title>"
+// (src/memoryshield.js); without it, the filter is by words only. One scored AUTO_SAVE_FROM or more may land confirmed when Mati
 // switched the score switch on (src/memoryautoaccept.js). The same model
 // call gives the project's "where we stopped" status: it overwrites the
 // project's note (src/memorynote.js) without the inbox; no status, no change.
 //
 // A full inbox pauses capture for that project: candidates nobody reviews are
 // not worth a model call.
+//
+// Two kinds of transcript are read: Claude Code's (any .jsonl under
+// ~/.claude/projects) and Antigravity's (agy, <appData>/brain/<id>/
+// .system_generated/logs/transcript[_full].jsonl, src/agytranscript.js). The
+// kind picks the digest (src/memorydigest.js); both give the same shape, so
+// the extraction after it is the same. The ledger is a file anyone can edit,
+// so a path is opened only when it is absolute, free of `..` and of NTFS
+// stream names, of the right shape under one of the two roots, a plain file,
+// and still under that root once every link and junction on the way is
+// resolved - checked when it is tracked, on every tick, and right before the
+// read. A check the disk cannot answer (a locked file) skips the file for
+// that tick; it never forgets the entry and its offset.
 // ============================================================================
 
 'use strict';
@@ -44,8 +59,12 @@ const { GLOBAL, projectFromRepoKey } = require('./memoryrecord');
 const { scan, writeRecord } = require('./memorystore');
 const { memoryPaths } = require('./memorysync');
 const { readEnabled } = require('./memoryprojects');
-const { digestTranscript } = require('./memorydigest');
-const { buildPrompt, candidatesFrom, outsideNote, withNote, LOW_USEFULNESS } = require('./memoryextract');
+const { digestOf } = require('./memorydigest');
+const { agyTranscriptConversation } = require('./agytranscript');
+const { AGY_APP_DATA_DIR } = require('./agywatcher');
+const { buildPrompt, outsideNote, withNote, LOW_USEFULNESS } = require('./memoryextract');
+const { semanticCandidates } = require('./memoryshield');
+const { sharedVectorStore } = require('./memoryembed');
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles } = require('./memorylog');
 const { statusFrom, saveNote } = require('./memorynote');
@@ -79,6 +98,78 @@ const NEWLINE = 0x0a;
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err && (err.code || err.message)) || 'error';
 const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+/** Paths compare without case where the file system ignores it. */
+const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/** Whether `file` lies strictly under `root` (both absolute). */
+function isUnder(file, root) {
+  const rel = path.relative(root, file);
+  return Boolean(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+/**
+ * Whether `file`, as it is on disk, is a plain file at the same place under
+ * the real `root`: a symlinked file, or a link or junction on the way that
+ * leads out of the root, is refused. A file not written yet passes: it is
+ * checked again once it exists, before it is read.
+ * @throws when the disk cannot tell right now (a locked file, a file deleted
+ *   mid-check): the caller looks again later instead of deciding
+ */
+function staysUnder(file, root) {
+  let st;
+  try {
+    st = fs.lstatSync(file);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return true;
+    throw err;
+  }
+  if (!st.isFile()) return false;
+  const real = fs.realpathSync.native(file);
+  const realRoot = fs.realpathSync.native(root);
+  return isUnder(real, realRoot) && samePath(path.relative(realRoot, real), path.relative(root, file));
+}
+
+/** A `..` segment, with either separator: refused, never resolved away. */
+const hasParentSegment = (file) => file.split(/[\\/]/).includes('..');
+/** A colon past the drive letter: an NTFS alternate data stream (a.jsonl:x). */
+const hasStreamName = (file) => process.platform === 'win32' && file.indexOf(':', 2) !== -1;
+
+/**
+ * The kind of transcript capture may open at `file`, or null. Separators are
+ * normalized (a ledger written with `/` keeps working); `..` is refused.
+ * @param {unknown} file
+ * @param {{claude: string, agy: string}} roots resolved roots of both kinds
+ * @returns {'claude'|'agy'|null}
+ * @throws when the disk cannot tell right now (see staysUnder)
+ */
+function transcriptKind(file, roots) {
+  if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file)) return null;
+  if (hasParentSegment(file) || hasStreamName(file)) return null;
+  const normal = path.normalize(file);
+  if (agyTranscriptConversation(normal, roots.agy)) return staysUnder(normal, roots.agy) ? 'agy' : null;
+  if (normal.endsWith('.jsonl') && isUnder(normal, roots.claude)) return staysUnder(normal, roots.claude) ? 'claude' : null;
+  return null;
+}
+
+/**
+ * The transcript capture reads for one tab: an agy tab's pinned conversation
+ * (never a subagent's), else the Claude watcher's file, else the file a
+ * Claude session id names. Null while the tab has none yet.
+ * @param {{agyWatcher?: {pinned?: {full: string}|null}|null, watcher?: {sessionUuid?: string,
+ *   pinned?: string|null, currentFile?: string|null}|null, transcriptId?: string|null, cwd?: string}} session
+ * @param {(cwd: string, id: string) => string} claudeFileOf the Claude transcript of a session id
+ * @returns {string|null}
+ */
+function sessionTranscriptOf(session, claudeFileOf) {
+  if (!session) return null;
+  const agy = session.agyWatcher;
+  if (agy) return (agy.pinned && agy.pinned.full) || null;
+  const watcher = session.watcher;
+  const pinned = watcher && (watcher.pinned || watcher.currentFile);
+  if (pinned) return pinned;
+  const id = (watcher && watcher.sessionUuid) || session.transcriptId;
+  return id && session.cwd ? claudeFileOf(session.cwd, id) : null;
+}
 
 /**
  * The log lines of the candidates dropped for a low usefulness score, so the
@@ -150,14 +241,16 @@ function readPiece(file, from, size) {
  * Runs the extractor over one piece of a transcript.
  * @param {{text: string, project: string, dir: string, source: string, today: string, notWanted?: string[],
  *   run: (job: {prompt: string}) => Promise<{ok: boolean, answer?: object, reason?: string}>}} opts
- *   notWanted = titles the user rejected lately: the model is told not to propose their kind again
+ *   notWanted = titles the user rejected lately: the model is told not to propose their kind again;
+ *   kind = 'claude' or 'agy': which digest reads the text;
+ *   vectors = the vector store (src/memoryembed.js) for dedup by meaning and the shield, null = by words
  * @returns {Promise<{ok: true, records: object[], rejected: object[], reason: string, outside: number, status: string|null}|{ok: false, reason: string}>}
  *   records are NOT written here; outside = the digest's count of calls that read outside
  *   content, also noted in each record's `source`; status = the "where we stopped" text
  *   the model gave (src/memorynote.js), null when it gave nothing meaningful
  */
-async function extractPiece({ text, project, dir, source, today, run, notWanted = [] }) {
-  const digest = digestTranscript(text);
+async function extractPiece({ text, project, dir, source, today, run, notWanted = [], kind = 'claude', vectors = null }) {
+  const digest = digestOf(text, kind);
   if (!digest.userTurns || digest.text.length < MIN_DIGEST_CHARS) {
     return { ok: true, records: [], rejected: [], reason: 'too-short', outside: digest.outside, status: null };
   }
@@ -169,7 +262,7 @@ async function extractPiece({ text, project, dir, source, today, run, notWanted 
   if (!res || !res.ok) return { ok: false, reason: `model-${(res && res.reason) || 'failed'}` };
   // The outside note comes before the ', suggested global' one candidatesFrom may add (memoryextract.js).
   const noted = withNote(source, outsideNote(digest.outside));
-  const { records, rejected } = candidatesFrom(res.answer, { project, today, source: noted, existing });
+  const { records, rejected } = await semanticCandidates(res.answer, { project, today, source: noted, existing }, vectors);
   // The note reaches every new session's card without review, so a piece that
   // read outside content (a fetched page could dictate it) gives no status at all.
   const status = digest.outside ? null : statusFrom(res.answer);
@@ -177,20 +270,33 @@ async function extractPiece({ text, project, dir, source, today, run, notWanted 
 }
 
 /**
- * @param {{configDir: string, machine: string,
+ * @param {{configDir: string, machine: string, transcriptsDir?: string, agyDir?: string,
  *   run: (job: {prompt: string}) => Promise<object>,
  *   live?: () => {file: string|null, project: string|null}[],
  *   now?: () => number, onSaved?: (count: number) => void,
  *   log?: {add: (event: object) => boolean, read: () => object[]}|null}} opts
  *   run = the small-model call (missionrunner.runJob with the app's env);
  *   live = the transcripts of the tabs open right now;
- *   log = the memory log (src/memorylog.js): what was proposed goes in, the rejected titles come out
+ *   transcriptsDir / agyDir = the only folders a transcript is read from (Claude Code's, agy's)
+ *   log = the memory log (src/memorylog.js): what was proposed goes in, the rejected titles come out;
+ *   vectors = the vector store getter (src/memoryembed.js), null result = by words, no shield
  */
-function createCapture({ configDir, machine, run, live = () => [], now = Date.now, onSaved = () => {}, transcriptsDir = CLAUDE_PROJECTS_DIR, log = null }) {
+function createCapture({
+  configDir,
+  machine,
+  run,
+  live = () => [],
+  now = Date.now,
+  onSaved = () => {},
+  transcriptsDir = CLAUDE_PROJECTS_DIR,
+  agyDir = AGY_APP_DATA_DIR,
+  log = null,
+  vectors = sharedVectorStore,
+}) {
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
   const graveyardFile = graveyardPath(configDir);
-  const root = path.resolve(transcriptsDir) + path.sep;
+  const roots = { claude: path.resolve(transcriptsDir), agy: path.resolve(agyDir) };
   let busy = false;
   let timer = null;
   let interval = null;
@@ -198,11 +304,21 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
   let tracked = [];
 
   const save =(ledger) => writeAtomic(ledgerFile, `${JSON.stringify(ledger)}\n`);
-  /** Only a transcript under Claude Code's own folder is ever opened: the ledger is a file anyone can edit. */
-  const isTranscript = (file) => typeof file === 'string' && file.endsWith('.jsonl') && path.resolve(file).startsWith(root);
+  /** Only a transcript under Claude Code's or agy's own folder is ever opened: the ledger is a file anyone can edit. */
+  /** transcriptKind, or undefined when the disk cannot tell right now: the file is looked at again next tick. */
+  const kindOf = (file) => {
+    try {
+      return transcriptKind(file, roots);
+    } catch (err) {
+      console.error('[memory] capture cannot check a transcript path now:', errText(err));
+      return undefined;
+    }
+  };
+  /** The session a transcript belongs to: Claude's file name, agy's conversation folder. */
+  const sessionOf = (file, kind) => (kind === 'agy' ? agyTranscriptConversation(path.normalize(file), roots.agy) : path.basename(file, '.jsonl'));
 
   function note(ledger, { file, project }) {
-    if (!isTranscript(file) || !projectFromRepoKey(project)) return false;
+    if (!kindOf(file) || !projectFromRepoKey(project)) return false;
     const known = ledger.files[file];
     if (known && known.project === project) return false;
     if (!known && Object.keys(ledger.files).length >= MAX_TRACKED) return false;
@@ -226,22 +342,27 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
   /**
    * One transcript: reads its new part and saves what the extractor keeps.
    * @param {{size: number, mtimeMs: number}} stat the transcript's fs.Stats
+   * @param {'claude'|'agy'} kind
    * @returns {Promise<{entry: object, reason: string, saved: number, called: boolean, noted: boolean}|null>}
    *   null = nothing to do now (a full inbox, no complete new line): the entry stays as it is;
    *   called = whether the model was asked
    */
-  async function processFile(file, entry, { size, mtimeMs }) {
+  async function processFile(file, entry, { size, mtimeMs }, kind) {
     if (pendingCount(paths.dir, entry.project) >= MAX_PENDING) return null;
+    // Checked again right before the open, with no await in between: earlier
+    // model calls of this tick gave a link time to appear since the first check.
+    if (kindOf(file) !== kind) return null;
     const piece = readPiece(file, entry.done, size);
     if (piece.end <= entry.done) return null;
-    const source = `captured from session ${path.basename(file, '.jsonl').slice(0, 8)} on ${machine}`;
+    const session = sessionOf(file, kind);
+    const source = `captured from session ${session.slice(0, 8)} on ${machine}`;
     let called = false;
     const counted = (job) => {
       called = true;
       return run(job);
     };
     const notWanted = log ? rejectedTitles(log.read(), entry.project) : [];
-    const res = await extractPiece({ text: piece.text, project: entry.project, dir: paths.dir, source, today: isoDate(now()), run: counted, notWanted });
+    const res = await extractPiece({ text: piece.text, project: entry.project, dir: paths.dir, source, today: isoDate(now()), run: counted, notWanted, kind, vectors: vectors() });
     if (!res.ok) {
       const fails = entry.fails + 1;
       // Giving up on a piece moves past it: one bad transcript must not be retried forever.
@@ -266,11 +387,11 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
     }
     // The "where we stopped" note: overwritten only when the model gave a status,
     // and never by a session that wrote its transcript before the note's own.
-    const note = { project: entry.project, text: res.status, date: isoDate(now()), session: path.basename(file, '.jsonl'), at: Math.floor(mtimeMs) };
+    const note = { project: entry.project, text: res.status, date: isoDate(now()), session, at: Math.floor(mtimeMs) };
     const noted = res.status ? saveNote(paths.dir, note) : false;
     const reason = saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason;
     if (log) for (const event of droppedEvents(res.rejected, entry.project)) log.add(event);
-    // The whole record of a low-usefulness drop, scrubbed: restorable from the memory window.
+    // The whole record of a low-usefulness, duplicate or shielded drop, scrubbed: restorable from the memory window.
     bury(graveyardFile, res.rejected, now());
     // Only a piece the model read is a capture worth counting.
     if (log && called) log.add({ ev: 'capture', project: entry.project, reason, kept: saved, dropped: countReasons(res.rejected) });
@@ -310,7 +431,9 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
           if (!err || err.code !== 'ENOENT') continue; // a locked file is looked at again next tick
         }
         const isLive = liveFiles.has(file);
-        const forget = !isTranscript(file) || !stat || !enabled.includes(entry.project) || (stat.size <= entry.done && !isLive && now() - entry.at > KEEP_MS);
+        const kind = stat ? kindOf(file) : null;
+        if (kind === undefined) continue;
+        const forget = !kind || !stat || !enabled.includes(entry.project) || (stat.size <= entry.done && !isLive && now() - entry.at > KEEP_MS);
         if (forget) {
           delete ledger.files[file];
           dirty = true;
@@ -320,7 +443,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
         // Only model calls count against the budget: a skip must not starve the transcripts after it.
         if (stat.size <= entry.done || quiet < (isLive ? IDLE_MS : SETTLE_MS) || calls >= MAX_PER_TICK) continue;
 
-        const res = await processFile(file, entry, stat);
+        const res = await processFile(file, entry, stat, kind);
         if (!res) continue;
         processed++;
         if (res.called) calls++;
@@ -364,4 +487,4 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
   };
 }
 
-module.exports = { createCapture, extractPiece, readPiece, readLedger, droppedEvents, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING, MIN_DIGEST_CHARS };
+module.exports = { createCapture, extractPiece, transcriptKind, sessionTranscriptOf, readPiece, readLedger, droppedEvents, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING, MIN_DIGEST_CHARS };

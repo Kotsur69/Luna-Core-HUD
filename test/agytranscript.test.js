@@ -1477,3 +1477,45 @@ test('watcher: a named subagent is never another tab\'s own conversation, even w
   a.watcher.stop();
   b.watcher.stop();
 });
+
+// ---- agyTranscriptConversation: which paths are an agy transcript ---------------
+
+const { agyTranscriptConversation, AGY_TRANSCRIPT_FILES } = require('../src/agytranscript');
+const { TRANSCRIPT_FILES: WATCHER_TRANSCRIPT_FILES } = require('../src/agywatcher');
+
+const AGY_ROOT = path.resolve(os.tmpdir(), 'agy-root');
+const CONV = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+const logsOf = (id = CONV) => path.join(AGY_ROOT, 'brain', id, '.system_generated', 'logs');
+
+test('agyTranscriptConversation accepts both transcript files of a conversation', () => {
+  assert.deepEqual([...AGY_TRANSCRIPT_FILES], ['transcript_full.jsonl', 'transcript.jsonl']);
+  assert.equal(WATCHER_TRANSCRIPT_FILES, AGY_TRANSCRIPT_FILES);
+  for (const name of AGY_TRANSCRIPT_FILES) {
+    assert.equal(agyTranscriptConversation(path.join(logsOf(), name), AGY_ROOT), CONV);
+  }
+  // The id comes back lowercase, as the watcher keys conversations.
+  assert.equal(agyTranscriptConversation(path.join(logsOf(CONV.toUpperCase()), 'transcript.jsonl'), AGY_ROOT), CONV);
+});
+
+test('agyTranscriptConversation refuses anything that is not exactly a transcript path', () => {
+  const refused = [
+    path.join(logsOf(), 'transcript.json'),
+    path.join(logsOf(), 'transcript.jsonl.bak'),
+    path.join(logsOf(), 'other.jsonl'),
+    path.join(logsOf(), 'sub', 'transcript.jsonl'),
+    path.join(AGY_ROOT, 'brain', CONV, 'logs', 'transcript.jsonl'),
+    path.join(AGY_ROOT, 'brains', CONV, '.system_generated', 'logs', 'transcript.jsonl'),
+    path.join(logsOf('not-a-uuid'), 'transcript.jsonl'),
+    // `..` is refused even when it would resolve to a valid transcript.
+    `${logsOf()}${path.sep}..${path.sep}logs${path.sep}transcript.jsonl`,
+    `${AGY_ROOT}${path.sep}..${path.sep}agy-root${path.sep}brain${path.sep}${CONV}${path.sep}.system_generated${path.sep}logs${path.sep}transcript.jsonl`,
+    path.join(path.resolve(os.tmpdir(), 'elsewhere'), 'brain', CONV, '.system_generated', 'logs', 'transcript.jsonl'),
+    path.join('brain', CONV, '.system_generated', 'logs', 'transcript.jsonl'),
+    `${path.join(logsOf(), 'transcript.jsonl')}\0`,
+  ];
+  for (const file of refused) assert.equal(agyTranscriptConversation(file, AGY_ROOT), null, file);
+  assert.equal(agyTranscriptConversation(path.join(logsOf(), 'transcript.jsonl'), ''), null);
+  assert.equal(agyTranscriptConversation(path.join(logsOf(), 'transcript.jsonl'), 'relative/root'), null);
+  assert.equal(agyTranscriptConversation(null, AGY_ROOT), null);
+  assert.equal(agyTranscriptConversation(42, AGY_ROOT), null);
+});

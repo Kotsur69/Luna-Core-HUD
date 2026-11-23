@@ -270,7 +270,7 @@ let configSync = null;
 // travels with the config sync (configsync.js startConfigSync).
 const { startMemory, memoryPaths } = require('./memorysync');
 const { createMemoryReader } = require('./memorytools');
-const { createEmbedder, createVectorStore, vectorsPath } = require('./memoryembed');
+const { createEmbedder, createVectorStore, vectorsPath, setSharedVectorStore } = require('./memoryembed');
 const { scan: scanMemory } = require('./memorystore');
 const { createProposer: createMemoryProposer } = require('./memorypropose');
 const { cardFor, writeCard, removeCard } = require('./memorycard');
@@ -278,7 +278,7 @@ const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 // Phase 4: capture from finished sessions (src/memorycapture.js) and the inbox.
-const { createCapture } = require('./memorycapture');
+const { createCapture, sessionTranscriptOf } = require('./memorycapture');
 // One capture per finished God Mode run, from its report (src/memoryruncapture.js).
 const { createRunCapture } = require('./memoryruncapture');
 const { listInbox: listMemoryInbox } = require('./memoryinbox');
@@ -1204,17 +1204,16 @@ function logCardStart(session, loaded, tools) {
 
 /**
  * What memory capture may read of one tab: its transcript and its project.
- * Null for a tab with no Claude transcript, for a project with memory switched
- * off, and for a God Mode worker: a run starts many short worker sessions, and
- * what they learn reaches the user's own tab through the run report.
+ * Null for a tab with no Claude or agy transcript, for a project with memory
+ * switched off, and for a God Mode worker: a run starts many short worker
+ * sessions, and what they learn reaches the user's own tab through the run report.
+ * An agy tab gives the conversation its watcher follows, never a subagent's.
  * @returns {{file: string, project: string}|null}
  */
 function captureSourceOf(session) {
   try {
     if (!session || orchestraRuns.ownsSession(session.id)) return null;
-    const id = (session.watcher && session.watcher.sessionUuid) || session.transcriptId;
-    const pinned = session.watcher && (session.watcher.pinned || session.watcher.currentFile);
-    const file = pinned || (id && session.cwd ? path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(session.cwd), `${id}.jsonl`) : null);
+    const file = sessionTranscriptOf(session, (cwd, id) => path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(cwd), `${id}.jsonl`));
     const project = file ? memoryProjectOf(session) : null;
     return project ? { file, project } : null;
   } catch (err) {
@@ -1241,6 +1240,8 @@ function memoryVectorsOf() {
       // The inbox shows which search is in use: repaint it when that changes.
       onChange: () => send('memory:changed', {}),
     });
+    // Capture, the inbox and the shield compare memories by meaning with this store (src/memoryshield.js).
+    setSharedVectorStore(memoryVectors);
   }
   return memoryVectors;
 }
@@ -2266,6 +2267,9 @@ function spawnInto(session, profile, launch = null) {
         statusBoard.turnEnd(session.id, isViewed(session.id));
         send('metrics:turnend', { sessionId: session.id, turn });
         orchestraRuns.onTurnEnd(session.id, turn.text);
+        // Memory capture learns of the conversation now, as for a Claude tab:
+        // a restart replaces this watcher without closing the tab.
+        trackForCapture(session);
       },
     },
   );
