@@ -381,3 +381,144 @@ test('a broken cache file is an empty cache', () => {
 
   assert.deepEqual(store.status(), { model: SMALL, count: 0 });
 });
+
+// ---- semantic dedup and the Rejected-Embedding Shield (src/memoryshield.js) ----
+
+const { cosine, semanticDuplicate, vectorLookup, encodeVector, SEMANTIC_DUPLICATE } = require('../src/memoryembed.js');
+const shield = require('../src/memoryshield.js');
+const { memoryPaths } = require('../src/memorysync.js');
+
+const SHIELD_PROJECT = 'github.com/acme/hud';
+const memory = (id, title, body = `Body of ${id}.`) => ({ id, project: SHIELD_PROJECT, title, body });
+const unit = (...xs) => Float32Array.from(xs.map((x) => x / Math.hypot(...xs)));
+
+test('cosine compares two vectors and refuses what cannot be compared', () => {
+  assert.ok(Math.abs(cosine([1, 2, 3], [2, 4, 6]) - 1) < 1e-9);
+  assert.equal(cosine([1, 0], [0, 1]), 0);
+  assert.ok(Math.abs(cosine([1, 0], [-1, 0]) + 1) < 1e-9);
+  assert.equal(cosine([1, 0], [1, 0, 0]), null, 'vectors of two models (two lengths) never compare');
+  assert.equal(cosine(undefined, [1]), null);
+  assert.equal(cosine([], []), null);
+  assert.equal(cosine([0, 0], [1, 0]), null, 'a zero vector has no direction');
+});
+
+test('two memories are near-duplicates by meaning from SEMANTIC_DUPLICATE on, and unknown without both vectors', () => {
+  assert.equal(SEMANTIC_DUPLICATE, 0.82);
+  const vectors = new Map([
+    ['a', unit(1, 0, 0)],
+    ['close', unit(1, 0.5, 0)], // cosine 0.894
+    ['far', unit(1, 1, 0)], // cosine 0.707
+  ]);
+  const vectorOf = (r) => vectors.get(r.id);
+  const a = memory('a', 'A');
+  assert.equal(semanticDuplicate(a, memory('close', 'B'), vectorOf), true);
+  assert.equal(semanticDuplicate(a, memory('far', 'C'), vectorOf), false);
+  assert.equal(semanticDuplicate(a, memory('none', 'D'), vectorOf), null, 'one vector missing: the caller compares words');
+  assert.equal(semanticDuplicate(a, memory('close', 'B'), null), null);
+  assert.equal(vectorLookup(null), null);
+});
+
+test('the store answers a memory vector for its current text only, and embeds new texts with its own model', async () => {
+  const file = tmpFile();
+  const studio = lmStudio();
+  const store = createVectorStore({ file, embedder: createEmbedder({ fetchImpl: studio.fetchImpl, log: quiet }) });
+  const a = memory('a', 'alpha');
+  assert.equal(await store.embedTexts(['x']), null, 'no vectors yet: nothing to compare with, no model call');
+  assert.equal(studio.calls.length, 0);
+
+  store.prepare([['github.com/acme/hud/a', a]]);
+  await store.ready();
+  assert.equal(store.model(), SMALL);
+  assert.equal(store.dir, path.dirname(file));
+  assert.ok(store.vectorFor(a));
+  assert.equal(store.vectorFor({ ...a, body: 'edited' }), undefined, 'a vector of an older text is not this memory any more');
+  assert.equal(vectorLookup(store)(a), store.vectorFor(a));
+
+  const res = await store.embedTexts(['one', 'two two']);
+  assert.equal(res.model, SMALL);
+  assert.equal(res.vectors.length, 2);
+
+  studio.world.down = true;
+  const offline = createVectorStore({ file, embedder: createEmbedder({ fetchImpl: studio.fetchImpl, log: quiet }) });
+  assert.ok(offline.vectorFor(a), 'cached vectors are read without LM Studio');
+  assert.equal(await offline.embedTexts(['three']), null, 'LM Studio down: compare by words, no error');
+});
+
+const shieldFile = (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-shield-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  return shield.rejectedVectorsPath(dir);
+};
+
+test('the rejected store keeps at most MAX_REJECTED_VECTORS entries and evicts the oldest', (t) => {
+  const file = shieldFile(t);
+  const extra = 3;
+  // A full file written in one go (one atomic write per entry is slow on Windows), then a few more.
+  const full = Array.from({ length: shield.MAX_REJECTED_VECTORS }, (_, i) => ({
+    at: 1000 + i,
+    project: SHIELD_PROJECT,
+    title: `Rejected ${i}`,
+    vec: encodeVector(unit(1, i + 1, 0)),
+  }));
+  fs.writeFileSync(file, JSON.stringify({ v: 1, model: SMALL, dim: 3, entries: full }));
+  assert.equal(shield.readRejected(file).entries.length, shield.MAX_REJECTED_VECTORS);
+  for (let i = shield.MAX_REJECTED_VECTORS; i < shield.MAX_REJECTED_VECTORS + extra; i++) {
+    shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: `Rejected ${i}`, vec: unit(1, i + 1, 0), at: 1000 + i });
+  }
+  const { model, entries } = shield.readRejected(file);
+  assert.equal(model, SMALL);
+  assert.equal(entries.length, shield.MAX_REJECTED_VECTORS);
+  assert.equal(entries[0].title, `Rejected ${extra}`, 'the oldest went first');
+  assert.equal(entries.at(-1).title, `Rejected ${shield.MAX_REJECTED_VECTORS + extra - 1}`);
+});
+
+test('the rejected store keeps one model, scrubs titles, and reads a broken file as empty', (t) => {
+  const file = shieldFile(t);
+  const secret = `${['DEPLOY', 'TOKEN'].join('_')}=${'q'.repeat(24)}`;
+  shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: `Set ${secret} first`, vec: unit(1, 0, 0), at: 1 });
+  assert.ok(!fs.readFileSync(file, 'utf8').includes('q'.repeat(24)), 'a secret in a title never reaches the file');
+  assert.match(shield.readRejected(file).entries[0].title, /\[redacted\]/);
+
+  shield.addRejected(file, { model: BIG, project: SHIELD_PROJECT, title: 'Other model', vec: unit(0, 1, 0, 0), at: 2 });
+  assert.deepEqual(shield.readRejected(file).entries.map((e) => e.title), ['Other model'], 'vectors of two models never mix');
+
+  assert.equal(shield.addRejected(file, { model: BIG, project: SHIELD_PROJECT, title: '', vec: unit(1, 0, 0, 0), at: 3 }), 0);
+  fs.writeFileSync(file, '{not json');
+  assert.deepEqual(shield.readRejected(file), { model: null, entries: [] });
+});
+
+test('the rejected store is local: its file is per PC and no sync path names it', () => {
+  assert.match(shield.REJECTED_VECTORS_FILE, /\.local\.json$/);
+  const configDir = path.join(os.tmpdir(), 'cfg');
+  assert.ok(!Object.values(memoryPaths(configDir)).includes(shield.rejectedVectorsPath(configDir)));
+  for (const rel of ['src/memorysync.js', 'src/configsync.js', 'src/docsync.js']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+    assert.ok(!/rejected-vectors|REJECTED_VECTORS_FILE|memoryshield/.test(source), `${rel} never syncs the shield`);
+  }
+});
+
+test('a rejection is remembered with its cached vector, or embedded when it has none', async (t) => {
+  const file = tmpFile();
+  t.after(() => fs.promises.rm(path.dirname(file), { recursive: true, force: true, maxRetries: 5 }));
+  const studio = lmStudio();
+  const store = createVectorStore({ file, embedder: createEmbedder({ fetchImpl: studio.fetchImpl, log: quiet }) });
+  const cached = memory('cached', 'Cached memory');
+  store.prepare([['github.com/acme/hud/cached', cached]]);
+  await store.ready();
+  const callsBefore = studio.calls.length;
+
+  assert.equal(await shield.rememberRejected(store, cached, 10), true);
+  assert.equal(studio.calls.length, callsBefore, 'a cached vector costs no model call');
+  assert.equal(await shield.rememberRejected(store, memory('fresh', 'Fresh memory'), 20), true);
+  assert.equal(studio.calls.length, callsBefore + 1);
+
+  const { entries } = shield.readRejected(shield.rejectedVectorsPath(store.dir));
+  assert.deepEqual(entries.map((e) => [e.title, e.project, e.at]), [
+    ['Cached memory', SHIELD_PROJECT, 10],
+    ['Fresh memory', SHIELD_PROJECT, 20],
+  ]);
+  assert.equal(await shield.rememberRejected(null, cached), false, 'no store: no shield, no error');
+  studio.world.down = true;
+  const offline = createVectorStore({ file, embedder: createEmbedder({ fetchImpl: studio.fetchImpl, log: quiet }) });
+  assert.equal(await shield.rememberRejected(offline, memory('other', 'Other memory')), false);
+});

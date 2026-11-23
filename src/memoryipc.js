@@ -77,6 +77,8 @@ const { listConflicts } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
 const { cachedChanges, currentChanges } = require('./memorychanges');
+const { sharedVectorStore, vectorLookup } = require('./memoryembed');
+const { rememberRejected } = require('./memoryshield');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -152,7 +154,9 @@ function cleanSearchMode(raw) {
  *   searchStatus = how memory_search answers on this PC (the vector store's mode());
  *   todoProjects = LunaCore's projects ({id, path}); memoryProjectOf = a folder -> its memory
  *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js);
- *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none
+ *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none;
+ *   vectors = the vector store (src/memoryembed.js): near-duplicates by meaning, and the
+ *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield
  */
 function registerMemoryIpc({
   ipcMain,
@@ -170,10 +174,26 @@ function registerMemoryIpc({
   memoryProjectOf = () => null,
   todos = null,
   changes = null,
+  vectors = sharedVectorStore,
 }) {
-  /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
+  /** The vector store right now, or null; a failure there means "by words", never a failed call. */
+  const store = () => {
+    try {
+      return vectors() || null;
+    } catch (err) {
+      console.error('[memory] vector store unavailable:', errText(err));
+      return null;
+    }
+  };
+  /** A memory's cached vector, for grouping; the listing and every decision use the same one. */
+  const vectorOf = () => vectorLookup(store());
+  /**
+   * Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor.
+   * A rejection (an inbox reject, an auto-accept undone) also goes to the shield, in the background.
+   */
   const decided = (ev, record) => {
     if (log) log.add(decisionEvent(ev, record));
+    if (ev === 'rejected') rememberRejected(store(), record, now());
   };
   const events = () => (log ? log.read() : []);
   /** The anchor check walks folders main named: a failure there must not hide the list. */
@@ -249,9 +269,9 @@ function registerMemoryIpc({
       const { records } = scan(dir());
       return {
         ok: true,
-        ...listInbox(dir(), usage),
+        ...listInbox(dir(), { ...usage, vectorOf: vectorOf() }),
         // Memories that contradict each other wait here too (src/memoryconflict.js).
-        conflicts: conflictsWithFinal(listConflicts(records, { events: evs }), new Map(records), usage),
+        conflicts: conflictsWithFinal(listConflicts(records, { events: evs, vectorOf: vectorOf() }), new Map(records), usage),
         capture: captureStatus(),
         search: searchMode(),
         stats: { days: STATS_DAYS, captures, proposed, approved, rejected, edited, rate },
@@ -262,8 +282,8 @@ function registerMemoryIpc({
       return { ok: false, reason: 'failed' };
     }
   });
-  ipcMain.handle('memory:approve', (_event, key) => guarded('approve', () => approve(dir(), keyOf(key), isoDate(now()), decided)));
-  ipcMain.handle('memory:reject', (_event, key) => guarded('reject', () => reject(dir(), keyOf(key), decided)));
+  ipcMain.handle('memory:approve', (_event, key) => guarded('approve', () => approve(dir(), keyOf(key), isoDate(now()), decided, { vectorOf: vectorOf() })));
+  ipcMain.handle('memory:reject', (_event, key) => guarded('reject', () => reject(dir(), keyOf(key), decided, { vectorOf: vectorOf() })));
   ipcMain.handle('memory:update', (_event, req) => {
     const edits = cleanEdits(req && req.edits);
     if (!edits) return { ok: false, reason: 'bad-edits' };
@@ -384,7 +404,7 @@ function registerMemoryIpc({
     const draft = cleanDraft(raw);
     if (!draft) return { ok: false, reason: 'bad-draft' };
     if (!todos) return { ok: false, reason: 'failed' };
-    const res = guarded('to-todo', () => moveToTodo({ dir: dir(), key: k, draft, now: now(), projectIdFor, todos, graveyardFile, log }));
+    const res = guarded('to-todo', () => moveToTodo({ dir: dir(), key: k, draft, now: now(), projectIdFor, todos, graveyardFile, log, vectorOf: vectorOf() }));
     // Some of a group's files may be gone even so: sync and repaint what is left.
     if (res.reason === 'remove-failed') onChanged();
     return res;
