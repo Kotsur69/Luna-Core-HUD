@@ -31,6 +31,8 @@ const MAX_CHUNK_CHARS = 1200;
 const MAX_CHUNKS_PER_PROJECT = 4000;
 /** Cached files across all projects before the cache starts over. */
 const MAX_CACHED_FILES = 600;
+/** Doc files read per project: a folder of thousands of notes cannot make every search slow. */
+const MAX_DOC_FILES = 200;
 const DOC_DIRS = ['docs/reference', 'docs/tbc_docs'];
 const ROOT_FILES = ['README.md', 'CLAUDE.md'];
 const HEADING_RE = /^(#{1,3})[ \t]+(.*\S)[ \t]*$/;
@@ -40,11 +42,17 @@ const MD_RE = /\.md$/i;
 const BOM_RE = new RegExp('^' + String.fromCharCode(0xfeff));
 const SKIP_NAME_RE = /\.local\./i;
 
-/** A doc chunk's memory_get key: `doc:<project>/<file>#L<start>-L<end>`. */
+/**
+ * A doc chunk's memory_get key: `doc:<project>/<file>#L<start>-L<end>`, with a
+ * `.<part>` suffix on the slices of one over-long line (they share a line range).
+ */
 const DOC_KEY_PREFIX = 'doc:';
-const DOC_KEY_RE = /^doc:(.+)\/((?:README\.md|CLAUDE\.md)|docs\/(?:reference|tbc_docs)\/[^/\\]+\.md)#L(\d+)-L(\d+)$/;
+const DOC_KEY_RE = /^doc:(.+)\/((?:README\.md|CLAUDE\.md)|docs\/(?:reference|tbc_docs)\/[^/\\]+\.md)#L(\d+)-L(\d+)(?:\.(\d+))?$/;
+/** How long a project's resolved folder is reused: a search then costs no repeated repo lookups. */
+const ROOT_TTL_MS = 5000;
 
-const docKey = (project, chunk) => `${DOC_KEY_PREFIX}${project}/${chunk.file}#L${chunk.startLine}-L${chunk.endLine}`;
+const docKey = (project, chunk) =>
+  `${DOC_KEY_PREFIX}${project}/${chunk.file}#L${chunk.startLine}-L${chunk.endLine}${chunk.part ? `.${chunk.part}` : ''}`;
 const isDocKey = (key) => typeof key === 'string' && key.startsWith(DOC_KEY_PREFIX);
 
 /** @returns {{project: string, file: string, startLine: number, endLine: number}|null} */
@@ -83,7 +91,7 @@ function splitSection(heading, lines, firstLine) {
     if (line.length > MAX_CHUNK_CHARS) {
       // One huge line (a minified blob, a long table row) cannot be kept whole.
       if (buffer.length) flush(lineNo - 1);
-      for (const slice of sliceLine(line)) chunks.push({ heading, startLine: lineNo, endLine: lineNo, text: slice });
+      sliceLine(line).forEach((slice, n) => chunks.push({ heading, startLine: lineNo, endLine: lineNo, part: n + 1, text: slice }));
       start = lineNo + 1;
       return;
     }
@@ -141,13 +149,16 @@ const hasNodeModules = (p) => p.split(/[\\/]/).some((seg) => seg.toLowerCase() =
 const isQuietError = (err) => err && (err.code === 'ENOENT' || err.code === 'ENOTDIR');
 
 /**
- * @param {{resolveRoot: (project: string) => string|null|undefined, fsImpl?: typeof fs}} opts
- *   resolveRoot = the local folder a project is mapped to on this PC, or null
+ * @param {{resolveRoot: (project: string) => string|null|undefined, fsImpl?: typeof fs, now?: () => number}} opts
+ *   resolveRoot = the local folder a project is mapped to on this PC, or null;
+ *   its answer is reused for ROOT_TTL_MS
  * @returns {{chunksFor: Function, get: Function, clear: () => void}}
  */
-function createDocSource({ resolveRoot, fsImpl = fs } = {}) {
-  /** `<project>\0<real path>` -> {mtimeMs, size, chunks}; in memory only. */
+function createDocSource({ resolveRoot, fsImpl = fs, now = Date.now } = {}) {
+  /** `<project> NUL <file> NUL <real path>` -> {mtimeMs, size, chunks}; in memory only. */
   const cache = new Map();
+  /** project -> {at, root}: the resolved folder of the last few seconds. */
+  const roots = new Map();
 
   function logFailure(what, err) {
     console.error(`[memory] docs: ${what}:`, (err && (err.code || err.message)) || 'error');
@@ -173,13 +184,15 @@ function createDocSource({ resolveRoot, fsImpl = fs } = {}) {
       }
       for (const name of entries.sort()) if (MD_RE.test(name)) names.push(`${dir}/${name}`);
     }
+    names.splice(MAX_DOC_FILES);
     const found = [];
     for (const file of names) {
       if (SKIP_NAME_RE.test(path.posix.basename(file))) continue;
       try {
         const real = fsImpl.realpathSync(path.join(realRoot, file));
         if (!isInside(realRoot, real) || hasNodeModules(path.relative(realRoot, real))) continue;
-        if (SKIP_NAME_RE.test(path.basename(real))) continue;
+        // The real file must be markdown too: a link named .md cannot expose another kind of file.
+        if (SKIP_NAME_RE.test(path.basename(real)) || !MD_RE.test(real)) continue;
         const stat = fsImpl.statSync(real);
         if (stat.isFile() && stat.size <= MAX_FILE_BYTES) found.push({ file, real, stat });
       } catch (err) {
@@ -189,22 +202,23 @@ function createDocSource({ resolveRoot, fsImpl = fs } = {}) {
     return found;
   }
 
+  /** @returns {{chunks: object[], failed: boolean}} failed = the file could not be read this time */
   function chunksOfFile(project, { file, real, stat }) {
-    const id = `${project}\0${real}`;
+    const id = [project, file, real].join('\u0000');
     const hit = cache.get(id);
-    if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.chunks;
+    if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return { chunks: hit.chunks, failed: false };
     let text;
     try {
       text = fsImpl.readFileSync(real, 'utf8');
     } catch (err) {
       if (!isQuietError(err)) logFailure(`${file} unreadable`, err);
       cache.delete(id);
-      return [];
+      return { chunks: [], failed: true };
     }
     if (cache.size >= MAX_CACHED_FILES) cache.clear();
     const chunks = chunkMarkdown(text, file).map((c) => ({ ...c, project, key: docKey(project, c) }));
     cache.set(id, { mtimeMs: stat.mtimeMs, size: stat.size, chunks });
-    return chunks;
+    return { chunks, failed: false };
   }
 
   /**
@@ -213,17 +227,30 @@ function createDocSource({ resolveRoot, fsImpl = fs } = {}) {
    * @returns {{chunks: object[], signature: string}}
    */
   function chunksFor(project) {
+    const root = rootOf(project);
+    if (!root) return { chunks: [], signature: '' };
+    const read = discover(root).map((f) => ({ f, ...chunksOfFile(project, f) }));
+    const chunks = read.flatMap((r) => r.chunks).slice(0, MAX_CHUNKS_PER_PROJECT);
+    // A file that failed to read is marked, so the index is rebuilt once it reads again.
+    const signature = read.map(({ f, failed }) => `${f.file}:${f.stat.mtimeMs}:${f.stat.size}${failed ? ':unreadable' : ''}`).join('|');
+    return { chunks, signature };
+  }
+
+  /** The mapped folder of a project, reused for ROOT_TTL_MS; null when there is none. */
+  function rootOf(project) {
+    if (typeof resolveRoot !== 'function' || typeof project !== 'string') return null;
+    const at = now();
+    const known = roots.get(project);
+    if (known && at - known.at < ROOT_TTL_MS) return known.root;
     let root = null;
     try {
-      root = typeof resolveRoot === 'function' && typeof project === 'string' ? resolveRoot(project) : null;
+      root = resolveRoot(project);
     } catch (err) {
       logFailure('project folder not resolved', err);
     }
-    if (typeof root !== 'string' || !root) return { chunks: [], signature: '' };
-    const files = discover(root);
-    const chunks = files.flatMap((f) => chunksOfFile(project, f)).slice(0, MAX_CHUNKS_PER_PROJECT);
-    const signature = files.map((f) => `${f.file}:${f.stat.mtimeMs}:${f.stat.size}`).join('|');
-    return { chunks, signature };
+    root = typeof root === 'string' && root ? root : null;
+    roots.set(project, { at, root });
+    return root;
   }
 
   /** One chunk by its doc key, from the current files; null when the key is bad or the file changed since. */
@@ -233,7 +260,14 @@ function createDocSource({ resolveRoot, fsImpl = fs } = {}) {
     return chunksFor(parsed.project).chunks.find((c) => c.key === key) || null;
   }
 
-  return { chunksFor, get, clear: () => cache.clear() };
+  return {
+    chunksFor,
+    get,
+    clear: () => {
+      cache.clear();
+      roots.clear();
+    },
+  };
 }
 
 module.exports = {

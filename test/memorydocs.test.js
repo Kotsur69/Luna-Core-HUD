@@ -294,3 +294,77 @@ test('get finds a chunk by its key and returns null once the file changed under 
   assert.equal(source.get(chunk.key), null);
   assert.equal(source.get('doc:nonsense'), null);
 });
+
+// ---- review fixes ---------------------------------------------------------------
+
+test('the slices of one over-long line get distinct keys and each can be read by key', (t) => {
+  const root = repo(t, { 'README.md': `# Blob\n${'x'.repeat(MAX_CHUNK_CHARS * 2 + 50)}\n` });
+  const source = sourceFor(root);
+
+  const chunks = source.chunksFor(PROJECT).chunks.filter((c) => c.startLine === 2);
+
+  assert.equal(chunks.length, 3);
+  assert.equal(new Set(chunks.map((c) => c.key)).size, 3);
+  for (const c of chunks) {
+    assert.ok(parseDocKey(c.key), c.key);
+    assert.equal(source.get(c.key).text, c.text);
+  }
+});
+
+test('a file that failed to read changes the signature, so the index is rebuilt when it reads again', (t) => {
+  const root = repo(t, { 'README.md': '# One\nfirst', 'CLAUDE.md': '# Two\nsecond' });
+  let failing = true;
+  const flaky = {
+    ...fs,
+    readFileSync: (file, ...rest) => {
+      if (failing && String(file).endsWith('CLAUDE.md')) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return fs.readFileSync(file, ...rest);
+    },
+  };
+  const original = console.error;
+  console.error = () => {};
+  t.after(() => {
+    console.error = original;
+  });
+  const source = createDocSource({ resolveRoot: () => root, fsImpl: flaky });
+
+  const during = source.chunksFor(PROJECT);
+  failing = false;
+  const after = source.chunksFor(PROJECT);
+
+  assert.deepEqual(filesOf(during.chunks), ['README.md']);
+  assert.notEqual(after.signature, during.signature);
+  assert.deepEqual(filesOf(after.chunks), ['CLAUDE.md', 'README.md']);
+});
+
+test('a project folder is resolved once per few seconds, then again', (t) => {
+  const root = repo(t, { 'README.md': '# One\nfirst' });
+  let calls = 0;
+  let clock = 1000;
+  const source = createDocSource({
+    resolveRoot: () => {
+      calls++;
+      return root;
+    },
+    now: () => clock,
+  });
+
+  source.chunksFor(PROJECT);
+  source.chunksFor(PROJECT);
+  assert.equal(calls, 1);
+  clock += 6000;
+  source.chunksFor(PROJECT);
+  assert.equal(calls, 2);
+});
+
+test('a .md link whose target is not markdown is not read', (t) => {
+  const root = repo(t, { 'README.md': '# Readme\nhello', '.env': 'TOKEN=abc' });
+  try {
+    fs.symlinkSync(path.join(root, '.env'), path.join(root, 'CLAUDE.md'), 'file');
+  } catch {
+    t.skip('cannot create a symlink here');
+    return;
+  }
+
+  assert.deepEqual(filesOf(sourceFor(root).chunksFor(PROJECT).chunks), ['README.md']);
+});
