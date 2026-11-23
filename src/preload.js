@@ -569,6 +569,15 @@ contextBridge.exposeInMainWorld('lunacore', {
       title: edits && typeof edits.title === 'string' ? edits.title : '',
       body: edits && typeof edits.body === 'string' ? edits.body : '',
     }),
+  // The Sleep Pass (src/memoryconsolidate.js): proposals only, into the inbox.
+  // A project string and a boolean at most; main checks both.
+  /** Starts the consolidation of one project. Promise<{ok} | {ok:false, reason}>; progress arrives as memory:changed. */
+  memoryConsolidate: (project) => ipcRenderer.invoke('memory:consolidate', typeof project === 'string' ? project : ''),
+  /** The pass's progress, and the weekly switch of `project`. Promise<{ok, status, busy, weekly, lastRun} | {ok:false, reason}>. */
+  memoryConsolidateStatus: (project) => ipcRenderer.invoke('memory:consolidate-status', typeof project === 'string' ? project : ''),
+  /** Switches the weekly pass of one project on or off. Promise<{ok, weekly} | {ok:false, reason}>. */
+  memoryConsolidateWeekly: (project, on) =>
+    ipcRenderer.invoke('memory:consolidate-weekly', { project: typeof project === 'string' ? project : '', on: on === true }),
   /** Read only: one memory's source, supersede chain, links and this PC's log about it. Promise<{ok, ...} | {ok:false, reason}>. */
   memoryProvenance: (key) => ipcRenderer.invoke('memory:provenance', typeof key === 'string' ? key : ''),
   /** Read only: the scrubbed excerpt of the session or run a memory came from. Promise<{ok, excerpt, ...} | {ok:false, reason}>. */

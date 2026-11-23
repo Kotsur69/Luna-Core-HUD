@@ -31,6 +31,7 @@ import { clearHistory } from './memoryhistory.js';
 import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
 import { statsLine, captureLine, searchLine, flagLine, graveLine } from './memoryinboxlines.js';
 import { createCheckFlow, checkReasonKey } from './memorycheckview.js';
+import { createConsolidateFlow } from './memoryconsolidateview.js';
 import { createOriginDrawer } from './memoryorigin.js';
 
 export { statsLine, searchLine, flagLine, graveLine };
@@ -83,6 +84,8 @@ const flowHooks = {
 /** "Make a to-do" (memorytodoform.js) and "Check if still true" (memorycheckview.js). */
 const todo = createTodoFlow(flowHooks);
 const check = createCheckFlow(flowHooks);
+/** The Sleep Pass on the All memories tab (memoryconsolidateview.js). */
+const consolidate = createConsolidateFlow(flowHooks);
 /** The origin-session drawer (C key, memoryorigin.js): read only, beside the inbox and review lists. */
 const origin = createOriginDrawer({ call: (...args) => call(...args), onClosed: () => load(selected === null ? undefined : selected) });
 
@@ -525,6 +528,7 @@ function allView(all) {
     onProject: (project) => {
       brainProject = project;
       scanError = null;
+      consolidate.reset();
       load();
     },
     onScan: startScan,
@@ -532,6 +536,7 @@ function allView(all) {
     onTodo: (key) => todo.open(key),
     todoFormOf: (key) => todo.formOf(key),
     check,
+    consolidate,
   });
   return { nodes: [node], list };
 }
@@ -594,16 +599,18 @@ let loadSeq = 0;
 /** Reads both lists and repaints. `focusKey` / `focusIndex` / `focusTab` say where the keyboard focus goes. */
 async function load(focusKey, focusIndex, focusTab) {
   const seq = ++loadSeq;
-  const [res, review, all, graves, checks] = await Promise.all([
+  const [res, review, all, graves, checks, sleep] = await Promise.all([
     call('memoryInbox'),
     call('memoryReview'),
     tab === 'all' ? call('memoryList', brainProject) : Promise.resolve(null),
     call('memoryGraveyard'),
     call('memoryCheckStatus'),
+    tab === 'all' ? call('memoryConsolidateStatus', brainProject) : Promise.resolve(null),
   ]);
   // Only the newest read paints: an older answer arriving late must not undo its focus.
   if (seq !== loadSeq || !overlay || !overlay.isOpen()) return;
   check.setStatus(checks);
+  consolidate.setStatus(sleep);
   if (!res || !res.ok || !Array.isArray(res.items)) {
     overlay.body.replaceChildren(el('p', 'hint is-fail', t('mem.inbox.err.load')));
     return;

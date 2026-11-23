@@ -860,3 +860,137 @@ test('memory:list: a conflicts mark whose other side is archived takes no points
   const keeper = s.invoke('memory:list', PROJECT).items.find((i) => i.id === 'keeper');
   assert.deepEqual(keeper.final.parts.penalties, { conflict: 0, dispute: 0 });
 });
+
+// --- the Sleep Pass (src/memoryconsolidate.js) -------------------------------------------
+
+const { createConsolidator } = require('../src/memoryconsolidate.js');
+const { createJobLock } = require('../src/memoryscan.js');
+
+const EMPTY_ANSWER = { merges: [], expiry: [], retire: [], architecture: null };
+
+/** The brain IPC with a consolidator on a shared lock, as main wires it. */
+function consolidateSetup(t, records, { run = async () => ({ ok: true, answer: EMPTY_ANSWER }), withConsolidator = true } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-brainipc-sleep-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  for (const r of records) writeRecord(dir, r);
+  const handlers = {};
+  const ipcMain = { handle: (channel, fn) => (handlers[channel] = fn) };
+  const lock = createJobLock();
+  const scanner = createScanner({ dir: () => dir, run: async () => ({ ok: false }), now: () => NOW, lock });
+  const calls = [];
+  const consolidator = withConsolidator
+    ? createConsolidator({
+        dir: () => dir,
+        run: (job) => (calls.push(job), run(job)),
+        now: () => NOW,
+        lock,
+        vectors: () => null,
+        settingsFile: () => path.join(dir, 'memory-consolidate.local.json'),
+      })
+    : null;
+  registerMemoryBrainIpc({ ipcMain, dir: () => dir, scanner, now: () => NOW, consolidator });
+  return { dir, lock, consolidator, calls, invoke: (channel, ...args) => handlers[channel]({}, ...args) };
+}
+
+test('memory:consolidate validates the project, starts one pass and refuses a second while the lock is held', async (t) => {
+  const s = consolidateSetup(t, [rec('a'), rec('b')]);
+  for (const bad of [undefined, 42, '', '../../etc', { project: PROJECT }, 'x'.repeat(200)]) {
+    assert.deepEqual(s.invoke('memory:consolidate', bad), { ok: false, reason: 'bad-project' }, String(bad));
+  }
+  assert.deepEqual(s.invoke('memory:consolidate', OTHER), { ok: false, reason: 'empty' });
+  assert.deepEqual(s.invoke('memory:consolidate', PROJECT), { ok: true });
+  assert.deepEqual(s.invoke('memory:consolidate', PROJECT), { ok: false, reason: 'busy' });
+  // The shared lock: the scan waits too.
+  assert.deepEqual(s.invoke('memory:scan', PROJECT), { ok: false, reason: 'busy' });
+  await s.consolidator.whenIdle();
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.lock.holder(), null);
+});
+
+test('memory:consolidate is refused while the scan holds the model', (t) => {
+  const s = consolidateSetup(t, [rec('a')]);
+  s.lock.take('scan');
+  assert.deepEqual(s.invoke('memory:consolidate', PROJECT), { ok: false, reason: 'busy' });
+  assert.equal(s.calls.length, 0);
+  assert.equal(s.invoke('memory:consolidate-status', PROJECT).busy, true);
+});
+
+test('memory:consolidate-status reports progress, the weekly switch and the last run of a valid project', async (t) => {
+  const s = consolidateSetup(t, [rec('a')], { run: async () => ({ ok: true, answer: 'not json' }) });
+  const idle = s.invoke('memory:consolidate-status');
+  assert.equal(idle.ok, true);
+  assert.equal(idle.status.running, false);
+  assert.equal(idle.weekly, false);
+  assert.equal(idle.lastRun, null);
+  for (const bad of [42, '../../etc', { project: PROJECT }]) {
+    assert.deepEqual(s.invoke('memory:consolidate-status', bad), { ok: false, reason: 'bad-project' }, String(bad));
+  }
+  const quiet = test.mock.method(console, 'error', () => {});
+  s.invoke('memory:consolidate', PROJECT);
+  assert.equal(s.invoke('memory:consolidate-status', PROJECT).status.running, true);
+  await s.consolidator.whenIdle();
+  quiet.mock.restore();
+  const done = s.invoke('memory:consolidate-status', PROJECT);
+  assert.equal(done.status.running, false);
+  assert.equal(done.status.project, PROJECT);
+  assert.equal(done.status.error, 'bad-answer', 'a malformed answer is a status, not a crash');
+  assert.equal(done.lastRun, NOW);
+});
+
+test('memory:consolidate-weekly validates its request and persists the opt-in', (t) => {
+  const s = consolidateSetup(t, [rec('a')]);
+  for (const bad of [undefined, 'on', [PROJECT, true]]) {
+    assert.deepEqual(s.invoke('memory:consolidate-weekly', bad), { ok: false, reason: 'bad-request' }, String(bad));
+  }
+  assert.deepEqual(s.invoke('memory:consolidate-weekly', { project: '../x', on: true }), { ok: false, reason: 'bad-project' });
+  assert.deepEqual(s.invoke('memory:consolidate-weekly', { project: PROJECT, on: 'yes' }), { ok: false, reason: 'bad-request' });
+  assert.equal(s.invoke('memory:consolidate-status', PROJECT).weekly, false, 'off by default');
+  assert.deepEqual(s.invoke('memory:consolidate-weekly', { project: PROJECT, on: true }), { ok: true, weekly: true });
+  assert.equal(s.invoke('memory:consolidate-status', PROJECT).weekly, true);
+  assert.equal(s.invoke('memory:consolidate-status', OTHER).weekly, false);
+  assert.deepEqual(s.invoke('memory:consolidate-weekly', { project: PROJECT, on: false }), { ok: true, weekly: false });
+});
+
+test('without a consolidator the Sleep Pass channels refuse', (t) => {
+  const s = consolidateSetup(t, [rec('a')], { withConsolidator: false });
+  assert.deepEqual(s.invoke('memory:consolidate', PROJECT), { ok: false, reason: 'failed' });
+  assert.deepEqual(s.invoke('memory:consolidate-status', PROJECT), { ok: false, reason: 'failed' });
+  assert.deepEqual(s.invoke('memory:consolidate-weekly', { project: PROJECT, on: true }), { ok: false, reason: 'failed' });
+});
+
+test('preload, main and the window wire the Sleep Pass through narrow functions, textContent only', () => {
+  const preload = read('src/preload.js');
+  for (const [fn, channel] of [
+    ['memoryConsolidate', 'memory:consolidate'],
+    ['memoryConsolidateStatus', 'memory:consolidate-status'],
+    ['memoryConsolidateWeekly', 'memory:consolidate-weekly'],
+  ]) {
+    assert.match(preload, new RegExp(`\\b${fn}:`), `${fn} is missing in preload`);
+    assert.ok(preload.includes(`ipcRenderer.invoke('${channel}'`), `${channel} is missing in preload`);
+  }
+  assert.match(preload, /on: on === true/);
+  const view = read('src/renderer/modules/memoryconsolidateview.js');
+  assert.doesNotMatch(view, /innerHTML|outerHTML|insertAdjacentHTML/);
+  for (const fn of ['memoryConsolidate', 'memoryConsolidateWeekly']) assert.ok(view.includes(`'${fn}'`), fn);
+  assert.ok(read('src/renderer/modules/memoryinbox.js').includes("'memoryConsolidateStatus'"));
+  assert.match(read('src/renderer/modules/memorybrain.js'), /consolidate\.controls\(list\.project\)/);
+  const main = read('src/main.js');
+  assert.match(main, /model: MEMORY_CONSOLIDATE_MODEL,\s*lean: true,\s*readOnly: Boolean\(cwd\),/);
+  assert.match(main, /lock: memoryJobLock,\s*settingsFile: \(\) => memoryPaths\(userDir\(\)\)\.consolidate/);
+  assert.match(main, /consolidator: memoryConsolidator,/);
+  assert.match(main, /memoryConsolidateSchedule\.start\(\)/);
+  assert.match(main, /memoryConsolidateSchedule\.stop\(\)/);
+});
+
+test('every Sleep Pass string exists in Polish and English, inside the mem.brain block, Polish without diacritics', () => {
+  const lines = read('src/renderer/i18n.js').split('\n');
+  const view = read('src/renderer/modules/memoryconsolidateview.js');
+  const keys = new Set([...view.matchAll(/'(mem\.brain\.[\w.]+)'/g)].map((m) => m[1]));
+  assert.ok(keys.size >= 14, String(keys.size));
+  for (const key of keys) {
+    const at = lines.map((l, i) => (l.includes(`'${key}':`) ? i : -1)).filter((i) => i >= 0);
+    assert.equal(at.length, 2, `${key} must exist once in pl and once in en`);
+    assert.doesNotMatch(lines[at[0]], /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, `${key}: Polish UI strings carry no diacritics`);
+    for (const i of at) assert.match(lines[i - 1] + lines[i + 1], /'mem\.brain\./, `${key} sits outside the mem.brain block`);
+  }
+});
