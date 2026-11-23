@@ -26,7 +26,7 @@ import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
 import { COMMANDS, keyCommand, typingIn, moveSelection, keepSelection } from './memoryinboxkeys.js';
 import { autoSection, RECALL_SWITCH } from './memoryautopanel.js';
-import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft } from './memorybrain.js';
+import { finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft, scoreNote, scoreTooltip, recommendNote } from './memorybrain.js';
 import { clearHistory } from './memoryhistory.js';
 import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
 import { statsLine, captureLine, searchLine, flagLine, graveLine } from './memoryinboxlines.js';
@@ -63,6 +63,9 @@ let autoError = null;
 let brainProject = '';
 /** An i18n key when main refused to start a scan, or null. */
 let scanError = null;
+/** pair id -> the merge form's start {title, body, fallback} after "Draft canonical merge"; the pair being drafted, or null. */
+const mergeDrafts = new Map();
+let draftingPair = null;
 
 /** What the to-do and check flows use of the window. Their open forms hold `editing`, so every draft lock applies. */
 const flowHooks = {
@@ -197,7 +200,8 @@ export function scoreLabel(item) {
 
 function scoreChip(item) {
   const chip = el('span', 'mem-inbox__score', scoreLabel(item));
-  chip.title = t('mem.inbox.usefulnessHint');
+  // The weights, then this entry's own parts, boost and penalties in words.
+  chip.title = [t('mem.inbox.usefulnessHint'), scoreTooltip(item)].filter(Boolean).join('\n');
   return chip;
 }
 
@@ -233,7 +237,7 @@ function entry(item) {
         }),
       );
     }
-    card.append(...notes(item), el('p', 'mem-inbox__note', usefulnessLine(item)));
+    card.append(...notes(item), scoreNote(item));
     if (item.source) card.append(el('p', 'hint', item.source));
     const off = busy.has(item.key);
     const approve = button('port-btn mem-inbox__btn mem-inbox__btn--approve', t('mem.inbox.approve'), () => decide(item.key, 'memoryInboxApprove'));
@@ -279,7 +283,9 @@ function reviewEntry(item) {
   // A 'checked' flag is drawn as the check's badge (memorycheckview.js), with its evidence.
   const flags = item.flags.filter((flag) => flag.kind !== 'checked').map((flag) => el('p', 'mem-inbox__note', flagLine(flag)));
   const badge = check.badge(item);
-  card.append(...flags, ...(badge ? [badge] : []), el('p', 'mem-inbox__note', usefulnessLine(item)));
+  // What this PC's use recommends: keep (read often) or retire (idle and never read).
+  const recommend = recommendNote(item);
+  card.append(...flags, ...(badge ? [badge] : []), scoreNote(item), ...(recommend ? [recommend] : []));
   const off = busy.has(item.key);
   const actions = el('div', 'mem-inbox__actions');
   const form = todo.formOf(item.key) || check.formOf(item.key);
@@ -415,9 +421,11 @@ function refocus(list, key, index, fallback) {
  * id), prefilled with A's title and both bodies; saving writes one new memory.
  */
 function conflictItem(pair) {
+  // "Draft canonical merge" fills the form with the model's draft; plain Merge with A and B joined.
+  const draft = mergeDrafts.get(pair.id) || { ...mergeDraft(pair), fallback: false };
   const form =
     editing === pair.id
-      ? editForm({ key: pair.id, ...mergeDraft(pair) }, (title, body) => act(pair.id, 'memoryMerge', pair.a.key, pair.b.key, { title, body }))
+      ? editForm({ key: pair.id, title: draft.title, body: draft.body }, (title, body) => act(pair.id, 'memoryMerge', pair.a.key, pair.b.key, { title, body }))
       : null;
   return conflictEntry(pair, {
     off: busy.has(pair.id),
@@ -426,11 +434,30 @@ function conflictItem(pair) {
     onKeep: (keep) => decide(pair.id, 'memoryConflictResolve', pair.a.key, pair.b.key, keep),
     onMerge: () => {
       if (editing !== null) return;
+      mergeDrafts.delete(pair.id);
       editing = pair.id;
       load();
     },
+    onDraft: () => draftMerge(pair),
+    drafting: draftingPair === pair.id,
+    draftOff: draftingPair !== null || editing !== null,
+    draftFailed: Boolean(form && draft.fallback),
     form,
   });
+}
+
+/** One lean model call drafts the merge form (memory:merge-draft); any failure falls back to mergeDraft(pair). */
+async function draftMerge(pair) {
+  if (editing !== null || draftingPair !== null) return;
+  draftingPair = pair.id;
+  load(pair.id);
+  const res = await call('memoryMergeDraft', pair.a.key, pair.b.key);
+  draftingPair = null;
+  const drafted = res && res.ok && typeof res.title === 'string' && typeof res.body === 'string';
+  mergeDrafts.set(pair.id, drafted ? { title: res.title, body: res.body, fallback: false } : { ...mergeDraft(pair), fallback: true });
+  // Another form opened while the model wrote: the draft waits for the next Draft click.
+  if (editing === null) editing = pair.id;
+  load();
 }
 
 /** The inbox (conflicts first), the review list or the graveyard. @returns {{nodes: HTMLElement[], list: HTMLElement|null}} */

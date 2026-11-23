@@ -57,10 +57,21 @@ const CONFIDENCE_KEYS = {
   inferred: 'mem.brain.conf.inferred',
 };
 
+/** Usefulness points a week of use adds (src/memorydecay.js USE_BOOST); only the tooltip's words use it. */
+const BOOST_POINTS = 5;
+
+const points = (v) => (Number.isInteger(v) && v > 0 ? v : 0);
+
+/** The points main took off a final score (memoryrecord.finalScore parts.penalties). */
+function penaltiesOf(parts) {
+  const p = parts && parts.penalties && typeof parts.penalties === 'object' ? parts.penalties : {};
+  return { conflict: points(p.conflict), dispute: points(p.dispute) };
+}
+
 /**
  * The final score main computed for an item (src/memoryrecord.js finalScore), or
  * null when there is none to show: not sent, or the memory has no usefulness yet.
- * @returns {{score: number, usefulness: number, confidence: string, reads: number}|null}
+ * @returns {{score: number, usefulness: number, confidence: string, reads: number, penalties: {conflict: number, dispute: number}}|null}
  */
 export function finalOf(item) {
   const final = item && item.final;
@@ -70,23 +81,80 @@ export function finalOf(item) {
     score: final.score,
     usefulness: parts.usefulness,
     confidence: Object.hasOwn(CONFIDENCE_KEYS, parts.confidence) ? parts.confidence : 'observed',
-    reads: Number.isInteger(parts.usage) && parts.usage > 0 ? parts.usage : 0,
+    reads: points(parts.usage),
+    penalties: penaltiesOf(parts),
   };
+}
+
+/** The penalties in words ("-20 open conflict, -30 reported wrong"), or '' when there are none. */
+export function penaltyWords(penalties) {
+  const list = [];
+  if (penalties.conflict) list.push(t('mem.brain.penalty.conflict', { points: penalties.conflict }));
+  if (penalties.dispute) list.push(t('mem.brain.penalty.dispute', { points: penalties.dispute }));
+  return list.join(', ');
 }
 
 /**
  * The score line of a memory: "Score 74 (usefulness 80, confirmed, read 3x) - <why>",
- * or "?" when it was never rated. Without a final score from main it says the usefulness alone.
+ * then its penalties in words, or "?" when it was never rated. Without a final score
+ * from main it says the usefulness alone.
  */
 export function usefulnessLine(item) {
   const final = finalOf(item);
   const note = item && item.usefulness_note;
   if (final) {
     const params = { score: final.score, usefulness: final.usefulness, confidence: t(CONFIDENCE_KEYS[final.confidence]), reads: final.reads };
-    return note ? t('mem.brain.scoreWhy', { ...params, note }) : t('mem.brain.score', params);
+    const line = note ? t('mem.brain.scoreWhy', { ...params, note }) : t('mem.brain.score', params);
+    const penalties = penaltyWords(final.penalties);
+    return penalties ? `${line} ${t('mem.brain.penalties', { list: penalties })}` : line;
   }
   if (!item || !Number.isInteger(item.usefulness)) return t('mem.brain.usefulnessNone');
   return note ? t('mem.brain.usefulnessWhy', { score: item.usefulness, note }) : t('mem.brain.usefulness', { score: item.usefulness });
+}
+
+/**
+ * The score's tooltip: every part in words, the last use boost and each penalty
+ * (or that there is none). '' without a final score.
+ */
+export function scoreTooltip(item) {
+  const final = finalOf(item);
+  if (!final) return '';
+  const lines = [t('mem.brain.tip.base', { usefulness: final.usefulness, confidence: t(CONFIDENCE_KEYS[final.confidence]), reads: final.reads })];
+  if (item.boosted_at) lines.push(t('mem.brain.tip.boost', { points: BOOST_POINTS, date: item.boosted_at }));
+  if (final.penalties.conflict) lines.push(t('mem.brain.tip.conflict', { points: final.penalties.conflict }));
+  if (final.penalties.dispute) lines.push(t('mem.brain.tip.dispute', { points: final.penalties.dispute }));
+  if (!final.penalties.conflict && !final.penalties.dispute) lines.push(t('mem.brain.tip.noPenalty'));
+  return lines.join('\n');
+}
+
+/** The score line as a paragraph, with the breakdown as its tooltip. */
+export function scoreNote(item) {
+  const p = el('p', 'mem-inbox__note', usefulnessLine(item));
+  const tip = scoreTooltip(item);
+  if (tip) p.title = tip;
+  return p;
+}
+
+/** Where a memory came from and when it was last used, in one line, inline on its card. */
+export function provenanceLine(item) {
+  const source = item && typeof item.source === 'string' && item.source ? t('mem.brain.source', { source: item.source }) : t('mem.brain.sourceNone');
+  const used = item && item.last_used ? t('mem.brain.lastUsed', { date: item.last_used }) : t('mem.brain.lastUsedNever');
+  return `${source} - ${used}`;
+}
+
+/** What this PC's use recommends (memoryrecord.usageRecommendation), in words; '' for none. */
+export function recommendLine(item) {
+  if (!item) return '';
+  const reads = points(item.final && item.final.parts && item.final.parts.usage);
+  if (item.recommend === 'keep') return t('mem.brain.recommend.keep', { reads });
+  if (item.recommend === 'retire') return t('mem.brain.recommend.retire');
+  return '';
+}
+
+/** The recommendation as a note, or null when there is none. */
+export function recommendNote(item) {
+  const line = recommendLine(item);
+  return line ? el('p', 'mem-inbox__note mem-brain__recommend', line) : null;
 }
 
 const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
@@ -135,7 +203,7 @@ function conflictSide(label, item) {
   const box = el('div', 'mem-brain__side');
   const head = el('div', 'mem-inbox__head');
   head.append(el('span', 'mem-inbox__type', `${label} - ${item.type}`), el('span', 'mem-inbox__date', item.created));
-  box.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', cut(item.body)), el('p', 'mem-inbox__note', usefulnessLine(item)));
+  box.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', cut(item.body)), scoreNote(item), el('p', 'hint', provenanceLine(item)));
   return box;
 }
 
@@ -155,11 +223,14 @@ export function mergeDraft(item) {
  * Two memories that contradict each other, or say nearly the same (source 'duplicate').
  * @param {object} item a pair of memory:inbox's conflicts ({id, source, note, a, b})
  * @param {{off: boolean, error: string|null, onKeep: (keep: 'a'|'b'|'both') => void,
- *   onMerge?: () => void, form?: HTMLElement|null}} ctx
+ *   onMerge?: () => void, onDraft?: () => void, drafting?: boolean, draftOff?: boolean,
+ *   draftFailed?: boolean, form?: HTMLElement|null}} ctx
  *   error = an i18n key of the last failed action, or null; form = the open merge
- *   draft (the inbox edit form), shown instead of the buttons
+ *   draft (the inbox edit form), shown instead of the buttons; onDraft = "Draft canonical
+ *   merge" (memory:merge-draft); drafting = this pair's draft is on its way; draftOff = some
+ *   draft is (one at a time); draftFailed = the open form fell back to A and B joined
  */
-export function conflictEntry(item, { off, error, onKeep, onMerge = null, form = null }) {
+export function conflictEntry(item, { off, error, onKeep, onMerge = null, onDraft = null, drafting = false, draftOff = false, draftFailed = false, form = null }) {
   const duplicate = item.source === 'duplicate';
   const card = el('li', `mem-inbox__item ${duplicate ? 'mem-brain__duplicate' : 'mem-brain__conflict'}`);
   card.dataset.key = item.id;
@@ -167,15 +238,27 @@ export function conflictEntry(item, { off, error, onKeep, onMerge = null, form =
   card.append(el('p', duplicate ? 'mem-inbox__note' : 'mem-inbox__note mem-inbox__note--warn', pairWhy(item)), conflictSide('A', item.a), conflictSide('B', item.b));
   card.append(el('p', 'hint', t(duplicate ? 'mem.brain.dup.hint' : 'mem.brain.conflict.hint')));
   if (form) {
-    card.append(el('p', 'hint', t('mem.brain.merge.formHint')), form);
+    card.append(el('p', 'hint', t('mem.brain.merge.formHint')));
+    if (draftFailed) {
+      const note = el('p', 'hint is-fail', t('mem.brain.merge.draftFallback'));
+      note.setAttribute('role', 'status');
+      card.append(note);
+    }
+    card.append(form);
   } else {
     const actions = el('div', 'mem-inbox__actions');
     const keepA = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepA'), () => onKeep('a'));
     const keepB = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepB'), () => onKeep('b'));
     const keepBoth = button('port-btn mem-inbox__btn', t('mem.brain.conflict.keepBoth'), () => onKeep('both'));
     const merge = onMerge ? button('port-btn mem-inbox__btn', t('mem.brain.merge'), onMerge) : null;
+    const draft = onDraft ? button('port-btn mem-inbox__btn', t(drafting ? 'mem.brain.merge.drafting' : 'mem.brain.merge.draft'), onDraft) : null;
     const buttons = [keepA, keepB, keepBoth, ...(merge ? [merge] : [])];
-    for (const b of buttons) b.disabled = off;
+    for (const b of buttons) b.disabled = off || drafting;
+    if (draft) {
+      draft.title = t('mem.brain.merge.draftHint');
+      draft.disabled = off || draftOff;
+      buttons.push(draft);
+    }
     actions.append(...buttons);
     card.append(actions);
   }
@@ -193,8 +276,12 @@ function memoryItem(item, { off, error, onRestore, onTodo = null, todoFormOf = (
   const head = el('div', 'mem-inbox__head');
   head.append(el('span', 'mem-inbox__type', item.type));
   if (item.confidence !== 'confirmed') head.append(el('span', 'mem-inbox__project', t('mem.brain.waiting')));
+  // Who confirmed it: a person, or the auto-accept switch (src/memoryautoaccept.js).
+  else head.append(el('span', 'mem-inbox__project', t(item.autoAccepted ? 'mem.brain.pill.auto' : 'mem.brain.pill.manual')));
   head.append(el('span', 'mem-inbox__date', item.created));
-  card.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', cut(item.body)), el('p', 'mem-inbox__note', usefulnessLine(item)));
+  card.append(head, el('h3', 'mem-inbox__title', item.title), el('p', 'mem-inbox__body', cut(item.body)), scoreNote(item), el('p', 'hint', provenanceLine(item)));
+  const recommend = recommendNote(item);
+  if (recommend) card.append(recommend);
   if (item.archived) card.append(el('p', 'mem-inbox__note mem-inbox__note--warn', t('mem.brain.archived', { date: item.archived })));
   // "Check if still true" (memorycheckview.js): a confirmed, active memory only.
   const checked = check && item.confidence === 'confirmed' && !item.archived ? check : null;

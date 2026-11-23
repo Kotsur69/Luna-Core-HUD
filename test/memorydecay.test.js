@@ -245,3 +245,68 @@ test('the timer starts once however often start is called, and stops cleanly', (
   assert.equal(intervals.mock.callCount(), 2, 'free to start again after a stop');
   timer.stop();
 });
+
+// --- use earns usefulness back: +USE_BOOST once per BOOST_EVERY_DAYS ----------------
+
+const { referencedRecord, USE_BOOST, BOOST_EVERY_DAYS } = require('../src/memorydecay.js');
+
+test('the boost constants say +5 at most once a week', () => {
+  assert.equal(USE_BOOST, 5);
+  assert.equal(BOOST_EVERY_DAYS, 7);
+});
+
+test('a referenced confirmed memory gains +5 usefulness and remembers the day, on disk', (t) => {
+  const dir = mirror(t, [rec('a', { usefulness: 60 })]);
+  assert.deepEqual(noteReferences(dir, [`${PROJECT}/a`], '2026-05-01'), [`${PROJECT}/a`]);
+  const a = stored(dir)[`${PROJECT}/a`];
+  assert.equal(a.usefulness, 60 + USE_BOOST);
+  assert.equal(a.boosted_at, '2026-05-01');
+  assert.equal(a.last_used, '2026-05-01');
+  // The scan's own date is left alone: decay keeps charging from where it was.
+  assert.equal(a.usefulness_at, '2026-01-01');
+});
+
+test('the boost is capped at 100 and a memory already at 100 keeps its boost date', () => {
+  const near = referencedRecord(rec('a', { usefulness: 98 }), '2026-05-01');
+  assert.equal(near.usefulness, 100);
+  assert.equal(near.boosted_at, '2026-05-01');
+  const full = referencedRecord(rec('b', { usefulness: 100, boosted_at: '2026-04-01' }), '2026-05-01');
+  assert.equal(full.usefulness, 100);
+  assert.equal(full.boosted_at, '2026-04-01');
+  assert.equal(full.last_used, '2026-05-01');
+});
+
+test('the boost comes at most once per 7 days, however often the memory is used', (t) => {
+  const dir = mirror(t, [rec('a', { usefulness: 50 })]);
+  const key = `${PROJECT}/a`;
+  noteReferences(dir, [key], '2026-05-01');
+  // Day by day: last_used moves every day, usefulness only once the week is over.
+  for (let day = 1; day < BOOST_EVERY_DAYS; day++) {
+    noteReferences(dir, [key], addDays('2026-05-01', day));
+    assert.equal(stored(dir)[key].usefulness, 55, `day ${day}`);
+    assert.equal(stored(dir)[key].last_used, addDays('2026-05-01', day));
+  }
+  noteReferences(dir, [key], addDays('2026-05-01', BOOST_EVERY_DAYS));
+  assert.equal(stored(dir)[key].usefulness, 60);
+  assert.equal(stored(dir)[key].boosted_at, addDays('2026-05-01', BOOST_EVERY_DAYS));
+});
+
+test('only a confirmed, scored memory is boosted; a boost date from the future is ignored', () => {
+  const pending = referencedRecord(rec('p', { confidence: 'observed', usefulness: 50 }), '2026-05-01');
+  assert.equal(pending.usefulness, 50);
+  assert.equal(pending.boosted_at, undefined);
+  const { usefulness, usefulness_at, ...unscoredBase } = rec('u');
+  const unscored = referencedRecord(unscoredBase, '2026-05-01');
+  assert.equal(unscored.usefulness, undefined);
+  assert.equal(unscored.boosted_at, undefined);
+  // A bad sync cannot hold the boost off forever.
+  const future = referencedRecord(rec('f', { usefulness: 50, boosted_at: '2027-01-01' }), '2026-05-01');
+  assert.equal(future.usefulness, 55);
+  assert.equal(future.boosted_at, '2026-05-01');
+});
+
+test('a boost date survives the file round trip, and a bad one is dropped', (t) => {
+  const dir = mirror(t, [rec('a', { boosted_at: '2026-04-01' }), rec('b', { boosted_at: 'yesterday' })]);
+  assert.equal(stored(dir)[`${PROJECT}/a`].boosted_at, '2026-04-01');
+  assert.equal(stored(dir)[`${PROJECT}/b`].boosted_at, undefined);
+});
