@@ -396,3 +396,14 @@ test('parseMergeAnswer refuses anything but one title and one body within the re
   }
   assert.equal(parseMergeAnswer({ title: 'x'.repeat(MAX_TITLE), body: 'B' }).ok, true);
 });
+
+test('parseMergeAnswer scrubs a secret that a zero-width space split in two', () => {
+  const half = Math.floor(FAKE_MERGE_KEY.length / 2);
+  const split = `${FAKE_MERGE_KEY.slice(0, half)}\u200b${FAKE_MERGE_KEY.slice(half)}`;
+  const res = parseMergeAnswer({ title: `Key ${split}`, body: `Use ${split} here.` });
+  assert.equal(res.ok, true);
+  assert.ok(!res.title.includes(FAKE_MERGE_KEY), res.title);
+  assert.ok(!res.body.includes(FAKE_MERGE_KEY), res.body);
+  const prompt = buildMergePrompt({ a: { title: 'A', body: `x ${split}` }, b: { title: 'B', body: 'y' } });
+  assert.ok(!prompt.includes(FAKE_MERGE_KEY), 'the prompt scrubs it too');
+});

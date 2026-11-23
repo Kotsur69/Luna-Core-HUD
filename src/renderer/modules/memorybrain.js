@@ -5,8 +5,12 @@
 // conflicts and the archive (src/memorybrainipc.js):
 //
 //   usefulnessLine   "Score 74 (usefulness 80, confirmed, read 3x) - <why>" under
-//                    every memory (the final score main computed), or "?" for
-//                    one that has no usefulness score yet.
+//                    every memory (the final score main computed), its conflict
+//                    and dispute penalties in words, or "?" for one that has no
+//                    usefulness score yet; scoreTooltip gives every part, the
+//                    last use boost and each penalty as the line's tooltip.
+//   provenanceLine   source and last use, inline on memory and conflict cards;
+//                    recommendLine says what this PC's use suggests (keep / retire).
 //   healthLine       "Memory health 78/100 - ..." on top of the list of all
 //                    memories, every part in words.
 //   conflictEntry    two memories that contradict each other, or two confirmed

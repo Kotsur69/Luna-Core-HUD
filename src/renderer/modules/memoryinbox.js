@@ -66,6 +66,8 @@ let scanError = null;
 /** pair id -> the merge form's start {title, body, fallback} after "Draft canonical merge"; the pair being drafted, or null. */
 const mergeDrafts = new Map();
 let draftingPair = null;
+/** Bumped by every draft and by closing the window: an answer for an older ticket is dropped. */
+let draftSeq = 0;
 
 /** What the to-do and check flows use of the window. Their open forms hold `editing`, so every draft lock applies. */
 const flowHooks = {
@@ -425,7 +427,9 @@ function conflictItem(pair) {
   const draft = mergeDrafts.get(pair.id) || { ...mergeDraft(pair), fallback: false };
   const form =
     editing === pair.id
-      ? editForm({ key: pair.id, title: draft.title, body: draft.body }, (title, body) => act(pair.id, 'memoryMerge', pair.a.key, pair.b.key, { title, body }))
+      ? editForm({ key: pair.id, title: draft.title, body: draft.body }, (title, body) =>
+          act(pair.id, 'memoryMerge', pair.a.key, pair.b.key, { title, body }).then((ok) => (ok && mergeDrafts.delete(pair.id), ok)),
+        )
       : null;
   return conflictEntry(pair, {
     off: busy.has(pair.id),
@@ -450,8 +454,11 @@ function conflictItem(pair) {
 async function draftMerge(pair) {
   if (editing !== null || draftingPair !== null) return;
   draftingPair = pair.id;
+  const ticket = ++draftSeq;
   load(pair.id);
   const res = await call('memoryMergeDraft', pair.a.key, pair.b.key);
+  // The window closed (and maybe opened again) while the model wrote: this draft is no one's now.
+  if (ticket !== draftSeq || !overlay || !overlay.isOpen()) return;
   draftingPair = null;
   const drafted = res && res.ok && typeof res.title === 'string' && typeof res.body === 'string';
   mergeDrafts.set(pair.id, drafted ? { title: res.title, body: res.body, fallback: false } : { ...mergeDraft(pair), fallback: true });
@@ -801,6 +808,10 @@ export async function openMemoryInbox() {
         if (stopListening) stopListening();
         stopListening = null;
         editing = null;
+        // A merge draft still on its way is dropped when it lands (draftMerge's ticket).
+        draftSeq++;
+        draftingPair = null;
+        mergeDrafts.clear();
         todo.reset();
         check.reset();
         origin.close();

@@ -416,3 +416,10 @@ test('usageRecommendation says nothing for a waiting or archived memory, or bad 
   assert.equal(usageRecommendation({ ...r, reads: '9' }, 'not-a-day'), null);
   assert.equal(usageRecommendation({ ...r, reads: Number.NaN }, '2026-11-20'), 'retire');
 });
+
+test('a caller that worked the conflicts out has the last word: a stale conflicts mark costs nothing', () => {
+  const stale = normalizeRecord({ ...base, usefulness: 80, conflicts: ['archived-one'] });
+  assert.equal(finalScore(stale, { reads: 3, conflicted: false }).parts.penalties.conflict, 0);
+  assert.equal(finalScore(stale, { reads: 3, conflicted: false }).score, 80);
+  assert.equal(finalScore(stale, { reads: 3 }).parts.penalties.conflict, 20, 'no flag: the field decides');
+});

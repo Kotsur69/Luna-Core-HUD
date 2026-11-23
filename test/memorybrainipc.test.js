@@ -851,3 +851,12 @@ test('every score, provenance, recommendation and merge-draft string exists in P
     assert.doesNotMatch(lines[at[0]], /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, `${key}: Polish UI strings carry no diacritics`);
   }
 });
+
+test('memory:list: a conflicts mark whose other side is archived takes no points off', (t) => {
+  const s = draftSetup(t, [
+    rec('keeper', { usefulness: 80, conflicts: ['gone'] }),
+    rec('gone', { usefulness: 0, archived: '2026-10-01' }),
+  ]);
+  const keeper = s.invoke('memory:list', PROJECT).items.find((i) => i.id === 'keeper');
+  assert.deepEqual(keeper.final.parts.penalties, { conflict: 0, dispute: 0 });
+});

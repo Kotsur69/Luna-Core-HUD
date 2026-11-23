@@ -33,8 +33,11 @@
 //            its `supersedes`; both originals stay on disk as history
 //            (decision 12). The log gets `merged`, and `superseded` per original.
 //
-// Only a pair that is listed right now can be settled, so the renderer cannot
-// use this to supersede an arbitrary memory.
+// "Draft canonical merge" (buildMergePrompt / parseMergeAnswer, memory:merge-draft)
+// lets one lean model call write the merge form's start; Mati still edits and saves it.
+//
+// Only a pair that is listed right now can be settled or drafted, so the renderer
+// cannot use this to supersede an arbitrary memory or send one to a model.
 // ============================================================================
 
 'use strict';
@@ -316,7 +319,7 @@ const DRAFT_BODY_BAD_RE = /(?![\n\t])[\p{Cc}\p{Cf}\u{E0000}-\u{E007F}]/gu;
  * Required at call time: memoryscan requires this module, so a top-level
  * require would load one of the two half-built.
  */
-const promptText = (text) => require('./memoryscan').promptSafe(String(text || ''));
+const promptText = (text) => require('./memoryscan').promptSafe(String(text || '').replace(/[\p{Cf}\u{E0000}-\u{E007F}]/gu, ''));
 
 function mergeSide(label, r) {
   const body = promptText(r.body);
@@ -358,8 +361,12 @@ function parseMergeAnswer(answer) {
   if (typeof answer.title !== 'string' || typeof answer.body !== 'string') return bad;
   // One title: a model that wrote several lines did not write one.
   if (/[\r\n\p{Zl}\p{Zp}]/u.test(answer.title.trim())) return bad;
-  const title = scrub(answer.title).toWellFormed().replace(DRAFT_LINE_BAD_RE, ' ').replace(/\s+/g, ' ').trim();
-  const body = scrub(answer.body).replace(/\r\n?/g, '\n').toWellFormed().replace(DRAFT_BODY_BAD_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+  // Invisible characters go first, then the scrub: a secret split by a zero-width
+  // space would slip past the scrubber and be joined again by a later strip.
+  const title = scrub(answer.title.toWellFormed().replace(DRAFT_LINE_BAD_RE, ' ').replace(/\s+/g, ' ')).trim();
+  const body = scrub(answer.body.replace(/\r\n?/g, '\n').toWellFormed().replace(DRAFT_BODY_BAD_RE, ''))
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   if (!title || title.length > MAX_TITLE || !body || body.length > MAX_BODY) return bad;
   return { ok: true, title, body };
 }

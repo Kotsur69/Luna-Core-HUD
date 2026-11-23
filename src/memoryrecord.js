@@ -328,20 +328,22 @@ const DISPUTE_PENALTY = 30;
  * @param {{reads?: number, today?: string|null, conflicted?: boolean, disputed?: boolean}} [usage]
  *   reads = memory_search hits and memory_get opens of this memory on this PC in the last
  *   USAGE_WINDOW_DAYS (memoryuse.readCounts); today = YYYY-MM-DD, for the `last_used` rule;
- *   conflicted = it is in an open conflict (its own non-empty `conflicts` counts too);
+ *   conflicted = it is in an open conflict (memoryconflict.conflictedKeys). When the caller
+ *   does not say (undefined), the record's own non-empty `conflicts` counts instead; a caller
+ *   that worked the conflicts out passes false for a stale mark (the other side archived);
  *   disputed = an open `wrong` dispute in this PC's memory log
  * @returns {{score: number|null, parts: {usefulness: number|null, confidence: string, usage: number,
  *   penalties: {conflict: number, dispute: number}}}}
  *   score = null while the memory has no usefulness score (shown as "?");
  *   parts.usage = the reads counted (before saturation); parts.penalties = the points taken off
  */
-function finalScore(record, { reads = 0, today = null, conflicted = false, disputed = false } = {}) {
+function finalScore(record, { reads = 0, today = null, conflicted = undefined, disputed = false } = {}) {
   const r = isPlainObject(record) ? record : {};
   const usefulness = usefulnessOf(r.usefulness) ?? null;
   const confidence = CONFIDENCE.includes(r.confidence) ? r.confidence : 'observed';
   const counted = typeof reads === 'number' && Number.isFinite(reads) && reads > 0 ? Math.floor(reads) : 0;
   const usage = Math.max(counted, usedRecently(r.last_used, today) ? 1 : 0);
-  const inConflict = conflicted === true || (Array.isArray(r.conflicts) && r.conflicts.length > 0);
+  const inConflict = conflicted === undefined ? Array.isArray(r.conflicts) && r.conflicts.length > 0 : conflicted === true;
   const penalties = { conflict: inConflict ? CONFLICT_PENALTY : 0, dispute: disputed === true ? DISPUTE_PENALTY : 0 };
   const parts = { usefulness, confidence, usage, penalties };
   if (usefulness === null) return { score: null, parts };

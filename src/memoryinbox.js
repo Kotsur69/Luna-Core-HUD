@@ -110,19 +110,21 @@ function scoredGroup(group, byKey, { reads, today, conflicted, disputed }) {
  * @param {string} dir the mirror folder (memoryPaths().dir)
  * @param {{reads?: Map<string, number>, today?: string|null, vectorOf?: Function|null, disputed?: {has: Function}|null}} [usage]
  *   this PC's recent reads (memoryuse.recentUsage); none = the final score counts no reads; vectorOf = see
- *   groupPending; disputed = keys with an open dispute (memorylog.openDisputes). An entry in an open
+ *   groupPending; disputed = keys with an open dispute (memorylog.openDisputes); conflicted = keys in an
+ *   open conflict, when the caller has them (else worked out from the mirror). An entry in an open
  *   conflict (memoryconflict.conflictedKeys) or with an open dispute loses points (memoryrecord.finalScore)
  * @returns {{items: object[], total: number}} the final score highest first (memoryrecord.finalScore),
  *   an entry without one last, then by usefulness, newest first within the same score;
  *   total = entries waiting, duplicates folded
  */
-function listInbox(dir, { reads = new Map(), today = null, vectorOf = null, disputed = null } = {}) {
+function listInbox(dir, { reads = new Map(), today = null, vectorOf = null, disputed = null, conflicted = null } = {}) {
   const { records } = scan(dir);
   const byKey = new Map(records);
   const usage = {
     reads: reads instanceof Map ? reads : new Map(),
     today,
-    conflicted: conflictedKeys(records),
+    // A caller that already worked the conflicts out passes them; else they are found here.
+    conflicted: conflicted instanceof Set ? conflicted : conflictedKeys(records),
     disputed: disputed && typeof disputed.has === 'function' ? disputed : new Set(),
   };
   // Array.prototype.sort is stable: equal scores keep the newest-first order.
