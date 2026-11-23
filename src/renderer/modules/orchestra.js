@@ -47,6 +47,7 @@ import { runTypeSwitch, planOnlyForm, resetPlanOnlyForm, planRunPanel } from './
 import { resumeBanner, pauseRow } from './orchestraResumeBanner.js';
 import { isRunFinished } from './orchestraFinished.js';
 import { finishedPanel, backToSummaryRow } from './orchestraFinishedView.js';
+import { mountBoardWeb } from './orchestraLiveWeb.js';
 // Guarded: node tests import the to-do widget chain without a document.
 const overlay = typeof document !== 'undefined' ? document.getElementById('orchestra') : null;
 const q = (sel) => (overlay ? overlay.querySelector(sel) : null);
@@ -55,6 +56,19 @@ const approveBtn = q('#orchestra-approve');
 const replanBtn = q('#orchestra-replan');
 const discardBtn = q('#orchestra-discard');
 const killBtn = q('#orchestra-kill');
+// Board | Live Web (#agymap slice 3, orchestraLiveWeb.js); null without the markup.
+const boardWeb = overlay
+  ? mountBoardWeb({
+    overlay,
+    getView: () => board.view(),
+    getProject: () => board.project(),
+    getRunLabel: () => (board.chips().find((c) => c && c.projectId === board.project()) || {}).label || '',
+    onGoto: (sessionId) => {
+      window.lunacore.activateSession(sessionId);
+      closeOrchestra();
+    },
+  })
+  : null;
 
 // Error codes main can return that have their own message; anything else
 // reads as the generic one.
@@ -753,6 +767,7 @@ function render() {
   } else if (plan && showFinished()) renderFinished();
   else if (plan) renderPlan();
   updateButtons();
+  if (boardWeb) boardWeb.refresh();
 }
 
 /** The finished run's summary in place of the board (orchestraFinishedView.js). */
@@ -1076,6 +1091,7 @@ export async function openOrchestra(projectId) {
     overlay.hidden = false;
     // Focus, so Escape reaches the overlay instead of the terminal.
     overlay.focus();
+    if (boardWeb) boardWeb.opened();
   }
   if (phase === 'idle') {
     const target = typeof projectId === 'string' || projectId === null ? { project: projectId } : { reset: fromTab };
@@ -1099,6 +1115,7 @@ function closeOrchestra() {
   picking = false;
   if (abortRevealTimer) clearTimeout(abortRevealTimer);
   abortRevealTimer = null;
+  if (boardWeb) boardWeb.closed();
   closeWithExit(overlay);
   term.focus();
 }

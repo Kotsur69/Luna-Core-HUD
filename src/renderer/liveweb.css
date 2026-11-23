@@ -1,0 +1,155 @@
+/* ============================================================================
+   LunaCore - God Mode Live Web (modules/liveWebView.js, #agymap slice 3)
+   ----------------------------------------------------------------------------
+   The canvas web itself is painted in JS (liveWebDraw.js, colours read from
+   the same theme tokens); this sheet styles what is DOM around it: the
+   toolbar and its layer filters, the stage, the hover tip, the inspector, the
+   God Mode tab's Live Web | Dependencies switch and the #orchestra board's
+   Board | Live Web tabs. It reuses the live map's own classes (.lm-toolbar,
+   .lm-tool, .lm-stage, .lm-side) so both views read as one family; every
+   colour is a theme token.
+
+   Motion: none here. The web's movement is the canvas's, and it stops under
+   prefers-reduced-motion and the in-app motion axis (liveWebView.js).
+   ============================================================================ */
+
+.lw,
+.orchestra-overlay {
+  --lm-select: var(--neon-cyan);
+}
+
+/* ---- The component ----------------------------------------------------------- */
+.lw {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.lw[hidden] { display: none; }
+
+.lw-bar { justify-content: space-between; }
+.lw-info {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.lw-info.is-warn { color: var(--warn); }
+
+/* Each layer toggle carries its layer's mark, so a hidden layer is not said by colour alone:
+   pressed = shown (aria-pressed), the mark hollows out when hidden. */
+.lw-filter { display: inline-flex; align-items: center; gap: var(--space-2); }
+.lw-filter::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: currentColor;
+}
+.lw-filter[aria-pressed='false']::before { background: transparent; }
+.lw-filter.is-file::before { color: var(--neon-magenta); }
+.lw-filter.is-process::before { color: var(--good); border-radius: 1px; }
+.lw-filter.is-port::before { color: var(--good); border-radius: 1px; transform: rotate(45deg) scale(0.85); }
+.lw-filter.is-verify::before { color: var(--neon-cyan); border-radius: 1px 1px 4px 4px; }
+.lw-filter.is-subagent::before { color: var(--neon-magenta); }
+.lw-filter.is-mcp::before { color: var(--neon-cyan); border-radius: 2px; }
+.lw-filter.is-memory::before { color: var(--neon-magenta); border-radius: 3px; }
+.lw-filter[aria-pressed='false'] { color: color-mix(in srgb, var(--text-dim) 70%, transparent); }
+
+.lw-body { flex: 1; min-height: 0; display: flex; gap: var(--space-4); }
+.lw-stage { min-height: 320px; }
+.lw-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  /* Pan and pinch belong to the web, not the page. */
+  touch-action: none;
+}
+.lw-canvas.is-pointer { cursor: pointer; }
+.lw-canvas:active { cursor: grabbing; }
+.lw-canvas:focus-visible { outline: 2px solid var(--lm-select); outline-offset: -2px; }
+
+.lw-tip {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: 0;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-5);
+  border: var(--border-w) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel);
+  box-shadow: 0 6px 18px color-mix(in srgb, black 35%, transparent);
+  pointer-events: none;
+  font-size: var(--fs-xs);
+}
+.lw-tip[hidden] { display: none; }
+.lw-tip.is-warn { border-color: var(--warn); }
+.lw-tip__kind {
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.lw-tip__name { color: var(--text); overflow-wrap: anywhere; }
+
+/* Read by screen readers only: the node a keyboard move picked. */
+.lw-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- Inspector (the live map's .lm-side, plus rows of workers) ------------ */
+.lw-side { gap: var(--space-4); }
+.lw-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.lw-rows { display: flex; flex-direction: column; gap: var(--space-2); }
+.lw-row { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.lw-row__text { color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.lw-badge.is-worker, .lw-badge.is-verify, .lw-badge.is-mcp { color: var(--neon-cyan); background: color-mix(in srgb, var(--neon-cyan) 14%, transparent); }
+.lw-badge.is-file, .lw-badge.is-subagent, .lw-badge.is-memory { color: var(--neon-magenta); background: color-mix(in srgb, var(--neon-magenta) 14%, transparent); }
+.lw-badge.is-process, .lw-badge.is-port { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+
+/* ---- Ctrl+Shift+G -> God Mode: runs + Live Web | Dependencies ------------- */
+.lm-gm__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.lm-gm__head .lm-runs { flex: 1 1 auto; min-width: 0; }
+.lm-gm__modes { flex: none; }
+.lm-gm__body[hidden], .lm-toolbar[hidden] { display: none; }
+
+/* ---- #orchestra: Board | Live Web ------------------------------------------ */
+.orchestra__views { flex: 1; }
+.orchestra__body[hidden] { display: none; }
+.orchestra__web {
+  height: min(72vh, 780px);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-6) var(--space-5);
+}
+.orchestra__web[hidden] { display: none; }
+
+@media (max-width: 900px) {
+  .lw-body { flex-direction: column; }
+  .lw-side { flex: 0 0 auto; max-height: 45%; }
+}

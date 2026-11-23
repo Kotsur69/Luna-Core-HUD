@@ -45,11 +45,12 @@
 import { t } from './util.js';
 import { truncate } from './liveMapHelpers.js';
 import { CTX_WARN_HIGH, CTX_WARN_MID } from './thresholds.js';
-import { STATIONS, MEMORY_CALLS, subscribe, tabStateOf, createTabState, cleanText } from './workmapmodel.js';
+import { STATIONS, MEMORY_CALLS, subscribe, tabStateOf, createTabState, cleanText, contextFraction } from './workmapmodel.js';
 import { svgNode, createPacketPool, playBurst, stopRipple, stepHeat, glowLevel } from './workmapFx.js';
 import { createSatelliteLayer, selectSatellites, satelliteItemsFor, procListOf, snapshotSessionIds, mergeProcs } from './workmapSatellites.js';
 import { createWorkmapPanel, resolveViewed, tickerRows, stationView, satelliteView } from './workmapPanel.js';
 import { openDiffModal, closeDiffModal } from './activefiles.js';
+import { shareModel, notifyModel } from './workmapFeed.js';
 
 // ---- geometry and pure helpers (tested) --------------------------------------
 
@@ -75,6 +76,9 @@ const GLOW_TICK_MS = 250;
 const SATELLITE_TICK_MS = 2000;
 const SWITCH_LABEL_CHARS = 40;
 const round2 = (n) => Math.round(n * 100) / 100;
+
+// Moved to the pure model (the Live Web reads it too); still offered from here.
+export { contextFraction };
 
 /**
  * Stations evenly on a circle, clockwise from `startDeg` (-90 = 12 o'clock).
@@ -140,22 +144,6 @@ export function ringDash(fraction, r) {
   const circumference = 2 * Math.PI * r;
   const f = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 0;
   return { circumference: round2(circumference), dasharray: `${round2(circumference * f)} ${round2(circumference)}` };
-}
-
-/**
- * The context share (0..1) of a tab, or null without a sample. tokens / limit
- * when both are known (observer.js derives `percent` from them); else the
- * percent field, read as a fraction when it is 0..1 - observer.js sends 0..1,
- * while workmapmodel.js documents (and clamps to) 0..100.
- * @param {{contextTokens?:number|null, contextLimit?:number|null, contextPercent?:number|null}|null} tab
- * @returns {number|null}
- */
-export function contextFraction(tab) {
-  if (!tab || typeof tab !== 'object') return null;
-  const { contextTokens: tokens, contextLimit: limit, contextPercent: pct } = tab;
-  if (Number.isFinite(tokens) && Number.isFinite(limit) && limit > 0) return Math.min(1, Math.max(0, tokens / limit));
-  if (!Number.isFinite(pct)) return null;
-  return Math.min(1, Math.max(0, pct <= 1 ? pct : pct / 100));
 }
 
 /** The ring's band, with the HUD's own thresholds (thresholds.js). */
@@ -427,7 +415,16 @@ export function createSessionsTab(deps = {}) {
   // liveMap.js never remounts a tab, so unmount() leaves them in place.
   // The process snapshot is the exception: it costs a process list per
   // poll in main, so it is taken on show and given back on hide.
-  const sub = subscribe(bridge, renderSoon, { getActiveSessionId: getActive });
+  const sub = subscribe(
+    bridge,
+    (state) => {
+      renderSoon();
+      notifyModel(state);
+    },
+    { getActiveSessionId: getActive },
+  );
+  // The Live Web reads this subscription's state too (workmapFeed.js).
+  shareModel(sub);
 
   if (typeof bridge.onSessions === 'function') {
     bridge.onSessions((payload) => {
