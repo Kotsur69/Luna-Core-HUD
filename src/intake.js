@@ -22,6 +22,10 @@
 //
 // The tool logic (applyAdd / applyUpdate / listView) is pure and exported so
 // it is unit-testable without a socket; IntakeServer only does HTTP + auth.
+//
+// POST /recall (opt-in auto-recall): the tab's UserPromptSubmit hook posts
+// its hook input with the same bearer token; src/intakerecall.js answers it.
+// A God Mode token gets no recall (its memory is in the brief).
 // ============================================================================
 
 'use strict';
@@ -34,6 +38,7 @@ const { normalizeTodo, normalizeTodos, MAX_ITEMS, MAX_TAGS } = require('./todo')
 const { EFFORTS } = require('./efforts');
 const { MEMORY_TOOLS, callMemoryTool } = require('./memorytools');
 const { ASSET_TOOLS, callAssetTool } = require('./lunasworkAssetTools');
+const { answerRecall, recallRequestOf, recallReply, RECALL_PATH, RECALL_HOOK_EVENT, MAX_RECALL_CONTEXT_CHARS } = require('./intakerecall');
 
 const MCP_PATH = '/mcp';
 const MAX_BODY_BYTES = 256 * 1024;
@@ -519,6 +524,11 @@ class IntakeServer {
     return this.port ? `http://127.0.0.1:${this.port}${MCP_PATH}` : null;
   }
 
+  /** The auto-recall endpoint a tab's UserPromptSubmit hook posts to, or null while stopped. */
+  recallUrl() {
+    return this.port ? `http://127.0.0.1:${this.port}${RECALL_PATH}` : null;
+  }
+
   /**
    * A fresh token for a session, replacing any it had (a restarted tab): a
    * session never holds two tokens, so a scoped one is never next to a full one.
@@ -592,30 +602,39 @@ class IntakeServer {
   handle(req, res) {
     req.on('error', () => res.destroy());
     const pathname = String(req.url || '').split('?')[0];
-    // A browser page can reach loopback; the CLI never sends Origin.
-    if (!this.isAllowedHost(req.headers.host) || req.headers.origin !== undefined || pathname !== MCP_PATH) {
+    const recall = pathname === RECALL_PATH;
+    // The MCP path answers in JSON-RPC; the recall hook reads plain JSON.
+    const refuse = (status, code, message, headers) => {
       req.resume();
-      sendJson(res, 403, rpcError(null, -32000, 'Forbidden'));
+      sendJson(res, status, recall ? { error: message } : rpcError(null, code, message), headers);
+    };
+    // A browser page can reach loopback; the CLI never sends Origin.
+    if (!this.isAllowedHost(req.headers.host) || req.headers.origin !== undefined || (pathname !== MCP_PATH && !recall)) {
+      refuse(403, -32000, 'Forbidden');
       return;
     }
     const token = bearerToken(req.headers.authorization);
     const entry = token ? this.tokens.get(hashToken(token)) : undefined;
     const store = entry ? this.storeFor(entry.sessionId) : null;
     if (!store) {
-      req.resume();
-      sendJson(res, 401, rpcError(null, -32001, 'Unauthorized'));
+      refuse(401, -32001, 'Unauthorized');
       return;
     }
     if (req.method !== 'POST') {
-      req.resume();
-      sendJson(res, 405, rpcError(null, -32000, 'Method not allowed'), { allow: 'POST' });
+      refuse(405, -32000, 'Method not allowed', { allow: 'POST' });
+      return;
+    }
+    if (recall) {
+      // A God Mode session's memory is in its brief: a scoped token never recalls.
+      if (entry.scope) refuse(403, -32000, 'Forbidden');
+      else this.readBody(req, res, (body) => answerRecall(body, store, (status, reply) => !res.headersSent && sendJson(res, status, reply)), { error: 'Request body too large' });
       return;
     }
     const scoped = entry.scope ? { scope: entry.scope, channel: this.channel } : null;
     this.readBody(req, res, (body) => this.answer(res, body, store, scoped));
   }
 
-  readBody(req, res, done) {
+  readBody(req, res, done, tooLarge = rpcError(null, -32000, 'Request body too large')) {
     const chunks = [];
     let size = 0;
     let rejected = false;
@@ -625,7 +644,7 @@ class IntakeServer {
       if (size > MAX_BODY_BYTES) {
         rejected = true;
         chunks.length = 0;
-        sendJson(res, 413, rpcError(null, -32000, 'Request body too large'), { connection: 'close' });
+        sendJson(res, 413, tooLarge, { connection: 'close' });
         return;
       }
       chunks.push(chunk);
@@ -741,5 +760,10 @@ module.exports = {
   handleRpc,
   bearerToken,
   mcpConfigFor,
+  recallRequestOf,
+  recallReply,
+  RECALL_PATH,
+  RECALL_HOOK_EVENT,
+  MAX_RECALL_CONTEXT_CHARS,
   IntakeServer,
 };

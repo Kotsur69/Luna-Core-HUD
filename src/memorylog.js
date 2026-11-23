@@ -31,6 +31,11 @@
 //                                  that job's last answer; verdict = holds | fixed | partly | fixable | unknown;
 //                                  suggested = a corrected body (verdict partly only)
 //   {"at": <ms>, "ev": "card",     "session", "loaded": true | false, "tools"?: bool, "project"?}   a `claude` tab started, with or without its project card
+//   {"at": <ms>, "ev": "brief-outcome", "project", "runId", "pkgId", "keys": ["<key>", ...], "outcome"}
+//                                  a God Mode package whose brief showed these memories settled
+//                                  (src/orchestraBriefMemory.js); outcome = clean | retried | stalled | failed
+//   {"at": <ms>, "ev": "recall",   "project", "hits": ["<key>", ...], "session"?}   auto-recall added these
+//                                  memories to a prompt (src/memoryrecall.js); a recall without hits is not logged
 //
 // `session` (the tab id, "s3") is also kept on search / get / proposed /
 // verified / disputed when a tab's memory tools wrote them (forSession()):
@@ -87,6 +92,12 @@ const VERDICTS = ['verified', 'disputed'];
 const BY = ['tool', 'user', 'check', 'run'];
 /** A God Mode run id (orchestraReport.js RUN_ID_RE). */
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
+/** A God Mode package id (orchestraSupervisor.js SLUG_RE). */
+const PKG_ID_RE = /^[a-z0-9-]{1,64}$/;
+/** How a package whose brief carried memories ended (src/orchestraBriefMemory.js briefOutcomeOf). */
+const BRIEF_OUTCOMES = Object.freeze(['clean', 'retried', 'stalled', 'failed']);
+/** Memories one package remembers and one brief-outcome line names: a brief shows 3, resumes may add others. */
+const MAX_BRIEF_KEYS = 10;
 /** What a memory check may answer (src/memorycheck.js parseCheckAnswer). */
 const CHECK_VERDICTS = ['holds', 'fixed', 'partly', 'fixable', 'unknown'];
 /** The verdicts that ask the user to act: the memory goes on the review list until settled. */
@@ -140,6 +151,15 @@ const block = (v, max) =>
         .trim()
         .slice(0, max)
     : '';
+
+/** A `brief-outcome` line rebuilt from untrusted input, or null (src/orchestraBriefMemory.js). */
+function briefOutcomeEvent(at, raw) {
+  const project = projectFromRepoKey(raw.project) === raw.project ? raw.project : null;
+  const keys = Array.isArray(raw.keys) ? [...new Set(raw.keys.filter((k) => splitKey(k)))].slice(0, MAX_BRIEF_KEYS) : [];
+  const ids = typeof raw.runId === 'string' && RUN_ID_RE.test(raw.runId) && typeof raw.pkgId === 'string' && PKG_ID_RE.test(raw.pkgId);
+  if (!project || !ids || !keys.length || !BRIEF_OUTCOMES.includes(raw.outcome)) return null;
+  return { at, ev: 'brief-outcome', project, runId: raw.runId, pkgId: raw.pkgId, keys, outcome: raw.outcome };
+}
 
 /** One event rebuilt from untrusted input, or null. */
 function cleanEvent(raw) {
@@ -198,6 +218,13 @@ function cleanEvent(raw) {
     const hits = Array.isArray(raw.hits) ? raw.hits.filter((k) => splitKey(k)).slice(0, MAX_HITS) : [];
     return { at, ev, project: projectOf(raw.project), hits, ...tagged(raw.session) };
   }
+  // Auto-recall's hits for one prompt (src/memoryrecall.js): only a recall that found something is a line.
+  if (ev === 'recall') {
+    const project = projectOf(raw.project);
+    const hits = Array.isArray(raw.hits) ? [...new Set(raw.hits.filter((k) => splitKey(k)))].slice(0, MAX_HITS) : [];
+    return project && hits.length ? { at, ev, project, hits, ...tagged(raw.session) } : null;
+  }
+  if (ev === 'brief-outcome') return briefOutcomeEvent(at, raw);
   if (ev === 'get') return key ? { at, ev, key, ...tagged(raw.session) } : null;
   // A candidate whose type was switched on but whose usefulness kept it in the inbox (src/memoryautoaccept.js).
   if (ev === 'held') {
@@ -267,10 +294,10 @@ function readLog(file) {
 }
 
 /**
- * A line that only counts a read or a tab start. They are many and cheap to
- * lose; decisions and reports are not.
+ * A line that only counts a read, a recall or a tab start. They are many and
+ * cheap to lose; decisions, reports and brief outcomes are not.
  */
-const USE_ROW_RE = /"ev":"(search|get|card)"/;
+const USE_ROW_RE = /"ev":"(search|get|card|recall)"/;
 const bytesOf = (rows) => rows.reduce((sum, row) => sum + Buffer.byteLength(row, 'utf8') + 1, 0);
 
 /**
@@ -691,6 +718,8 @@ module.exports = {
   acceptedMissing,
   CHECK_VERDICTS,
   CHECK_ACTION_VERDICTS,
+  BRIEF_OUTCOMES,
+  MAX_BRIEF_KEYS,
   MAX_EVIDENCE,
   MAX_EVIDENCE_CHARS,
   isoWeek,

@@ -79,7 +79,11 @@ const { reviewList, verify, retire, findConfirmed } = require('./memoryreview');
 const { captureStats, decisionEvent, lastChecks, DAY_MS } = require('./memorylog');
 const { checkOf } = require('./memorycheck');
 const auto = require('./memoryautoaccept');
+const { readAutoRecall, setAutoRecall } = require('./memoryrecallhook');
 const { CANDIDATE_TYPES } = require('./memoryextract');
+
+/** The id the memory window's auto-recall switch goes by (memoryautopanel.js). */
+const RECALL_SWITCH = 'recall';
 const { listConflicts } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
@@ -177,6 +181,7 @@ function registerMemoryIpc({
   roots = () => ({}),
   searchStatus = () => null,
   autoFile = () => null,
+  recallFile = () => null,
   onSettingsChanged = () => {},
   graveyardFile = () => null,
   todoProjects = () => [],
@@ -281,6 +286,8 @@ function registerMemoryIpc({
         types: auto.autoStatus(auto.readAuto(file), auto.typeStats(evs, now())),
         score: { id: auto.SCORE_SWITCH, on: auto.readScoreAuto(file), ...auto.scoreStats(evs, now()) },
         recent: auto.recentAutoAccepted(scan(dir()).records, isoDate(now())),
+        // Auto-recall into prompts (src/memoryrecallhook.js); absent without its file.
+        ...(recallFile() ? { recall: { id: RECALL_SWITCH, on: readAutoRecall(recallFile()) } } : {}),
         bar: {
           min: auto.AUTO_MIN_DECISIONS,
           days: auto.AUTO_WINDOW_DAYS,
@@ -387,6 +394,21 @@ function registerMemoryIpc({
       return { ok: true, type, on: req.on };
     } catch (err) {
       console.error('[memory] auto-accept switch failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  });
+  // Auto-recall (src/memoryrecallhook.js): opt-in, no numbers to earn; on or
+  // off is the whole request, and only a boolean is taken from the renderer.
+  ipcMain.handle('memory:recall-set', (_event, req) => {
+    if (!req || typeof req !== 'object' || typeof req.on !== 'boolean') return { ok: false, reason: 'bad-request' };
+    try {
+      const file = recallFile();
+      if (!file) return { ok: false, reason: 'failed' };
+      setAutoRecall(file, req.on);
+      onSettingsChanged();
+      return { ok: true, on: req.on };
+    } catch (err) {
+      console.error('[memory] auto-recall switch failed:', errText(err));
       return { ok: false, reason: 'failed' };
     }
   });

@@ -300,6 +300,8 @@ const { createChangeTracker: createMemoryChangeTracker } = require('./memorychan
 const { conflictCount: memoryConflictCount } = require('./memoryconflict');
 const { createDecayTimer: createMemoryDecay, createReferenceRecorder: createMemoryReferences } = require('./memorydecay');
 const { createInjector: createMemoryInjector } = require('./memoryinject');
+const { createRecaller: createMemoryRecaller } = require('./memoryrecall');
+const { recallProject, prepareRecallHook, removeRecallHook, recallHookLaunch } = require('./memoryrecallhook');
 const MEMORY_EXTRACT_TIMEOUT_MS = 180000;
 let memorySync = null;
 let memoryCapture = null;
@@ -1326,6 +1328,8 @@ const memoryInjector = createMemoryInjector({
   configDir: () => userDir(),
   projectOf: (folder) => projectFromRepoKey(memoryRepoKeys.resolve(folder).key),
   onInjected: (keys) => memoryReferences.note(keys),
+  // Ranks by meaning too when the local embedding model answers in time; keywords otherwise.
+  vectors: () => memoryVectorsOf(),
 });
 
 let memoryLog = null;
@@ -1400,6 +1404,8 @@ const intakeServer = new IntakeServer({
       // God Mode workers must never tick cards; only the user's own tabs may.
       canMarkDone: !orchestraRuns.ownsSession(sessionId),
       memory: memoryFor(session),
+      // POST /recall (auto-recall): only while switched on and memory is on for the tab's project.
+      recall: recallFor(session),
       assets: lunasworkAssetsFor(sessionId, session),
     };
   },
@@ -1641,7 +1647,10 @@ const orchestraCtx = {
   userDir,
   ensureUserDir,
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
-  projectMemory: (repoPath, pkg) => memoryInjector(repoPath, pkg),
+  // A worker brief's memory section and its keys; the query is embedded while the worktree is made.
+  projectMemory: (repoPath, pkg) => memoryInjector.select(repoPath, pkg),
+  warmProjectMemory: (repoPath, pkg) => memoryInjector.warm(repoPath, pkg),
+  logBriefOutcome: (event) => memoryLogOf().add(event),
   worktrees: { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).
@@ -1893,7 +1902,41 @@ async function prepareIntake(session) {
     const log = (line) => console.error(line);
     return writeGodModeConfig({ dir: userDir(), sessionId: session.id, url: intakeServer.url(), server: intakeServer, task, log });
   }
-  return writeSessionConfig(userDir(), session.id, intakeServer.url(), intakeServer.issueToken(session.id));
+  const token = intakeServer.issueToken(session.id);
+  // Auto-recall's UserPromptSubmit hook posts with the same token (src/memoryrecallhook.js).
+  session.recallHook = prepareRecallHook({ dir: userDir(), sessionId: session.id, url: intakeServer.recallUrl(), token, on: Boolean(recallProjectOf(session)) });
+  return writeSessionConfig(userDir(), session.id, intakeServer.url(), token);
+}
+
+/** The memory project a tab's prompts are recalled for, or null (src/memoryrecallhook.js recallProject). */
+function recallProjectOf(session) {
+  try {
+    const paths = memoryPaths(userDir());
+    return recallProject({ recallFile: paths.recall, projectsFile: paths.projects, project: memoryProjectOf(session) });
+  } catch (err) {
+    console.error('[memory] auto-recall unavailable:', (err && (err.code || err.message)) || 'error');
+    return null;
+  }
+}
+
+/** Auto-recall into a tab's prompts (src/memoryrecall.js); hits hold off usefulness decay. */
+const memoryRecaller = createMemoryRecaller({
+  dir: () => memoryPaths(userDir()).dir,
+  vectors: () => memoryVectorsOf(),
+  log: { add: (event) => memoryLogOf().add(event) },
+  onHits: (keys) => memoryReferences.note(keys),
+});
+
+/**
+ * The intake store's `recall` for one tab; God Mode workers get none. Whether
+ * recall is on is read per /recall, not per MCP request: a tab with it off gets {}.
+ */
+function recallFor(session) {
+  if (orchestraRuns.ownsSession(session.id)) return undefined;
+  return (prompt) => {
+    const project = recallProjectOf(session);
+    return project ? memoryRecaller({ project, prompt, session: session.id }) : null;
+  };
 }
 
 /**
@@ -2304,6 +2347,8 @@ function spawnInto(session, profile, launch = null) {
   session.todoCli = null;
   session.todoServer = null;
   session.memoryCard = null;
+  // Set again by prepareIntake when auto-recall is on for this start.
+  session.recallHook = null;
   // A restart (maybe under another profile) drops the previous launch's agy entry.
   agyIntake.unregister(session.id);
   if (startCommand) {
@@ -2322,7 +2367,10 @@ function spawnInto(session, profile, launch = null) {
         const hasTools = intakeState(startCommand, launched, Boolean(agyServer)) === 'ready';
         const claude = !isOverride && isClaudeCommand(startCommand);
         const carded = claude || agy ? withMemoryCard(launched, prepareCard(session, hasTools)) : launched;
-        proc.write(`${carded}\r`);
+        // Auto-recall's hook settings, when prepareIntake wrote them; a file the command cannot carry is deleted.
+        const recalled = recallHookLaunch(carded, { claude, file: session.recallHook, dir: userDir(), sessionId: session.id });
+        session.recallHook = recalled.file;
+        proc.write(`${recalled.command}\r`);
         session.todoTools = intakeState(startCommand, launched, Boolean(agyServer));
         // An override agy command gets no server, but ✨ still words its state for agy.
         session.todoCli = isAgyCommand(startCommand) ? 'agy' : null;
@@ -2540,6 +2588,7 @@ function closeSession(sessionId) {
   if (session.localModelWatcher) session.localModelWatcher.stop();
   intakeServer.revoke(sessionId);
   removeSessionConfig(userDir(), sessionId);
+  removeRecallHook(userDir(), sessionId);
   agyIntake.unregister(sessionId);
   removeCard(userDir(), sessionId);
   overnight.forgetSession(sessionId);
@@ -3749,6 +3798,7 @@ function registerIpc() {
     roots: memoryRoots,
     // Auto-accept per type (src/memoryautoaccept.js): the switches sync in the config scope.
     autoFile: () => memoryPaths(userDir()).autoAccept,
+    recallFile: () => memoryPaths(userDir()).recall,
     onSettingsChanged: () => configSync && configSync.soon(),
     // The local graveyard of candidates dropped under the usefulness floor (never synced).
     graveyardFile: () => memoryGraveyardPath(userDir()),
@@ -4810,6 +4860,7 @@ app.on('window-all-closed', () => {
     trackForCapture(session);
     teardownSession(session);
     removeSessionConfig(userDir(), session.id);
+    removeRecallHook(userDir(), session.id);
     removeCard(userDir(), session.id);
   }
   // Every agy entry this run wrote leaves agy's config with the app.

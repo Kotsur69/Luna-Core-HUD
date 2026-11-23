@@ -25,7 +25,7 @@
 import { t } from './util.js';
 import { createTallOverlay } from './talloverlay.js';
 import { COMMANDS, keyCommand, typingIn, moveSelection, keepSelection } from './memoryinboxkeys.js';
-import { autoSection } from './memoryautopanel.js';
+import { autoSection, RECALL_SWITCH } from './memoryautopanel.js';
 import { usefulnessLine, finalOf, conflictEntry, memoriesPanel, scanStartKey, mergeDraft } from './memorybrain.js';
 import { clearHistory } from './memoryhistory.js';
 import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
@@ -642,12 +642,12 @@ export function autoReasonKey(reason) {
   return 'mem.inbox.err.failed';
 }
 
-/** Switches auto-accept for one type; main re-checks that the numbers allow it. */
+/** Switches auto-accept for one type, or auto-recall; main re-checks that the numbers allow it. */
 async function toggleAuto(type, on) {
   // Like switchTab: never while a draft is open, a repaint would throw it away.
   if (switching || editing !== null) return;
   switching = true;
-  const res = await call('memoryAutoSet', type, on);
+  const res = type === RECALL_SWITCH ? await call('memoryAutoRecallSet', on) : await call('memoryAutoSet', type, on);
   switching = false;
   autoError = res && res.ok ? null : autoReasonKey(res && res.reason);
   load();
