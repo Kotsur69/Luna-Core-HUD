@@ -101,7 +101,7 @@ function todoProjectFor(memoryProject, projects, projectOf) {
 }
 
 /** The memory with this key and, for a waiting one, the near-duplicates folded with it; or a reason. */
-function findMemory(dir, key) {
+function findMemory(dir, key, vectorOf = null) {
   if (!splitKey(key)) return { reason: 'bad-key' };
   const { records } = scan(dir);
   const found = records.find(([k]) => k === key);
@@ -109,7 +109,7 @@ function findMemory(dir, key) {
   const record = found[1];
   if (!isPending(record)) return { record, pending: false, twins: [] };
   // The inbox shows a group as one entry: its twins say the same and leave with it.
-  const group = groupPending(records).find((g) => g.key === key || g.duplicates.includes(key));
+  const group = groupPending(records, vectorOf).find((g) => g.key === key || g.duplicates.includes(key));
   const byKey = new Map(records);
   const twins = group ? [group.key, ...group.duplicates].filter((k) => k !== key && byKey.has(k)).map((k) => [k, byKey.get(k)]) : [];
   return { record, pending: true, twins };
@@ -187,13 +187,13 @@ function removeMemory({ dir, key, found, graveyardFile, now }) {
  *   now: number, projectIdFor: (project: string) => string|null,
  *   todos: {read: (projectId: string) => object[], write: (projectId: string, list: object[]) => boolean,
  *     changed?: (projectId: string) => void},
- *   graveyardFile: () => string|null, log?: {add: (event: object) => boolean}|null}} ctx
- *   draft = cleanDraft()'s result
+ *   graveyardFile: () => string|null, log?: {add: (event: object) => boolean}|null, vectorOf?: Function|null}} ctx
+ *   draft = cleanDraft()'s result; vectorOf = the lookup the inbox grouped with (memoryinbox.groupPending)
  * @returns {{ok: true, key: string, projectId: string, at: number}|{ok: false, reason: string, projectId?: string, at?: number}}
  *   reason 'remove-failed' = the card was written but the memory is still there
  */
-function moveToTodo({ dir, key, draft, now, projectIdFor, todos, graveyardFile, log = null }) {
-  const found = findMemory(dir, key);
+function moveToTodo({ dir, key, draft, now, projectIdFor, todos, graveyardFile, log = null, vectorOf = null }) {
+  const found = findMemory(dir, key, vectorOf);
   if (!found.record) return fail(found.reason);
   const target = targetOf(found.record, projectIdFor);
   if (!target.projectId) return fail(target.reason);

@@ -250,3 +250,73 @@ test('keep A on a merge suggestion supersedes B like a conflict', (t) => {
   assert.deepEqual(resolveConflict(dir, { a: key('ci-before'), b: key('ci-first'), keep: 'a' }, TODAY), { ok: true, kept: [key('ci-before')], superseded: key('ci-first') });
   assert.deepEqual(stored(dir)[key('ci-before')].supersedes, ['ci-first']);
 });
+
+// ---- merge suggestions by meaning (src/memoryembed.js), with the word fallback ----
+
+const unitVec = (...xs) => Float32Array.from(xs.map((x) => x / Math.hypot(...xs)));
+const vectorsById = (pairs) => {
+  const map = new Map(pairs);
+  return (r) => map.get(r.id);
+};
+
+const SYMLINK = rec('no-symlink', 'Never symlink package dependencies from the main checkout');
+const JUNCTION_ONLY = rec('no-junction-2', 'Keep node_modules real in every package worktree');
+const DASHES = rec('dashes', 'Name the installer with dashes');
+const DASHES_TOO = rec('dashes-too', 'Name the installer with dashes always');
+
+test('findDuplicates suggests a merge for two memories that mean the same in other words', (t) => {
+  const { dir } = mirror(t, [SYMLINK, JUNCTION_ONLY]);
+  const records = scan(dir).records;
+  const vectorOf = vectorsById([
+    ['no-symlink', unitVec(1, 0.1, 0)],
+    ['no-junction-2', unitVec(1, 0.3, 0)], // cosine 0.98
+  ]);
+
+  assert.deepEqual(findDuplicates(records), [], 'by words they share nothing');
+  assert.deepEqual(
+    findDuplicates(records, vectorOf).map((p) => [p.a, p.b, p.source]),
+    [[key('no-junction-2'), key('no-symlink'), 'duplicate']],
+  );
+  assert.equal(listConflicts(records, { vectorOf }).total, 1);
+});
+
+test('findDuplicates: far vectors are no merge even in the same words; one vector missing = by words', (t) => {
+  const { dir } = mirror(t, [DASHES, DASHES_TOO]);
+  const records = scan(dir).records;
+  const far = vectorsById([
+    ['dashes', unitVec(1, 0, 0)],
+    ['dashes-too', unitVec(1, 1.5, 0)], // cosine 0.55
+  ]);
+  const half = vectorsById([['dashes', unitVec(1, 0, 0)]]);
+
+  assert.equal(findDuplicates(records).length, 1, 'by words, a pair');
+  assert.deepEqual(findDuplicates(records, far), [], 'the vectors decide when both exist');
+  assert.equal(findDuplicates(records, half).length, 1, 'without both vectors the words decide');
+});
+
+test('a pair found by meaning is settled with the same lookup, and refused without it', (t) => {
+  const { dir } = mirror(t, [SYMLINK, JUNCTION_ONLY]);
+  const vectorOf = vectorsById([
+    ['no-symlink', unitVec(1, 0.1, 0)],
+    ['no-junction-2', unitVec(1, 0.3, 0)],
+  ]);
+  const pair = { a: key('no-symlink'), b: key('no-junction-2') };
+
+  assert.deepEqual(resolveConflict(dir, { ...pair, keep: 'both' }, TODAY), { ok: false, reason: 'not-conflict' });
+  assert.equal(resolveConflict(dir, { ...pair, keep: 'both' }, TODAY, { vectorOf }).ok, true);
+  assert.deepEqual(findDuplicates(scan(dir).records, vectorOf), [], "'keep both' holds for pairs found by meaning too");
+});
+
+test('mergePair merges a pair found by meaning', (t) => {
+  const { dir } = mirror(t, [SYMLINK, JUNCTION_ONLY]);
+  const vectorOf = vectorsById([
+    ['no-symlink', unitVec(1, 0.1, 0)],
+    ['no-junction-2', unitVec(1, 0.3, 0)],
+  ]);
+  const merge = { a: key('no-symlink'), b: key('no-junction-2'), title: 'Keep node_modules real in worktrees', body: 'No junction, no symlink.' };
+
+  assert.deepEqual(mergePair(dir, merge, TODAY), { ok: false, reason: 'not-conflict' });
+  const res = mergePair(dir, merge, TODAY, { vectorOf });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.superseded.sort(), [key('no-junction-2'), key('no-symlink')]);
+});

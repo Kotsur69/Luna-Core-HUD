@@ -662,3 +662,106 @@ test('the prompt offers expiry hints for temporary constraints only, in both sub
     assert.match(prompt, /- expires_when: optional, one line of at most 120 characters/);
   }
 });
+
+// ---- near-duplicates by meaning (src/memoryembed.js), with the word fallback ----
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { semanticCandidates } = require('../src/memoryshield.js');
+
+const unitVec = (...xs) => Float32Array.from(xs.map((x) => x / Math.hypot(...xs)));
+/** Vectors by title: a test says outright which memories mean the same. */
+const byTitle = (pairs) => {
+  const map = new Map(pairs);
+  return (r) => map.get(r.title);
+};
+
+test('nearDuplicate by meaning: a hit in other words, a miss in the same words', () => {
+  const junction = existing('no-junction', 'Do not junction node_modules into a worktree');
+  const symlink = existing('no-symlink', 'Never symlink package dependencies from the main checkout');
+  const dashes = existing('dashes', 'Name the installer with dashes');
+  const noDashes = existing('no-dashes', 'Name the installer without dashes');
+  const vectorOf = byTitle([
+    [junction.title, unitVec(1, 0.1, 0)],
+    [symlink.title, unitVec(1, 0.2, 0)], // cosine 0.995
+    [dashes.title, unitVec(0, 1, 0)],
+    [noDashes.title, unitVec(0, 1, 1.2)], // cosine 0.64
+  ]);
+
+  assert.equal(nearDuplicate(junction, symlink), false, 'by words, no shared topic');
+  assert.equal(nearDuplicate(junction, symlink, vectorOf), true);
+  assert.equal(nearDuplicate(dashes, noDashes), true, 'by words, nearly the same title');
+  assert.equal(nearDuplicate(dashes, noDashes, vectorOf), false, 'the vectors say they mean different things');
+});
+
+test('nearDuplicate falls back to words when one of the two has no vector', () => {
+  const dashes = existing('dashes', 'Name the installer with dashes');
+  const twin = existing('twin', 'Name the installer with dashes always');
+  const other = existing('other', 'Battery sleep kills long packages');
+  const vectorOf = byTitle([[dashes.title, unitVec(1, 0, 0)]]);
+
+  assert.equal(nearDuplicate(dashes, twin, vectorOf), true);
+  assert.equal(nearDuplicate(dashes, other, vectorOf), false);
+  assert.equal(nearDuplicate(dashes, twin, () => undefined), true, 'a lookup without vectors is the word check');
+});
+
+test('candidatesFrom drops a candidate that means what a memory says, with duplicateOf', () => {
+  const memory = existing('no-junction', 'Do not junction node_modules into a worktree');
+  const candidate = cand('Never symlink package dependencies from the main checkout');
+  const vectorOf = (r) => (/junction|symlink/.test(r.title) ? unitVec(1, 0.1, 0) : undefined);
+
+  const byWords = candidatesFrom({ candidates: [candidate] }, { ...CTX, existing: [memory] });
+  assert.equal(byWords.records.length, 1, 'by words it is new');
+
+  const { records, rejected } = candidatesFrom({ candidates: [candidate] }, { ...CTX, existing: [memory], vectorOf });
+  assert.deepEqual(records, []);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason, DUPLICATE);
+  assert.equal(rejected[0].duplicateOf, memory.title);
+  assert.equal(rejected[0].record.title, candidate.title);
+});
+
+/** A vector store with LM Studio as the test says: topic vectors from the text. */
+function fakeStore(t, { down = false } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-extract-vec-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  const topic = (text) => (/junction|symlink/i.test(text) ? unitVec(1, 0.1, 0) : unitVec(0, 0.1, 1));
+  const calls = [];
+  return {
+    calls,
+    dir,
+    model: () => 'qwen3-embedding-0.6b',
+    vectorFor: (r) => topic(`${r.title}\n\n${r.body}`),
+    embedTexts: async (texts) => {
+      calls.push(texts);
+      return down ? null : { model: 'qwen3-embedding-0.6b', vectors: texts.map(topic) };
+    },
+  };
+}
+
+test('semanticCandidates finds a duplicate by meaning when the store answers', async (t) => {
+  const memory = existing('no-junction', 'Do not junction node_modules into a worktree');
+  const answer = { candidates: [cand('Never symlink package dependencies from the main checkout'), cand('Name the installer with dashes')] };
+  const store = fakeStore(t);
+
+  const { records, rejected } = await semanticCandidates(answer, { ...CTX, existing: [memory] }, store);
+
+  assert.deepEqual(records.map((r) => r.title), ['Name the installer with dashes']);
+  assert.deepEqual(rejected.map((r) => [r.reason, r.duplicateOf]), [[DUPLICATE, memory.title]]);
+  assert.equal(store.calls.length, 1, 'the candidates are embedded in one call');
+});
+
+test('semanticCandidates is the word filter, unchanged, without a store or with LM Studio down', async (t) => {
+  const memory = existing('no-junction', 'Do not junction node_modules into a worktree');
+  const answer = { candidates: [cand('Never symlink package dependencies from the main checkout'), cand('Do not junction node_modules into a worktree!')] };
+  const ctx = { ...CTX, existing: [memory] };
+  const byWords = candidatesFrom(answer, ctx);
+  assert.equal(byWords.records.length, 1);
+  assert.equal(byWords.rejected[0].reason, DUPLICATE, 'the word check still catches the same title');
+
+  assert.deepEqual(await semanticCandidates(answer, ctx, null), byWords);
+  const down = fakeStore(t, { down: true });
+  assert.deepEqual(await semanticCandidates(answer, ctx, down), byWords);
+  assert.equal(down.calls.length, 1, 'one try, no retry and no error');
+});
