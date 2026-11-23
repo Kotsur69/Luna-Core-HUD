@@ -225,8 +225,14 @@ function sessionDeps(ctx) {
     // run has tabs, plus the LM Studio watchdog for local-model workers. The
     // tab closing ends it (overnight.forgetSession in the close path).
     createSession: guardedSessionFactory(ctx.createSession, ctx.overnight),
-    // A worker brief's "## Project memory" section (src/memoryinject.js), or null.
+    // A worker brief's "## Project memory" section (src/memoryinject.js select):
+    // {text, keys, project} or null. orchestra.js keeps the keys on the package
+    // (src/orchestraBriefMemory.js), so they survive a restart with the run.
     projectMemory: (repoPath, pkg) => (typeof ctx.projectMemory === 'function' ? ctx.projectMemory(repoPath, pkg) : null),
+    // Embeds the package's memory query while its worktree is made (bounded, never rejects).
+    warmProjectMemory: (repoPath, pkg) => (typeof ctx.warmProjectMemory === 'function' ? ctx.warmProjectMemory(repoPath, pkg) : null),
+    // One `brief-outcome` line in the memory log per settled package (src/memorylog.js).
+    logBriefOutcome: (event) => (typeof ctx.logBriefOutcome === 'function' ? ctx.logBriefOutcome(event) : false),
     // Briefs live inside the worker's cwd and are git-excluded (src/workerBrief.js).
     writeBrief: (file, text) => workerBrief.writeWorkerBrief(file, text),
     removeBrief: (file) => workerBrief.removeWorkerBrief(file),

@@ -39,6 +39,7 @@ const sup = require('./orchestraSupervisor');
 const { DEFAULT_EFFORT, isEffort, normalizeEffort, nextEffort } = require('./efforts');
 const { createFinalizer, ABORT_FINISH_AFTER_MS, postMergeContext, slugOf } = require('./orchestraFinalize');
 const { createFixupRunner } = require('./orchestraFixup');
+const briefMemoryRules = require('./orchestraBriefMemory');
 const workerBrief = require('./workerBrief');
 const followupLaunch = require('./orchestraFollowupsLaunch');
 const { normalizeFollowupEntries, followupBriefLines } = require('./orchestraFollowups');
@@ -606,6 +607,8 @@ function createOrchestra(deps) {
     putSnapshot: deps.putSnapshot,
     onReport: deps.onReport,
     onHandbackScan: deps.onHandbackScan,
+    // One memory-log line per package with brief memories (src/orchestraBriefMemory.js).
+    logBriefOutcome: deps.logBriefOutcome || null,
     sleep: deps.sleep,
     onIdle: () => afterFinalize(),
     // The integrate watchdog (default: orchestraFinalize integrateTimeoutFor)
@@ -1961,6 +1964,8 @@ function createOrchestra(deps) {
    * package: the worker gets it as the first step of its brief.
    */
   async function launchOneUnsafe(pkg, stamp, made) {
+    // The brief's memory query is embedded while git and the install work (bounded, src/memoryinject.js).
+    const memoryWarm = warmProjectMemory(pkg);
     const pushedDeps = pkg.dependsOn.map(findPkg).filter((d) => d && d.state === 'pushed' && d.branch);
     const baseDep = pushedDeps.find((d) => d.headSha) || null;
     made.depBranch = baseDep ? baseDep.branch : null;
@@ -2010,7 +2015,23 @@ function createOrchestra(deps) {
     // starts this worker in the same worktree.
     if (!ready.ok) return { ...where, state: 'pending', heldLaunch: true, held: ready };
     await agyModelsReady([pkg]);
+    if (memoryWarm) await memoryWarm;
     return startWorker(pkg, where);
+  }
+
+  /**
+   * Starts embedding a package's memory query ahead of its brief, or null
+   * without a warmer. The promise never rejects and settles within the
+   * injector's timeout; the brief falls back to keywords on its own.
+   */
+  function warmProjectMemory(pkg) {
+    if (typeof deps.warmProjectMemory !== 'function') return null;
+    try {
+      return Promise.resolve(deps.warmProjectMemory(plan.repoPath, pkg)).catch((err) => log(`project memory not prepared for ${pkg.id}: ${(err && err.message) || err}`));
+    } catch (err) {
+      log(`project memory not prepared for ${pkg.id}: ${(err && err.message) || err}`);
+      return null;
+    }
   }
 
   /**
@@ -2019,12 +2040,21 @@ function createOrchestra(deps) {
    * @param {{branch:string, root:string, cwd:string, briefPath:string, baseSha:string|null, depMerge:object|null}} where
    */
   function startWorker(pkg, where) {
+    // The brief's memories count for the package only once a worker got it (src/orchestraBriefMemory.js).
+    const known = findPkg(pkg.id);
+    const unseen = { briefMemory: (known && known.briefMemory) || null, briefOutcome: (known && known.briefOutcome) || null };
     if (!where.briefPath || !deps.writeBrief(where.briefPath, runBrief(pkg, where.branch, { depMerge: where.depMerge, memory: projectMemoryFor(pkg) }))) {
-      return { ...where, state: 'failed', error: 'briefFailed' };
+      return { ...where, ...unseen, state: 'failed', error: 'briefFailed' };
     }
     // Same folder briefPathFor() used: the first message names the brief relative to it.
-    const session = openTab(pkg, where.cwd || where.root, where.branch, where.briefPath);
-    if (!session) return { ...where, state: 'failed', error: 'noTab' };
+    let session;
+    try {
+      session = openTab(pkg, where.cwd || where.root, where.branch, where.briefPath);
+    } catch (err) {
+      patch(pkg.id, unseen);
+      throw err;
+    }
+    if (!session) return { ...where, ...unseen, state: 'failed', error: 'noTab' };
     return { ...where, ...freshRun(), state: 'launched', sessionId: session.id, heldLaunch: false };
   }
 
@@ -2065,12 +2095,18 @@ function createOrchestra(deps) {
     return briefText(pkg, branch, { ...opts, followups: !!plan && plan.followups === true });
   }
 
-  /** The brief's project memory section, or null. Memory never stops a worker from starting. */
+  /**
+   * The brief's project memory section, or null. Memory never stops a worker
+   * from starting. The memories it shows stay on the package (`briefMemory`)
+   * for the run's brief-outcome lines (src/orchestraBriefMemory.js).
+   */
   function projectMemoryFor(pkg) {
     if (typeof deps.projectMemory !== 'function') return null;
     try {
-      const text = deps.projectMemory(plan.repoPath, pkg);
-      return typeof text === 'string' && text ? text : null;
+      const { text, briefMemory } = briefMemoryRules.readInjection(deps.projectMemory(plan.repoPath, pkg));
+      const current = briefMemory ? findPkg(pkg.id) : null;
+      if (current) patch(pkg.id, briefMemoryRules.injectedFields(current.briefMemory, briefMemory));
+      return text;
     } catch (err) {
       log(`project memory unavailable for ${pkg.id}: ${(err && err.message) || err}`);
       return null;
