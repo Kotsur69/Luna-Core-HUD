@@ -18,6 +18,10 @@
 //   memory:merge    ({a, b, title, body}) -> {ok, key, superseded} | {ok:false, reason}
 //                                       merges a listed pair into one new confirmed memory
 //                                       (src/memoryconflict.js mergePair)
+//   memory:merge-draft ({a, b})      -> {ok, title, body} | {ok:false, reason: 'bad-key'|'not-conflict'|'busy'|
+//                                       'model-<why>'|'bad-answer'|'failed'}   read only: one lean model call
+//                                       drafts the merge form of a listed pair (memoryconflict.buildMergePrompt);
+//                                       the renderer falls back to joining A and B itself
 //   memory:provenance (key)          -> {ok, ...} | {ok:false, reason}   read only: the History
 //                                       expander (src/memoryprovenance.js); the timeline is this PC's log
 //
@@ -47,17 +51,17 @@
 
 'use strict';
 
-const { validProject, splitKey, scoreOf, finalScore, byFinalScore, DATE_RE, MAX_TITLE, MAX_BODY } = require('./memoryrecord');
+const { validProject, splitKey, scoreOf, finalScore, byFinalScore, usageRecommendation, DATE_RE, MAX_TITLE, MAX_BODY } = require('./memoryrecord');
 const { scan } = require('./memorystore');
 const { supersededKeys, reviewList } = require('./memoryreview');
-const { resolveConflict, findConflicts, mergePair, KEEP } = require('./memoryconflict');
-const { provenance, originSnippet } = require('./memoryprovenance');
+const { resolveConflict, findConflicts, findPairs, pairId, conflictedKeys, mergePair, buildMergePrompt, parseMergeAnswer, KEEP } = require('./memoryconflict');
+const { sharedVectorStore, vectorLookup } = require('./memoryembed');
+const { provenance, originSnippet, sourceOf } = require('./memoryprovenance');
 const { promptSafe } = require('./memoryscan');
 const { scrub } = require('./hostscrub');
-const { sharedVectorStore, vectorLookup } = require('./memoryembed');
 const { restore } = require('./memorydecay');
 const { recentUsage } = require('./memoryuse');
-const { lastChecks } = require('./memorylog');
+const { lastChecks, openDisputes } = require('./memorylog');
 const { checkOf, editChecked } = require('./memorycheck');
 const { cachedChanges } = require('./memorychanges');
 
@@ -89,27 +93,41 @@ const NO_USAGE = Object.freeze({ reads: new Map(), today: null });
  * @param {[string, object][]} records
  * @param {string} project
  * @param {Set<string>} gone superseded keys
- * @param {{reads: Map<string, number>, today: string|null}} [usage] memoryuse.recentUsage(): the reads the final score counts
+ * @param {{reads: Map<string, number>, today: string|null, conflicted?: Set<string>, disputed?: {has: Function}}} [usage]
+ *   memoryuse.recentUsage(): the reads the final score counts; conflicted = keys in an open
+ *   conflict (memoryconflict.conflictedKeys), disputed = keys with an open dispute
+ *   (memorylog.openDisputes): both take points off the final score
  * @param {Map<string, object>} [checks] memorylog.lastChecks(): each item's last "Check if still true" answer
  */
 function listItems(records, project, gone, usage = NO_USAGE, checks = new Map()) {
+  const conflicted = usage.conflicted || new Set();
+  const disputes = usage.disputed || new Set();
   return records
     .filter(([key, r]) => r.project === project && !gone.has(key))
-    .map(([key, r]) => ({
-      key,
-      id: r.id,
-      type: r.type,
-      title: r.title,
-      body: r.body.length > LIST_BODY_CHARS ? `${r.body.slice(0, LIST_BODY_CHARS).trimEnd()} ...` : r.body,
-      confidence: r.confidence,
-      created: r.created,
-      last_used: r.last_used || null,
-      archived: r.archived || null,
-      ...scoreOf(r),
-      // Computed, never stored: {score: 0-100|null, parts: {usefulness, confidence, usage}}.
-      final: finalScore(r, { reads: usage.reads.get(key) || 0, today: usage.today }),
-      check: checkOf(checks, key),
-    }))
+    .map(([key, r]) => {
+      const reads = usage.reads.get(key) || 0;
+      const disputed = disputes.has(key);
+      return {
+        key,
+        id: r.id,
+        type: r.type,
+        title: r.title,
+        body: r.body.length > LIST_BODY_CHARS ? `${r.body.slice(0, LIST_BODY_CHARS).trimEnd()} ...` : r.body,
+        confidence: r.confidence,
+        created: r.created,
+        last_used: r.last_used || null,
+        boosted_at: r.boosted_at || null,
+        archived: r.archived || null,
+        // Shown inline: where it came from, and whether a person or the auto-accept switch confirmed it.
+        source: r.source || null,
+        autoAccepted: sourceOf(r.source).autoAccepted,
+        ...scoreOf(r),
+        // Computed, never stored: {score: 0-100|null, parts: {usefulness, confidence, usage, penalties}}.
+        final: finalScore(r, { reads, today: usage.today, conflicted: conflicted.has(key), disputed }),
+        recommend: usageRecommendation({ ...r, reads, disputed }, usage.today),
+        check: checkOf(checks, key),
+      };
+    })
     .sort(byUse);
 }
 
@@ -245,12 +263,11 @@ function projectsOf(records, gone, enabled) {
  *   folder on this PC}, for the anchor check of the health line; checker = memorycheck.createChecker()
  *   ("Check if still true"), null = the check channels refuse; changes =
  *   memorychanges.createChangeTracker(): memory:list refreshes it in the background
- *   (the 'changed' flags "Check all" puts first), null = none; origin = the folders the
- *   origin-session drawer may read: {transcriptsDir, runsDir, agyDir}, each () => string|null
- *   (Claude Code's projects folder, LunaCore's run reports, agy's brain folder); ask = the
- *   Interrogate model call (missionrunner.runJob, lean, no tools), null = it refuses;
- *   vectors = the vector store the inbox found merge suggestions with (src/memoryembed.js),
- *   null = by words
+ *   (the 'changed' flags "Check all" puts first), null = none; vectors = the vector store
+ *   the inbox found merge suggestions with (src/memoryembed.js), null = by words; origin = the
+ *   folders the origin-session drawer may read: {transcriptsDir, runsDir, agyDir}, each
+ *   () => string|null (Claude Code's projects folder, LunaCore's run reports, agy's brain
+ *   folder); ask = the Interrogate model call (missionrunner.runJob, lean, no tools), null = it refuses
  */
 function registerMemoryBrainIpc({
   ipcMain,
@@ -263,9 +280,9 @@ function registerMemoryBrainIpc({
   roots = () => ({}),
   checker = null,
   changes = null,
+  vectors = sharedVectorStore,
   origin = {},
   ask = null,
-  vectors = sharedVectorStore,
 }) {
   /** The lookup the inbox listed its merge suggestions with: a pair it showed can be settled. */
   const vectorOf = () => {
@@ -336,7 +353,8 @@ function registerMemoryBrainIpc({
       const wanted = projectArg(rawProject);
       const project = wanted && projects.some((p) => p.project === wanted) ? wanted : projects.length ? projects[0].project : null;
       const evs = events();
-      const items = project ? listItems(records, project, gone, recentUsage(evs, now()), lastChecks(evs)) : [];
+      const usage = { ...recentUsage(evs, now()), conflicted: conflictedKeys(records), disputed: openDisputes(evs) };
+      const items = project ? listItems(records, project, gone, usage, lastChecks(evs)) : [];
       const health = project ? healthOf(records, project, items, evs) : null;
       return { ok: true, projects, project, items: items.slice(0, MAX_LIST_ITEMS), total: items.length, scan: scanner.status(), health };
     } catch (err) {
@@ -465,6 +483,34 @@ function registerMemoryBrainIpc({
     } catch (err) {
       console.error('[memory] origin snippet failed:', errText(err));
       return { ok: false, reason: 'failed' };
+    }
+  });
+
+  // "Draft canonical merge": read only, the form saves through memory:merge.
+  // Only a pair listed right now (findConflicts / findDuplicates) is drafted,
+  // so the renderer cannot send arbitrary memories to the model.
+  let drafting = false;
+  ipcMain.handle('memory:merge-draft', async (_event, req) => {
+    if (!isObject(req)) return { ok: false, reason: 'bad-request' };
+    const a = keyArg(req.a);
+    const b = keyArg(req.b);
+    if (!a || !b || a === b) return { ok: false, reason: 'bad-key' };
+    if (typeof ask !== 'function') return { ok: false, reason: 'failed' };
+    if (drafting) return { ok: false, reason: 'busy' };
+    drafting = true;
+    try {
+      const { records } = scan(dir());
+      if (!findPairs(records, vectorOf()).some((p) => p.id === pairId(a, b))) return { ok: false, reason: 'not-conflict' };
+      const byKey = new Map(records);
+      // buildMergePrompt scrubs secrets and the prompt's markers out of both memories.
+      const res = await ask({ prompt: buildMergePrompt({ a: byKey.get(a), b: byKey.get(b) }) });
+      if (!res || !res.ok) return { ok: false, reason: `model-${(res && res.reason) || 'failed'}` };
+      return parseMergeAnswer(res.answer);
+    } catch (err) {
+      console.error('[memory] merge draft failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    } finally {
+      drafting = false;
     }
   });
 

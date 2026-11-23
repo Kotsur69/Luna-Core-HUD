@@ -10,7 +10,9 @@
 //
 // A reference is a memory being returned by search, opened, verified or
 // injected into a God Mode brief. Each one moves `last_used` to today, at most
-// once a day per memory: every write is a sync push.
+// once a day per memory: every write is a sync push. The same write gives a
+// confirmed, scored memory USE_BOOST usefulness points (capped at 100), at most
+// once per BOOST_EVERY_DAYS (`boosted_at`): use earns back what idleness costs.
 //
 // Decay is idempotent: `usefulness_at` records up to which day it was charged,
 // so a timer that fires twice a day, or a PC that was off for a month, lowers
@@ -24,7 +26,7 @@
 
 'use strict';
 
-const { splitKey } = require('./memoryrecord');
+const { splitKey, USEFULNESS_MAX } = require('./memoryrecord');
 const { scan, writeRecord } = require('./memorystore');
 
 /** A memory nobody referenced for this long starts losing usefulness. */
@@ -35,6 +37,10 @@ const DECAY_STEP_DAYS = 7;
 const DECAY_PER_STEP = 10;
 /** A memory restored from the archive starts again from here. */
 const RESTORED_USEFULNESS = 50;
+/** A confirmed memory that is used gains this many usefulness points ... */
+const USE_BOOST = 5;
+/** ... at most once per this many days (`boosted_at`), so use does not flood the sync. */
+const BOOST_EVERY_DAYS = 7;
 /** `last_used` moves at most this often per memory. */
 const REFERENCE_REFRESH_DAYS = 1;
 const DECAY_TICK_MS = 6 * 60 * 60 * 1000;
@@ -135,7 +141,25 @@ function restore(dir, key, today) {
 }
 
 /**
- * Moves `last_used` of the named memories to today.
+ * A referenced memory as it should be written: `last_used` today and, for a
+ * confirmed and scored one, USE_BOOST usefulness points (capped at 100) once
+ * per BOOST_EVERY_DAYS. A `boosted_at` after today came from a bad sync and is
+ * ignored. A memory already at 100 is not boosted, so `boosted_at` stays put. Pure.
+ * @param {object} record
+ * @param {string} today YYYY-MM-DD
+ * @returns {object}
+ */
+function referencedRecord(record, today) {
+  const used = { ...record, last_used: today };
+  if (record.confidence !== 'confirmed' || !Number.isInteger(record.usefulness) || record.usefulness >= USEFULNESS_MAX) return used;
+  const last = record.boosted_at && record.boosted_at <= today ? record.boosted_at : null;
+  if (last && daysBetween(last, today) < BOOST_EVERY_DAYS) return used;
+  return { ...used, usefulness: Math.min(USEFULNESS_MAX, record.usefulness + USE_BOOST), boosted_at: today };
+}
+
+/**
+ * Moves `last_used` of the named memories to today, and boosts the confirmed
+ * ones (referencedRecord). Riding on the `last_used` write, the boost adds no sync push.
  * @param {string} dir
  * @param {string[]} keys
  * @param {string} today
@@ -149,7 +173,7 @@ function noteReferences(dir, keys, today) {
     if (!wanted.has(key) || isArchived(record)) continue;
     if (record.last_used && daysBetween(record.last_used, today) < REFERENCE_REFRESH_DAYS) continue;
     try {
-      writeRecord(dir, { ...record, last_used: today });
+      writeRecord(dir, referencedRecord(record, today));
       written.push(key);
     } catch (err) {
       console.error('[memory] reference not written:', errText(err));
@@ -233,6 +257,7 @@ module.exports = {
   decayAll,
   restore,
   noteReferences,
+  referencedRecord,
   keysOfEvent,
   createReferenceRecorder,
   createDecayTimer,
@@ -243,4 +268,6 @@ module.exports = {
   DECAY_PER_STEP,
   RESTORED_USEFULNESS,
   REFERENCE_REFRESH_DAYS,
+  USE_BOOST,
+  BOOST_EVERY_DAYS,
 };

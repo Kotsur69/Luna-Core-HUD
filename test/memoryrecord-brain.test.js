@@ -229,7 +229,7 @@ test('the final score weighs usefulness 70%, confidence 15% and usage 15%', () =
   assert.deepEqual(CONFIDENCE_POINTS, { confirmed: 100, observed: 50, inferred: 25 });
   const confirmed = normalizeRecord({ ...base, usefulness: 80 });
   // 0.7 * 80 + 0.15 * 100 + 0.15 * (3 / 5 * 100) = 56 + 15 + 9
-  assert.deepEqual(finalScore(confirmed, { reads: 3 }), { score: 80, parts: { usefulness: 80, confidence: 'confirmed', usage: 3 } });
+  assert.deepEqual(finalScore(confirmed, { reads: 3 }), { score: 80, parts: { usefulness: 80, confidence: 'confirmed', usage: 3, penalties: { conflict: 0, dispute: 0 } } });
   // 0.7 * 80 + 0.15 * 50 + 0 = 63.5, rounded
   assert.equal(finalScore({ ...confirmed, confidence: 'observed' }).score, 64);
   assert.equal(finalScore({ ...confirmed, confidence: 'inferred' }).score, 60);
@@ -237,7 +237,7 @@ test('the final score weighs usefulness 70%, confidence 15% and usage 15%', () =
 });
 
 test('a memory without a usefulness score has no final score, but its parts are still told', () => {
-  assert.deepEqual(finalScore(normalizeRecord(base), { reads: 4 }), { score: null, parts: { usefulness: null, confidence: 'confirmed', usage: 4 } });
+  assert.deepEqual(finalScore(normalizeRecord(base), { reads: 4 }), { score: null, parts: { usefulness: null, confidence: 'confirmed', usage: 4, penalties: { conflict: 0, dispute: 0 } } });
   assert.equal(finalScore(null).score, null);
   assert.equal(finalScore({ usefulness: 'high' }).score, null);
 });
@@ -245,7 +245,7 @@ test('a memory without a usefulness score has no final score, but its parts are 
 test('the final score is clamped to 0-100 and never trusts its inputs', () => {
   assert.equal(finalScore({ ...base, usefulness: 140 }, { reads: 50 }).score, 100);
   assert.equal(finalScore({ ...base, usefulness: -20, confidence: 'nonsense' }, { reads: -3 }).score, 8);
-  assert.deepEqual(finalScore({ ...base, usefulness: '72' }, { reads: Number.NaN }).parts, { usefulness: 72, confidence: 'confirmed', usage: 0 });
+  assert.deepEqual(finalScore({ ...base, usefulness: '72' }, { reads: Number.NaN }).parts, { usefulness: 72, confidence: 'confirmed', usage: 0, penalties: { conflict: 0, dispute: 0 } });
   assert.equal(finalScore({ ...base, usefulness: 72 }, { reads: '9' }).parts.usage, 0);
 });
 
@@ -338,4 +338,88 @@ test('a file with a hand-broken expiry still loads, without it', () => {
   const res = recordFromFile(text, where);
   assert.ok(res.record);
   assert.equal(res.record.expires_after_days, undefined);
+});
+
+// ---- conflict and dispute penalties ------------------------------------------------
+
+const { CONFLICT_PENALTY, DISPUTE_PENALTY, usageRecommendation, KEEP_MIN_READS, RETIRE_IDLE_DAYS } = require('../src/memoryrecord.js');
+
+test('an open conflict takes 20 points off the final score and a wrong dispute 30, both in parts', () => {
+  assert.equal(CONFLICT_PENALTY, 20);
+  assert.equal(DISPUTE_PENALTY, 30);
+  const r = normalizeRecord({ ...base, usefulness: 80 });
+  // 0.7 * 80 + 0.15 * 100 + 0.15 * 60 = 80 before any penalty.
+  assert.equal(finalScore(r, { reads: 3 }).score, 80);
+  const conflicted = finalScore(r, { reads: 3, conflicted: true });
+  assert.equal(conflicted.score, 60);
+  assert.deepEqual(conflicted.parts.penalties, { conflict: 20, dispute: 0 });
+  const disputed = finalScore(r, { reads: 3, disputed: true });
+  assert.equal(disputed.score, 50);
+  assert.deepEqual(disputed.parts.penalties, { conflict: 0, dispute: 30 });
+  const both = finalScore(r, { reads: 3, conflicted: true, disputed: true });
+  assert.equal(both.score, 30);
+  assert.deepEqual(both.parts.penalties, { conflict: 20, dispute: 30 });
+});
+
+test('the record s own conflicts field counts as an open conflict; truthy non-booleans do not', () => {
+  const r = normalizeRecord({ ...base, usefulness: 80, conflicts: ['other-memory'] });
+  assert.equal(finalScore(r, { reads: 3 }).parts.penalties.conflict, 20);
+  assert.equal(finalScore(r, { reads: 3 }).score, 60);
+  const plain = normalizeRecord({ ...base, usefulness: 80 });
+  assert.deepEqual(finalScore(plain, { reads: 3, conflicted: 'yes', disputed: 1 }).parts.penalties, { conflict: 0, dispute: 0 });
+});
+
+test('penalties clamp the final score at 0, and an unscored memory keeps a null score', () => {
+  const low = normalizeRecord({ ...base, usefulness: 10, confidence: 'inferred' });
+  // 0.7 * 10 + 0.15 * 25 = 10.75 -> 11, minus 50 -> clamped to 0.
+  assert.equal(finalScore(low, { conflicted: true, disputed: true }).score, 0);
+  const unscored = finalScore(normalizeRecord(base), { conflicted: true, disputed: true });
+  assert.equal(unscored.score, null);
+  assert.deepEqual(unscored.parts.penalties, { conflict: 20, dispute: 30 });
+});
+
+test('a penalty reorders the list: a disputed memory falls under a weaker clean one', () => {
+  const strong = { usefulness: 90, final: finalScore({ ...base, usefulness: 90 }, { disputed: true }) };
+  const weak = { usefulness: 60, final: finalScore({ ...base, usefulness: 60 }) };
+  assert.deepEqual([strong, weak].sort(byFinalScore).map((i) => i.usefulness), [60, 90]);
+});
+
+// ---- usage evidence (memoryrecord.usageRecommendation) ------------------------------
+
+test('usageRecommendation: read 3+ times and not disputed = keep', () => {
+  assert.equal(KEEP_MIN_READS, 3);
+  const r = normalizeRecord(base);
+  assert.equal(usageRecommendation({ ...r, reads: 3 }, '2026-11-20'), 'keep');
+  assert.equal(usageRecommendation({ ...r, reads: 9 }, '2026-11-20'), 'keep');
+  assert.equal(usageRecommendation({ ...r, reads: 2 }, '2026-11-20'), null);
+  assert.equal(usageRecommendation({ ...r, reads: 5, disputed: true }, '2026-11-20'), null);
+});
+
+test('usageRecommendation: idle 45+ days and never read = retire; any read or recent use = nothing', () => {
+  assert.equal(RETIRE_IDLE_DAYS, 45);
+  const r = normalizeRecord({ ...base, created: '2026-10-01' });
+  assert.equal(usageRecommendation({ ...r, reads: 0 }, '2026-11-15'), 'retire', 'exactly 45 days');
+  assert.equal(usageRecommendation({ ...r, reads: 0 }, '2026-11-14'), null, '44 days');
+  assert.equal(usageRecommendation({ ...r, reads: 1 }, '2026-12-31'), null);
+  assert.equal(usageRecommendation({ ...r, reads: 0, last_used: '2026-11-10' }, '2026-12-01'), null);
+  assert.equal(usageRecommendation({ ...r, reads: 0, last_verified: '2026-11-10' }, '2026-12-01'), null);
+  // A date from a bad sync in the future is no use.
+  assert.equal(usageRecommendation({ ...r, reads: 0, last_used: '2027-06-01' }, '2026-12-01'), 'retire');
+});
+
+test('usageRecommendation says nothing for a waiting or archived memory, or bad input', () => {
+  const r = normalizeRecord({ ...base, created: '2026-01-01' });
+  assert.equal(usageRecommendation({ ...r, confidence: 'observed', reads: 9 }, '2026-11-20'), null);
+  assert.equal(usageRecommendation({ ...r, archived: '2026-06-01', reads: 0 }, '2026-11-20'), null);
+  assert.equal(usageRecommendation(null, '2026-11-20'), null);
+  assert.equal(usageRecommendation({ ...r, reads: 0 }, null), null);
+  assert.equal(usageRecommendation({ ...r, reads: '9' }, 'not-a-day'), null);
+  assert.equal(usageRecommendation({ ...r, reads: Number.NaN }, '2026-11-20'), 'retire');
+});
+
+test('a caller that worked the conflicts out has the last word: a stale conflicts mark costs nothing', () => {
+  const stale = normalizeRecord({ ...base, usefulness: 80, conflicts: ['archived-one'] });
+  assert.equal(finalScore(stale, { reads: 3, conflicted: false }).parts.penalties.conflict, 0);
+  assert.equal(finalScore(stale, { reads: 3, conflicted: false }).score, 80);
+  assert.equal(finalScore(stale, { reads: 3 }).parts.penalties.conflict, 20, 'no flag: the field decides');
 });

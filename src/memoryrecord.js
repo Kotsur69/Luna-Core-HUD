@@ -17,7 +17,8 @@
 //   <markdown body>
 //
 // Optional, only once something set them (brainFields()): usefulness (0-100),
-// usefulness_note, usefulness_at, last_used, archived, conflicts, compatible.
+// usefulness_note, usefulness_at, last_used, boosted_at, archived, conflicts, compatible.
+// boosted_at = the day use last raised usefulness (src/memorydecay.js noteReferences).
 // Optional expiry hints of a temporary or in-progress constraint (expiryFields()):
 // expires_after_days (1-365, counted from last_verified or created) and
 // expires_when (one line: what ends it). src/memoryreview.js flags it 'expired'.
@@ -86,7 +87,7 @@ const INTEGER_TEXT_RE = /^\s*\d+\s*$/;
 /** Every field this version reads or writes. Anything else in a file is carried in `extra`. */
 const KNOWN_FIELDS = new Set([
   'id', 'type', 'project', 'area', 'title', 'created', 'last_verified', 'source', 'confidence',
-  'usefulness', 'usefulness_note', 'usefulness_at', 'last_used', 'archived', 'conflicts', 'compatible',
+  'usefulness', 'usefulness_note', 'usefulness_at', 'last_used', 'boosted_at', 'archived', 'conflicts', 'compatible',
   'expires_after_days', 'expires_when', 'supersedes', 'links', 'body', 'extra',
 ]);
 /** A carried field's name: plain snake_case, as every field of a memory file is. */
@@ -255,6 +256,7 @@ function brainFields(raw) {
     if (isDate(raw.usefulness_at)) out.usefulness_at = raw.usefulness_at;
   }
   if (isDate(raw.last_used)) out.last_used = raw.last_used;
+  if (isDate(raw.boosted_at)) out.boosted_at = raw.boosted_at;
   if (isDate(raw.archived)) out.archived = raw.archived;
   for (const field of ['conflicts', 'compatible']) {
     const ids = refs(raw[field]).filter((x) => x !== raw.id);
@@ -315,28 +317,68 @@ function usedRecently(lastUsed, today) {
   return (Date.parse(today) - Date.parse(lastUsed)) / DAY_MS <= USAGE_WINDOW_DAYS;
 }
 
+/** Points the final score loses while a memory is in an open conflict (memoryconflict.findConflicts). */
+const CONFLICT_PENALTY = 20;
+/** Points it loses while a session's or a run's "this is wrong" (memorylog.openDisputes) is open. */
+const DISPUTE_PENALTY = 30;
+
 /**
  * A memory's final score. Pure.
  * @param {object} record a checked record
- * @param {{reads?: number, today?: string|null}} [usage] reads = memory_search hits and
- *   memory_get opens of this memory on this PC in the last USAGE_WINDOW_DAYS
- *   (memoryuse.readCounts); today = YYYY-MM-DD, for the `last_used` rule
- * @returns {{score: number|null, parts: {usefulness: number|null, confidence: string, usage: number}}}
+ * @param {{reads?: number, today?: string|null, conflicted?: boolean, disputed?: boolean}} [usage]
+ *   reads = memory_search hits and memory_get opens of this memory on this PC in the last
+ *   USAGE_WINDOW_DAYS (memoryuse.readCounts); today = YYYY-MM-DD, for the `last_used` rule;
+ *   conflicted = it is in an open conflict (memoryconflict.conflictedKeys). When the caller
+ *   does not say (undefined), the record's own non-empty `conflicts` counts instead; a caller
+ *   that worked the conflicts out passes false for a stale mark (the other side archived);
+ *   disputed = an open `wrong` dispute in this PC's memory log
+ * @returns {{score: number|null, parts: {usefulness: number|null, confidence: string, usage: number,
+ *   penalties: {conflict: number, dispute: number}}}}
  *   score = null while the memory has no usefulness score (shown as "?");
- *   parts.usage = the reads counted (before saturation)
+ *   parts.usage = the reads counted (before saturation); parts.penalties = the points taken off
  */
-function finalScore(record, { reads = 0, today = null } = {}) {
+function finalScore(record, { reads = 0, today = null, conflicted = undefined, disputed = false } = {}) {
   const r = isPlainObject(record) ? record : {};
   const usefulness = usefulnessOf(r.usefulness) ?? null;
   const confidence = CONFIDENCE.includes(r.confidence) ? r.confidence : 'observed';
   const counted = typeof reads === 'number' && Number.isFinite(reads) && reads > 0 ? Math.floor(reads) : 0;
   const usage = Math.max(counted, usedRecently(r.last_used, today) ? 1 : 0);
-  const parts = { usefulness, confidence, usage };
+  const inConflict = conflicted === undefined ? Array.isArray(r.conflicts) && r.conflicts.length > 0 : conflicted === true;
+  const penalties = { conflict: inConflict ? CONFLICT_PENALTY : 0, dispute: disputed === true ? DISPUTE_PENALTY : 0 };
+  const parts = { usefulness, confidence, usage, penalties };
   if (usefulness === null) return { score: null, parts };
   const usagePoints = (Math.min(usage, USAGE_SATURATION_READS) / USAGE_SATURATION_READS) * 100;
   const weighted =
     (FINAL_WEIGHT_PCT.usefulness * usefulness + FINAL_WEIGHT_PCT.confidence * CONFIDENCE_POINTS[confidence] + FINAL_WEIGHT_PCT.usage * usagePoints) / 100;
-  return { score: Math.min(USEFULNESS_MAX, Math.max(USEFULNESS_MIN, Math.round(weighted))), parts };
+  const score = Math.round(weighted) - penalties.conflict - penalties.dispute;
+  return { score: Math.min(USEFULNESS_MAX, Math.max(USEFULNESS_MIN, score)), parts };
+}
+
+// --- usage evidence ------------------------------------------------------------------
+
+/** Reads in the window that make a memory worth keeping. */
+const KEEP_MIN_READS = 3;
+/** A confirmed memory nobody read or referenced for this many days, with no reads, could go. */
+const RETIRE_IDLE_DAYS = 45;
+
+/**
+ * What this PC's use says about a memory. Pure; advisory only, nothing acts on it.
+ * @param {{reads?: number, disputed?: boolean, confidence?: string, archived?: string|null,
+ *   created?: string, last_used?: string|null, last_verified?: string|null}} item
+ *   reads = this PC's reads in the last USAGE_WINDOW_DAYS
+ * @param {string|null} today YYYY-MM-DD
+ * @returns {'keep'|'retire'|null} keep = read >= KEEP_MIN_READS times and not disputed;
+ *   retire = idle >= RETIRE_IDLE_DAYS and never read; null = nothing to say (waiting, archived, or in between)
+ */
+function usageRecommendation(item, today) {
+  if (!isPlainObject(item) || item.archived || (item.confidence !== undefined && item.confidence !== 'confirmed')) return null;
+  const reads = typeof item.reads === 'number' && Number.isFinite(item.reads) && item.reads > 0 ? Math.floor(item.reads) : 0;
+  if (reads >= KEEP_MIN_READS && item.disputed !== true) return 'keep';
+  if (reads !== 0 || !isDate(today)) return null;
+  // A future date (a bad sync) never counts as use: idle is measured from the last real one.
+  const seen = [item.created, item.last_used, item.last_verified].filter((d) => isDate(d) && d <= today).sort().pop();
+  if (!seen) return null;
+  return (Date.parse(today) - Date.parse(seen)) / DAY_MS >= RETIRE_IDLE_DAYS ? 'retire' : null;
 }
 
 /**
@@ -438,6 +480,7 @@ function serializeRecord(record) {
     ['usefulness_note', record.usefulness_note],
     ['usefulness_at', record.usefulness_at],
     ['last_used', record.last_used],
+    ['boosted_at', record.boosted_at],
     ['archived', record.archived],
     ['expires_after_days', record.expires_after_days === undefined ? undefined : String(record.expires_after_days)],
     ['expires_when', record.expires_when],
@@ -555,6 +598,11 @@ module.exports = {
   CONFIDENCE_POINTS,
   USAGE_SATURATION_READS,
   USAGE_WINDOW_DAYS,
+  CONFLICT_PENALTY,
+  DISPUTE_PENALTY,
+  usageRecommendation,
+  KEEP_MIN_READS,
+  RETIRE_IDLE_DAYS,
   usefulnessOf,
   expiresDaysOf,
   MIN_EXPIRES_DAYS,
