@@ -13,7 +13,10 @@ const MENU = {
   ],
   free: [],
 };
+// A stand-in dictionary: an agy family key reads as its English product name.
+const { agyFamilyList } = await import('../src/agyFamilies.js');
 globalThis.window = {
+  i18n: { t: (key) => (agyFamilyList().find((f) => f.labelKey === key) || { name: key }).name },
   lunacore: {
     getUiPrefs: async () => prefs,
     setUiPrefs: async () => ({ ok: true }),
