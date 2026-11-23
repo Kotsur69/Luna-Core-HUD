@@ -521,3 +521,304 @@ test('acceptance: with the score switch on, the 95 is auto-accepted with Undo; t
   assert.deepEqual(auto.recentAutoAccepted(scan(memoryPaths(s.configDir).dir).records, today).map((r) => r.key), [key]);
   assert.equal(auto.undoAutoAccept(memoryPaths(s.configDir).dir, key, today).ok, true);
 });
+
+// ---- Antigravity (agy) sessions ------------------------------------------------
+
+const { transcriptKind, sessionTranscriptOf } = require('../src/memorycapture.js');
+const { readNote } = require('../src/memorynote.js');
+
+const AGY_CONV = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+const AGY_STATUS = 'The agy capture is wired; nothing is in progress and the next step is a release.';
+
+let agyStep = 0;
+/** One agy step line, with its own index and time. */
+const agyLine = (type, over = {}) => {
+  const index = agyStep++;
+  return JSON.stringify({ step_index: index, type, status: 'DONE', created_at: new Date(NOW - 3600000 + index * 1000).toISOString(), ...over });
+};
+/** An agy session long enough to be worth a model call; `calls` = [name, args] of the reply's tool calls. */
+const agySession = (topic, calls = []) =>
+  `${[
+    agyLine('USER_INPUT', { content: `<USER_REQUEST>\nplease look at ${topic} ${'detail '.repeat(60)}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: now.\n</ADDITIONAL_METADATA>` }),
+    agyLine('PLANNER_RESPONSE', { content: `I looked at ${topic}. ${'finding '.repeat(60)}`, tool_calls: calls.map(([name, args]) => ({ name, args })) }),
+  ].join('\n')}\n`;
+
+/** A capture whose Claude and agy roots are two temp folders of their own. */
+function agySetup(t) {
+  const temp = (prefix) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+    return dir;
+  };
+  const configDir = temp('luna-capture-agy-cfg-');
+  const claudeDir = temp('luna-capture-agy-claude-');
+  const agyDir = temp('luna-capture-agy-app-');
+  const elsewhere = temp('luna-capture-agy-else-');
+  setEnabled(memoryPaths(configDir).projects, PROJECT, true);
+  const clock = { at: NOW };
+  const calls = [];
+  const state = { reply: answer(), live: [] };
+  const capture = createCapture({
+    configDir,
+    machine: 'PC1',
+    transcriptsDir: claudeDir,
+    agyDir,
+    now: () => clock.at,
+    live: () => state.live,
+    log: createLog(logPath(configDir), { now: () => clock.at }),
+    run: async (job) => {
+      calls.push(job.prompt);
+      return typeof state.reply === 'function' ? state.reply() : state.reply;
+    },
+  });
+  const logsDir = (root, id) => path.join(root, 'brain', id, '.system_generated', 'logs');
+  const touch = (file, ageMs) => {
+    const when = new Date(clock.at - ageMs);
+    fs.utimesSync(file, when, when);
+  };
+  /** Writes an agy transcript last touched `ageMs` before the clock. */
+  const transcript = (text, { id = AGY_CONV, name = 'transcript_full.jsonl', root = agyDir, ageMs = SETTLE_MS + 1000 } = {}) => {
+    fs.mkdirSync(logsDir(root, id), { recursive: true });
+    const file = path.join(logsDir(root, id), name);
+    fs.writeFileSync(file, text);
+    touch(file, ageMs);
+    return file;
+  };
+  const memories = () => scan(memoryPaths(configDir).dir).records.map(([, r]) => r);
+  const ledger = () => readLedger(path.join(configDir, LEDGER_FILE));
+  const note = () => readNote(memoryPaths(configDir).dir, PROJECT);
+  const roots = { claude: path.resolve(claudeDir), agy: path.resolve(agyDir) };
+  return { configDir, claudeDir, agyDir, elsewhere, roots, capture, clock, calls, state, transcript, touch, logsDir, memories, ledger, note };
+}
+
+test('agy: a finished session gives inbox candidates and the where-we-stopped note', async (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('the agy capture'));
+  s.state.reply = { ok: true, answer: { ...answer('Agy logs a step again when its status moves on').answer, status: AGY_STATUS } };
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, 1);
+  // The digest the model read is agy's prompt, without the metadata agy wraps around it.
+  assert.match(s.calls[0], /please look at the agy capture/);
+  assert.doesNotMatch(s.calls[0], /ADDITIONAL_METADATA|USER_REQUEST|current local time/);
+  const [memory] = s.memories();
+  assert.equal(memory.title, 'Agy logs a step again when its status moves on');
+  assert.equal(memory.confidence, 'observed');
+  assert.equal(memory.source, `captured from session ${AGY_CONV.slice(0, 8)} on PC1`);
+  assert.equal(listInbox(memoryPaths(s.configDir).dir).items.length, 1);
+  const note = s.note();
+  assert.equal(note.text, AGY_STATUS);
+  // The session is agy's conversation id, not the transcript's file name.
+  assert.equal(note.session, AGY_CONV);
+  assert.deepEqual(s.ledger().files[file], { project: PROJECT, done: fs.statSync(file).size, fails: 0, at: NOW });
+});
+
+test('agy: the ledger moves on, so only what was appended is read next time', async (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('the first topic'));
+  s.capture.track({ file, project: PROJECT });
+  await s.capture.tick();
+  await s.capture.tick();
+  assert.equal(s.calls.length, 1);
+
+  fs.appendFileSync(file, agySession('the second topic'));
+  s.touch(file, SETTLE_MS + 1000);
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, 2);
+  assert.match(s.calls[1], /the second topic/);
+  assert.doesNotMatch(s.calls[1], /the first topic/);
+  assert.equal(s.ledger().files[file].done, fs.statSync(file).size);
+});
+
+test('agy: an open tab is tracked from live() and captured once it has been idle', async (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('a live agy tab'), { ageMs: 60 * 1000 });
+  s.state.live = [{ file, project: PROJECT }];
+
+  await s.capture.tick();
+  assert.equal(s.calls.length, 0);
+  assert.equal(s.ledger().files[file].done, 0);
+
+  s.clock.at += IDLE_MS;
+  await s.capture.tick();
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.ledger().files[file].done, fs.statSync(file).size);
+});
+
+test('agy: a session that read outside content notes it and leaves the note alone', async (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('a web search', [
+    ['search_web', { Query: 'agy flags' }],
+    ['call_mcp_tool', { ServerName: 'github', ToolName: 'get_issue' }],
+    ['call_mcp_tool', { ServerName: 'lunacore-s1', ToolName: 'memory_search' }],
+    ['run_command', { CommandLine: 'npm test' }],
+  ]));
+  s.state.reply = { ok: true, answer: { ...answer('Agy help never exits').answer, status: AGY_STATUS } };
+  s.capture.track({ file, project: PROJECT });
+
+  await s.capture.tick();
+
+  const [memory] = s.memories();
+  assert.equal(memory.source, `captured from session ${AGY_CONV.slice(0, 8)} on PC1, read 2 outside source(s)`);
+  assert.equal(s.note(), null);
+});
+
+test('agy: only a transcript under agy\'s or Claude\'s own folder is tracked', (t) => {
+  const s = agySetup(t);
+  const good = s.transcript(agySession('good'));
+  const plain = s.transcript(agySession('plain'), { name: 'transcript.jsonl' });
+  const refused = [
+    // the right shape under another app data folder
+    s.transcript(agySession('elsewhere'), { root: s.elsewhere }),
+    // the wrong file name or extension in a conversation's logs
+    s.transcript(agySession('wrong name'), { name: 'notes.jsonl' }),
+    s.transcript(agySession('wrong ext'), { name: 'transcript_full.json' }),
+    // a folder that is not a conversation id
+    s.transcript(agySession('not a uuid'), { id: 'not-a-conversation' }),
+    // `..` is refused even where it resolves back inside the root
+    `${s.logsDir(s.agyDir, AGY_CONV)}${path.sep}..${path.sep}logs${path.sep}transcript_full.jsonl`,
+    `${s.agyDir}${path.sep}..${path.sep}${path.basename(s.agyDir)}${path.sep}brain${path.sep}${AGY_CONV}${path.sep}.system_generated${path.sep}logs${path.sep}transcript_full.jsonl`,
+    // relative, or not a string
+    path.join('brain', AGY_CONV, '.system_generated', 'logs', 'transcript_full.jsonl'),
+    42,
+  ];
+  for (const file of refused) s.capture.track({ file, project: PROJECT });
+  assert.deepEqual(s.ledger().files, {});
+
+  s.capture.track({ file: good, project: PROJECT });
+  s.capture.track({ file: plain, project: PROJECT });
+  assert.deepEqual(Object.keys(s.ledger().files).sort(), [good, plain].sort());
+});
+
+test('agy: a hand-edited ledger cannot point capture at another file', async (t) => {
+  const s = agySetup(t);
+  const outside = s.transcript(agySession('outside the root'), { root: s.elsewhere });
+  const climbing = `${s.logsDir(s.agyDir, AGY_CONV)}${path.sep}..${path.sep}..${path.sep}..${path.sep}..${path.sep}..${path.sep}${path.basename(s.elsewhere)}${path.sep}brain${path.sep}${AGY_CONV}${path.sep}.system_generated${path.sep}logs${path.sep}transcript_full.jsonl`;
+  const entry = { project: PROJECT, done: 0, fails: 0, at: 0 };
+  fs.writeFileSync(path.join(s.configDir, LEDGER_FILE), JSON.stringify({ files: { [outside]: entry, [climbing]: entry } }));
+
+  await s.capture.tick();
+
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(s.ledger().files, {});
+});
+
+test('agy: a conversation folder that is a link out of the root is refused', async (t) => {
+  const s = agySetup(t);
+  // The real transcript lives elsewhere; brain/<id> under the root links to it.
+  const target = s.transcript(agySession('through a junction'), { root: s.elsewhere });
+  fs.mkdirSync(path.join(s.agyDir, 'brain'), { recursive: true });
+  // A junction needs no privilege on Windows; elsewhere the type is ignored and a dir symlink is made.
+  fs.symlinkSync(path.join(s.elsewhere, 'brain', AGY_CONV), path.join(s.agyDir, 'brain', AGY_CONV), 'junction');
+  const linked = path.join(s.logsDir(s.agyDir, AGY_CONV), 'transcript_full.jsonl');
+  assert.equal(fs.readFileSync(linked, 'utf8'), fs.readFileSync(target, 'utf8'));
+
+  assert.equal(transcriptKind(linked, s.roots), null);
+  s.capture.track({ file: linked, project: PROJECT });
+  assert.deepEqual(s.ledger().files, {});
+
+  fs.writeFileSync(path.join(s.configDir, LEDGER_FILE), JSON.stringify({ files: { [linked]: { project: PROJECT, done: 0, fails: 0, at: 0 } } }));
+  await s.capture.tick();
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(s.ledger().files, {});
+});
+
+test('agy: a symlinked transcript file is refused', (t) => {
+  const s = agySetup(t);
+  const target = s.transcript(agySession('a symlinked file'), { root: s.elsewhere });
+  fs.mkdirSync(s.logsDir(s.agyDir, AGY_CONV), { recursive: true });
+  const linked = path.join(s.logsDir(s.agyDir, AGY_CONV), 'transcript_full.jsonl');
+  try {
+    fs.symlinkSync(target, linked, 'file');
+  } catch (err) {
+    if (err.code === 'EPERM') return t.skip('file symlinks need a privilege on this machine');
+    throw err;
+  }
+  assert.equal(transcriptKind(linked, s.roots), null);
+});
+
+test('transcriptKind tells the two kinds apart and refuses everything else', (t) => {
+  const s = agySetup(t);
+  const agy = s.transcript(agySession('kind'));
+  const claude = path.join(s.claudeDir, 'C--repo', 'aaaaaaaa-1111.jsonl');
+  fs.mkdirSync(path.dirname(claude), { recursive: true });
+  fs.writeFileSync(claude, session('kind'));
+
+  assert.equal(transcriptKind(agy, s.roots), 'agy');
+  assert.equal(transcriptKind(claude, s.roots), 'claude');
+  // A session whose file is not written yet passes the shape check; it is checked again before a read.
+  assert.equal(transcriptKind(path.join(s.claudeDir, 'C--repo', 'bbbbbbbb-2222.jsonl'), s.roots), 'claude');
+  assert.equal(transcriptKind(path.join(s.claudeDir, 'C--repo', 'notes.txt'), s.roots), null);
+  assert.equal(transcriptKind(`${s.claudeDir}${path.sep}C--repo${path.sep}..${path.sep}C--repo${path.sep}aaaaaaaa-1111.jsonl`, s.roots), null);
+  assert.equal(transcriptKind(path.join(s.elsewhere, 'x.jsonl'), s.roots), null);
+  // A folder named like a transcript is not one.
+  fs.mkdirSync(path.join(s.claudeDir, 'dir.jsonl'));
+  assert.equal(transcriptKind(path.join(s.claudeDir, 'dir.jsonl'), s.roots), null);
+  assert.equal(transcriptKind(undefined, s.roots), null);
+});
+
+test('agy: extractPiece reads an agy piece with the agy digest', async (t) => {
+  const s = agySetup(t);
+  const text = agySession('a piece', [['search_web', { Query: 'x' }]]);
+  const run = async () => answer('Something learned from agy');
+  const res = await extractPiece({ text, project: PROJECT, dir: memoryPaths(s.configDir).dir, source: 'captured from session 0a1b2c3d on PC1', today: '2026-11-11', run, kind: 'agy' });
+  assert.equal(res.ok, true);
+  assert.equal(res.outside, 1);
+  assert.equal(res.records.length, 1);
+
+  // Read as a Claude transcript the same text has no user turn: no model call.
+  const asClaude = await extractPiece({ text, project: PROJECT, dir: memoryPaths(s.configDir).dir, source: 's', today: '2026-11-11', run });
+  assert.equal(asClaude.reason, 'too-short');
+});
+
+test('agy: a ledger path written with forward slashes still works; `..` and stream names do not', (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('slashes'));
+  const slashed = file.split(path.sep).join('/');
+  assert.equal(transcriptKind(slashed, s.roots), 'agy');
+  const claudeFile = path.join(s.claudeDir, 'C--repo', 'cccccccc-3333.jsonl');
+  assert.equal(transcriptKind(claudeFile.split(path.sep).join('/'), s.roots), 'claude');
+  assert.equal(transcriptKind(`${path.dirname(slashed)}/../logs/transcript_full.jsonl`, s.roots), null);
+  if (process.platform === 'win32') {
+    assert.equal(transcriptKind(`${claudeFile}:stream.jsonl`, s.roots), null);
+    assert.equal(transcriptKind(path.join(s.claudeDir, 'C--repo', 'a.jsonl:x.jsonl'), s.roots), null);
+  }
+});
+
+test('a transcript the disk cannot check right now is skipped, not forgotten', async (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('a locked file'));
+  s.capture.track({ file, project: PROJECT });
+  const realLstat = fs.lstatSync;
+  const lstat = t.mock.method(fs, 'lstatSync', (p, ...rest) => {
+    if (p === file) throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+    return realLstat(p, ...rest);
+  });
+
+  await s.capture.tick();
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(s.ledger().files[file], { project: PROJECT, done: 0, fails: 0, at: NOW });
+
+  lstat.mock.restore();
+  await s.capture.tick();
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.ledger().files[file].done, fs.statSync(file).size);
+});
+
+test('sessionTranscriptOf: an agy tab gives its pinned conversation, a Claude tab its transcript', () => {
+  const claudeFileOf = (cwd, id) => path.join('/claude', cwd, `${id}.jsonl`);
+  const full = path.join('/agy', 'brain', AGY_CONV, '.system_generated', 'logs', 'transcript_full.jsonl');
+
+  assert.equal(sessionTranscriptOf({ agyWatcher: { pinned: { id: AGY_CONV, full } }, cwd: 'C:/repo' }, claudeFileOf), full);
+  // An agy tab that has not picked its conversation yet has none, never a guessed Claude file.
+  assert.equal(sessionTranscriptOf({ agyWatcher: { pinned: null }, transcriptId: 'abc', cwd: 'C:/repo' }, claudeFileOf), null);
+  assert.equal(sessionTranscriptOf({ watcher: { pinned: '/p.jsonl', currentFile: '/c.jsonl' } }, claudeFileOf), '/p.jsonl');
+  assert.equal(sessionTranscriptOf({ watcher: { currentFile: '/c.jsonl' } }, claudeFileOf), '/c.jsonl');
+  assert.equal(sessionTranscriptOf({ watcher: { sessionUuid: 'u1' }, transcriptId: 'u2', cwd: 'repo' }, claudeFileOf), claudeFileOf('repo', 'u1'));
+  assert.equal(sessionTranscriptOf({ transcriptId: 'u2', cwd: 'repo' }, claudeFileOf), claudeFileOf('repo', 'u2'));
+  assert.equal(sessionTranscriptOf({ transcriptId: 'u2' }, claudeFileOf), null);
+  assert.equal(sessionTranscriptOf(null, claudeFileOf), null);
+});
