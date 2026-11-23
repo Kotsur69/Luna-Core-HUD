@@ -9,7 +9,10 @@
 //                  src/workerPool.js agyFamilyVariants(). Model ids are never
 //                  listed here - variants come from the live list.
 //   poolKey        the God Mode worker-pool / planner key ('agy-neon').
-//   name           the product name the menus show ('Neon (agy)').
+//   name           the English product name ('Neon (agy)'): the fallback for
+//                  main-process code and the planner text.
+//   labelKey       the renderer dictionary key of the translated menu name
+//                  ('orch.agy.family.neon'); menus show t(labelKey).
 //   plannerText    what the planner prompt says the key runs on.
 //   tier           'hard' / 'easy' (src/workerPool.js tierOf).
 //   strength       rank among the agy families, strongest = 0.
@@ -34,23 +37,23 @@
 /** The agy families, strongest first. */
 export const AGY_FAMILIES = Object.freeze([
   Object.freeze({
-    family: 'opus', poolKey: 'agy-opus', name: 'Opus (agy)', plannerText: 'Claude Opus on the Antigravity CLI',
+    family: 'opus', poolKey: 'agy-opus', labelKey: 'orch.agy.family.opus', name: 'Opus (agy)', plannerText: 'Claude Opus on the Antigravity CLI',
     tier: 'hard', strength: 0, usageRow: 'Opus', ownUsageRow: false, usageFromSummary: true, usageAlwaysListed: false, weeklyOnly: false,
   }),
   // Neon replaces Argon on Google's side; both stay while agy lists both.
   // Neon's own usage bucket is UNVERIFIED (agy /usage listed none on
   // 2026-11-19): it is matched by name, so it gets its own row once reported.
   Object.freeze({
-    family: 'neon', poolKey: 'agy-neon', name: 'Neon (agy)', plannerText: 'Gemini Neon on the Antigravity CLI',
+    family: 'neon', poolKey: 'agy-neon', labelKey: 'orch.agy.family.neon', name: 'Neon (agy)', plannerText: 'Gemini Neon on the Antigravity CLI',
     tier: 'hard', strength: 1, usageRow: 'Neon', ownUsageRow: true, usageFromSummary: false, usageAlwaysListed: false, weeklyOnly: false,
   }),
   Object.freeze({
-    family: 'argon', poolKey: 'agy-argon', name: 'Argon (agy)', plannerText: 'Gemini Argon on the Antigravity CLI',
+    family: 'argon', poolKey: 'agy-argon', labelKey: 'orch.agy.family.argon', name: 'Argon (agy)', plannerText: 'Gemini Argon on the Antigravity CLI',
     tier: 'hard', strength: 2, usageRow: 'Argon', ownUsageRow: true, usageFromSummary: false, usageAlwaysListed: true, weeklyOnly: true,
   }),
   // Hydrogen shares the Gemini quota (every gemini-* model without its own).
   Object.freeze({
-    family: 'hydrogen', poolKey: 'agy-hydrogen', name: 'Hydrogen (agy)', plannerText: 'Gemini Hydrogen on the Antigravity CLI',
+    family: 'hydrogen', poolKey: 'agy-hydrogen', labelKey: 'orch.agy.family.hydrogen', name: 'Hydrogen (agy)', plannerText: 'Gemini Hydrogen on the Antigravity CLI',
     tier: 'easy', strength: 3, usageRow: 'Gemini', ownUsageRow: false, usageFromSummary: false, usageAlwaysListed: false, weeklyOnly: false,
   }),
 ]);

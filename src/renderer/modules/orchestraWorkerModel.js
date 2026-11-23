@@ -18,7 +18,7 @@
 import { t } from './util.js';
 import { normalizeWorkerModel, badgeModelOf, modelName, runWorkerModel, agyBadgeText } from './orchestraWorkerModelRules.js';
 import { agyChoiceName, refreshAgyModels } from './agyModelChoices.js';
-import { loadPool, chosenPool, poolPickerView, poolText, agyEntryModel } from './orchestraPoolPicker.js';
+import { loadPool, chosenPool, poolPickerView, poolText, poolModelText, agyEntryModel } from './orchestraPoolPicker.js';
 import { isPoolRun, singleClaudeModel, poolWorkers, poolKeys, strongestKey, poolModelName, poolKeyOf, runsOnOf, poolEffortLevel, POOL_FREE_KEY, POOL_EFFORT_PLAN } from '../../workerPool.js';
 import { poolEntryOfKey, packagePoolEffort } from '../../poolEffort.js';
 
@@ -118,7 +118,7 @@ export function runModelLabel(plan) {
 
 /** A pool model's name with a level ('Opus - xhigh'), the name alone without one. */
 const withLevel = (key, level) => {
-  const name = key === POOL_FREE_KEY ? t('orch.pkgModel.free') : poolModelName(key);
+  const name = key === POOL_FREE_KEY ? t('orch.pkgModel.free') : poolModelText(key) || poolModelName(key);
   return name && level ? `${name} - ${level}` : name;
 };
 

@@ -13,7 +13,7 @@
 import { t } from './util.js';
 import { pickable, manualCount, mergeSelection, missingDeps, withDeps, tagCounts, withTag } from './orchestraPickRules.js';
 // The "Workers" pool (the models the planner may give packages): shared with Approve.
-import { loadPool, chosenPool, poolPickerView, agyFamilyOptions, refreshPoolOptions } from './orchestraPoolPicker.js';
+import { loadPool, chosenPool, poolPickerView, agyFamilyOptions, refreshPoolOptions, poolModelText } from './orchestraPoolPicker.js';
 import { isPoolRun, poolWorkers, runsOnOf, poolModelName } from '../../workerPool.js';
 
 // src/efforts.js EFFORTS (the renderer cannot require main-side modules,
@@ -302,7 +302,7 @@ function agyModelSelect(disabled, repaint) {
   sel.append(def);
   const families = agyFamilyOptions();
   for (const f of families) {
-    const opt = el('option', '', poolModelName(f.model) || f.model);
+    const opt = el('option', '', poolModelText(f.model) || poolModelName(f.model) || f.model);
     opt.value = f.model;
     // A saved family that left the list stays selectable, so it can be changed.
     opt.disabled = !f.available && f.model !== agyPlannerModel;
