@@ -69,6 +69,8 @@ const MAX_HITS = 20;
 const MAX_MISSING = 20;
 const MAX_PATH = 200;
 const MAX_REASON = 40;
+/** A rejected line's reason from the phone (src/hostmemory.js). */
+const MAX_REJECT_REASON = 80;
 const MAX_REJECTED_TITLES = 20;
 /** A merge joins one pair; a hand-edited line may name a few more, never many. */
 const MAX_MERGED_FROM = 10;
@@ -177,7 +179,9 @@ function cleanEvent(raw) {
   if (DECISIONS.includes(ev)) {
     if (!key || !type) return null;
     const title = line(raw.title, MAX_TITLE);
-    return { at, ev, key, type, ...(title ? { title } : {}), ...scored(raw.usefulness) };
+    // The phone's rejection chip ("too-vague", "duplicate"): kept on a rejected line only.
+    const reason = ev === 'rejected' ? line(raw.reason, MAX_REJECT_REASON) : '';
+    return { at, ev, key, type, ...(title ? { title } : {}), ...(reason ? { reason } : {}), ...scored(raw.usefulness) };
   }
   // A memory turned into a to-do card (src/memorytodo.js): card = the card's `at`.
   if (ev === 'to-todo') {

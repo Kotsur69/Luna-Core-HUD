@@ -15,7 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createHostMemory, needsHudMemoryHandlers, decisionTarget, KINDS, MAX_PHONE_ITEMS, MAX_PHONE_BODY } = require('../src/hostmemory.js');
+const { createHostMemory, needsHudMemoryHandlers, decisionTarget, KINDS, MAX_PHONE_ITEMS, MAX_PHONE_BODY, MAX_REASON_CHARS, RESULT_BUDGET_BYTES } = require('../src/hostmemory.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { createLog, captureStats } = require('../src/memorylog.js');
 const { typeStats } = require('../src/memoryautoaccept.js');
@@ -299,4 +299,142 @@ test("host switch: HUD host mode hands startHost the HUD's memory inbox", () => 
   });
   control.start();
   assert.equal(calls[0].memory, memory);
+});
+
+// ---- memory.search, originSessionId, rejection reasons -----------------------
+
+/** A fake secret assembled at runtime so no secret-shaped literal sits in the source. */
+const fakeSecret = () => ['gh', 'p_', 'a'.repeat(36)].join('');
+const searchRec = (id, title, over = {}) => rec(id, title, { confidence: 'confirmed', body: `Notes about zebrafish tuning for ${id}.`, ...over });
+
+test('memory.search returns confirmed hits with a snippet and unreviewed ones without', async (t) => {
+  const { handlers } = setup(t, [
+    searchRec('zebra-confirmed', 'Zebrafish tuning rules'),
+    rec('zebra-waiting', 'Zebrafish waiting entry', { body: 'Secret zebrafish body text.' }),
+  ]);
+
+  const res = await handlers['memory.search']({ query: 'zebrafish' });
+
+  assert.equal(res.status, 'found');
+  const confirmed = res.results.find((r) => r.key === `${PROJECT}/zebra-confirmed`);
+  const waiting = res.results.find((r) => r.key === `${PROJECT}/zebra-waiting`);
+  assert.equal(confirmed.project, PROJECT);
+  assert.equal(confirmed.type, 'gotcha');
+  assert.match(confirmed.trust, /^confirmed/);
+  assert.ok(confirmed.snippet.includes('zebrafish'));
+  assert.ok(waiting);
+  assert.equal(waiting.snippet, undefined);
+  assert.equal(waiting.unreviewed, true);
+  assert.match(waiting.trust, /not verified/);
+  assert.ok(!JSON.stringify(res).includes('Secret zebrafish body'));
+});
+
+test('memory.search honours the project filter and the limit', async (t) => {
+  const { handlers } = setup(t, [
+    searchRec('a-one', 'Zebrafish one'),
+    searchRec('a-two', 'Zebrafish two with other words'),
+    searchRec('b-one', 'Zebrafish elsewhere', { project: OTHER }),
+  ]);
+
+  const only = await handlers['memory.search']({ query: 'zebrafish', project: OTHER });
+  assert.deepEqual(only.results.map((r) => r.project), [OTHER]);
+  const one = await handlers['memory.search']({ query: 'zebrafish', limit: 1 });
+  assert.equal(one.results.length, 1);
+});
+
+test('memory.search refuses a bad query, limit, project or extra field', async (t) => {
+  const { handlers } = setup(t, [searchRec('x', 'Zebrafish')]);
+  const bad = async (payload, error) => assert.deepEqual(await handlers['memory.search'](payload), { status: 'refused', error }, JSON.stringify(payload));
+
+  await bad({}, 'badQuery');
+  await bad({ query: '' }, 'badQuery');
+  await bad({ query: '   ' }, 'badQuery');
+  await bad({ query: 5 }, 'badQuery');
+  await bad({ query: 'a'.repeat(201) }, 'badQuery');
+  await bad({ query: 'two\nlines' }, 'badQuery');
+  await bad({ query: 'ok', limit: 0 }, 'badLimit');
+  await bad({ query: 'ok', limit: 16 }, 'badLimit');
+  await bad({ query: 'ok', limit: 2.5 }, 'badLimit');
+  await bad({ query: 'ok', limit: '3' }, 'badLimit');
+  await bad({ query: 'ok', project: '../etc' }, 'badProject');
+  await bad({ query: 'ok', project: 7 }, 'badProject');
+  await bad({ query: 'ok', extra: 1 }, 'badPayload');
+  await bad(null, 'badPayload');
+  await bad([], 'badPayload');
+});
+
+test('memory.search scrubs secrets and stays under the result budget', async (t) => {
+  const secret = fakeSecret();
+  const records = Array.from({ length: 15 }, (_, i) =>
+    searchRec(`big-${i}`, `Zebrafish big ${i}`, { body: `zebrafish ${secret} ${'filler '.repeat(400)}` }),
+  );
+  const { handlers } = setup(t, records);
+
+  const res = await handlers['memory.search']({ query: 'zebrafish', limit: 15 });
+
+  assert.ok(res.results.length > 0);
+  assert.ok(!JSON.stringify(res).includes(secret));
+  assert.ok(Buffer.byteLength(JSON.stringify(res), 'utf8') <= RESULT_BUDGET_BYTES);
+});
+
+test('memory.search uses an injected search and cuts its results to the budget', async (t) => {
+  const huge = Array.from({ length: 15 }, (_, i) => ({
+    key: `${PROJECT}/h${i}`, project: PROJECT, type: 'gotcha', title: 'T'.repeat(190), confidence: 'confirmed',
+    created: '2026-11-10', last_verified: null, source: 'S'.repeat(9000), snippet: 'n'.repeat(1000),
+  }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-hostmem-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  const { handlers } = createHostMemory({ dir: () => root, search: async () => huge, logLine: () => {} });
+
+  const res = await handlers['memory.search']({ query: 'anything', limit: 15 });
+
+  assert.ok(res.results.length > 0 && res.results.length < 15);
+  assert.ok(Buffer.byteLength(JSON.stringify(res), 'utf8') <= RESULT_BUDGET_BYTES);
+});
+
+test('memory.inbox items carry the originSessionId parsed from the source', async (t) => {
+  const { handlers } = setup(t, [
+    rec('from-session', 'From a session', { source: 'captured from session abc-12 on PC1' }),
+    rec('proposed', 'Proposed one', { source: 'proposed in session s7 on PC2' }),
+    rec('god', 'From a run', { source: 'captured from God Mode run run1x on PC1' }),
+    rec('none', 'No source at all'),
+  ]);
+
+  const res = await handlers['memory.inbox']({});
+  const byId = Object.fromEntries(res.items.map((i) => [i.id, i.originSessionId]));
+
+  assert.equal(byId['from-session'], 'abc-12');
+  assert.equal(byId.proposed, 's7');
+  assert.equal(byId.god, null);
+  assert.equal(byId.none, null);
+});
+
+test('memory.reject records a valid reason in the memory log', async (t) => {
+  const { dir, log, handlers } = setup(t, [rec('a', 'Something vague'), rec('b', 'Something plain')]);
+
+  const res = await handlers['memory.reject']({ project: PROJECT, id: 'a', reason: '  too-vague ' });
+  await handlers['memory.reject']({ project: PROJECT, id: 'b' });
+
+  assert.equal(res.status, 'decided');
+  assert.deepEqual(Object.keys(stored(dir)), []);
+  const [withReason, without] = log.read();
+  assert.equal(withReason.ev, 'rejected');
+  assert.equal(withReason.reason, 'too-vague');
+  assert.equal(without.reason, undefined);
+});
+
+test('memory.reject refuses a bad reason and leaves the entry waiting; approve takes no reason', async (t) => {
+  const { dir, handlers } = setup(t, [rec('a', 'Something vague')]);
+  const bad = async (reason) =>
+    assert.deepEqual(await handlers['memory.reject']({ project: PROJECT, id: 'a', reason }), { status: 'refused', error: 'badReason' }, String(reason));
+
+  await bad('');
+  await bad('   ');
+  await bad(5);
+  await bad(null);
+  await bad('x'.repeat(MAX_REASON_CHARS + 1));
+  await bad('line\nbreak');
+  assert.deepEqual(Object.keys(stored(dir)), [`${PROJECT}/a`]);
+  assert.deepEqual(await handlers['memory.approve']({ project: PROJECT, id: 'a', reason: 'x' }), { status: 'refused', error: 'badPayload' });
+  assert.equal((await handlers['memory.reject']({ project: PROJECT, id: 'a', reason: 'x'.repeat(MAX_REASON_CHARS) })).status, 'decided');
 });
