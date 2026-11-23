@@ -31,6 +31,7 @@ import { clearHistory } from './memoryhistory.js';
 import { createTodoFlow, todoButton, todoReasonKey } from './memorytodoform.js';
 import { statsLine, captureLine, searchLine, flagLine, graveLine } from './memoryinboxlines.js';
 import { createCheckFlow, checkReasonKey } from './memorycheckview.js';
+import { createOriginDrawer } from './memoryorigin.js';
 
 export { statsLine, searchLine, flagLine, graveLine };
 
@@ -77,6 +78,8 @@ const flowHooks = {
 /** "Make a to-do" (memorytodoform.js) and "Check if still true" (memorycheckview.js). */
 const todo = createTodoFlow(flowHooks);
 const check = createCheckFlow(flowHooks);
+/** The origin-session drawer (C key, memoryorigin.js): read only, beside the inbox and review lists. */
+const origin = createOriginDrawer({ call: (...args) => call(...args) });
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
@@ -364,6 +367,7 @@ function switchTab(name) {
   tab = name;
   confirming = null;
   selected = null;
+  origin.close();
   load(undefined, undefined, true);
 }
 
@@ -540,7 +544,7 @@ function render(res, review, all, graves, focusKey, focusIndex, focusTab) {
   const keys = tab === 'all' || tab === 'graveyard' ? null : el('p', 'hint mem-inbox__keys', t(tab === 'review' ? 'mem.inbox.keys.review' : 'mem.inbox.keys.inbox'));
   // An open draft locks the section: its repaint would throw the typed text away.
   const autoPart = tab !== 'inbox' ? null : autoSection(res.auto, { onToggle: toggleAuto, onUndo: undoAuto, busy, switching: switching || editing !== null, error: autoError });
-  overlay.body.replaceChildren(bar, panel, ...(autoPart ? [autoPart] : []), foot, ...(stats ? [el('p', 'hint', stats)] : []), ...(searchNote ? [searchNote] : []), ...(keys ? [keys] : []));
+  overlay.body.replaceChildren(bar, tab === 'inbox' || tab === 'review' ? origin.wrap(panel) : panel, ...(autoPart ? [autoPart] : []), foot, ...(stats ? [el('p', 'hint', stats)] : []), ...(searchNote ? [searchNote] : []), ...(keys ? [keys] : []));
   const selectedTab = bar.querySelector('[aria-selected="true"]');
   if (focusTab) selectedTab.focus();
   else if (list && (focusKey !== undefined || focusIndex !== undefined)) refocus(list, focusKey, focusIndex || 0, selectedTab);
@@ -716,6 +720,8 @@ const ENTRY_ACTIONS = {
 function runCommand(cmd, item) {
   if (cmd === COMMANDS.NEXT || cmd === COMMANDS.PREV) return moveTo(cmd === COMMANDS.NEXT ? 1 : -1);
   if (cmd === COMMANDS.CLEAR) return clearSelection();
+  // Read only: opens or folds the drawer, the repaint keeps the keyboard on the entry.
+  if (cmd === COMMANDS.CONTEXT) return item ? (origin.toggle(item), load(item.key)) : undefined;
   if (cmd === COMMANDS.SAVE) {
     const form = overlay.body.querySelector('.mem-inbox__form');
     if (form && !busy.has(editing)) form.requestSubmit();
@@ -768,6 +774,7 @@ export async function openMemoryInbox() {
         editing = null;
         todo.reset();
         check.reset();
+        origin.close();
         confirming = null;
         selected = null;
         shownItems = [];

@@ -14,6 +14,7 @@
 //   node scripts/luna.js memory review | verify <id> | retire <id>   confirmed memories that need a look
 //   node scripts/luna.js memory stats              what capture proposed, what was approved, what is read
 //   node scripts/luna.js memory notes [--since <tag|date>]   what the memory gained and lost since a release
+//   node scripts/luna.js memory export <folder>    every memory copied to a backup folder (src/memoryexport.js)
 //
 // It reads and writes the same files as the app (the mirror under
 // <config>/memory). The app is what syncs them: a memory written here is
@@ -57,6 +58,7 @@ const { cardSessions, cardSessionLines } = require('../src/memoryuse');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { changeQueries, readChanges } = require('../src/memorychanges');
 const { machineName } = require('../src/missionledgersync');
+const { exportAll } = require('../src/memoryexport');
 
 const USAGE = `Usage: node scripts/luna.js memory <command> [options]
 
@@ -78,6 +80,8 @@ const USAGE = `Usage: node scripts/luna.js memory <command> [options]
   notes                 markdown list of memories confirmed, superseded, archived and retired, titles only
                         [--since <tag|YYYY-MM-DD>] [--all]   default: the latest v* tag; tags are read
                         from the repository of the current folder, whatever --project says
+  export <folder>       copy every memory and "where we stopped" note to <folder>/lunacore-memory-backup-<date>/
+                        (files holding a secret are skipped and listed in its export-manifest.json)
 
   --project <host/owner/repo>   default: the repository of the current folder
   --dir <config folder>         default: LUNA_CONFIG_DIR, else this clone's config/ when its memory
@@ -543,6 +547,31 @@ async function cmdNotes({ configDir, dir, project, values }) {
   process.stdout.write(memoryNotes({ records: records.map(([, r]) => r), events, since: date, project: values.all ? null : project, label }));
 }
 
+/** Why an export was refused, in words. */
+const EXPORT_REFUSALS = {
+  'no-memory-dir': 'this config folder has no memory folder',
+  'bad-target': 'give an existing folder',
+  'target-missing': 'that folder does not exist',
+  'inside-memory-dir': 'pick a folder outside the memory folder',
+  'name-taken': 'every backup name for today is taken in that folder',
+  failed: 'the export failed (see the message above)',
+};
+
+/** `memory export <folder>`: the same copy as the window's "Export all". */
+function cmdExport({ dir, positionals }) {
+  const [target] = positionals;
+  if (!target) throw new UsageError('give the folder the backup goes into: memory export <folder>');
+  const res = exportAll({ dir, destDir: path.resolve(target), now: Date.now() });
+  if (!res.ok) {
+    process.stderr.write(`export refused: ${EXPORT_REFUSALS[res.reason] || res.reason}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  out(`Exported ${res.memories} memories and ${res.notes} notes (${res.projects} projects) to ${res.folder}`);
+  for (const skip of res.skipped) out(`skipped (${skip.reason}): ${skip.file}`);
+  if (res.skippedCount > res.skipped.length) out(`and ${res.skippedCount - res.skipped.length} more skipped`);
+}
+
 const COMMANDS = {
   search: cmdSearch,
   list: cmdList,
@@ -561,6 +590,7 @@ const COMMANDS = {
   retire: (ctx) => cmdSettle(ctx, false),
   stats: cmdStats,
   notes: cmdNotes,
+  export: cmdExport,
 };
 
 function main(argv) {
