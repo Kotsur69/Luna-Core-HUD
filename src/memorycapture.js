@@ -25,7 +25,10 @@
 // candidate scored under AUTO_REJECT_BELOW (src/memoryextract.js) never gets
 // there: it is logged (src/memorylog.js, `dropped`) with its score, and kept
 // whole in the local graveyard (src/memorygraveyard.js), where it can be
-// restored. One scored AUTO_SAVE_FROM or more may land confirmed when Mati
+// restored. With LM Studio serving the model of the local memory vectors, the
+// candidates are also compared by meaning, and one that means what a rejected
+// memory meant is buried as "similar to rejected: <title>"
+// (src/memoryshield.js); without it, the filter is by words only. One scored AUTO_SAVE_FROM or more may land confirmed when Mati
 // switched the score switch on (src/memoryautoaccept.js). The same model
 // call gives the project's "where we stopped" status: it overwrites the
 // project's note (src/memorynote.js) without the inbox; no status, no change.
@@ -59,7 +62,9 @@ const { readEnabled } = require('./memoryprojects');
 const { digestOf } = require('./memorydigest');
 const { agyTranscriptConversation } = require('./agytranscript');
 const { AGY_APP_DATA_DIR } = require('./agywatcher');
-const { buildPrompt, candidatesFrom, outsideNote, withNote, LOW_USEFULNESS } = require('./memoryextract');
+const { buildPrompt, outsideNote, withNote, LOW_USEFULNESS } = require('./memoryextract');
+const { semanticCandidates } = require('./memoryshield');
+const { sharedVectorStore } = require('./memoryembed');
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles } = require('./memorylog');
 const { statusFrom, saveNote } = require('./memorynote');
@@ -237,13 +242,14 @@ function readPiece(file, from, size) {
  * @param {{text: string, project: string, dir: string, source: string, today: string, notWanted?: string[],
  *   run: (job: {prompt: string}) => Promise<{ok: boolean, answer?: object, reason?: string}>}} opts
  *   notWanted = titles the user rejected lately: the model is told not to propose their kind again;
- *   kind = 'claude' or 'agy': which digest reads the text
+ *   kind = 'claude' or 'agy': which digest reads the text;
+ *   vectors = the vector store (src/memoryembed.js) for dedup by meaning and the shield, null = by words
  * @returns {Promise<{ok: true, records: object[], rejected: object[], reason: string, outside: number, status: string|null}|{ok: false, reason: string}>}
  *   records are NOT written here; outside = the digest's count of calls that read outside
  *   content, also noted in each record's `source`; status = the "where we stopped" text
  *   the model gave (src/memorynote.js), null when it gave nothing meaningful
  */
-async function extractPiece({ text, project, dir, source, today, run, notWanted = [], kind = 'claude' }) {
+async function extractPiece({ text, project, dir, source, today, run, notWanted = [], kind = 'claude', vectors = null }) {
   const digest = digestOf(text, kind);
   if (!digest.userTurns || digest.text.length < MIN_DIGEST_CHARS) {
     return { ok: true, records: [], rejected: [], reason: 'too-short', outside: digest.outside, status: null };
@@ -256,7 +262,7 @@ async function extractPiece({ text, project, dir, source, today, run, notWanted 
   if (!res || !res.ok) return { ok: false, reason: `model-${(res && res.reason) || 'failed'}` };
   // The outside note comes before the ', suggested global' one candidatesFrom may add (memoryextract.js).
   const noted = withNote(source, outsideNote(digest.outside));
-  const { records, rejected } = candidatesFrom(res.answer, { project, today, source: noted, existing });
+  const { records, rejected } = await semanticCandidates(res.answer, { project, today, source: noted, existing }, vectors);
   // The note reaches every new session's card without review, so a piece that
   // read outside content (a fetched page could dictate it) gives no status at all.
   const status = digest.outside ? null : statusFrom(res.answer);
@@ -272,9 +278,21 @@ async function extractPiece({ text, project, dir, source, today, run, notWanted 
  *   run = the small-model call (missionrunner.runJob with the app's env);
  *   live = the transcripts of the tabs open right now;
  *   transcriptsDir / agyDir = the only folders a transcript is read from (Claude Code's, agy's)
- *   log = the memory log (src/memorylog.js): what was proposed goes in, the rejected titles come out
+ *   log = the memory log (src/memorylog.js): what was proposed goes in, the rejected titles come out;
+ *   vectors = the vector store getter (src/memoryembed.js), null result = by words, no shield
  */
-function createCapture({ configDir, machine, run, live = () => [], now = Date.now, onSaved = () => {}, transcriptsDir = CLAUDE_PROJECTS_DIR, agyDir = AGY_APP_DATA_DIR, log = null }) {
+function createCapture({
+  configDir,
+  machine,
+  run,
+  live = () => [],
+  now = Date.now,
+  onSaved = () => {},
+  transcriptsDir = CLAUDE_PROJECTS_DIR,
+  agyDir = AGY_APP_DATA_DIR,
+  log = null,
+  vectors = sharedVectorStore,
+}) {
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
   const graveyardFile = graveyardPath(configDir);
@@ -344,7 +362,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
       return run(job);
     };
     const notWanted = log ? rejectedTitles(log.read(), entry.project) : [];
-    const res = await extractPiece({ text: piece.text, project: entry.project, dir: paths.dir, source, today: isoDate(now()), run: counted, notWanted, kind });
+    const res = await extractPiece({ text: piece.text, project: entry.project, dir: paths.dir, source, today: isoDate(now()), run: counted, notWanted, kind, vectors: vectors() });
     if (!res.ok) {
       const fails = entry.fails + 1;
       // Giving up on a piece moves past it: one bad transcript must not be retried forever.
@@ -373,7 +391,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
     const noted = res.status ? saveNote(paths.dir, note) : false;
     const reason = saved ? 'saved' : res.reason === 'saved' ? 'write-failed' : res.reason;
     if (log) for (const event of droppedEvents(res.rejected, entry.project)) log.add(event);
-    // The whole record of a low-usefulness drop, scrubbed: restorable from the memory window.
+    // The whole record of a low-usefulness, duplicate or shielded drop, scrubbed: restorable from the memory window.
     bury(graveyardFile, res.rejected, now());
     // Only a piece the model read is a capture worth counting.
     if (log && called) log.add({ ev: 'capture', project: entry.project, reason, kept: saved, dropped: countReasons(res.rejected) });

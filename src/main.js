@@ -270,7 +270,7 @@ let configSync = null;
 // travels with the config sync (configsync.js startConfigSync).
 const { startMemory, memoryPaths } = require('./memorysync');
 const { createMemoryReader } = require('./memorytools');
-const { createEmbedder, createVectorStore, vectorsPath } = require('./memoryembed');
+const { createEmbedder, createVectorStore, vectorsPath, setSharedVectorStore } = require('./memoryembed');
 const { scan: scanMemory } = require('./memorystore');
 const { createProposer: createMemoryProposer } = require('./memorypropose');
 const { cardFor, writeCard, removeCard } = require('./memorycard');
@@ -1244,6 +1244,8 @@ function memoryVectorsOf() {
       // The inbox shows which search is in use: repaint it when that changes.
       onChange: () => send('memory:changed', {}),
     });
+    // Capture, the inbox and the shield compare memories by meaning with this store (src/memoryshield.js).
+    setSharedVectorStore(memoryVectors);
   }
   return memoryVectors;
 }

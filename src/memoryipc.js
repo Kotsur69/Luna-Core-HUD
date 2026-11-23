@@ -89,6 +89,8 @@ const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
 const { cachedChanges, currentChanges } = require('./memorychanges');
 const { exportAll } = require('./memoryexport');
+const { sharedVectorStore, vectorLookup, docText } = require('./memoryembed');
+const { rememberRejected, forgetSimilar } = require('./memoryshield');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -165,7 +167,9 @@ function cleanSearchMode(raw) {
  *   todoProjects = LunaCore's projects ({id, path}); memoryProjectOf = a folder -> its memory
  *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js);
  *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none;
- *   chooseFolder = main's folder dialog for "Export all": (event) => Promise<string|null>, null = cancelled
+ *   chooseFolder = main's folder dialog for "Export all": (event) => Promise<string|null>, null = cancelled;
+ *   vectors = the vector store (src/memoryembed.js): near-duplicates by meaning, and the
+ *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield
  */
 function registerMemoryIpc({
   ipcMain,
@@ -185,10 +189,51 @@ function registerMemoryIpc({
   todos = null,
   changes = null,
   chooseFolder = null,
+  vectors = sharedVectorStore,
 }) {
-  /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
+  /** The vector store right now, or null; a failure there means "by words", never a failed call. */
+  const store = () => {
+    try {
+      return vectors() || null;
+    } catch (err) {
+      console.error('[memory] vector store unavailable:', errText(err));
+      return null;
+    }
+  };
+  /** A memory's cached vector right now: the conflict list (a pair is settled only as listed). */
+  const vectorOf = () => vectorLookup(store());
+  /**
+   * The vectors the inbox was last listed with, per key, with the text each was
+   * made of. A decision groups with these, never with vectors that appeared
+   * since (the store fills in the background): approving or rejecting an entry
+   * removes the twins the inbox showed folded into it, and no other memory.
+   * @type {Map<string, {text: string, vec: Float32Array}>}
+   */
+  let listed = new Map();
+  const snapshot = (records) => {
+    const lookup = vectorOf();
+    const next = new Map();
+    if (lookup) {
+      for (const [key, r] of records) {
+        const vec = lookup(r);
+        if (vec) next.set(key, { text: docText(r), vec });
+      }
+    }
+    listed = next;
+  };
+  const listedVectorOf = (record) => {
+    const seen = listed.get(`${record.project}/${record.id}`);
+    return seen && seen.text === docText(record) ? seen.vec : undefined;
+  };
+  /**
+   * Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor.
+   * A rejection (an inbox reject, an auto-accept undone) also goes to the shield, in the background;
+   * an approval makes the shield forget the rejections it is close to (src/memoryshield.js).
+   */
   const decided = (ev, record) => {
     if (log) log.add(decisionEvent(ev, record));
+    if (ev === 'rejected') rememberRejected(store(), record, now());
+    if (ev === 'approved') forgetSimilar(store(), record);
   };
   const events = () => (log ? log.read() : []);
   /** The anchor check walks folders main named: a failure there must not hide the list. */
@@ -264,11 +309,12 @@ function registerMemoryIpc({
       const { captures, proposed, approved, rejected, edited, rate } = captureStats(evs, { since: now() - STATS_DAYS * DAY_MS });
       const usage = recentUsage(evs, now());
       const { records } = scan(dir());
+      snapshot(records);
       return {
         ok: true,
-        ...listInbox(dir(), usage),
+        ...listInbox(dir(), { ...usage, vectorOf: listedVectorOf }),
         // Memories that contradict each other wait here too (src/memoryconflict.js).
-        conflicts: conflictsWithFinal(listConflicts(records, { events: evs }), new Map(records), usage),
+        conflicts: conflictsWithFinal(listConflicts(records, { events: evs, vectorOf: vectorOf() }), new Map(records), usage),
         capture: captureStatus(),
         search: searchMode(),
         stats: { days: STATS_DAYS, captures, proposed, approved, rejected, edited, rate },
@@ -279,8 +325,8 @@ function registerMemoryIpc({
       return { ok: false, reason: 'failed' };
     }
   });
-  ipcMain.handle('memory:approve', (_event, key) => guarded('approve', () => approve(dir(), keyOf(key), isoDate(now()), decided)));
-  ipcMain.handle('memory:reject', (_event, key) => guarded('reject', () => reject(dir(), keyOf(key), decided)));
+  ipcMain.handle('memory:approve', (_event, key) => guarded('approve', () => approve(dir(), keyOf(key), isoDate(now()), decided, { vectorOf: listedVectorOf })));
+  ipcMain.handle('memory:reject', (_event, key) => guarded('reject', () => reject(dir(), keyOf(key), decided, { vectorOf: listedVectorOf })));
   ipcMain.handle('memory:update', (_event, req) => {
     const edits = cleanEdits(req && req.edits);
     if (!edits) return { ok: false, reason: 'bad-edits' };
@@ -416,7 +462,7 @@ function registerMemoryIpc({
     const draft = cleanDraft(raw);
     if (!draft) return { ok: false, reason: 'bad-draft' };
     if (!todos) return { ok: false, reason: 'failed' };
-    const res = guarded('to-todo', () => moveToTodo({ dir: dir(), key: k, draft, now: now(), projectIdFor, todos, graveyardFile, log }));
+    const res = guarded('to-todo', () => moveToTodo({ dir: dir(), key: k, draft, now: now(), projectIdFor, todos, graveyardFile, log, vectorOf: listedVectorOf }));
     // Some of a group's files may be gone even so: sync and repaint what is left.
     if (res.reason === 'remove-failed') onChanged();
     return res;

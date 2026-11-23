@@ -538,3 +538,104 @@ test('preload exposes memory:export with no argument, and main opens the dialog 
   assert.match(brain, /window\.lunacore\.memoryExport\(\)/);
   assert.doesNotMatch(brain, /innerHTML|outerHTML|insertAdjacentHTML/);
 });
+
+// ---- near-duplicates by meaning, and the Rejected-Embedding Shield (src/memoryshield.js) ----
+
+const shield = require('../src/memoryshield.js');
+const { asAutoAccepted } = require('../src/memoryautoaccept.js');
+
+const unitVec = (...xs) => Float32Array.from(xs.map((x) => x / Math.hypot(...xs)));
+const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+/** registerMemoryIpc with a vector store that knows the vectors the test names (by memory id). */
+function shieldSetup(t, records, vectors = new Map()) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-memipc-shield-'));
+  t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const dir = path.join(base, 'memory');
+  for (const r of records) writeRecord(dir, r);
+  const store = { dir: base, model: () => 'qwen3-embedding-0.6b', vectorFor: (r) => vectors.get(r.id), embedTexts: async () => null };
+  const handlers = {};
+  let useStore = true;
+  registerMemoryIpc({
+    ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) },
+    dir: () => dir,
+    now: () => NOW,
+    log: createLog(logPath(base), { now: () => NOW }),
+    vectors: () => (useStore ? store : null),
+  });
+  return {
+    dir,
+    invoke: (channel, arg) => handlers[channel]({}, arg),
+    remembered: () => shield.readRejected(shield.rejectedVectorsPath(base)).entries.map((e) => e.title),
+    shieldExists: () => fs.existsSync(shield.rejectedVectorsPath(base)),
+    noStore: () => (useStore = false),
+  };
+}
+
+test('the inbox folds twins that mean the same, and rejecting the entry removes the group and feeds the shield', async (t) => {
+  const lead = rec('symlink', { title: 'Never symlink package dependencies', created: '2026-11-09' });
+  const twin = rec('junction', { title: 'Keep node_modules real in worktrees' });
+  const other = rec('dashes', { title: 'Name the installer with dashes' });
+  const s = shieldSetup(t, [lead, twin, other], new Map([
+    ['symlink', unitVec(1, 0.1, 0)],
+    ['junction', unitVec(1, 0.2, 0)],
+    ['dashes', unitVec(0, 0, 1)],
+  ]));
+
+  const inbox = s.invoke('memory:inbox');
+  assert.equal(inbox.total, 2, 'the two that mean the same are one entry');
+  const entry = inbox.items.find((i) => i.id === 'symlink');
+  assert.equal(entry.duplicates, 1);
+
+  const res = s.invoke('memory:reject', `${PROJECT}/symlink`);
+  assert.deepEqual(res, { ok: true, key: `${PROJECT}/symlink`, removed: [`${PROJECT}/junction`] });
+  await settled();
+  assert.deepEqual(s.remembered(), ['Never symlink package dependencies']);
+  assert.deepEqual(scan(s.dir).records.map(([k]) => k), [`${PROJECT}/dashes`]);
+});
+
+test('an undone auto-accept feeds the shield too', async (t) => {
+  const accepted = asAutoAccepted(rec('auto', { title: 'Auto accepted lesson', created: '2026-11-11' }), '2026-11-11');
+  const s = shieldSetup(t, [accepted], new Map([['auto', unitVec(1, 0, 0)]]));
+
+  assert.equal(s.invoke('memory:auto-undo', `${PROJECT}/auto`).ok, true);
+  await settled();
+  assert.deepEqual(s.remembered(), ['Auto accepted lesson']);
+});
+
+test('without a vector store the inbox groups by words and a rejection writes no shield file', async (t) => {
+  const s = shieldSetup(t, [rec('symlink', { title: 'Never symlink package dependencies' }), rec('junction', { title: 'Keep node_modules real in worktrees' })]);
+  s.noStore();
+
+  assert.equal(s.invoke('memory:inbox').total, 2);
+  assert.equal(s.invoke('memory:reject', `${PROJECT}/symlink`).ok, true);
+  await settled();
+  assert.equal(s.shieldExists(), false);
+  assert.deepEqual(scan(s.dir).records.map(([k]) => k), [`${PROJECT}/junction`]);
+});
+
+test('a decision groups with the vectors the inbox was listed with, not with ones that appeared since', async (t) => {
+  const lead = rec('symlink', { title: 'Never symlink package dependencies', created: '2026-11-09' });
+  const twin = rec('junction', { title: 'Keep node_modules real in worktrees' });
+  const vectors = new Map([['symlink', unitVec(1, 0.1, 0)]]);
+  const s = shieldSetup(t, [lead, twin], vectors);
+
+  assert.equal(s.invoke('memory:inbox').total, 2, 'listed apart: the twin had no vector yet');
+  // The background fill embeds the twin after the listing.
+  vectors.set('junction', unitVec(1, 0.2, 0));
+  const res = s.invoke('memory:reject', `${PROJECT}/symlink`);
+  assert.deepEqual(res.removed, [], 'a memory never shown folded is not deleted with the entry');
+  assert.deepEqual(scan(s.dir).records.map(([k]) => k), [`${PROJECT}/junction`]);
+  await settled();
+});
+
+test('approving an entry makes the shield forget the rejections it is close to', async (t) => {
+  const kept = rec('kept', { title: 'Keep node_modules real in worktrees' });
+  const s = shieldSetup(t, [kept], new Map([['kept', unitVec(1, 0, 0)]]));
+  shield.addRejected(path.join(path.dirname(s.dir), shield.REJECTED_VECTORS_FILE), { model: 'qwen3-embedding-0.6b', project: PROJECT, title: 'Never symlink package dependencies', vec: unitVec(1, 0.1, 0), at: NOW });
+  assert.deepEqual(s.remembered(), ['Never symlink package dependencies']);
+
+  s.invoke('memory:inbox');
+  assert.equal(s.invoke('memory:approve', `${PROJECT}/kept`).ok, true);
+  assert.deepEqual(s.remembered(), []);
+});

@@ -42,6 +42,11 @@
 // "duplicate of: <title>" (src/memorygraveyard.js), so a wrong match can be
 // restored by hand.
 //
+// Near-duplicates are found by meaning when both memories have a vector of the
+// local embedding model (src/memoryembed.js, cosine >= SEMANTIC_DUPLICATE),
+// and by words (Jaccard) when one of them has none: no model, no vectors yet.
+// The vectors are passed in (`vectorOf`), never made here: this file stays sync.
+//
 // A candidate may carry expiry hints (`expires_after_days`, `expires_when`)
 // for a temporary or in-progress constraint; checkRecord validates them and
 // the review list flags the memory 'expired' once they run out (src/memoryreview.js).
@@ -76,6 +81,7 @@ const {
 } = require('./memoryrecord');
 const { hasSecret } = require('./memorysync');
 const { MAX_NOTE_CHARS: MAX_STATUS_CHARS } = require('./memorynote');
+const { semanticDuplicate } = require('./memoryembed');
 
 /** A `digest` decays and belongs to phase 5; the extractor does not write one. */
 const CANDIDATE_TYPES = TYPES.filter((t) => t !== 'digest');
@@ -238,14 +244,18 @@ function jaccard(a, b) {
 }
 
 /**
- * Whether two memories say the same thing: nearly the same title, or nearly
- * the same words overall. Deliberately strict: a missed duplicate costs Mati
- * one click in the inbox, a wrong match would drop a real lesson unseen.
+ * Whether two memories say the same thing. With a vector for both
+ * (vectorOf, src/memoryembed.js): their cosine is SEMANTIC_DUPLICATE or more.
+ * Without: nearly the same title, or nearly the same words overall.
+ * Deliberately strict: a missed duplicate costs Mati one click in the inbox,
+ * a wrong match would drop a real lesson unseen.
  * @param {{title: string, body: string}} a
  * @param {{title: string, body: string}} b
+ * @param {((record: object) => ArrayLike<number>|undefined)|null} [vectorOf] a memory's vector, if known
  */
-function nearDuplicate(a, b) {
-  return sameWords(duplicateWords(a), duplicateWords(b));
+function nearDuplicate(a, b, vectorOf = null) {
+  const byMeaning = semanticDuplicate(a, b, vectorOf);
+  return byMeaning === null ? sameWords(duplicateWords(a), duplicateWords(b)) : byMeaning;
 }
 
 /**
@@ -406,14 +416,15 @@ function idFor(title, project, taken) {
 /**
  * The model's answer -> records to save.
  * @param {unknown} answer the parsed JSON the model returned
- * @param {{project: string, today: string, source: string, existing: object[]}} ctx
- *   existing = every record of this project and of `global` in the mirror
+ * @param {{project: string, today: string, source: string, existing: object[], vectorOf?: Function|null}} ctx
+ *   existing = every record of this project and of `global` in the mirror;
+ *   vectorOf = a record's vector for the near-duplicate check (nearDuplicate), none = by words
  * @returns {{records: object[], rejected: {title: string, reason: string, type?: string, usefulness?: number, duplicateOf?: string}[]}}
  *   type, usefulness and record (the checked record) are set on a LOW_USEFULNESS or a DUPLICATE
  *   rejection only: the record goes to the graveyard (src/memorygraveyard.js), never to the log;
  *   duplicateOf = the title of the memory a DUPLICATE repeats
  */
-function candidatesFrom(answer, { project, today, source, existing }) {
+function candidatesFrom(answer, { project, today, source, existing, vectorOf = null }) {
   const raw = isObject(answer) && Array.isArray(answer.candidates) ? answer.candidates.filter(isObject).slice(0, MAX_RAW_CANDIDATES) : [];
   const taken = new Set(existing.map(keyOf));
   const records = [];
@@ -472,7 +483,7 @@ function candidatesFrom(answer, { project, today, source, existing }) {
     }
     // A corrected version of a memory is meant to resemble the one it replaces.
     const replaced = new Set(record.supersedes);
-    const twin = [...existing, ...records].find((r) => !(r.project === scope && replaced.has(r.id)) && nearDuplicate(r, record));
+    const twin = [...existing, ...records].find((r) => !(r.project === scope && replaced.has(r.id)) && nearDuplicate(r, record, vectorOf));
     if (twin) {
       // The record rides along so the graveyard can keep it as "duplicate of: <title>".
       rejected.push({ title: record.title, reason: DUPLICATE, type: record.type, usefulness: record.usefulness, duplicateOf: twin.title || keyOf(twin), record });

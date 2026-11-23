@@ -279,3 +279,95 @@ test('duplicateEvents logs each duplicate with the memory it repeats, and nothin
   assert.deepEqual(s.logged(), [{ ev: 'dropped', project: PROJECT, reason: DUPLICATE, type: 'gotcha', title: 'Twin', usefulness: 70, duplicateOf: 'Original title' }]);
   assert.deepEqual(duplicateEvents(null, PROJECT), []);
 });
+
+// ---- the Rejected-Embedding Shield (src/memoryshield.js) buries, restorable by hand ----
+
+const shield = require('../src/memoryshield.js');
+const { MAX_TITLE } = require('../src/memoryrecord.js');
+
+const unitVec = (...xs) => Float32Array.from(xs.map((x) => x / Math.hypot(...xs)));
+const MODEL = 'qwen3-embedding-0.6b';
+const similar = (id, similarTo, over) => ({ title: `Title of ${id}`, reason: shield.SIMILAR_REJECTED, type: 'gotcha', usefulness: 70, similarTo, record: record(id, { usefulness: 70, ...over }) });
+
+test('bury keeps a shielded candidate as "similar to rejected: <title>", with the whole title', (t) => {
+  const s = setup(t);
+  const longTitle = `Rejected ${'x'.repeat(MAX_TITLE - 9)}`;
+  const written = g.bury(s.file, [similar('short', 'Junction node_modules'), similar('long', longTitle), similar('no-title', '')], NOW);
+
+  assert.equal(written, 2, 'without the rejected title a shielded candidate is not kept');
+  const reasons = Object.fromEntries(g.readGraveyard(s.file, NOW).map((e) => [e.record.id, [e.reason, e.score]]));
+  assert.deepEqual(reasons.short, ['similar to rejected: Junction node_modules', 70]);
+  assert.deepEqual(reasons.long, [`similar to rejected: ${longTitle}`, 70]);
+});
+
+/** A vector store whose LM Studio answers: topic vectors from the text. */
+function shieldStore(base) {
+  const topic = (text) => (/junction|symlink/i.test(text) ? unitVec(1, 0.1, 0) : unitVec(0, 0.1, 1));
+  return {
+    dir: base,
+    model: () => MODEL,
+    vectorFor: () => undefined,
+    embedTexts: async (texts) => ({ model: MODEL, vectors: texts.map(topic) }),
+  };
+}
+
+const candidate = (title) => ({ type: 'gotcha', scope: 'project', title, body: `${title}. **Why:** it broke once.`, rubric: { durable: true, actionable: true, specific: true, non_obvious: true, verified: false } });
+const CTX = { project: PROJECT, today: '2026-11-11', source: 'captured from session abc on PC1', existing: [] };
+
+test('capture buries a candidate that means what a rejected memory meant, and it can be restored', async (t) => {
+  const s = setup(t);
+  const store = shieldStore(s.base);
+  shield.addRejected(shield.rejectedVectorsPath(s.base), { model: MODEL, project: PROJECT, title: 'Junction node_modules into worktrees', vec: unitVec(1, 0.1, 0), at: NOW });
+  const answer = { candidates: [candidate('Symlink the dependencies from the main checkout'), candidate('Name the installer with dashes')] };
+
+  const { records, rejected } = await shield.semanticCandidates(answer, CTX, store);
+  assert.deepEqual(records.map((r) => r.title), ['Name the installer with dashes']);
+  assert.deepEqual(rejected.map((r) => [r.reason, r.similarTo, r.title]), [[shield.SIMILAR_REJECTED, 'Junction node_modules into worktrees', 'Symlink the dependencies from the main checkout']]);
+
+  assert.equal(g.bury(s.file, rejected, NOW), 1);
+  const { items } = g.listGraveyard(s.file, NOW);
+  assert.deepEqual(items.map((i) => i.reason), ['similar to rejected: Junction node_modules into worktrees']);
+  const res = g.restoreEntry({ file: s.file, dir: s.dir, id: items[0].key, now: NOW, log: s.log });
+  assert.equal(res.ok, true);
+  assert.deepEqual(listInbox(s.dir).items.map((i) => i.title), ['Symlink the dependencies from the main checkout']);
+  assert.deepEqual(g.listGraveyard(s.file, NOW).items, []);
+});
+
+test('the shield buries from REJECTED_SIMILAR on, for the same project or a global rejection only', () => {
+  assert.equal(shield.REJECTED_SIMILAR, 0.8);
+  const entry = (project, vec) => ({ at: NOW, project, title: `Rejected in ${project}`, vec });
+  const near = unitVec(1, 0.7, 0); // cosine 0.819 with (1, 0, 0)
+  const far = unitVec(1, 0.8, 0); // cosine 0.781
+  const probe = (shieldDoc, vec, project = PROJECT) => shield.closestRejected(shieldDoc, { model: MODEL, project, vec });
+
+  const own = { model: MODEL, entries: [entry(PROJECT, unitVec(1, 0, 0))] };
+  assert.equal(probe(own, near).title, `Rejected in ${PROJECT}`);
+  assert.equal(probe(own, far), null);
+  assert.equal(probe(own, near, 'github.com/acme/other'), null, "another project's rejection does not count");
+  assert.equal(probe({ model: MODEL, entries: [entry('global', unitVec(1, 0, 0))] }, near, 'github.com/acme/other').title, 'Rejected in global');
+  assert.equal(probe({ model: 'another-model', entries: own.entries }, near), null, 'vectors of another model never compare');
+  assert.equal(probe(own, undefined), null);
+});
+
+test('without LM Studio the shield does nothing and the candidate goes to the inbox', async (t) => {
+  const s = setup(t);
+  shield.addRejected(shield.rejectedVectorsPath(s.base), { model: MODEL, project: PROJECT, title: 'Junction node_modules into worktrees', vec: unitVec(1, 0.1, 0), at: NOW });
+  const offline = { ...shieldStore(s.base), embedTexts: async () => null };
+  const answer = { candidates: [candidate('Symlink the dependencies from the main checkout')] };
+
+  const { records, rejected } = await shield.semanticCandidates(answer, CTX, offline);
+  assert.deepEqual(records.map((r) => r.title), ['Symlink the dependencies from the main checkout']);
+  assert.deepEqual(rejected, []);
+});
+
+test('a candidate that supersedes a memory is a correction: the shield lets it through', async (t) => {
+  const s = setup(t);
+  const store = shieldStore(s.base);
+  shield.addRejected(shield.rejectedVectorsPath(s.base), { model: MODEL, project: PROJECT, title: 'Junction node_modules into worktrees', vec: unitVec(1, 0.1, 0), at: NOW });
+  const old = { id: 'old-worktree-note', type: 'gotcha', project: PROJECT, title: 'Worktrees share the installer cache', created: '2026-10-01', confidence: 'confirmed', supersedes: [], links: [], body: 'Old note.' };
+  const correction = { ...candidate('Symlink the dependencies from the main checkout'), supersedes: ['old-worktree-note'] };
+
+  const { records, rejected } = await shield.semanticCandidates({ candidates: [correction] }, { ...CTX, existing: [old] }, store);
+  assert.deepEqual(records.map((r) => r.title), ['Symlink the dependencies from the main checkout']);
+  assert.deepEqual(rejected, []);
+});

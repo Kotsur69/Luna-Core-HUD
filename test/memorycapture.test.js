@@ -822,3 +822,38 @@ test('sessionTranscriptOf: an agy tab gives its pinned conversation, a Claude ta
   assert.equal(sessionTranscriptOf({ transcriptId: 'u2' }, claudeFileOf), null);
   assert.equal(sessionTranscriptOf(null, claudeFileOf), null);
 });
+
+// ---- the Rejected-Embedding Shield in a capture tick (src/memoryshield.js) ----
+
+const shieldMod = require('../src/memoryshield.js');
+
+test('a capture tick buries a candidate that means what a rejected memory meant; the rest reach the inbox', async (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-capture-shield-'));
+  t.after(() => fs.promises.rm(configDir, { recursive: true, force: true, maxRetries: 5 }));
+  setEnabled(memoryPaths(configDir).projects, PROJECT, true);
+  const unitVec = (...xs) => Float32Array.from(xs.map((x) => x / Math.hypot(...xs)));
+  const MODEL = 'qwen3-embedding-0.6b';
+  const topic = (text) => (/symlink|junction/i.test(text) ? unitVec(1, 0.1, 0) : unitVec(0, 0.1, 1));
+  const store = { dir: configDir, model: () => MODEL, vectorFor: () => undefined, embedTexts: async (texts) => ({ model: MODEL, vectors: texts.map(topic) }) };
+  shieldMod.addRejected(shieldMod.rejectedVectorsPath(configDir), { model: MODEL, project: PROJECT, title: 'Junction node_modules into worktrees', vec: unitVec(1, 0.1, 0), at: NOW });
+
+  const capture = createCapture({
+    configDir,
+    machine: 'PC1',
+    transcriptsDir: configDir,
+    now: () => NOW,
+    run: async () => answer('Symlink the dependencies from the main checkout', 'Name the installer asset with dashes'),
+    vectors: () => store,
+  });
+  const file = path.join(configDir, 'abcdef01-shield.jsonl');
+  fs.writeFileSync(file, session('the worktree setup'));
+  const when = new Date(NOW - SETTLE_MS - 1000);
+  fs.utimesSync(file, when, when);
+  capture.track({ file, project: PROJECT });
+
+  const res = await capture.tick();
+  assert.equal(res.saved, 1);
+  assert.deepEqual(listInbox(memoryPaths(configDir).dir).items.map((i) => i.title), ['Name the installer asset with dashes']);
+  const buried = readGraveyard(graveyardPath(configDir), NOW);
+  assert.deepEqual(buried.map((e) => [e.reason, e.record.title]), [['similar to rejected: Junction node_modules into worktrees', 'Symlink the dependencies from the main checkout']]);
+});

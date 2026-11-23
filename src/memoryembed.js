@@ -14,6 +14,12 @@
 // embedding model happens to be loaded. Vectors of two models must never mix,
 // so a reply is only accepted when it names the model that was asked for, and
 // the store holds the vectors of exactly one model at a time.
+//
+// The same vectors find near-duplicate memories by meaning (semanticDuplicate,
+// used by src/memoryextract.js, memoryinbox.js and memoryconflict.js) and feed
+// the Rejected-Embedding Shield (src/memoryshield.js). main.js registers its
+// one store with setSharedVectorStore(); the modules that compare memories
+// read it through sharedVectorStore() and fall back to words without it.
 // ============================================================================
 
 'use strict';
@@ -51,6 +57,10 @@ const MAX_QUERIES_AT_ONCE = 4;
 const WAKE_EVERY_MS = 10 * 60000;
 /** Question vectors kept, so a repeated question costs no model call. */
 const QUERY_CACHE_SIZE = 64;
+/** Candidates of one capture embedded at once; a capture tick runs in the background, so a cold model load may take this long. */
+const CANDIDATE_TIMEOUT_MS = 30000;
+/** Two memories whose vectors are at least this close (cosine) say the same thing (memoryextract.nearDuplicate). */
+const SEMANTIC_DUPLICATE = 0.82;
 
 /** The text a memory is embedded as. */
 const docText = (record) => `${record.title}\n\n${record.body}`.slice(0, MAX_TEXT_CHARS);
@@ -97,6 +107,43 @@ function normalize(vector) {
   if (!Number.isFinite(sum) || sum <= 0) return null;
   const norm = Math.sqrt(sum);
   return vector.map((x) => x / norm);
+}
+
+/**
+ * Cosine similarity of two vectors, -1 to 1; null when they cannot be compared
+ * (missing, of different lengths, or without a finite, non-zero length).
+ * The store's vectors are unit vectors already; the norms are worked out anyway
+ * so a caller may pass any vector.
+ * @param {ArrayLike<number>|null|undefined} a
+ * @param {ArrayLike<number>|null|undefined} b
+ * @returns {number|null}
+ */
+function cosine(a, b) {
+  if (!a || !b || !a.length || a.length !== b.length) return null;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  const cos = dot / Math.sqrt(na * nb);
+  return Number.isFinite(cos) ? cos : null;
+}
+
+/**
+ * Whether two memories say the same thing by meaning: true or false when both
+ * have a vector, null when one of them has none (the caller falls back to words).
+ * @param {object} a
+ * @param {object} b
+ * @param {((record: object) => ArrayLike<number>|undefined)|null} vectorOf
+ * @returns {boolean|null}
+ */
+function semanticDuplicate(a, b, vectorOf) {
+  if (typeof vectorOf !== 'function') return null;
+  const cos = cosine(vectorOf(a), vectorOf(b));
+  return cos === null ? null : cos >= SEMANTIC_DUPLICATE;
 }
 
 /** One embedding from a reply -> a unit Float32Array, or null when it is not a usable vector. */
@@ -219,10 +266,29 @@ function createEmbedder({
   return { model, embed, state: () => ({ model: picked.id, reason: picked.id ? null : code }) };
 }
 
-const encode = (vector) => Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength).toString('base64');
+/** The app's one vector store (main.js memoryVectorsOf registers it); null in the CLI and in tests. */
+let sharedStore = null;
+
+/** Registers the store the memory modules compare memories with; null unregisters it. */
+function setSharedVectorStore(store) {
+  sharedStore = store || null;
+}
+
+/** @returns {object|null} the registered vector store, or null (compare by words) */
+const sharedVectorStore = () => sharedStore;
+
+/**
+ * A record -> its cached vector, from a vector store; null without a store,
+ * which nearDuplicate and its callers read as "compare by words".
+ * @param {object|null} store
+ * @returns {((record: object) => Float32Array|undefined)|null}
+ */
+const vectorLookup = (store) => (store && typeof store.vectorFor === 'function' ? (record) => store.vectorFor(record) : null);
+
+const encodeVector = (vector) => Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength).toString('base64');
 
 /** A vector from the cache file; checked like one from the model, because the file can be edited. */
-function decode(text, dim) {
+function decodeVector(text, dim) {
   if (typeof text !== 'string') return null;
   const bytes = Buffer.from(text, 'base64');
   if (bytes.length !== dim * 4) return null;
@@ -244,7 +310,7 @@ function readVectors(file) {
   if (v !== FILE_VERSION || typeof model !== 'string' || !Number.isInteger(dim) || dim < 1 || dim > MAX_DIM) return empty;
   const entries = new Map();
   for (const [key, row] of Object.entries(vectors && typeof vectors === 'object' ? vectors : {})) {
-    const vec = Array.isArray(row) && typeof row[0] === 'string' ? decode(row[1], dim) : null;
+    const vec = Array.isArray(row) && typeof row[0] === 'string' ? decodeVector(row[1], dim) : null;
     if (vec) entries.set(key, { hash: row[0], vec });
   }
   return { model, entries };
@@ -252,7 +318,7 @@ function readVectors(file) {
 
 function writeVectors(file, { model, entries }) {
   const first = entries.values().next().value;
-  const vectors = Object.fromEntries([...entries].map(([key, e]) => [key, [e.hash, encode(e.vec)]]));
+  const vectors = Object.fromEntries([...entries].map(([key, e]) => [key, [e.hash, encodeVector(e.vec)]]));
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     fs.writeFileSync(tmp, JSON.stringify({ v: FILE_VERSION, model, dim: first ? first.vec.length : 1, vectors }), 'utf8');
@@ -418,13 +484,72 @@ function createVectorStore({ file, embedder, onChange = () => {} }) {
     }
   }
 
+  /**
+   * The cached vector of a memory, when it was made from the memory's current
+   * text; never asks the model. Keyed by the memory's key, so it also answers
+   * for a memory deleted a moment ago (an inbox rejection) until the next fill.
+   * @param {{project: string, id: string, title: string, body: string}} record
+   * @returns {Float32Array|undefined}
+   */
+  function vectorFor(record) {
+    if (!record || typeof record !== 'object') return undefined;
+    const entry = state.entries.get(`${record.project}/${record.id}`);
+    return entry && entry.hash === hashOf(docText(record)) ? entry.vec : undefined;
+  }
+
+  /**
+   * Embeds texts that are no memory yet (capture candidates, a rejected entry
+   * without a cached vector) with the model of the stored vectors.
+   * Never throws and never waits for a model the store has no vectors of.
+   * @param {string[]} texts
+   * @returns {Promise<{model: string, vectors: Float32Array[]}|null>} null = compare by words
+   */
+  async function embedTexts(texts) {
+    const list = (Array.isArray(texts) ? texts : []).map((t) => String(t).slice(0, MAX_TEXT_CHARS));
+    // No vectors on this PC yet: nothing to compare with, so no model call either.
+    if (!list.length || !state.model) return null;
+    try {
+      const model = await embedder.model();
+      if (!model || model !== state.model) return null;
+      const vectors = await embedder.embed(model, list, CANDIDATE_TIMEOUT_MS);
+      // The model may have been replaced while the texts were embedded.
+      return vectors && model === state.model ? { model, vectors } : null;
+    } catch (err) {
+      console.error('[memory] texts not embedded:', reasonOf(err));
+      return null;
+    }
+  }
+
   return {
+    /** The folder of the cache file: the shield keeps its own file next to it (src/memoryshield.js). */
+    dir: path.dirname(file),
     prepare,
     ready: () => inFlight || Promise.resolve(),
     queryVector,
+    vectorFor,
+    embedTexts,
+    /** The model the stored vectors were made with, or null. */
+    model: () => state.model,
     mode,
     status: () => ({ model: state.model, count: state.entries.size }),
   };
 }
 
-module.exports = { createEmbedder, createVectorStore, pickModel, parseEmbeddings, vectorsPath, docText, PREFERRED_MODELS };
+module.exports = {
+  createEmbedder,
+  createVectorStore,
+  pickModel,
+  parseEmbeddings,
+  vectorsPath,
+  docText,
+  cosine,
+  semanticDuplicate,
+  vectorLookup,
+  setSharedVectorStore,
+  sharedVectorStore,
+  encodeVector,
+  decodeVector,
+  PREFERRED_MODELS,
+  SEMANTIC_DUPLICATE,
+  MAX_DIM,
+};

@@ -54,6 +54,7 @@ const { resolveConflict, findConflicts, mergePair, KEEP } = require('./memorycon
 const { provenance, originSnippet } = require('./memoryprovenance');
 const { promptSafe } = require('./memoryscan');
 const { scrub } = require('./hostscrub');
+const { sharedVectorStore, vectorLookup } = require('./memoryembed');
 const { restore } = require('./memorydecay');
 const { recentUsage } = require('./memoryuse');
 const { lastChecks } = require('./memorylog');
@@ -247,7 +248,9 @@ function projectsOf(records, gone, enabled) {
  *   (the 'changed' flags "Check all" puts first), null = none; origin = the folders the
  *   origin-session drawer may read: {transcriptsDir, runsDir, agyDir}, each () => string|null
  *   (Claude Code's projects folder, LunaCore's run reports, agy's brain folder); ask = the
- *   Interrogate model call (missionrunner.runJob, lean, no tools), null = it refuses
+ *   Interrogate model call (missionrunner.runJob, lean, no tools), null = it refuses;
+ *   vectors = the vector store the inbox found merge suggestions with (src/memoryembed.js),
+ *   null = by words
  */
 function registerMemoryBrainIpc({
   ipcMain,
@@ -262,7 +265,17 @@ function registerMemoryBrainIpc({
   changes = null,
   origin = {},
   ask = null,
+  vectors = sharedVectorStore,
 }) {
+  /** The lookup the inbox listed its merge suggestions with: a pair it showed can be settled. */
+  const vectorOf = () => {
+    try {
+      return vectorLookup(vectors());
+    } catch (err) {
+      console.error('[memory] vector store unavailable:', (err && (err.code || err.message)) || 'error');
+      return null;
+    }
+  };
   const guarded = (label, fn) => {
     try {
       const res = fn();
@@ -349,7 +362,7 @@ function registerMemoryBrainIpc({
     const b = keyArg(req.b);
     if (!a || !b) return { ok: false, reason: 'bad-key' };
     if (!KEEP.includes(req.keep)) return { ok: false, reason: 'bad-keep' };
-    return guarded('conflict', () => resolveConflict(dir(), { a, b, keep: req.keep }, isoDate(now()), { log }));
+    return guarded('conflict', () => resolveConflict(dir(), { a, b, keep: req.keep }, isoDate(now()), { log, vectorOf: vectorOf() }));
   });
 
   ipcMain.handle('memory:restore', (_event, rawKey) => {
@@ -367,7 +380,7 @@ function registerMemoryBrainIpc({
     const title = text('title');
     const body = text('body');
     if (title === null || body === null) return { ok: false, reason: 'bad-edits' };
-    return guarded('merge', () => mergePair(dir(), { a, b, title, body }, isoDate(now()), { log }));
+    return guarded('merge', () => mergePair(dir(), { a, b, title, body }, isoDate(now()), { log, vectorOf: vectorOf() }));
   });
 
   // "Check if still true" (src/memorycheck.js). A start writes nothing yet: the

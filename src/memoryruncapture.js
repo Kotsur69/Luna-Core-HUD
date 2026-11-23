@@ -47,7 +47,9 @@ const { GLOBAL, projectFromRepoKey } = require('./memoryrecord');
 const { scan, writeRecord } = require('./memorystore');
 const { memoryPaths } = require('./memorysync');
 const { readEnabled } = require('./memoryprojects');
-const { buildPrompt, candidatesFrom, outsideNote, withNote } = require('./memoryextract');
+const { buildPrompt, outsideNote, withNote } = require('./memoryextract');
+const { semanticCandidates } = require('./memoryshield');
+const { sharedVectorStore } = require('./memoryembed');
 const { pendingCount } = require('./memoryinbox');
 const { rejectedTitles, duplicateEvents } = require('./memorylog');
 const { droppedEvents, MAX_PENDING } = require('./memorycapture');
@@ -127,6 +129,7 @@ function createRunCapture({
   countOutside = countRunOutside,
   log = null,
   onDisputed = () => {},
+  vectors = sharedVectorStore,
 }) {
   const paths = memoryPaths(configDir);
   const ledgerFile = path.join(configDir, LEDGER_FILE);
@@ -230,7 +233,8 @@ function createRunCapture({
     if (!res || !res.ok) return { reason: `model-${(res && res.reason) || 'failed'}`, saved: 0, rejected: [] };
     const source = withNote(`captured from God Mode run ${runId} on ${machine}`, outsideNote(outside));
     // The gotcha the REPEATED FAILURE section asked for is never scored under the floor.
-    const { records, rejected } = candidatesFrom(floorRepeated(res.answer, repeated), { project, today, source, existing });
+    // By meaning and through the Rejected-Embedding Shield when LM Studio serves the vectors' model (src/memoryshield.js).
+    const { records, rejected } = await semanticCandidates(floorRepeated(res.answer, repeated), { project, today, source, existing }, vectors());
     const saved = saveRecords(records);
     disputeObsolete({ answer: res.answer, stale, runId, view });
     const reason = saved ? 'saved' : records.length ? 'write-failed' : 'nothing';
