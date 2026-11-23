@@ -22,7 +22,7 @@
 'use strict';
 
 import { t } from './util.js';
-import { POOL_MODEL_LIST, POOL_EFFORT_PLAN, poolFromPrefs, togglePoolModel, cleanPoolOptions, poolLabel, freeProfileIdOf, poolEffortLevel } from '../../workerPool.js';
+import { POOL_MODEL_LIST, POOL_EFFORT_PLAN, poolFromPrefs, togglePoolModel, cleanPoolOptions, poolLabel, poolModelLabelKey, freeProfileIdOf, poolEffortLevel } from '../../workerPool.js';
 import { poolEffortControl, setPoolEffort } from '../../poolEffort.js';
 
 /** The pool on screen (= the saved pref), or null before it was read. */
@@ -75,6 +75,12 @@ export function refreshPoolOptions() {
   return reading;
 }
 
+/** The menu text of a pool model: the translated family name when it has a key, else its product name. */
+export function poolModelText(model) {
+  const key = poolModelLabelKey(model);
+  return key ? t(key) : null;
+}
+
 /** A free entry's profile name from the live menu, else null. */
 function freeName(model) {
   const hit = options && options.free.find((f) => f.model === model);
@@ -83,7 +89,7 @@ function freeName(model) {
 
 /** The pool's text: 'Opus + Argon (agy) + Free: FreeLLMAPI - coding'. */
 export function poolText(list) {
-  return poolLabel(list, (model) => (freeProfileIdOf(model) ? t('orch.pool.free', { name: freeName(model) || freeProfileIdOf(model) }) : null));
+  return poolLabel(list, (model) => (freeProfileIdOf(model) ? t('orch.pool.free', { name: freeName(model) || freeProfileIdOf(model) }) : null), poolModelText);
 }
 
 /**
@@ -122,13 +128,13 @@ function menuRows(current) {
   // The ticked entry itself: its effort select reads it.
   const entryOf = (model) => current.find((e) => e.model === model) || null;
   const rows = POOL_MODEL_LIST.map((m) => {
-    if (m.runsOn !== 'agy') return { model: m.id, name: m.name, checked: ticked(m.id), disabled: false, hint: null, title: '' };
+    if (m.runsOn !== 'agy') return { model: m.id, name: poolModelText(m.id) || m.name, checked: ticked(m.id), disabled: false, hint: null, title: '' };
     const opt = options ? options.models.find((o) => o.model === m.id) : null;
     const available = !!(opt && opt.available);
     const hint = !options ? t('orch.pool.agyReading') : available ? null : t('orch.pool.agyMissing');
     const title = opt && opt.variants.length ? t('orch.pool.variants', { list: opt.variants.map((v) => v.name).join(', ') }) : '';
     // A ticked family that left the list stays untickable, so it can be removed.
-    return { model: m.id, name: m.name, checked: ticked(m.id), disabled: !available && !ticked(m.id), hint, title, entry: entryOf(m.id) };
+    return { model: m.id, name: poolModelText(m.id) || m.name, checked: ticked(m.id), disabled: !available && !ticked(m.id), hint, title, entry: entryOf(m.id) };
   });
   const listed = options ? options.free : [];
   for (const f of listed) {

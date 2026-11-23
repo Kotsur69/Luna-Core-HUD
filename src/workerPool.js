@@ -39,7 +39,7 @@ export const POOL_MODEL_LIST = Object.freeze([
   Object.freeze({ id: 'opus', name: 'Opus', runsOn: 'claude', tier: 'hard', family: null }),
   Object.freeze({ id: 'sonnet', name: 'Sonnet', runsOn: 'claude', tier: 'easy', family: null }),
   // The agy families (src/agyFamilies.js), strongest first.
-  ...agyFamilyList().map((f) => Object.freeze({ id: f.poolKey, name: f.name, runsOn: 'agy', tier: f.tier, family: f.family })),
+  ...agyFamilyList().map((f) => Object.freeze({ id: f.poolKey, name: f.name, labelKey: f.labelKey, runsOn: 'agy', tier: f.tier, family: f.family })),
 ]);
 
 /** The ids of POOL_MODEL_LIST. */
@@ -128,6 +128,12 @@ export function agyFamilyOf(key) {
 export function poolModelName(model) {
   const m = byId(model);
   return m ? m.name : null;
+}
+
+/** The renderer dictionary key of a pool model's translated name (agy families), else null. */
+export function poolModelLabelKey(model) {
+  const m = byId(model);
+  return m && m.labelKey ? m.labelKey : null;
 }
 
 /** The levels a Claude pool model ('opus' / 'sonnet') runs at, weakest first; [] for anything else. */
@@ -403,12 +409,13 @@ export function cleanPoolOptions(raw) {
  * A pool all "Per plan" reads as it always did.
  * @param {{model:string, effort?:string}[]} pool
  * @param {(model:string) => string|null} [nameOf] a free profile's name
+ * @param {(model:string) => string|null} [labelOf] a translated product name (agy family), else null
  * @returns {string}
  */
-export function poolLabel(pool, nameOf = () => null) {
+export function poolLabel(pool, nameOf = () => null, labelOf = () => null) {
   return (Array.isArray(pool) ? pool : [])
     .map((e) => {
-      const name = poolModelName(e.model) || nameOf(e.model) || freeProfileIdOf(e.model) || String(e.model);
+      const name = labelOf(e.model) || poolModelName(e.model) || nameOf(e.model) || freeProfileIdOf(e.model) || String(e.model);
       const level = poolEffortLevel(e);
       return level ? `${name} - ${level}` : name;
     })

@@ -33,3 +33,10 @@ test('a pick is offered only before Approve, in a pool run, for a pending packag
   assert.equal(canPick(plan, pkg, POOL, 'free'), false);
   assert.equal(packageModelsField(plan, POOL, variants), null, 'no picks = the payload as before');
 });
+
+test('pickText shows the translated agy family name when a translator is given', () => {
+  const choice = { model: 'agy-argon', effort: 'agy:gemini-4-argon-medium' };
+  const translate = (key) => (key === 'orch.agy.family.argon' ? 'Argon (tlum.)' : key);
+  assert.equal(pickText(choice, 'per plan', translate), 'Argon (tlum.) - medium');
+  assert.equal(pickText({ model: 'sonnet', effort: 'plan' }, 'per plan', translate), 'Sonnet - per plan');
+});

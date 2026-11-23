@@ -15,7 +15,7 @@
 
 'use strict';
 
-import { STRENGTH_ORDER, POOL_FREE_KEY, POOL_EFFORT_PLAN, isPoolRun, poolKeys, runsOnOf, claudePoolLevels, poolModelName, poolEffortLevel } from '../../workerPool.js';
+import { STRENGTH_ORDER, POOL_FREE_KEY, POOL_EFFORT_PLAN, isPoolRun, poolKeys, runsOnOf, claudePoolLevels, poolModelName, poolModelLabelKey, poolEffortLevel } from '../../workerPool.js';
 
 /** Picks on screen, `${planId}:${pkgId}` -> {model, effort}, until launched. */
 const picks = new Map();
@@ -50,9 +50,10 @@ export function pickOptions(pool, variantsOf) {
   });
 }
 
-/** A choice's text: 'Opus - xhigh', 'Argon (agy) - medium', 'Sonnet - <per plan>'. */
-export function pickText(choice, perPlan) {
-  const name = poolModelName(choice.model) || choice.model;
+/** A choice's text (translate = the dictionary lookup for an agy family's name): 'Opus - xhigh', 'Argon (agy) - medium', 'Sonnet - <per plan>'. */
+export function pickText(choice, perPlan, translate = null) {
+  const labelKey = poolModelLabelKey(choice.model);
+  const name = (labelKey && translate && translate(labelKey)) || poolModelName(choice.model) || choice.model;
   const level = choice.effort === POOL_EFFORT_PLAN ? perPlan : poolEffortLevel(choice) || choice.effort;
   return `${name} - ${level}`;
 }
@@ -108,7 +109,7 @@ export function packagePickView({ plan, pkg, pool, variantsOf, badge, t, onChang
   btn.className = 'pad-send';
   btn.disabled = disabled;
   btn.title = t('orch.pick.pkg.hint');
-  btn.textContent = pick ? pickText(pick, t('orch.pick.pkg.perPlan')) : badge || t('orch.pick.pkg.none');
+  btn.textContent = pick ? pickText(pick, t('orch.pick.pkg.perPlan'), t) : badge || t('orch.pick.pkg.none');
   btn.addEventListener('click', () => {
     if (open.has(key)) open.delete(key);
     else open.add(key);
@@ -128,7 +129,7 @@ export function packagePickView({ plan, pkg, pool, variantsOf, badge, t, onChang
   choices.forEach((c, i) => {
     const opt = document.createElement('option');
     opt.value = String(i);
-    opt.textContent = pickText(c, t('orch.pick.pkg.perPlan'));
+    opt.textContent = pickText(c, t('orch.pick.pkg.perPlan'), t);
     if (pick && c.model === pick.model && c.effort === pick.effort) opt.selected = true;
     select.append(opt);
   });
