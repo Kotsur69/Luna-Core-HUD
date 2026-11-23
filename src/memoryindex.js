@@ -24,6 +24,7 @@
 
 const { GLOBAL } = require('./memoryrecord');
 const { isStale, isDecayed } = require('./memoryreview');
+const { sourceOf } = require('./memorydocs');
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 50;
@@ -53,6 +54,14 @@ const KEYWORD_WEIGHT = 0.15;
 const SHORT_QUERY_TERMS = 3;
 const SHORT_QUERY_KEYWORD_WEIGHT = 0.4;
 const SEMANTIC_SNIPPET_CHARS = 160;
+
+// Repo doc chunks (src/memorydocs.js, decision 22) are reference material, not
+// verified lessons: their score is scaled down, and a search always lists its
+// memory hits before its doc hits.
+const DOC_SCORE_FACTOR = 0.55;
+/** When docs match, this many of a search's slots are kept for them (from a limit of DOC_RESERVE_MIN_LIMIT). */
+const DOC_RESERVED_SLOTS = 1;
+const DOC_RESERVE_MIN_LIMIT = 3;
 
 /** The distinct words of a question that are worth searching for. */
 function termsOf(query) {
@@ -97,6 +106,65 @@ function createIndex(records, { vectors = null } = {}) {
   }
 }
 
+/**
+ * A throwaway keyword index over doc chunks (src/memorydocs.js). Docs have no
+ * vectors: they are found by words only.
+ * @param {object[]} chunks from memorydocs createDocSource().chunksFor()
+ * @returns {{search: (query: string, limit: number) => object[], size: number, close: () => void}}
+ */
+function createDocIndex(chunks) {
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec("create virtual table doc using fts5(key unindexed, title, tags, body, tokenize = 'unicode61 remove_diacritics 2')");
+    const insert = db.prepare('insert into doc (key, title, tags, body) values (?, ?, ?, ?)');
+    const byKey = new Map();
+    for (const chunk of chunks) {
+      byKey.set(chunk.key, chunk);
+      insert.run(chunk.key, chunk.heading, chunk.file.replace(/[-_./]/g, ' '), chunk.text);
+    }
+    const { title, tags, body } = BM25_WEIGHTS;
+    const find = db.prepare(
+      `select key, bm25(doc, 0, ${title}, ${tags}, ${body}) as rank,
+              snippet(doc, 3, '', '', ' ... ', ${SNIPPET_TOKENS}) as snippet
+       from doc where doc match ? order by rank limit ${MAX_CANDIDATES}`,
+    );
+    function search(query, limit) {
+      if (!termsOf(query).length) return [];
+      return find
+        .all(toMatch(query))
+        .slice(0, limit)
+        .map((row) => {
+          const chunk = byKey.get(row.key);
+          return {
+            kind: 'doc',
+            key: chunk.key,
+            project: chunk.project,
+            file: chunk.file,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            heading: chunk.heading,
+            source: sourceOf(chunk),
+            snippet: row.snippet.replace(/\s+/g, ' ').trim(),
+            score: -row.rank * DOC_SCORE_FACTOR,
+          };
+        });
+    }
+    return { search, size: byKey.size, close: () => db.close() };
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+}
+
+/** Memory hits first, then doc hits; the doc hits get the free slots, or the reserved one. */
+function mergeDocs(memoryHits, docHits, max) {
+  if (!docHits.length) return memoryHits.slice(0, max);
+  const reserved = max >= DOC_RESERVE_MIN_LIMIT ? DOC_RESERVED_SLOTS : 0;
+  const docSlots = Math.min(docHits.length, Math.max(reserved, max - memoryHits.length));
+  return [...memoryHits.slice(0, max - docSlots), ...docHits.slice(0, docSlots)];
+}
+
 function buildIndex(db, records, vectors) {
   db.exec("create virtual table mem using fts5(key unindexed, title, tags, body, tokenize = 'unicode61 remove_diacritics 2')");
   const insert = db.prepare('insert into mem (key, title, tags, body) values (?, ?, ?, ?)');
@@ -125,11 +193,13 @@ function buildIndex(db, records, vectors) {
    *   lower (src/memoryreview.js). Without it, age plays no part;
    *   vector = the question's embedding: memories are ranked by meaning first
    *   and by keywords second. Without it (or without memory vectors) the
-   *   ranking is keywords only.
+   *   ranking is keywords only;
+   *   docs = a createDocIndex() of the project's repo docs: its hits follow the
+   *   memory hits, and never outrank one.
    * @returns {object[]} best first: {key, id, project, type, title, confidence,
    *   created, last_verified, source, links, snippet, stale, score}
    */
-  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null, today = null, vector = null, archived = false } = {}) {
+  function search(query, { project = null, limit = DEFAULT_LIMIT, only = null, today = null, vector = null, archived = false, docs = null } = {}) {
     const terms = termsOf(query);
     const semantic = Boolean(vector && vectors && vectors.size);
     if (!terms.length && !semantic) return [];
@@ -165,7 +235,8 @@ function buildIndex(db, records, vectors) {
         score: relevance * scope * CONFIDENCE_BOOST[record.confidence] * (stale ? STALE_FACTOR : 1),
       });
     }
-    return hits.sort((a, b) => b.score - a.score).slice(0, max);
+    hits.sort((a, b) => b.score - a.score);
+    return docs ? mergeDocs(hits, docs.search(query, max), max) : hits.slice(0, max);
   }
 
   /**
@@ -193,4 +264,4 @@ function buildIndex(db, records, vectors) {
   return { search, size: byKey.size, close: () => db.close() };
 }
 
-module.exports = { createIndex, toMatch, DEFAULT_LIMIT };
+module.exports = { createIndex, createDocIndex, toMatch, DEFAULT_LIMIT, DOC_SCORE_FACTOR };
