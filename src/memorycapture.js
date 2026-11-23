@@ -66,7 +66,8 @@ const { buildPrompt, outsideNote, withNote, LOW_USEFULNESS } = require('./memory
 const { semanticCandidates } = require('./memoryshield');
 const { sharedVectorStore } = require('./memoryembed');
 const { pendingCount } = require('./memoryinbox');
-const { rejectedTitles } = require('./memorylog');
+// Rejected titles of this PC and of the others (their _signals units).
+const { notWantedTitles } = require('./memorysignals');
 const { statusFrom, saveNote } = require('./memorynote');
 const { createLanding, autoEvent, heldEvent } = require('./memoryautoaccept');
 const { scrub } = require('./hostscrub');
@@ -361,7 +362,7 @@ function createCapture({
       called = true;
       return run(job);
     };
-    const notWanted = log ? rejectedTitles(log.read(), entry.project) : [];
+    const notWanted = notWantedTitles(log ? log.read() : [], entry.project);
     const res = await extractPiece({ text: piece.text, project: entry.project, dir: paths.dir, source, today: isoDate(now()), run: counted, notWanted, kind, vectors: vectors() });
     if (!res.ok) {
       const fails = entry.fails + 1;

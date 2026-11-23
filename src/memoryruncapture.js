@@ -51,7 +51,9 @@ const { buildPrompt, outsideNote, withNote } = require('./memoryextract');
 const { semanticCandidates } = require('./memoryshield');
 const { sharedVectorStore } = require('./memoryembed');
 const { pendingCount } = require('./memoryinbox');
-const { rejectedTitles, duplicateEvents } = require('./memorylog');
+const { duplicateEvents } = require('./memorylog');
+// Rejected titles of this PC and of the others (their _signals units).
+const { notWantedTitles } = require('./memorysignals');
 const { droppedEvents, MAX_PENDING } = require('./memorycapture');
 const { runDigest, countRunOutside, runFailureSignatures } = require('./memoryrundigest');
 const { recordFailures, repeatedFailures, uncoveredRepeats, floorRepeated, FAILURE_LEDGER_FILE } = require('./memoryfailures');
@@ -224,7 +226,7 @@ function createRunCapture({
     const outside = await outsideOf(repoPath, view);
     const mirror = scan(paths.dir).records;
     const existing = mirror.map(([, r]) => r).filter((r) => r.project === project || r.project === GLOBAL);
-    const notWanted = log ? rejectedTitles(log.read(), project) : [];
+    const notWanted = notWantedTitles(log ? log.read() : [], project);
     // Confirmed memories naming files the run integrated: listed in the same prompt (none = the prompt is unchanged).
     const stale = staleCandidates({ records: mirror, project, view });
     // The digest quotes worker and test output: mask what looks like a secret before it leaves the machine.
