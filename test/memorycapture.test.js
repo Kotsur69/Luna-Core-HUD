@@ -524,7 +524,7 @@ test('acceptance: with the score switch on, the 95 is auto-accepted with Undo; t
 
 // ---- Antigravity (agy) sessions ------------------------------------------------
 
-const { transcriptKind } = require('../src/memorycapture.js');
+const { transcriptKind, sessionTranscriptOf } = require('../src/memorycapture.js');
 const { readNote } = require('../src/memorynote.js');
 
 const AGY_CONV = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
@@ -653,7 +653,7 @@ test('agy: a session that read outside content notes it and leaves the note alon
   const file = s.transcript(agySession('a web search', [
     ['search_web', { Query: 'agy flags' }],
     ['call_mcp_tool', { ServerName: 'github', ToolName: 'get_issue' }],
-    ['call_mcp_tool', { ServerName: `lunacore-tab_1`, ToolName: 'memory_search' }],
+    ['call_mcp_tool', { ServerName: 'lunacore-s1', ToolName: 'memory_search' }],
     ['run_command', { CommandLine: 'npm test' }],
   ]));
   s.state.reply = { ok: true, answer: { ...answer('Agy help never exits').answer, status: AGY_STATUS } };
@@ -772,4 +772,53 @@ test('agy: extractPiece reads an agy piece with the agy digest', async (t) => {
   // Read as a Claude transcript the same text has no user turn: no model call.
   const asClaude = await extractPiece({ text, project: PROJECT, dir: memoryPaths(s.configDir).dir, source: 's', today: '2026-11-11', run });
   assert.equal(asClaude.reason, 'too-short');
+});
+
+test('agy: a ledger path written with forward slashes still works; `..` and stream names do not', (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('slashes'));
+  const slashed = file.split(path.sep).join('/');
+  assert.equal(transcriptKind(slashed, s.roots), 'agy');
+  const claudeFile = path.join(s.claudeDir, 'C--repo', 'cccccccc-3333.jsonl');
+  assert.equal(transcriptKind(claudeFile.split(path.sep).join('/'), s.roots), 'claude');
+  assert.equal(transcriptKind(`${path.dirname(slashed)}/../logs/transcript_full.jsonl`, s.roots), null);
+  if (process.platform === 'win32') {
+    assert.equal(transcriptKind(`${claudeFile}:stream.jsonl`, s.roots), null);
+    assert.equal(transcriptKind(path.join(s.claudeDir, 'C--repo', 'a.jsonl:x.jsonl'), s.roots), null);
+  }
+});
+
+test('a transcript the disk cannot check right now is skipped, not forgotten', async (t) => {
+  const s = agySetup(t);
+  const file = s.transcript(agySession('a locked file'));
+  s.capture.track({ file, project: PROJECT });
+  const realLstat = fs.lstatSync;
+  const lstat = t.mock.method(fs, 'lstatSync', (p, ...rest) => {
+    if (p === file) throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+    return realLstat(p, ...rest);
+  });
+
+  await s.capture.tick();
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(s.ledger().files[file], { project: PROJECT, done: 0, fails: 0, at: NOW });
+
+  lstat.mock.restore();
+  await s.capture.tick();
+  assert.equal(s.calls.length, 1);
+  assert.equal(s.ledger().files[file].done, fs.statSync(file).size);
+});
+
+test('sessionTranscriptOf: an agy tab gives its pinned conversation, a Claude tab its transcript', () => {
+  const claudeFileOf = (cwd, id) => path.join('/claude', cwd, `${id}.jsonl`);
+  const full = path.join('/agy', 'brain', AGY_CONV, '.system_generated', 'logs', 'transcript_full.jsonl');
+
+  assert.equal(sessionTranscriptOf({ agyWatcher: { pinned: { id: AGY_CONV, full } }, cwd: 'C:/repo' }, claudeFileOf), full);
+  // An agy tab that has not picked its conversation yet has none, never a guessed Claude file.
+  assert.equal(sessionTranscriptOf({ agyWatcher: { pinned: null }, transcriptId: 'abc', cwd: 'C:/repo' }, claudeFileOf), null);
+  assert.equal(sessionTranscriptOf({ watcher: { pinned: '/p.jsonl', currentFile: '/c.jsonl' } }, claudeFileOf), '/p.jsonl');
+  assert.equal(sessionTranscriptOf({ watcher: { currentFile: '/c.jsonl' } }, claudeFileOf), '/c.jsonl');
+  assert.equal(sessionTranscriptOf({ watcher: { sessionUuid: 'u1' }, transcriptId: 'u2', cwd: 'repo' }, claudeFileOf), claudeFileOf('repo', 'u1'));
+  assert.equal(sessionTranscriptOf({ transcriptId: 'u2', cwd: 'repo' }, claudeFileOf), claudeFileOf('repo', 'u2'));
+  assert.equal(sessionTranscriptOf({ transcriptId: 'u2' }, claudeFileOf), null);
+  assert.equal(sessionTranscriptOf(null, claudeFileOf), null);
 });

@@ -38,9 +38,12 @@
 // .system_generated/logs/transcript[_full].jsonl, src/agytranscript.js). The
 // kind picks the digest (src/memorydigest.js); both give the same shape, so
 // the extraction after it is the same. The ledger is a file anyone can edit,
-// so a path is opened only when it is absolute, normalized (no `..`), of the
-// right shape under one of the two roots, a plain file, and still under that
-// root once every link and junction on the way is resolved.
+// so a path is opened only when it is absolute, free of `..` and of NTFS
+// stream names, of the right shape under one of the two roots, a plain file,
+// and still under that root once every link and junction on the way is
+// resolved - checked when it is tracked, on every tick, and right before the
+// read. A check the disk cannot answer (a locked file) skips the file for
+// that tick; it never forgets the entry and its offset.
 // ============================================================================
 
 'use strict';
@@ -104,36 +107,63 @@ function isUnder(file, root) {
  * the real `root`: a symlinked file, or a link or junction on the way that
  * leads out of the root, is refused. A file not written yet passes: it is
  * checked again once it exists, before it is read.
+ * @throws when the disk cannot tell right now (a locked file, a file deleted
+ *   mid-check): the caller looks again later instead of deciding
  */
 function staysUnder(file, root) {
   let st;
   try {
     st = fs.lstatSync(file);
   } catch (err) {
-    return err.code === 'ENOENT' || err.code === 'ENOTDIR';
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return true;
+    throw err;
   }
   if (!st.isFile()) return false;
-  try {
-    const real = fs.realpathSync.native(file);
-    const realRoot = fs.realpathSync.native(root);
-    return isUnder(real, realRoot) && samePath(path.relative(realRoot, real), path.relative(root, file));
-  } catch (err) {
-    console.error('[memory] capture cannot resolve a transcript path:', errText(err));
-    return false;
-  }
+  const real = fs.realpathSync.native(file);
+  const realRoot = fs.realpathSync.native(root);
+  return isUnder(real, realRoot) && samePath(path.relative(realRoot, real), path.relative(root, file));
 }
 
+/** A `..` segment, with either separator: refused, never resolved away. */
+const hasParentSegment = (file) => file.split(/[\\/]/).includes('..');
+/** A colon past the drive letter: an NTFS alternate data stream (a.jsonl:x). */
+const hasStreamName = (file) => process.platform === 'win32' && file.indexOf(':', 2) !== -1;
+
 /**
- * The kind of transcript capture may open at `file`, or null.
+ * The kind of transcript capture may open at `file`, or null. Separators are
+ * normalized (a ledger written with `/` keeps working); `..` is refused.
  * @param {unknown} file
  * @param {{claude: string, agy: string}} roots resolved roots of both kinds
  * @returns {'claude'|'agy'|null}
+ * @throws when the disk cannot tell right now (see staysUnder)
  */
 function transcriptKind(file, roots) {
-  if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file) || path.normalize(file) !== file) return null;
-  if (agyTranscriptConversation(file, roots.agy)) return staysUnder(file, roots.agy) ? 'agy' : null;
-  if (file.endsWith('.jsonl') && isUnder(file, roots.claude)) return staysUnder(file, roots.claude) ? 'claude' : null;
+  if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file)) return null;
+  if (hasParentSegment(file) || hasStreamName(file)) return null;
+  const normal = path.normalize(file);
+  if (agyTranscriptConversation(normal, roots.agy)) return staysUnder(normal, roots.agy) ? 'agy' : null;
+  if (normal.endsWith('.jsonl') && isUnder(normal, roots.claude)) return staysUnder(normal, roots.claude) ? 'claude' : null;
   return null;
+}
+
+/**
+ * The transcript capture reads for one tab: an agy tab's pinned conversation
+ * (never a subagent's), else the Claude watcher's file, else the file a
+ * Claude session id names. Null while the tab has none yet.
+ * @param {{agyWatcher?: {pinned?: {full: string}|null}|null, watcher?: {sessionUuid?: string,
+ *   pinned?: string|null, currentFile?: string|null}|null, transcriptId?: string|null, cwd?: string}} session
+ * @param {(cwd: string, id: string) => string} claudeFileOf the Claude transcript of a session id
+ * @returns {string|null}
+ */
+function sessionTranscriptOf(session, claudeFileOf) {
+  if (!session) return null;
+  const agy = session.agyWatcher;
+  if (agy) return (agy.pinned && agy.pinned.full) || null;
+  const watcher = session.watcher;
+  const pinned = watcher && (watcher.pinned || watcher.currentFile);
+  if (pinned) return pinned;
+  const id = (watcher && watcher.sessionUuid) || session.transcriptId;
+  return id && session.cwd ? claudeFileOf(session.cwd, id) : null;
 }
 
 /**
@@ -257,9 +287,17 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
 
   const save =(ledger) => writeAtomic(ledgerFile, `${JSON.stringify(ledger)}\n`);
   /** Only a transcript under Claude Code's or agy's own folder is ever opened: the ledger is a file anyone can edit. */
-  const kindOf = (file) => transcriptKind(file, roots);
+  /** transcriptKind, or undefined when the disk cannot tell right now: the file is looked at again next tick. */
+  const kindOf = (file) => {
+    try {
+      return transcriptKind(file, roots);
+    } catch (err) {
+      console.error('[memory] capture cannot check a transcript path now:', errText(err));
+      return undefined;
+    }
+  };
   /** The session a transcript belongs to: Claude's file name, agy's conversation folder. */
-  const sessionOf = (file, kind) => (kind === 'agy' ? agyTranscriptConversation(file, roots.agy) : path.basename(file, '.jsonl'));
+  const sessionOf = (file, kind) => (kind === 'agy' ? agyTranscriptConversation(path.normalize(file), roots.agy) : path.basename(file, '.jsonl'));
 
   function note(ledger, { file, project }) {
     if (!kindOf(file) || !projectFromRepoKey(project)) return false;
@@ -293,6 +331,9 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
    */
   async function processFile(file, entry, { size, mtimeMs }, kind) {
     if (pendingCount(paths.dir, entry.project) >= MAX_PENDING) return null;
+    // Checked again right before the open, with no await in between: earlier
+    // model calls of this tick gave a link time to appear since the first check.
+    if (kindOf(file) !== kind) return null;
     const piece = readPiece(file, entry.done, size);
     if (piece.end <= entry.done) return null;
     const session = sessionOf(file, kind);
@@ -373,6 +414,7 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
         }
         const isLive = liveFiles.has(file);
         const kind = stat ? kindOf(file) : null;
+        if (kind === undefined) continue;
         const forget = !kind || !stat || !enabled.includes(entry.project) || (stat.size <= entry.done && !isLive && now() - entry.at > KEEP_MS);
         if (forget) {
           delete ledger.files[file];
@@ -427,4 +469,4 @@ function createCapture({ configDir, machine, run, live = () => [], now = Date.no
   };
 }
 
-module.exports = { createCapture, extractPiece, transcriptKind, readPiece, readLedger, droppedEvents, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING, MIN_DIGEST_CHARS };
+module.exports = { createCapture, extractPiece, transcriptKind, sessionTranscriptOf, readPiece, readLedger, droppedEvents, LEDGER_FILE, IDLE_MS, SETTLE_MS, MAX_FAILS, MAX_PENDING, MIN_DIGEST_CHARS };

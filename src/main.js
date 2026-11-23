@@ -278,7 +278,7 @@ const { readEnabled: readMemoryProjects } = require('./memoryprojects');
 const { projectFromRepoKey } = require('./memoryrecord');
 const { createRepoKeys, findRepo } = require('./missionrepokey');
 // Phase 4: capture from finished sessions (src/memorycapture.js) and the inbox.
-const { createCapture } = require('./memorycapture');
+const { createCapture, sessionTranscriptOf } = require('./memorycapture');
 // One capture per finished God Mode run, from its report (src/memoryruncapture.js).
 const { createRunCapture } = require('./memoryruncapture');
 const { listInbox: listMemoryInbox } = require('./memoryinbox');
@@ -1213,11 +1213,7 @@ function logCardStart(session, loaded, tools) {
 function captureSourceOf(session) {
   try {
     if (!session || orchestraRuns.ownsSession(session.id)) return null;
-    const id = (session.watcher && session.watcher.sessionUuid) || session.transcriptId;
-    const pinned = session.watcher && (session.watcher.pinned || session.watcher.currentFile);
-    const agy = session.agyWatcher;
-    const file = agy ? (agy.pinned && agy.pinned.full) || null
-      : pinned || (id && session.cwd ? path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(session.cwd), `${id}.jsonl`) : null);
+    const file = sessionTranscriptOf(session, (cwd, id) => path.join(os.homedir(), '.claude', 'projects', encodeProjectDir(cwd), `${id}.jsonl`));
     const project = file ? memoryProjectOf(session) : null;
     return project ? { file, project } : null;
   } catch (err) {
