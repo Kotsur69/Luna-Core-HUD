@@ -144,6 +144,10 @@ const LIVE_MAP_FILES = [
   'src/renderer/modules/workmap.js',
   'src/renderer/modules/liveMapLunasWork.js',
   'src/renderer/modules/lunasworkMapView.js',
+  'src/renderer/modules/liveWebView.js',
+  'src/renderer/modules/liveWebInspector.js',
+  'src/renderer/modules/liveWebDraw.js',
+  'src/renderer/modules/orchestraLiveWeb.js',
 ];
 
 function usedKeys() {
@@ -180,6 +184,34 @@ test('every lm.* key is defined in both languages (no one-sided entries)', () =>
 test('Polish live-map strings carry no diacritics (repo convention)', () => {
   const lines = PL_SRC.split('\n').filter((l) => /^\s*'lm\./.test(l));
   for (const line of lines) assert.doesNotMatch(line, /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/, line);
+});
+
+test('Live Web: runtime-built keys and the #orchestra Board | Live Web tabs exist in pl and en', () => {
+  const { LAYERS, FILTER_LAYERS } = require('../src/renderer/modules/liveWebModel.js');
+  const keys = [];
+  for (const layer of LAYERS) keys.push(`lm.web.layer.${layer}`);
+  // Filter toggles, plus the "+N workers" summary when the cap drops workers.
+  for (const layer of [...FILTER_LAYERS, 'worker']) keys.push(`lm.web.filter.${layer}`);
+  for (const mode of ['web', 'deps']) keys.push(`lm.web.mode.${mode}`);
+  // The inspector names a worker's state and a verify phase through the board's own keys.
+  for (const state of ['pending', 'launched', 'finishing', 'waitingVerify', 'pushed', 'failed', 'stalled', 'killed', 'closed']) keys.push(`orch.state.${state}`);
+  for (const kind of ['search', 'get', 'verify', 'propose']) keys.push(`lm.wm.mem.${kind}`);
+  const html = read('src/renderer/index.html');
+  const start = html.indexOf('<div id="orchestra"');
+  const block = html.slice(start, html.indexOf('</div>\n  </div>', start));
+  const tabKeys = [...block.matchAll(/data-i18n(?:-aria)?="(lm\.web\.[^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(tabKeys.sort(), ['lm.web.tab.board', 'lm.web.tab.web', 'lm.web.tabs.label']);
+  for (const key of [...keys, ...tabKeys]) {
+    assert.ok(has(PL_SRC, key), `missing pl: ${key}`);
+    assert.ok(has(EN_SRC, key), `missing en: ${key}`);
+  }
+});
+
+test('Live Web modules never build HTML from strings', () => {
+  for (const file of ['liveWebView.js', 'liveWebInspector.js', 'liveWebDraw.js', 'liveWebModel.js', 'orchestraLiveWeb.js']) {
+    const src = read(`src/renderer/modules/${file}`);
+    assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/, file);
+  }
 });
 
 test('the live map is listed in the Ctrl+/ panel and Ctrl+G leaves the shifted chord alone', () => {

@@ -32,9 +32,15 @@ import { createToolbar, summaryPanel } from './liveMapToolbar.js';
 import {
   DIRECTIONS, STORAGE_DIR, readPref, writePref, graphStatus, doneSummary, summaryLists, matchesFilter, runChips, elapsedLabel,
 } from './liveMapHelpers.js';
+import { createLiveWeb } from './liveWebView.js';
+import { closeDiffModal } from './activefiles.js';
 
 // Elapsed hints and "long-stalled" age without a push; a repaint, not a fetch.
 const CLOCK_TICK_MS = 30 * 1000;
+// Live Web | Dependencies (#agymap slice 3). Nothing stored = Live Web on an active run.
+const MODES = ['web', 'deps'];
+const STORAGE_MODE = 'lunacore.liveMap.godmodeView';
+const ACTIVE_PKG_STATES = new Set(['launched', 'finishing']);
 // How long the located card on the board stays highlighted.
 const LOCATE_HIGHLIGHT_MS = 2400;
 const TIP_GAP_PX = 10;
@@ -90,8 +96,13 @@ export function createGodModeTab(shell) {
     trace: false,
     selectedId: null,
     loading: false,
+    // Mati's Live Web | Dependencies pick; '' = not picked yet (the run decides).
+    mode: readPref(storage(), STORAGE_MODE, MODES, ''),
   };
   let dom = null;
+  let web = null;
+  // The mode the run decided while Mati has not picked one; null = decide on the next render.
+  let autoMode = null;
   let graphView = null;
   let graph = null;
   let layout = null;
@@ -142,9 +153,78 @@ export function createGodModeTab(shell) {
     const side = el('aside', 'lm-side');
     side.hidden = true;
     body.append(stage, side);
-    panel.replaceChildren(runs, toolbar.root, body);
-    dom = { panel, runs, toolbar, stage, message, banner, host, summary, tip, side };
+    const modes = el('div', 'lm-toolbar__group lm-gm__modes');
+    modes.setAttribute('role', 'group');
+    const modeButtons = new Map();
+    for (const mode of MODES) {
+      const btn = el('button', 'lm-tool');
+      btn.type = 'button';
+      btn.addEventListener('click', () => setMode(mode));
+      modeButtons.set(mode, btn);
+      modes.append(btn);
+    }
+    const head = el('div', 'lm-gm__head');
+    head.append(runs, modes);
+    web = createLiveWeb({
+      bridge: window.lunacore,
+      getView: viewNow,
+      getRunLabel: runLabel,
+      gotoWorker,
+      showOnBoard: (pkgId) => showOnBoard(pkgId),
+    });
+    panel.replaceChildren(head, toolbar.root, body, web.root);
+    dom = { panel, runs, modes, modeButtons, toolbar, body, stage, message, banner, host, summary, tip, side };
     graphView = createGraphView(host, { onSelect: select, onOpen: showOnBoard, onHover: hover });
+  }
+
+  // --- Live Web | Dependencies ---------------------------------------------------
+
+  /** The chip label of the run on screen, for the web's middle node. */
+  function runLabel() {
+    const chip = board.chips().find((c) => c && c.projectId === s.project);
+    return (chip && chip.label) || '';
+  }
+
+  /**
+   * What shows: Mati's pick, else the Live Web when the run had a worker
+   * running as it came on screen. That choice holds until the run or the tab
+   * changes, so the last worker finishing never swaps the view under the cursor.
+   */
+  function modeNow() {
+    if (s.mode) return s.mode;
+    if (autoMode) return autoMode;
+    const view = viewNow();
+    if (!view) return 'deps';
+    const active = Array.isArray(view.packages) && view.packages.some((p) => p && ACTIVE_PKG_STATES.has(p.state));
+    autoMode = active ? 'web' : 'deps';
+    return autoMode;
+  }
+
+  function setMode(mode) {
+    if (!MODES.includes(mode)) return;
+    s.mode = mode;
+    writePref(storage(), STORAGE_MODE, mode);
+    if (mode === 'deps') fitPending = true;
+    renderSoon();
+  }
+
+  /** Shows one of the two views; the web runs (frame, feeds) only while it shows. */
+  function applyMode(mode) {
+    const onWeb = mode === 'web';
+    dom.toolbar.root.hidden = onWeb;
+    dom.body.hidden = onWeb;
+    web.root.hidden = !onWeb;
+    dom.modes.setAttribute('aria-label', t('lm.web.mode.label'));
+    for (const [key, btn] of dom.modeButtons) {
+      btn.textContent = t(`lm.web.mode.${key}`);
+      btn.setAttribute('aria-pressed', key === mode ? 'true' : 'false');
+    }
+    if (onWeb && shown) {
+      web.show();
+      web.refresh();
+    } else {
+      web.hide();
+    }
   }
 
   // --- actions ---------------------------------------------------------------
@@ -168,6 +248,8 @@ export function createGodModeTab(shell) {
     s.trace = false;
     fitPending = true;
     layoutSig = '';
+    autoMode = null;
+    if (web) web.resetRun();
   }
 
   function selectRun(projectId) {
@@ -332,6 +414,13 @@ export function createGodModeTab(shell) {
     if (s.project !== undefined && picked !== s.project) resetRunState();
     s.project = picked;
     renderRuns(chips);
+    const mode = modeNow();
+    applyMode(mode);
+    if (mode === 'web') {
+      // The dependency graph is hidden: nothing of it to lay out or hover.
+      if (hoverId) hover(null, null);
+      return;
+    }
     const view = viewNow();
     graph = buildGraph(view);
     const status = graphStatus(view, graph, { loading: s.loading });
@@ -403,6 +492,8 @@ export function createGodModeTab(shell) {
     unmount() {
       if (graphView) graphView.destroy();
       graphView = null;
+      if (web) web.destroy();
+      web = null;
       dom = null;
     },
     onShow() {
@@ -413,6 +504,8 @@ export function createGodModeTab(shell) {
       }
       if (!tick) tick = setInterval(renderSoon, CLOCK_TICK_MS);
       fitPending = true;
+      // Every open looks at the run afresh (an idle run that started since gets the web).
+      autoMode = null;
       refetch();
     },
     onHide() {
@@ -424,19 +517,26 @@ export function createGodModeTab(shell) {
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
       if (dom) hover(null, null);
+      // The web's frame, its process snapshot and its model feed stop with the tab.
+      if (web) web.hide();
     },
     /** Re-renders labels after a language switch. */
     onLang() {
       layoutSig = '';
       sideSig = '';
       summarySig = '';
+      if (web) web.onLang();
       renderSoon();
     },
     /**
-     * Keys while this tab shows. Esc clears the selection first (true = consumed).
+     * Keys while this tab shows. Esc closes a diff opened from the web, then
+     * clears a selection (true = consumed). On the Live Web every other key
+     * is the web's own (its canvas listens).
      * @param {KeyboardEvent} e
      */
     onKey(e) {
+      if (e.key === 'Escape' && closeDiffModal()) return true;
+      if (dom && web && !web.root.hidden) return e.key === 'Escape' ? web.onKey(e) : false;
       if (e.key === 'Escape') {
         if (!s.selectedId) return false;
         const id = s.selectedId;

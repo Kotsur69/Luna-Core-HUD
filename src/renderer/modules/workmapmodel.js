@@ -281,6 +281,22 @@ export function tabStateOf(state, sessionId) {
   return state.tabs.get(sessionId) || null;
 }
 
+/**
+ * The context share (0..1) of a tab, or null without a sample. tokens / limit
+ * when both are known (observer.js derives `percent` from them); else the
+ * percent field, read as a fraction when it is 0..1 - observer.js sends 0..1,
+ * while this module documents (and clamps to) 0..100.
+ * @param {{contextTokens?:number|null, contextLimit?:number|null, contextPercent?:number|null}|null} tab
+ * @returns {number|null}
+ */
+export function contextFraction(tab) {
+  if (!tab || typeof tab !== 'object') return null;
+  const { contextTokens: tokens, contextLimit: limit, contextPercent: pct } = tab;
+  if (Number.isFinite(tokens) && Number.isFinite(limit) && limit > 0) return Math.min(1, Math.max(0, tokens / limit));
+  if (!Number.isFinite(pct)) return null;
+  return Math.min(1, Math.max(0, pct <= 1 ? pct : pct / 100));
+}
+
 // ---- Helpers ---------------------------------------------------------------
 
 function isObject(v) {

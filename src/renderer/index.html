@@ -52,6 +52,8 @@
   <link rel="stylesheet" href="workmap.css" />
   <!-- Live map, Luna's Work tab: the iteration loop (modules/liveMapLunasWork.js), same reason. -->
   <link rel="stylesheet" href="lunasworkmap.css" />
+  <!-- God Mode Live Web (modules/liveWebView.js): live map + #orchestra board, same reason. -->
+  <link rel="stylesheet" href="liveweb.css" />
 </head>
 <body>
   <!-- ================= HUD =================
@@ -1242,6 +1244,11 @@
       <div class="palette__bar">
         <span class="palette__glyph">&#x2442;</span>
         <span class="orchestra__heading" data-i18n="orch.title">Plan God Mode</span>
+        <!-- Board | Live Web (#agymap slice 3, modules/orchestraLiveWeb.js). -->
+        <div class="lm-tabs orchestra__views" role="tablist" data-i18n-aria="lm.web.tabs.label" aria-label="Widok God Mode">
+          <button type="button" class="lm-tabs__tab" role="tab" id="orchestra-tab-board" data-orch-view="board" aria-controls="orchestra-body" aria-selected="true" tabindex="0" data-i18n="lm.web.tab.board">Tablica</button>
+          <button type="button" class="lm-tabs__tab" role="tab" id="orchestra-tab-web" data-orch-view="web" aria-controls="orchestra-web" aria-selected="false" tabindex="-1" data-i18n="lm.web.tab.web">Zywa siec</button>
+        </div>
         <button
           type="button"
           class="libraries__closebtn"
@@ -1253,6 +1260,7 @@
         >×</button>
       </div>
       <div id="orchestra-body" class="libraries libraries-overlay__body orchestra__body" aria-live="polite"></div>
+      <div id="orchestra-web" class="orchestra__web" role="tabpanel" aria-labelledby="orchestra-tab-web" hidden></div>
       <div class="palette__foot orchestra__foot">
         <button
           type="button"
