@@ -563,6 +563,12 @@ contextBridge.exposeInMainWorld('lunacore', {
     }),
   /** Read only: one memory's source, supersede chain, links and this PC's log about it. Promise<{ok, ...} | {ok:false, reason}>. */
   memoryProvenance: (key) => ipcRenderer.invoke('memory:provenance', typeof key === 'string' ? key : ''),
+  /** Read only: the scrubbed excerpt of the session or run a memory came from. Promise<{ok, excerpt, ...} | {ok:false, reason}>. */
+  memoryOriginSnippet: (key) => ipcRenderer.invoke('memory:origin-snippet', typeof key === 'string' ? key : ''),
+  /** One lean model call: why this memory was proposed from its excerpt. Promise<{ok, verdict, text} | {ok:false, reason}>. */
+  memoryInterrogate: (key) => ipcRenderer.invoke('memory:interrogate', typeof key === 'string' ? key : ''),
+  /** Copies every memory to a folder main asks for in its own dialog: no path crosses. Promise<{ok, folder, files, skipped} | {ok:false, reason}>. */
+  memoryExport: () => ipcRenderer.invoke('memory:export'),
   /** The memory files changed (capture, a sync, an approval). Returns an unsubscribe. */
   onMemoryChanged: (cb) => {
     if (typeof cb !== 'function') return () => {};
