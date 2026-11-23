@@ -290,3 +290,37 @@ test('Esc is left to the live map when nothing of the tab is open on top', () =>
   assert.equal(tab.onKey({ key: 'Enter' }), false);
   assert.equal(tab.onKey(null), false);
 });
+
+// --- Hooks station -----------------------------------------------------------------
+
+test('the Hooks station is laid out with the others, clear of them', () => {
+  const pos = W.stationLayout(STATIONS);
+  const hooks = pos.find((p) => p.id === 'hooks');
+  assert.ok(hooks, 'hooks is placed');
+  for (const other of pos) {
+    if (other === hooks) continue;
+    assert.ok(Math.hypot(hooks.x - other.x, hooks.y - other.y) > 2 * W.STATION_R + 20, `hooks vs ${other.id}`);
+  }
+});
+
+test('a hook refusal shows as one failed, finished call on the Hooks station only', () => {
+  const prev = createTabState();
+  const next = {
+    ...prev,
+    stations: {
+      ...prev.stations,
+      hooks: { inFlight: 0, total: 1, errors: 1, lastError: { callId: 'e1', at: 1, message: 'no' } },
+    },
+  };
+  const d = W.callDeltas(prev, next);
+  assert.deepEqual(d.hooks, { started: 1, ended: 1, failed: 1 });
+  assert.deepEqual(d.files, { started: 0, ended: 0, failed: 0 });
+});
+
+test('the Hooks station has a name in both languages, polish without diacritics', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'i18n.js'), 'utf8');
+  const pl = /'lm\.wm\.station\.hooks': '([^']+)'/g;
+  const found = [...src.matchAll(pl)].map((m) => m[1]);
+  assert.deepEqual(found, ['Hooki', 'Hooks']);
+  for (const text of found) assert.ok(/^[\x20-\x7e]+$/.test(text), text);
+});

@@ -630,3 +630,99 @@ test('tabStateOf reads any tab by id, null for junk or unknown ids', () => {
   assert.equal(tabStateOf(s, 42), null);
   assert.equal(tabStateOf(null, 'one'), null);
 });
+
+// ---- Hooks station, built-in tool errors and the Skill tool -------------------
+
+const { isHookRefusal } = require('../src/renderer/modules/workmapmodel.js');
+
+const startNamed = (id, tile, toolName, at = 1000) => ({ phase: 'start', id, tile, toolName, at, file: '' });
+const endWith = (id, tile, extra, at = 1500) => ({ phase: 'end', id, tile, at, file: '', ...extra });
+
+test('STATIONS has a Hooks station and createTabState starts it idle', () => {
+  assert.ok(STATIONS.includes('hooks'));
+  assert.deepEqual(createTabState().stations.hooks, { inFlight: 0, total: 0, errors: 0, lastError: null });
+});
+
+test('a Skill call (empty tile, toolName Skill) lights the Skills station and settles', () => {
+  let s = applyEvent(createState(), tools([startNamed('k1', '', 'Skill')]));
+  assert.equal(tab(s).stations.skills.inFlight, 1);
+  assert.equal(tab(s).stations.other.total, 0);
+  assert.equal(tab(s).recent[0].tool, 'Skill');
+  s = applyEvent(s, tools([endWith('k1', '', { toolName: 'Skill', isError: false })]));
+  assert.equal(tab(s).stations.skills.inFlight, 0);
+  assert.equal(tab(s).stations.skills.total, 1);
+  assert.equal(tab(s).stations.skills.errors, 0);
+});
+
+test('a toolName start maps like the tile it comes with', () => {
+  const s = applyEvent(createState(), tools([startNamed('t1', 'Shell', 'PowerShell')]));
+  assert.equal(tab(s).stations.shell.inFlight, 1);
+});
+
+test('isHookRefusal: toolDenialKind alone, the PreToolUse prefix alone, neither', () => {
+  assert.equal(isHookRefusal({ toolDenialKind: 'hook' }), true);
+  assert.equal(isHookRefusal({ error: 'PreToolUse:Edit hook error: nope' }), true);
+  assert.equal(isHookRefusal({ error: '  PreToolUse:Bash hook error: nope' }), true);
+  assert.equal(isHookRefusal({ isError: true, error: 'Exit code 1' }), false);
+  assert.equal(isHookRefusal({ toolDenialKind: '' }), false);
+  assert.equal(isHookRefusal(null), false);
+  assert.equal(isHookRefusal('PreToolUse:'), false);
+});
+
+test('a refusal flagged by toolDenialKind lights Hooks red, not the Edit', () => {
+  let s = applyEvent(createState(), tools([startNamed('e1', 'Edit', 'Edit')]));
+  s = applyEvent(s, tools([endWith('e1', 'Edit', { toolName: 'Edit', isError: true, toolDenialKind: 'hook', error: 'gate says no' })]));
+  const t = tab(s);
+  assert.equal(t.stations.files.inFlight, 0);
+  assert.equal(t.stations.files.errors, 0, 'the refused Edit is not a failed Edit');
+  assert.equal(t.stations.hooks.errors, 1);
+  assert.equal(t.stations.hooks.total, 1);
+  assert.equal(t.stations.hooks.inFlight, 0);
+  assert.equal(t.stations.hooks.lastError.callId, 'e1');
+  assert.equal(t.stations.hooks.lastError.message, 'gate says no');
+  assert.equal(t.pulses.length, 0);
+  assert.equal(t.recent[0].status, 'failed');
+  assert.equal(t.recent[0].station, 'hooks', 'the ticker files it under Hooks');
+});
+
+test('a refusal flagged only by the PreToolUse: prefix lands on Hooks too', () => {
+  let s = applyEvent(createState(), tools([startNamed('w1', 'Write', 'Write')]));
+  s = applyEvent(s, tools([endWith('w1', 'Write', { isError: true, error: 'PreToolUse:Write hook error: [gate] read it first' })]));
+  assert.equal(tab(s).stations.hooks.errors, 1);
+  assert.equal(tab(s).stations.files.errors, 0);
+  assert.match(tab(s).stations.hooks.lastError.message, /^PreToolUse:Write/);
+});
+
+test('an ordinary built-in tool error is a red error on its own station, not on Hooks', () => {
+  let s = applyEvent(createState(), tools([startNamed('b1', 'Shell', 'Bash')]));
+  s = applyEvent(s, tools([endWith('b1', 'Shell', { toolName: 'Bash', isError: true, error: 'Exit code 2' })]));
+  const t = tab(s);
+  assert.equal(t.stations.shell.errors, 1);
+  assert.equal(t.stations.shell.lastError.message, 'Exit code 2');
+  assert.equal(t.stations.hooks.errors, 0);
+  assert.equal(t.stations.hooks.total, 0);
+  assert.equal(t.recent[0].status, 'failed');
+  assert.equal(t.recent[0].station, 'shell');
+});
+
+test('isError false leaves a clean end clean, and an error text is cleaned of control characters', () => {
+  let s = applyEvent(createState(), tools([startNamed('r1', 'Read', 'Read')]));
+  s = applyEvent(s, tools([endWith('r1', 'Read', { isError: false })]));
+  assert.equal(tab(s).stations.files.errors, 0);
+  s = applyEvent(s, tools([startNamed('r2', 'Read', 'Read')]));
+  s = applyEvent(s, tools([endWith('r2', 'Read', { isError: true, error: 'bad‮\nthing' })]));
+  assert.equal(tab(s).stations.files.lastError.message, 'bad thing');
+});
+
+test('a refusal of a call that never opened here is an orphan end and changes nothing', () => {
+  const s0 = applyEvent(createState(), tools([startNamed('x0', 'Read', 'Read')]));
+  const s1 = applyEvent(s0, tools([endWith('nope', 'Edit', { isError: true, toolDenialKind: 'hook' })]));
+  assert.equal(s1, s0);
+});
+
+test('an MCP failure still lands on its own station, never on Hooks', () => {
+  let s = applyEvent(createState(), mcp([{ phase: 'start', id: 'm1', server: 'srv', tool: 'go', at: 1 }]));
+  s = applyEvent(s, mcp([{ phase: 'end', id: 'm1', server: 'srv', tool: 'go', at: 2, ok: false, content: 'PreToolUse:x' }]));
+  assert.equal(tab(s).stations.mcp.errors, 1);
+  assert.equal(tab(s).stations.hooks.errors, 0);
+});

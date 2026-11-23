@@ -120,8 +120,9 @@ const angleDist = (a, b) => {
 };
 
 test('every station gets its slots on the map, clear of discs, the context ring, labels and each other', () => {
-  const geometry = { center: W.CENTER, view: W.VIEW, stationR: W.STATION_R };
   const stations = W.stationLayout(STATIONS);
+  // The map hands the slots its station centres and label rule, as workmap.js buildMap() does.
+  const geometry = { center: W.CENTER, view: W.VIEW, stationR: W.STATION_R, stations, labelY: W.stationLabelY };
   const all = [];
   for (const pos of stations) {
     const slots = SAT.satelliteSlots(pos, geometry);
