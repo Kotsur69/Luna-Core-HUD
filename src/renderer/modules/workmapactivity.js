@@ -106,7 +106,8 @@ function lineCount(value) {
  * @returns {CallInfo}
  */
 export function toolCallInfo(ev, station) {
-  const tool = cleanText(typeof ev.name === 'string' && ev.name ? ev.name : ev.tile, MAX_NAME_CHARS);
+  // The tile when there is one; the Skill tool has none, so its name stands in.
+  const tool = cleanText(typeof ev.name === 'string' && ev.name ? ev.name : ev.tile || ev.toolName, MAX_NAME_CHARS);
   const detail = cleanText(ev.detail);
   const file = cleanPath(ev.file);
   let item = null;
@@ -164,13 +165,14 @@ export function addRecent(recent, callId, station, info, at) {
  * @param {string} callId
  * @param {'ok'|'failed'|'dropped'} status
  * @param {{added:number, removed:number}} lines
+ * @param {string|null} [station] moves the line to this station (a hook refusal belongs to Hooks, not to the refused tool's)
  * @returns {RecentCall[]}
  */
-export function settleRecent(recent, callId, status, lines) {
+export function settleRecent(recent, callId, status, lines, station = null) {
   const i = recent.findLastIndex((e) => e.callId === callId);
   if (i < 0) return recent;
   const next = recent.slice();
-  next[i] = { ...recent[i], status, added: lines.added, removed: lines.removed };
+  next[i] = { ...recent[i], status, added: lines.added, removed: lines.removed, ...(station ? { station } : {}) };
   return next;
 }
 

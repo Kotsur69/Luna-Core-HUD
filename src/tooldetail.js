@@ -102,12 +102,14 @@ function maskLongRun(run) {
 
 /**
  * Removes whatever looks like a credential from display text and cuts it to
- * MAX_DETAIL_CHARS. Over-scrubbing (an `author: x` field) is accepted; a
+ * MAX_DETAIL_CHARS (or `max`, for text that is allowed to be longer, such as
+ * an error prefix). Over-scrubbing (an `author: x` field) is accepted; a
  * token on screen is not.
  * @param {unknown} value
+ * @param {number} [max] cut length, at most MAX_SCRUB_CHARS
  * @returns {string} '' for anything that is not a string
  */
-function scrubSecrets(value) {
+function scrubSecrets(value, max = MAX_DETAIL_CHARS) {
   const text = plainText(value, MAX_SCRUB_CHARS);
   if (!text) return '';
   const masked = scrub(text)
@@ -115,7 +117,29 @@ function scrubSecrets(value) {
     .replace(SECRET_FLAG_RE, `$1 ${MASK}`)
     .replace(SECRET_PAIR_RE, `$1$2${MASK}`)
     .replace(LONG_RUN_RE, maskLongRun);
-  return clip(masked);
+  return clip(masked, Math.min(max, MAX_SCRUB_CHARS));
+}
+
+/** Longest error prefix a tool end event carries. */
+const MAX_ERROR_PREFIX_CHARS = 160;
+
+/**
+ * A short, secret-scrubbed prefix of a tool_result's content (a string, or
+ * the `[{type:'text', text}]` shape), for an error: the tool's own message
+ * starts with what failed, and a hook refusal starts with `PreToolUse:`.
+ * @param {unknown} content a tool_result's `content`
+ * @returns {string} '' when there is no text
+ */
+function errorPrefix(content) {
+  let text = '';
+  if (typeof content === 'string') text = content;
+  else if (Array.isArray(content)) {
+    text = content
+      .filter((part) => part && typeof part === 'object' && typeof part.text === 'string')
+      .map((part) => part.text)
+      .join(' ');
+  }
+  return scrubSecrets(text, MAX_ERROR_PREFIX_CHARS);
 }
 
 
@@ -213,6 +237,8 @@ function claudeToolDetail(name, input) {
     case 'Grep':
     case 'Glob':
       return scrubSecrets(args.pattern);
+    case 'Skill':
+      return safeLabel(args.skill);
     default:
       return '';
   }
@@ -224,4 +250,6 @@ module.exports = {
   commandSummary,
   safeLabel,
   claudeToolDetail,
+  errorPrefix,
+  MAX_ERROR_PREFIX_CHARS,
 };

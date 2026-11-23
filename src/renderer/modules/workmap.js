@@ -357,7 +357,7 @@ function buildMap(onPickSatellite) {
     items.set(pos.id, { ...station, spoke, seg });
   }
   const pool = createPacketPool(packetLayer);
-  const sats = createSatelliteLayer(satLayer, positions, { center: CENTER, view: VIEW, stationR: STATION_R }, onPickSatellite);
+  const sats = createSatelliteLayer(satLayer, positions, { center: CENTER, view: VIEW, stationR: STATION_R, stations: positions, labelY: stationLabelY }, onPickSatellite);
   root.append(spokes, packetLayer, satLayer, core.g, stationLayer);
   return { root, core, items, pool, sats };
 }

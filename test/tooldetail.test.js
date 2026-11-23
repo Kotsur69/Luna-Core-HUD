@@ -179,3 +179,29 @@ test('observer start events carry the sanitized detail through foldToolEvents; e
   assert.equal('detail' in events.find((e) => e.phase === 'end'), false);
   assert.ok(!leaks(JSON.stringify(events)));
 });
+
+// ---- errorPrefix and the Skill detail (Live Work Map) ---------------------------
+
+const { errorPrefix, MAX_ERROR_PREFIX_CHARS } = require('../src/tooldetail');
+
+test('errorPrefix reads a string or text parts, one line, at most MAX_ERROR_PREFIX_CHARS', () => {
+  assert.equal(MAX_ERROR_PREFIX_CHARS, 160);
+  assert.equal(errorPrefix('Exit code 1\n\tboom'), 'Exit code 1 boom');
+  assert.equal(errorPrefix([{ type: 'text', text: 'one' }, { type: 'image' }, { type: 'text', text: 'two' }]), 'one two');
+  assert.ok(errorPrefix('x'.repeat(1000)).length <= 160);
+  assert.equal(errorPrefix(undefined), '');
+  assert.equal(errorPrefix({ text: 'not a list' }), '');
+});
+
+test('errorPrefix masks a secret in the message (built at run time, never a literal)', () => {
+  const secret = ['sk', '-ant-api03-'].join('') + 'Zq9'.repeat(10);
+  const out = errorPrefix(`request failed: Authorization failed for ${secret}`);
+  assert.ok(!out.includes(secret));
+  assert.ok(out.startsWith('request failed'));
+});
+
+test('the Skill tool detail is the skill name, scrubbed like any label', () => {
+  assert.equal(claudeToolDetail('Skill', { skill: 'ecc:plan' }), 'ecc:plan');
+  assert.equal(claudeToolDetail('Skill', {}), '');
+  assert.equal(claudeToolDetail('Skill', null), '');
+});
