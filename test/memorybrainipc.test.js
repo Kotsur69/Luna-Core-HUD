@@ -194,7 +194,9 @@ test('main wires the scan to Sonnet, the decay timer, references and God Mode br
   assert.match(main, /memoryDecay\.start\(\)/);
   assert.match(main, /memoryDecay\.stop\(\)/);
   assert.match(main, /memoryReferences\.fromEvent\(event\)/);
-  assert.match(main, /projectMemory: \(repoPath, pkg\) => memoryInjector\(repoPath, pkg\)/);
+  // select() answers {text, keys, project}: the keys feed the brief-outcome lines (src/orchestraBriefMemory.js).
+  assert.match(main, /projectMemory: \(repoPath, pkg\) => memoryInjector\.select\(repoPath, pkg\)/);
+  assert.match(main, /warmProjectMemory: \(repoPath, pkg\) => memoryInjector\.warm\(repoPath, pkg\)/);
   assert.match(main, /memoryConflictCount\(dir\)/);
   assert.match(read('src/orchestraWiring.js'), /projectMemory: \(repoPath, pkg\) =>/);
 });

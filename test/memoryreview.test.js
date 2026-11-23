@@ -14,6 +14,7 @@ const { isStale, isDecayed, anchorsOf, missingAnchors, reviewList, verify, retir
 const { createLog, logPath } = require('../src/memorylog.js');
 const { writeRecord, scan } = require('../src/memorystore.js');
 const { createIndex } = require('../src/memoryindex.js');
+const { FAILING_BRIEF_DAYS, MIN_FAILED_BRIEFS } = require('../src/memoryuse.js');
 
 const PROJECT = 'github.com/acme/hud';
 const TODAY = '2026-11-11';
@@ -390,7 +391,8 @@ test('changed ranks after anchor and before stale, and counts toward the hub num
 
   const res = s.list({ changes, events: readsFrom(90) });
 
-  assert.deepEqual(FLAG_ORDER, ['disputed', 'checked', 'anchor', 'changed', 'expired', 'stale', 'unopened']);
+  // 'failing' (God Mode brief outcomes) sits right after 'expired'.
+  assert.deepEqual(FLAG_ORDER, ['disputed', 'checked', 'anchor', 'changed', 'expired', 'failing', 'stale', 'unopened']);
   assert.equal(LOW_FLAGS.includes('changed'), false);
   assert.deepEqual(res.items.map((i) => i.id), ['c-anchor', 'b-changed', 'a-stale', 'd-quiet']);
   assert.equal(res.urgent, 3);
@@ -466,4 +468,85 @@ test('a check that says it holds only moves the date: the expiry starts over', (
   assert.equal(stored.last_verified, TODAY);
   assert.equal(stored.expires_after_days, 3);
   assert.equal(s.list().total, 0);
+});
+
+// ---- God Mode brief outcomes ('failing') ------------------------------------------
+
+/** A brief-outcome line of package `pkgId` in run `runId`, `daysAgo` days before NOW. */
+const outcome = (keys, outcomeName, { runId = 'r1', pkgId = 'p1', daysAgo = 1 } = {}) => ({
+  at: NOW - daysAgo * 86400000,
+  ev: 'brief-outcome',
+  project: PROJECT,
+  runId,
+  pkgId,
+  keys,
+  outcome: outcomeName,
+});
+
+test('a memory in three failed or stalled packages and no clean one is flagged failing, right after expired', (t) => {
+  const s = setup(t, [rec('bad'), rec('mixed'), rec('fine')]);
+  const events = [
+    outcome([key('bad'), key('mixed')], 'failed', { pkgId: 'p1' }),
+    outcome([key('bad'), key('mixed')], 'stalled', { pkgId: 'p2' }),
+    outcome([key('bad'), key('mixed'), key('fine')], 'failed', { pkgId: 'p3', runId: 'r2' }),
+    outcome([key('mixed'), key('fine')], 'clean', { pkgId: 'p4', runId: 'r2' }),
+    outcome([key('bad')], 'retried', { pkgId: 'p5', runId: 'r2' }),
+  ];
+
+  const res = s.list({ events });
+
+  assert.deepEqual(res.items.map((i) => i.id), ['bad']);
+  assert.deepEqual(res.items[0].flags, [{ kind: 'failing', failed: 2, stalled: 1, retried: 1, days: FAILING_BRIEF_DAYS }]);
+  assert.equal(res.urgent, 1);
+  assert.equal(FLAG_ORDER.indexOf('failing'), FLAG_ORDER.indexOf('expired') + 1);
+  assert.equal(LOW_FLAGS.includes('failing'), false);
+});
+
+test('only the last 30 days count, and the latest line of a package replaces an earlier one', (t) => {
+  const s = setup(t, [rec('old'), rec('recovered')]);
+  const events = [
+    outcome([key('old')], 'failed', { pkgId: 'p1', daysAgo: FAILING_BRIEF_DAYS + 2 }),
+    outcome([key('old')], 'failed', { pkgId: 'p2' }),
+    outcome([key('old')], 'stalled', { pkgId: 'p3' }),
+    // A stalled package retried after the run settled, and then pushed clean.
+    outcome([key('recovered')], 'stalled', { pkgId: 'p1', runId: 'r9', daysAgo: 3 }),
+    outcome([key('recovered')], 'failed', { pkgId: 'p2', runId: 'r9' }),
+    outcome([key('recovered')], 'failed', { pkgId: 'p3', runId: 'r9' }),
+    outcome([key('recovered')], 'retried', { pkgId: 'p1', runId: 'r9', daysAgo: 0 }),
+  ];
+
+  assert.equal(MIN_FAILED_BRIEFS, 3);
+  assert.equal(s.list({ events }).total, 0);
+});
+
+test('"still true" or a check that holds settles the flag; later failures flag it again', (t) => {
+  const s = setup(t, [rec('a'), rec('b'), rec('c')]);
+  const failures = (k) => [1, 2, 3].map((n) => outcome([key(k)], 'failed', { pkgId: `p${n}`, runId: `r${k}`, daysAgo: 5 }));
+  const events = [
+    ...failures('a'),
+    ...failures('b'),
+    ...failures('c'),
+    { at: NOW - 2 * 86400000, ev: 'verified', key: key('a'), by: 'user' },
+    { at: NOW - 2 * 86400000, ev: 'verified', key: key('b'), by: 'check' },
+    // A session's own "it held" is not an answer.
+    { at: NOW - 2 * 86400000, ev: 'verified', key: key('c'), by: 'tool' },
+  ];
+
+  assert.deepEqual(s.list({ events }).items.map((i) => i.id), ['c']);
+
+  const later = [1, 2, 3].map((n) => outcome([key('a')], 'stalled', { pkgId: `q${n}`, runId: 'rlater', daysAgo: 1 }));
+  assert.deepEqual(s.list({ events: [...events, ...later] }).items.map((i) => i.id), ['a', 'c']);
+});
+
+test('an unconfirmed, archived or superseded memory is never flagged failing', (t) => {
+  const s = setup(t, [
+    rec('waiting', { confidence: 'observed' }),
+    rec('archived', { archived: '2026-11-01' }),
+    rec('old-one'),
+    rec('new-one', { supersedes: ['old-one'] }),
+  ]);
+  const keys = ['waiting', 'archived', 'old-one'].map(key);
+  const events = [1, 2, 3].map((n) => outcome(keys, 'failed', { pkgId: `p${n}` }));
+
+  assert.equal(s.list({ events }).total, 0);
 });

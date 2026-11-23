@@ -43,6 +43,7 @@ const { normalizeFollowupEntries } = require('./orchestraFollowups');
 const { normalizeStoredAb, isParked, isUndecidedGroup } = require('./orchestraVariants');
 const { normalizeHeals } = require('./orchestraHeal');
 const { normalizeContextResume } = require('./orchestraContextGuard');
+const { storedBriefFields } = require('./orchestraBriefMemory');
 // Pool rescue (escalation ladder, limit moves, emergency Opus): its fields survive a restart.
 const { normalizeStoredRescue, EMERGENCY_EFFORTS } = require('./orchestraRescue');
 
@@ -852,6 +853,8 @@ function normalizePackage(raw) {
     ...(normalizeContextResume(raw.contextResume) ? { contextResume: normalizeContextResume(raw.contextResume) } : {}),
     // A pool run's rescues (src/orchestraRescue.js): the key it stands on now and the moves.
     ...normalizeStoredRescue(raw),
+    // The memories its brief showed and the outcome already logged for them (src/orchestraBriefMemory.js).
+    ...storedBriefFields(raw),
   };
 }
 

@@ -1325,6 +1325,8 @@ const memoryInjector = createMemoryInjector({
   configDir: () => userDir(),
   projectOf: (folder) => projectFromRepoKey(memoryRepoKeys.resolve(folder).key),
   onInjected: (keys) => memoryReferences.note(keys),
+  // Ranks by meaning too when the local embedding model answers in time; keywords otherwise.
+  vectors: () => memoryVectorsOf(),
 });
 
 let memoryLog = null;
@@ -1640,7 +1642,10 @@ const orchestraCtx = {
   userDir,
   ensureUserDir,
   runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
-  projectMemory: (repoPath, pkg) => memoryInjector(repoPath, pkg),
+  // A worker brief's memory section and its keys; the query is embedded while the worktree is made.
+  projectMemory: (repoPath, pkg) => memoryInjector.select(repoPath, pkg),
+  warmProjectMemory: (repoPath, pkg) => memoryInjector.warm(repoPath, pkg),
+  logBriefOutcome: (event) => memoryLogOf().add(event),
   worktrees: { addWorktree, dirtyCount, removeWorktree, deleteBranch, listOwnBranches, worktreeBranches },
   putSnapshot: (run) => snapshotPuts.godmode.add(run),
   // A transient failure leaves the run email pending (src/godmodePending.js).

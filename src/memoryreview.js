@@ -22,6 +22,10 @@
 //             wrong (src/memorylog.js keeps the report).
 //   checked   "Check if still true" (src/memorycheck.js) found it fixed, partly
 //             true or fixable, and nobody has acted on that yet.
+//   failing   its God Mode brief injection went into MIN_FAILED_BRIEFS or more
+//             failed or stalled packages, and into no clean one, in the last
+//             FAILING_BRIEF_DAYS (src/memoryuse.js failingBriefs). A hint that
+//             it may be wrong: "Check if still true" or "still true" settles it.
 //   decayed   a `digest` older than DIGEST_DAYS drops out of search. The file
 //             stays: archived, not deleted.
 //   unopened  low priority: a confirmed memory last checked more than
@@ -46,7 +50,7 @@ const path = require('path');
 const { splitKey, scoreOf, DATE_RE } = require('./memoryrecord');
 const { scan, writeRecord, removeRecord, fileFor } = require('./memorystore');
 const { openDisputes, openChecks, acceptedMissing, DAY_MS } = require('./memorylog');
-const { lastOpened, oldestRead } = require('./memoryuse');
+const { lastOpened, oldestRead, failingBriefs } = require('./memoryuse');
 const { FULL_AREA_IDS } = require('./memorycard');
 
 /** A gotcha or how-to unverified for this long is flagged (tools and commands change). */
@@ -61,7 +65,7 @@ const MAX_ITEMS = 100;
 /** A confirmed memory checked longer ago than this and never opened since is flagged, at low priority. */
 const UNOPENED_DAYS = 60;
 /** Worst first. A flag listed in LOW_FLAGS alone does not count toward the hub's number. */
-const FLAG_ORDER = ['disputed', 'checked', 'anchor', 'changed', 'expired', 'stale', 'unopened'];
+const FLAG_ORDER = ['disputed', 'checked', 'anchor', 'changed', 'expired', 'failing', 'stale', 'unopened'];
 const LOW_FLAGS = ['unopened'];
 
 const daysBetween = (from, to) => Math.floor((Date.parse(to) - Date.parse(from)) / DAY_MS);
@@ -201,7 +205,7 @@ function unopenedCheck(events, today) {
  *   changes = {<project>: Map<anchorPath, newestCommitISO>} (src/memorychanges.js);
  *   a project without an entry gets no 'changed' flags
  * @returns {{items: object[], total: number, urgent: number}} worst first: disputed, checked,
- *   anchors, changed, expired, stale, then unopened; urgent = how many carry more than a low-priority flag
+ *   anchors, changed, expired, failing, stale, then unopened; urgent = how many carry more than a low-priority flag
  */
 function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
   const disputes = openDisputes(events);
@@ -209,6 +213,9 @@ function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
   const accepted = acceptedMissing(events);
   const gone = supersededKeys(records);
   const unopened = unopenedCheck(events, today);
+  // The window ends with today: the whole of today's packages count.
+  const endOfToday = Date.parse(today) + DAY_MS;
+  const failing = Number.isFinite(endOfToday) ? failingBriefs(events, { now: endOfToday }) : new Map();
   const items = [];
   for (const [key, record] of records) {
     // An archived memory (src/memorydecay.js) is out of the way until restored.
@@ -229,6 +236,8 @@ function reviewList({ records, today, events = [], roots = {}, changes = {} }) {
     if (files.length) flags.push({ kind: 'changed', files, last: changed.last });
     const expired = expiredOn(record, today);
     if (expired) flags.push({ kind: 'expired', on: expired, ...(record.expires_when ? { when: record.expires_when } : {}) });
+    const briefs = failing.get(key);
+    if (briefs) flags.push({ kind: 'failing', failed: briefs.failed, stalled: briefs.stalled, retried: briefs.retried, days: briefs.days });
     if (isStale(record, today)) flags.push({ kind: 'stale', since: checkedOn(record) });
     if (unopened && unopened(key, record)) flags.push({ kind: 'unopened', days: UNOPENED_DAYS });
     if (!flags.length) continue;

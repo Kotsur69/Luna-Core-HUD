@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createInjector, injectionFor, queryTerms, MAX_INJECTED, MAX_ITEM_CHARS, MAX_SECTION_CHARS, SECTION_HEADING } = require('../src/memoryinject.js');
+const { createInjector, injectionFor, queryTerms, queryText, MAX_INJECTED, MAX_ITEM_CHARS, MAX_SECTION_CHARS, SECTION_HEADING, MIN_BRIEF_COSINE } = require('../src/memoryinject.js');
 const { writeRecord } = require('../src/memorystore.js');
 const { memoryPaths } = require('../src/memorysync.js');
 const { setEnabled } = require('../src/memoryprojects.js');
@@ -206,4 +206,194 @@ test('a failing memory lookup never stops a worker from starting', async (t) => 
   const res = await orch.launch({ planId: plan.id });
   assert.equal(res.plan.packages[0].state, 'launched');
   assert.doesNotMatch(briefs.get(sessions[0].task.briefPath), /Project memory/);
+});
+
+// ---- vector-assisted selection (src/memoryembed.js vector store) -----------------
+
+/** A memory that shares no word with PKG: only its meaning can bring it in. */
+const BY_MEANING = rec('archive-lock', 'EBUSY while LunaCore holds the packed archive', 'Close the running app before copying the packed file.');
+const unit = (i, dim = 4) => Float32Array.from({ length: dim }, (_, j) => (j === i ? 1 : 0));
+
+/**
+ * A stand-in for createVectorStore: one vector per memory key, and the query's
+ * vector after `delayMs` (null = LM Studio offline). Calls are counted.
+ */
+function fakeStore(byKey, { query = unit(0), delayMs = 0 } = {}) {
+  const store = {
+    prepared: 0,
+    asked: 0,
+    prepare(records) {
+      store.prepared += 1;
+      const keys = records.map(([k]) => k).filter((k) => byKey.has(k));
+      return { get: (k) => byKey.get(k), size: keys.length };
+    },
+    queryVector() {
+      store.asked += 1;
+      return new Promise((resolve) => setTimeout(() => resolve(query), delayMs));
+    },
+  };
+  return store;
+}
+
+/** Vectors: BY_MEANING points where the query does, everything else elsewhere. */
+function meaningVectors() {
+  const byKey = new Map([[`${PROJECT}/${BY_MEANING.id}`, unit(0)]]);
+  for (const r of [...RELEVANT, ...UNRELATED]) byKey.set(`${PROJECT}/${r.id}`, unit(1));
+  return byKey;
+}
+
+function injector(t, store, opts = {}) {
+  const { configDir } = configWith(t, [...RELEVANT, ...UNRELATED, BY_MEANING]);
+  const injected = [];
+  const inject = createInjector({
+    configDir: () => configDir,
+    projectOf: () => PROJECT,
+    now: () => NOW,
+    onInjected: (keys) => injected.push(...keys),
+    vectors: store === undefined ? null : () => store,
+    ...opts,
+  });
+  return { inject, injected };
+}
+
+test('queryText is the title and the start of the prompt', () => {
+  assert.equal(queryText({ title: ' Deps ', prompt: 'Install it.' }), 'Deps\n\nInstall it.');
+  assert.equal(queryText({ title: 'x', prompt: 'y'.repeat(5000) }).length, 2000);
+  assert.equal(queryText(null), '');
+});
+
+test('with an embedded query, a memory close in meaning is injected though it shares no word', async (t) => {
+  const store = fakeStore(meaningVectors());
+  const { inject, injected } = injector(t, store);
+
+  assert.equal(await inject.warm('/repo', PKG), true);
+  const res = inject.select('/repo', PKG);
+
+  assert.equal(res.search, 'meaning');
+  assert.equal(res.project, PROJECT);
+  assert.equal(res.keys[0], `${PROJECT}/${BY_MEANING.id}`);
+  assert.equal(res.keys.length, MAX_INJECTED);
+  assert.equal(res.keys.includes(`${PROJECT}/release-dashes`), false);
+  assert.match(res.text, /\[archive-lock\] \(gotcha, confirmed\)/);
+  assert.deepEqual(injected, res.keys);
+  // The memories went to the store to be embedded; the query was asked once, then cached.
+  assert.ok(store.prepared >= 2);
+  assert.equal(await inject.warm('/repo', PKG), true);
+  assert.equal(store.asked, 1);
+});
+
+test('without the embedded query the same memory is not injected', (t) => {
+  const { inject } = injector(t, fakeStore(meaningVectors()));
+
+  const res = inject.select('/repo', PKG);
+
+  assert.equal(res.search, 'keywords');
+  assert.equal(res.keys.includes(`${PROJECT}/${BY_MEANING.id}`), false);
+});
+
+test('a memory found by meaning below the cosine bar is not injected', async (t) => {
+  const byKey = meaningVectors();
+  const cos = MIN_BRIEF_COSINE - 0.05;
+  byKey.set(`${PROJECT}/${BY_MEANING.id}`, Float32Array.from([cos, Math.sqrt(1 - cos * cos), 0, 0]));
+  const { inject } = injector(t, fakeStore(byKey));
+
+  await inject.warm('/repo', PKG);
+  const res = inject.select('/repo', PKG);
+
+  assert.equal(res.search, 'meaning');
+  assert.equal(res.keys.includes(`${PROJECT}/${BY_MEANING.id}`), false);
+});
+
+test('a query that is not embedded in time falls back to keywords, and is ready for the next brief', async (t) => {
+  const store = fakeStore(meaningVectors(), { delayMs: 150 });
+  const { inject } = injector(t, store, { queryTimeoutMs: 20 });
+
+  const started = Date.now();
+  assert.equal(await inject.warm('/repo', PKG), false);
+  assert.ok(Date.now() - started < 140, 'warm gave up at its timeout');
+  const first = inject.select('/repo', PKG);
+  assert.equal(first.search, 'keywords');
+  assert.equal(first.keys.includes(`${PROJECT}/${BY_MEANING.id}`), false);
+  assert.equal(first.keys.length, MAX_INJECTED);
+
+  // The late vector is kept: a resume brief of the same package ranks by meaning.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(inject.select('/repo', PKG).search, 'meaning');
+});
+
+test('offline, without memory vectors or without a store, the brief is the keyword one', async (t) => {
+  const plain = configWith(t, [...RELEVANT, ...UNRELATED, BY_MEANING]);
+  const keywordKeys = injectionFor({ dir: plain.dir, enabled: plain.enabled, project: PROJECT, pkg: PKG, today: TODAY }).keys;
+  const cases = [
+    ['offline', fakeStore(meaningVectors(), { query: null })],
+    ['no memory vectors', fakeStore(new Map())],
+    ['no store', undefined],
+  ];
+  for (const [name, store] of cases) {
+    const { inject } = injector(t, store);
+    await inject.warm('/repo', PKG);
+    const res = inject.select('/repo', PKG);
+    assert.equal(res.search, 'keywords', name);
+    assert.deepEqual(res.keys, keywordKeys, name);
+  }
+});
+
+test('a broken store or a failing query never fails the brief', async (t) => {
+  const quiet = t.mock.method(console, 'error', () => {});
+  const throwing = { prepare: () => ({ get: () => undefined, size: 0 }), queryVector: () => Promise.reject(new Error('model gone')) };
+  const a = injector(t, throwing);
+  assert.equal(await a.inject.warm('/repo', PKG), false);
+  assert.equal(a.inject.select('/repo', PKG).search, 'keywords');
+
+  const { configDir } = configWith(t, RELEVANT);
+  const broken = () => {
+    throw new Error('store unavailable');
+  };
+  const b = createInjector({ configDir: () => configDir, projectOf: () => PROJECT, now: () => NOW, vectors: broken });
+  assert.equal(await b.warm('/repo', PKG), false);
+  assert.match(b('/repo', PKG), /^## Project memory/);
+  assert.ok(quiet.mock.callCount() >= 2);
+});
+
+test('warm does nothing for a project with memory off', async (t) => {
+  const store = fakeStore(meaningVectors());
+  const { configDir } = configWith(t, RELEVANT, { off: true });
+  const inject = createInjector({ configDir: () => configDir, projectOf: () => PROJECT, now: () => NOW, vectors: () => store });
+
+  assert.equal(await inject.warm('/repo', PKG), false);
+  assert.equal(store.asked, 0);
+  assert.equal(inject.select('/repo', PKG), null);
+});
+
+test('God Mode warms the query before the brief and keeps the injected keys on the package', async () => {
+  const calls = [];
+  let saved = null;
+  const keys = [`${PROJECT}/worktree-junction`, `${PROJECT}/deps-asar-lock`];
+  const orch = createOrchestra({
+    now: () => 1700000000000,
+    readTodos: () => [{ at: 1, text: 'one', done: false }],
+    dirtyCount: async () => 0,
+    runPlanner: async () => ({ ok: true, raw: { packages: [{ ...PKG, todoAts: [1], dependsOn: [], model: 'sonnet' }], notes: '' }, costUsd: 0 }),
+    addWorktree: async (repo, name) => ({ ok: true, root: path.join('/wt', name), cwd: path.join('/wt', name), branch: `luna/${name}` }),
+    briefDir: () => '/cfg/tasks',
+    writeBrief: () => true,
+    createSession: () => ({ id: 's1' }),
+    saveState: (data) => {
+      saved = data;
+    },
+    warmProjectMemory: async (repo, pkg) => {
+      calls.push(['warm', repo, pkg.id]);
+      return true;
+    },
+    projectMemory: (repo, pkg) => {
+      calls.push(['select', repo, pkg.id]);
+      return { text: `${SECTION_HEADING}\nintro\n- A memory [x] (gotcha, confirmed): text`, keys: [...keys, 'not a key'], project: PROJECT };
+    },
+  });
+  const { plan } = await orch.makePlan({ projectId: 'p1', repoPath: '/repo', profileId: 'claude-cloud', env: {} });
+  const res = await orch.launch({ planId: plan.id });
+
+  assert.equal(res.plan.packages[0].state, 'launched');
+  assert.deepEqual(calls, [['warm', '/repo', 'deps'], ['select', '/repo', 'deps']]);
+  assert.deepEqual(saved.packages[0].briefMemory, { project: PROJECT, keys });
 });
