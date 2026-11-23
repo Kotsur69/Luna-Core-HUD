@@ -14,7 +14,16 @@
 // LOCAL and never synced, like the vector cache (decision 9): each PC embeds
 // with its own model, and vectors of two models never mix, so a new model
 // starts the file over. A title is run through the secret scrub before it is
-// written; the body is not kept at all, only its vector.
+// written. The body is not kept, only the vector of title and body, as the
+// vector cache keeps one per memory; a fresh embed is of the scrubbed text.
+// Rejecting the same memory again replaces its entry. Approving a memory
+// forgets the entries it is within REJECTED_SIMILAR of (forgetSimilar): Mati
+// said yes to that meaning after all.
+//
+// The file can be edited by anyone. A row that does not check out is skipped;
+// a file that cannot be parsed is moved aside to <file>.broken on the next
+// write, never silently overwritten; a file the disk cannot read right now
+// (locked) is left alone and that one rejection is not remembered.
 //
 // Capture (src/memorycapture.js, src/memoryruncapture.js) embeds its candidates
 // when LM Studio serves the model of the stored vectors (semanticCandidates):
@@ -22,7 +31,8 @@
 //   - a kept candidate within REJECTED_SIMILAR (cosine) of a rejected memory of
 //     the same project (or a global one) is dropped as SIMILAR_REJECTED: the
 //     graveyard keeps it as "similar to rejected: <title>" (src/memorygraveyard.js),
-//     restorable by hand like any other entry.
+//     restorable by hand like any other entry. A candidate that supersedes a
+//     memory is a correction and is never shielded: Mati decides in the inbox.
 // Without the model, or without vectors, capture is exactly the word-based
 // filter it was: no error, no wait beyond the embedder's cached "no model".
 // ============================================================================
@@ -45,7 +55,11 @@ const MAX_REJECTED_VECTORS = 500;
 const REJECTED_SIMILAR = 0.8;
 /** The rejection reason of a shielded candidate; it carries `similarTo` (the rejected title) and its record. */
 const SIMILAR_REJECTED = 'similar to rejected';
-/** A file past this size is not read: the shield starts over (500 vectors of 8192 floats fit easily). */
+/** Rows read from the file at most, valid or not: a hand-grown file cannot make a read slow. */
+const MAX_RAW_ROWS = MAX_REJECTED_VECTORS * 2;
+/** Two entries of one project this close are the same rejection: the newer replaces the older. */
+const SAME_ENTRY = 0.99;
+/** A file past this size is not read: it is moved aside on the next write (500 vectors of 8192 floats fit easily). */
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_PROJECT_CHARS = 200;
 
@@ -67,25 +81,29 @@ function cleanTitle(raw) {
 const cleanProject = (raw) => (typeof raw === 'string' && raw && raw.length <= MAX_PROJECT_CHARS ? raw : '');
 
 /**
- * The shield file -> {model, entries}, oldest first. A missing, broken or
- * hand-edited file is read as far as it is valid; never throws.
+ * The shield file -> {model, entries}, oldest first. A missing or hand-edited
+ * file is read as far as it is valid; never throws.
  * @param {string} file rejectedVectorsPath(dir)
- * @returns {{model: string|null, entries: {at: number, project: string, title: string, vec: Float32Array}[]}}
+ * @returns {{model: string|null, entries: {at: number, project: string, title: string, vec: Float32Array}[], state: 'ok'|'broken'|'locked'}}
+ *   state: 'broken' = the file is there but is no shield file (addRejected moves it aside),
+ *   'locked' = the disk cannot read it right now (addRejected leaves it alone)
  */
 function readRejected(file) {
-  const empty = { model: null, entries: [] };
+  const empty = (state) => ({ model: null, entries: [], state });
   let doc = null;
   try {
     if (fs.statSync(file).size > MAX_FILE_BYTES) throw new Error('too large');
     doc = readDoc(file);
   } catch (err) {
-    if (err.code !== 'ENOENT') console.error('[memory] rejected vectors unreadable, starting over:', errText(err));
-    return empty;
+    if (err.code === 'ENOENT') return empty('ok');
+    console.error('[memory] rejected vectors unreadable:', errText(err));
+    // A file system error (EBUSY, EPERM ...) carries a code; bad content (JSON, size) does not.
+    return empty(err.code ? 'locked' : 'broken');
   }
   const { v, model, dim, entries } = isObject(doc) ? doc : {};
-  if (v !== FILE_VERSION || typeof model !== 'string' || !model || !Number.isInteger(dim) || dim < 1 || dim > MAX_DIM) return empty;
-  // Oldest first: a hand-grown list keeps its newest entries.
-  const rows = Array.isArray(entries) ? entries.slice(-MAX_REJECTED_VECTORS) : [];
+  if (v !== FILE_VERSION || typeof model !== 'string' || !model || !Number.isInteger(dim) || dim < 1 || dim > MAX_DIM) return empty('broken');
+  // Oldest first: a hand-grown list keeps its newest valid entries.
+  const rows = Array.isArray(entries) ? entries.slice(-MAX_RAW_ROWS) : [];
   const kept = [];
   for (const row of rows) {
     if (!isObject(row) || !Number.isFinite(row.at)) continue;
@@ -94,8 +112,26 @@ function readRejected(file) {
     const vec = decodeVector(row.vec, dim);
     if (title && project && vec) kept.push({ at: row.at, project, title, vec });
   }
-  return { model, entries: kept };
+  return { model, entries: kept.slice(-MAX_REJECTED_VECTORS), state: 'ok' };
 }
+
+/**
+ * The entries of the file as a write may build on them: a broken file is moved
+ * aside to <file>.broken first, so a hand-edit with a typo is never lost.
+ * @throws when the file cannot be read right now (the caller skips this write)
+ */
+function entriesToBuildOn(file) {
+  const current = readRejected(file);
+  if (current.state === 'locked') throw new Error('rejected vectors locked, not written');
+  if (current.state === 'broken') {
+    fs.renameSync(file, `${file}.broken`);
+    console.error('[memory] rejected vectors moved aside to', `${path.basename(file)}.broken`);
+  }
+  return current;
+}
+
+/** Whether two entries are the same rejection: same project, and the same title or nearly the same vector. */
+const sameEntry = (a, b) => a.project === b.project && (a.title.toLowerCase() === b.title.toLowerCase() || (cosine(a.vec, b.vec) || 0) >= SAME_ENTRY);
 
 function writeRejected(file, { model, entries }) {
   const dim = entries.length ? entries[0].vec.length : 1;
@@ -115,11 +151,42 @@ function addRejected(file, { model, project, title, vec, at }) {
   const clean = { at: Number.isFinite(at) ? at : Date.now(), project: cleanProject(project), title: cleanTitle(title), vec };
   const usable = typeof model === 'string' && model && clean.project && clean.title && vec instanceof Float32Array && vec.length >= 1 && vec.length <= MAX_DIM;
   if (!usable) return 0;
-  const current = readRejected(file);
-  const same = current.model === model ? current.entries.filter((e) => e.vec.length === vec.length) : [];
+  const current = entriesToBuildOn(file);
+  if (current.model && current.model !== model && current.entries.length) {
+    console.error(`[memory] rejected vectors of ${current.model} dropped: the shield starts over with ${model}`);
+  }
+  const same = current.model === model ? current.entries.filter((e) => e.vec.length === vec.length && !sameEntry(e, clean)) : [];
   const entries = [...same, clean].slice(-MAX_REJECTED_VECTORS);
   writeRejected(file, { model, entries });
   return entries.length;
+}
+
+/**
+ * Forgets the rejections a memory Mati approved is close to (same project or
+ * global): he said yes to that meaning after all. Uses the cached vector only;
+ * never asks the model and never throws.
+ * @param {object|null} store the vector store
+ * @param {object} record the approved memory
+ * @returns {number} entries forgotten
+ */
+function forgetSimilar(store, record) {
+  try {
+    if (!store || !isObject(record) || typeof store.dir !== 'string') return 0;
+    const vec = store.vectorFor(record);
+    const model = store.model();
+    if (!vec || !model) return 0;
+    const file = rejectedVectorsPath(store.dir);
+    const current = readRejected(file);
+    if (current.state !== 'ok' || current.model !== model) return 0;
+    const close = (e) => (e.project === record.project || e.project === GLOBAL) && (cosine(e.vec, vec) || 0) >= REJECTED_SIMILAR;
+    const kept = current.entries.filter((e) => !close(e));
+    if (kept.length === current.entries.length) return 0;
+    writeRejected(file, { model, entries: kept });
+    return current.entries.length - kept.length;
+  } catch (err) {
+    console.error('[memory] shield entries not forgotten:', errText(err));
+    return 0;
+  }
 }
 
 /**
@@ -155,7 +222,8 @@ async function rememberRejected(store, record, now = Date.now()) {
     let vec = store.vectorFor(record);
     let model = store.model();
     if (!vec) {
-      const res = await store.embedTexts([docText(record)]);
+      // Only a vector is kept, but it is made of the scrubbed text all the same.
+      const res = await store.embedTexts([scrub(docText(record))]);
       if (!res) return false;
       [vec] = res.vectors;
       ({ model } = res);
@@ -173,7 +241,8 @@ async function rememberRejected(store, record, now = Date.now()) {
  * @param {{records: object[], rejected: object[]}} filtered candidatesFrom()'s answer
  * @param {{file: string, model: string, vectorOf: (record: object) => ArrayLike<number>|undefined}} ctx
  * @returns {{records: object[], rejected: object[]}} a shielded candidate moves to `rejected`
- *   as {title, reason: SIMILAR_REJECTED, type, usefulness, similarTo, record}
+ *   as {title, reason: SIMILAR_REJECTED, type, usefulness, similarTo, record}; a candidate
+ *   that supersedes a memory (a correction) is never shielded
  */
 function shieldCandidates({ records, rejected }, { file, model, vectorOf }) {
   const shield = readRejected(file);
@@ -181,7 +250,8 @@ function shieldCandidates({ records, rejected }, { file, model, vectorOf }) {
   const kept = [];
   const dropped = [];
   for (const record of records) {
-    const hit = closestRejected(shield, { model, project: record.project, vec: vectorOf(record) });
+    const correction = Array.isArray(record.supersedes) && record.supersedes.length > 0;
+    const hit = correction ? null : closestRejected(shield, { model, project: record.project, vec: vectorOf(record) });
     if (hit) dropped.push({ title: record.title, reason: SIMILAR_REJECTED, type: record.type, usefulness: record.usefulness, similarTo: hit.title, record });
     else kept.push(record);
   }
@@ -214,7 +284,7 @@ async function semanticCandidates(answer, ctx, store) {
   const byText = new Map(texts.map((text, i) => [text, embedded.vectors[i]]));
   const stored = vectorLookup(store);
   // A stored vector counts only while it is of the model the candidates were embedded with.
-  const vectorOf = (record) => byText.get(docText(record)) || (store.model() === embedded.model ? stored(record) : undefined);
+  const vectorOf = (record) => byText.get(docText(record)) || (stored && store.model() === embedded.model ? stored(record) : undefined);
   const byMeaning = candidatesFrom(answer, { ...ctx, vectorOf });
   try {
     return shieldCandidates(byMeaning, { file: rejectedVectorsPath(store.dir), model: embedded.model, vectorOf });
@@ -230,6 +300,7 @@ module.exports = {
   addRejected,
   closestRejected,
   rememberRejected,
+  forgetSimilar,
   shieldCandidates,
   semanticCandidates,
   REJECTED_VECTORS_FILE,

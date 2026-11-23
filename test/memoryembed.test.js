@@ -453,17 +453,20 @@ const shieldFile = (t) => {
 test('the rejected store keeps at most MAX_REJECTED_VECTORS entries and evicts the oldest', (t) => {
   const file = shieldFile(t);
   const extra = 3;
+  const dim = shield.MAX_REJECTED_VECTORS + extra;
+  /** One axis per entry: every rejection is distinct, so none replaces another. */
+  const axis = (i) => Float32Array.from({ length: dim }, (_, j) => (j === i ? 1 : 0));
   // A full file written in one go (one atomic write per entry is slow on Windows), then a few more.
   const full = Array.from({ length: shield.MAX_REJECTED_VECTORS }, (_, i) => ({
     at: 1000 + i,
     project: SHIELD_PROJECT,
     title: `Rejected ${i}`,
-    vec: encodeVector(unit(1, i + 1, 0)),
+    vec: encodeVector(axis(i)),
   }));
-  fs.writeFileSync(file, JSON.stringify({ v: 1, model: SMALL, dim: 3, entries: full }));
+  fs.writeFileSync(file, JSON.stringify({ v: 1, model: SMALL, dim, entries: full }));
   assert.equal(shield.readRejected(file).entries.length, shield.MAX_REJECTED_VECTORS);
   for (let i = shield.MAX_REJECTED_VECTORS; i < shield.MAX_REJECTED_VECTORS + extra; i++) {
-    shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: `Rejected ${i}`, vec: unit(1, i + 1, 0), at: 1000 + i });
+    shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: `Rejected ${i}`, vec: axis(i), at: 1000 + i });
   }
   const { model, entries } = shield.readRejected(file);
   assert.equal(model, SMALL);
@@ -484,7 +487,64 @@ test('the rejected store keeps one model, scrubs titles, and reads a broken file
 
   assert.equal(shield.addRejected(file, { model: BIG, project: SHIELD_PROJECT, title: '', vec: unit(1, 0, 0, 0), at: 3 }), 0);
   fs.writeFileSync(file, '{not json');
-  assert.deepEqual(shield.readRejected(file), { model: null, entries: [] });
+  assert.deepEqual(shield.readRejected(file), { model: null, entries: [], state: 'broken' });
+});
+
+test('a broken shield file is moved aside before a write, never silently overwritten', (t) => {
+  const file = shieldFile(t);
+  const handEdited = '{"v": 1, "model": "m", "dim": 3, "entries": [ , ]}';
+  fs.writeFileSync(file, handEdited);
+
+  assert.equal(shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: 'After the typo', vec: unit(1, 0, 0), at: 1 }), 1);
+  assert.equal(fs.readFileSync(`${file}.broken`, 'utf8'), handEdited, 'the hand-edit is kept to fix by hand');
+  assert.deepEqual(shield.readRejected(file).entries.map((e) => e.title), ['After the typo']);
+});
+
+test('a shield file the disk cannot read right now is left alone', (t) => {
+  const file = shieldFile(t);
+  // A folder where the file should be: the read fails with a file system code, like a locked file.
+  fs.mkdirSync(file);
+  assert.equal(shield.readRejected(file).state, 'locked');
+  assert.throws(() => shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: 'Locked', vec: unit(1, 0, 0), at: 1 }), /locked/);
+  assert.ok(fs.statSync(file).isDirectory(), 'nothing was moved or overwritten');
+});
+
+test('rejecting the same memory again replaces its entry; invalid rows do not push valid ones out', (t) => {
+  const file = shieldFile(t);
+  shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: 'Same lesson', vec: unit(1, 0, 0), at: 1 });
+  shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: 'Other lesson', vec: unit(0, 1, 0), at: 2 });
+  shield.addRejected(file, { model: SMALL, project: SHIELD_PROJECT, title: 'same LESSON', vec: unit(0, 0, 1), at: 3 });
+  shield.addRejected(file, { model: SMALL, project: 'github.com/acme/other', title: 'Same lesson', vec: unit(1, 0, 0), at: 4 });
+  assert.deepEqual(shield.readRejected(file).entries.map((e) => [e.title, e.at]), [
+    ['Other lesson', 2],
+    ['same LESSON', 3],
+    ['Same lesson', 4],
+  ]);
+
+  const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  doc.entries.push(...Array.from({ length: 10 }, () => ({ at: 9, project: SHIELD_PROJECT, title: 'bad', vec: 'not-a-vector' })));
+  fs.writeFileSync(file, JSON.stringify(doc));
+  assert.equal(shield.readRejected(file).entries.length, 3);
+});
+
+test('approving a memory forgets the rejections it is close to, from its cached vector only', async (t) => {
+  const file = tmpFile();
+  t.after(() => fs.promises.rm(path.dirname(file), { recursive: true, force: true, maxRetries: 5 }));
+  const studio = lmStudio();
+  const store = createVectorStore({ file, embedder: createEmbedder({ fetchImpl: studio.fetchImpl, log: quiet }) });
+  const approved = memory('approved', 'Approved lesson');
+  store.prepare([['github.com/acme/hud/approved', approved]]);
+  await store.ready();
+  const vec = store.vectorFor(approved);
+  const shieldPath = shield.rejectedVectorsPath(store.dir);
+  shield.addRejected(shieldPath, { model: SMALL, project: SHIELD_PROJECT, title: 'Close in this project', vec, at: 1 });
+  shield.addRejected(shieldPath, { model: SMALL, project: 'github.com/acme/other', title: 'Close elsewhere', vec, at: 2 });
+  shield.addRejected(shieldPath, { model: SMALL, project: SHIELD_PROJECT, title: 'Far', vec: Float32Array.from(vec, (x, i) => (i === 0 ? -x : x)), at: 3 });
+
+  assert.equal(shield.forgetSimilar(store, approved), 1);
+  assert.deepEqual(shield.readRejected(shieldPath).entries.map((e) => e.title).sort(), ['Close elsewhere', 'Far']);
+  assert.equal(shield.forgetSimilar(store, memory('unknown', 'Never embedded')), 0, 'no cached vector: nothing forgotten, no model call');
+  assert.equal(shield.forgetSimilar(null, approved), 0);
 });
 
 test('the rejected store is local: its file is per PC and no sync path names it', () => {
@@ -509,7 +569,7 @@ test('a rejection is remembered with its cached vector, or embedded when it has 
 
   assert.equal(await shield.rememberRejected(store, cached, 10), true);
   assert.equal(studio.calls.length, callsBefore, 'a cached vector costs no model call');
-  assert.equal(await shield.rememberRejected(store, memory('fresh', 'Fresh memory'), 20), true);
+  assert.equal(await shield.rememberRejected(store, memory('fresh', 'Fresh memory', 'x'.repeat(300)), 20), true);
   assert.equal(studio.calls.length, callsBefore + 1);
 
   const { entries } = shield.readRejected(shield.rejectedVectorsPath(store.dir));

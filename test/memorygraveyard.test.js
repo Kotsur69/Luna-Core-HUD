@@ -359,3 +359,15 @@ test('without LM Studio the shield does nothing and the candidate goes to the in
   assert.deepEqual(records.map((r) => r.title), ['Symlink the dependencies from the main checkout']);
   assert.deepEqual(rejected, []);
 });
+
+test('a candidate that supersedes a memory is a correction: the shield lets it through', async (t) => {
+  const s = setup(t);
+  const store = shieldStore(s.base);
+  shield.addRejected(shield.rejectedVectorsPath(s.base), { model: MODEL, project: PROJECT, title: 'Junction node_modules into worktrees', vec: unitVec(1, 0.1, 0), at: NOW });
+  const old = { id: 'old-worktree-note', type: 'gotcha', project: PROJECT, title: 'Worktrees share the installer cache', created: '2026-10-01', confidence: 'confirmed', supersedes: [], links: [], body: 'Old note.' };
+  const correction = { ...candidate('Symlink the dependencies from the main checkout'), supersedes: ['old-worktree-note'] };
+
+  const { records, rejected } = await shield.semanticCandidates({ candidates: [correction] }, { ...CTX, existing: [old] }, store);
+  assert.deepEqual(records.map((r) => r.title), ['Symlink the dependencies from the main checkout']);
+  assert.deepEqual(rejected, []);
+});
