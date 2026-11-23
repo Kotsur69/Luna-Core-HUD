@@ -36,6 +36,7 @@ const { selfCheckGate } = require('./orchestraSelfCheck');
 const { supabaseGate } = require('./orchestraApplyActions');
 const { branchFor } = require('./worktrees');
 const { MAX_DETAILS_CHARS } = require('./todorows');
+const { logBriefOutcomes } = require('./orchestraBriefMemory');
 
 // Lets a closed tab's processes let go of the worktree folder (Windows).
 const TAB_CLOSE_SETTLE_MS = 2500;
@@ -679,6 +680,21 @@ function createFinalizer(deps) {
     }
   }
 
+  /**
+   * Brief-outcome memory-log lines of the settled packages (src/orchestraBriefMemory.js);
+   * a pushed package skipped at its merge verify, or every one of a failed pass,
+   * waits for a later pass. Never breaks the finalize.
+   */
+  function recordBriefOutcomes(plan, res) {
+    if (typeof deps.logBriefOutcome !== 'function') return;
+    try {
+      const held = new Set(res.ok ? (res.skipped || []).map((s) => s && s.id) : plan.packages.map((p) => p.id));
+      logBriefOutcomes(plan, { log: deps.logBriefOutcome, patch: deps.patch, held });
+    } catch (err) {
+      deps.onRunEvent('error', { where: 'briefOutcome', message: errText(err) });
+    }
+  }
+
   async function finalizeOnce(plan) {
     // startedAt: the board's "finishing since HH:MM" and the Abort finish threshold.
     setIntegration(plan, { state: 'running', error: null, detail: null, startedAt: deps.now() });
@@ -705,6 +721,7 @@ function createFinalizer(deps) {
     );
     // The base head this run landed: "Release now" checks it reached the checkout.
     if (res.landed && res.headSha) setIntegration(plan, { headSha: res.headSha });
+    recordBriefOutcomes(plan, { ...res, skipped });
     deps.commit();
     try {
       await cleanup(plan);

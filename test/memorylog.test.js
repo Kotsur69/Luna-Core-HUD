@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createLog, readLog, logPath, cleanEvent, captureStats, usage, rejectedTitles, openDisputes, acceptedMissing, decisionEvent, memoryNotes, LOG_FILE, MAX_LOG_BYTES, DAY_MS, USEFULNESS_BANDS } = require('../src/memorylog.js');
+const { createLog, readLog, logPath, cleanEvent, captureStats, usage, rejectedTitles, openDisputes, acceptedMissing, decisionEvent, memoryNotes, LOG_FILE, MAX_LOG_BYTES, DAY_MS, USEFULNESS_BANDS, BRIEF_OUTCOMES, MAX_BRIEF_KEYS } = require('../src/memorylog.js');
 
 const PROJECT = 'github.com/acme/hud';
 const OTHER = 'github.com/acme/quote';
@@ -469,4 +469,58 @@ test('memoryNotes lists a merged memory as confirmed', () => {
   const text = memoryNotes({ records, events: [{ at: NOW, ev: 'merged', key: key('both'), type: 'gotcha', from: [key('a'), key('b')] }], since, project: PROJECT });
   assert.match(text, /## Confirmed \(1\)[\s\S]*- One of two/);
   assert.match(text, /## Superseded \(2\)/);
+});
+
+// ---- God Mode brief outcomes and auto-recall (vector-recall package) -------------
+
+test('`brief-outcome` keeps its project, run, package, keys and outcome; anything off-shape is refused', (t) => {
+  const { log } = setup(t);
+  const good = { ev: 'brief-outcome', project: PROJECT, runId: 'abc12', pkgId: 'deps-a', keys: [key('a'), key('b'), key('a'), 'not a key'], outcome: 'failed' };
+
+  assert.equal(log.add(good), true);
+  assert.deepEqual(log.read(), [{ at: NOW, ev: 'brief-outcome', project: PROJECT, runId: 'abc12', pkgId: 'deps-a', keys: [key('a'), key('b')], outcome: 'failed' }]);
+  for (const outcome of BRIEF_OUTCOMES) assert.ok(cleanEvent({ ...good, at: NOW, outcome }), outcome);
+
+  for (const bad of [
+    { ...good, outcome: 'pushed' },
+    { ...good, runId: 'Run 1' },
+    { ...good, pkgId: '../x' },
+    { ...good, project: 'global' },
+    { ...good, keys: [] },
+    { ...good, keys: ['nope'] },
+  ]) {
+    assert.equal(cleanEvent({ ...bad, at: NOW }), null, JSON.stringify(bad));
+  }
+  const many = cleanEvent({ ...good, at: NOW, keys: Array.from({ length: 30 }, (_, i) => key(`k-${i}`)) });
+  assert.equal(many.keys.length, MAX_BRIEF_KEYS);
+});
+
+test('`recall` keeps its project, its hits and the tab; a recall without a hit is not a line', (t) => {
+  const { log } = setup(t);
+
+  assert.equal(log.add({ ev: 'recall', project: PROJECT, hits: [key('a'), 'bad', key('a')], session: 's3', prompt: 'never stored' }), true);
+  assert.equal(log.add({ ev: 'recall', project: PROJECT, hits: [] }), false);
+  assert.equal(log.add({ ev: 'recall', project: 'nope', hits: [key('a')] }), false);
+
+  assert.deepEqual(log.read(), [{ at: NOW, ev: 'recall', project: PROJECT, hits: [key('a')], session: 's3' }]);
+});
+
+test('recall lines are trimmed with the reads, before a brief outcome', (t) => {
+  const { file, log } = setup(t);
+  const outcome = JSON.stringify({ at: 1, ev: 'brief-outcome', project: PROJECT, runId: 'r1', pkgId: 'p1', keys: [key('kept')], outcome: 'stalled' });
+  const recall = JSON.stringify({ at: 2, ev: 'recall', project: PROJECT, hits: Array.from({ length: 20 }, (_, i) => key(`hit-${i}`)) });
+  fs.writeFileSync(file, [outcome, ...Array.from({ length: Math.ceil(MAX_LOG_BYTES / recall.length) + 10 }, () => recall), ''].join('\n'));
+
+  log.add({ ev: 'get', key: key('newest') });
+
+  const events = readLog(file);
+  assert.ok(fs.statSync(file).size < MAX_LOG_BYTES);
+  assert.equal(events[0].ev, 'brief-outcome');
+  assert.equal(events.at(-1).key, key('newest'));
+});
+
+test('a brief-outcome line needs the canonical project form', () => {
+  const line = { at: NOW, ev: 'brief-outcome', project: `git:${PROJECT}`, runId: 'r1', pkgId: 'p1', keys: [key('a')], outcome: 'clean' };
+  assert.equal(cleanEvent(line), null);
+  assert.equal(cleanEvent({ ...line, project: PROJECT }).project, PROJECT);
 });

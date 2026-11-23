@@ -516,6 +516,8 @@ contextBridge.exposeInMainWorld('lunacore', {
   // a type on unless this PC's numbers offer it, and undoes only a recent auto-accept.
   /** Switches one type on or off. Promise<{ok, type, on} | {ok:false, reason}>. */
   memoryAutoSet: (type, on) => ipcRenderer.invoke('memory:auto-set', { type: typeof type === 'string' ? type : '', on: on === true }),
+  /** Auto-recall into prompts on or off (src/memoryrecallhook.js); a boolean only. Promise<{ok, on} | {ok:false, reason}>. */
+  memoryAutoRecallSet: (on) => ipcRenderer.invoke('memory:recall-set', { on: on === true }),
   /** Undoes one auto-accept: the memory is deleted on every PC. Promise<{ok, key} | {ok:false, reason}>. */
   memoryAutoUndo: (key) => ipcRenderer.invoke('memory:auto-undo', typeof key === 'string' ? key : ''),
   // The memory graveyard (src/memoryipc.js): candidates dropped under the

@@ -6,7 +6,8 @@
 // switch per memory type that this PC's numbers offer (or that is already
 // on), and the memories auto-accepted in the last days, each with an Undo
 // (= reject, deleted on every PC). Main re-checks every switch and undo
-// (src/memoryipc.js memory:auto-set / memory:auto-undo).
+// (src/memoryipc.js memory:auto-set / memory:auto-undo). Last, the auto-recall
+// switch (memory:recall-set): memories added to prompts, also off by default.
 // Titles are model text: textContent only, never markup.
 // ============================================================================
 
@@ -58,19 +59,33 @@ export function scoreHint(score, bar) {
   return t('mem.auto.scoreHint', { min: bar.min, on: pct(bar.on), off: pct(bar.off), auto: score.auto, undone: score.undone });
 }
 
-/** The 'Auto-save memories scored 90+' switch; main names it (score.id) and re-checks it. */
-function scoreRow(score, bar, { onToggle, disabled }) {
+/** One named switch with its hint under it; main names it (`id`) and re-checks every change. */
+function hintedSwitch({ id, on, text, hint, onToggle, disabled }) {
   const wrap = el('div', 'mem-auto__types');
   const label = el('label', 'mem-auto__row');
   const box = el('input', 'mem-auto__switch');
   box.type = 'checkbox';
   box.setAttribute('role', 'switch');
-  box.checked = score.on === true;
+  box.checked = on === true;
   box.disabled = disabled;
-  box.addEventListener('change', () => onToggle(score.id, box.checked));
-  label.append(box, el('span', 'mem-auto__text', t('mem.auto.score', { from: bar.saveFrom })));
-  wrap.append(label, el('p', 'hint', scoreHint(score, bar)));
+  box.addEventListener('change', () => onToggle(id, box.checked));
+  label.append(box, el('span', 'mem-auto__text', text));
+  wrap.append(label, el('p', 'hint', hint));
   return wrap;
+}
+
+/** The 'Auto-save memories scored 90+' switch; main names it (score.id) and re-checks it. */
+function scoreRow(score, bar, { onToggle, disabled }) {
+  return hintedSwitch({ id: score.id, on: score.on, text: t('mem.auto.score', { from: bar.saveFrom }), hint: scoreHint(score, bar), onToggle, disabled });
+}
+
+/** The id main gives the auto-recall switch (src/memoryipc.js RECALL_SWITCH). */
+export const RECALL_SWITCH = 'recall';
+
+/** Auto-recall: up to two confirmed memories added to each prompt (src/memoryrecallhook.js), off by default. */
+function recallBlock(recall, { onToggle, disabled }) {
+  const heading = el('h4', 'mem-auto__heading', t('mem.auto.recallTitle'));
+  return [heading, hintedSwitch({ id: recall.id, on: recall.on, text: t('mem.auto.recall'), hint: t('mem.auto.recallHint'), onToggle, disabled })];
 }
 
 function recentRow(item, { onUndo, busy }) {
@@ -115,6 +130,7 @@ export function autoSection(auto, { onToggle, onUndo, busy, switching, error }) 
   } else {
     section.append(el('p', 'hint', t('mem.auto.recentNone')));
   }
+  if (auto.recall && auto.recall.id === RECALL_SWITCH) section.append(...recallBlock(auto.recall, { onToggle, disabled: switching }));
   if (error) {
     const err = el('p', 'hint is-fail', t(error));
     err.setAttribute('role', 'alert');

@@ -496,3 +496,124 @@ test('tool schemas advertise tags and the list tag filter', () => {
   assert.ok(byName.luna_todo_update.inputSchema.properties.patch.properties.tags);
   assert.equal(byName.luna_todo_list.inputSchema.properties.tag.type, 'string');
 });
+
+// ---- POST /recall (auto-recall's UserPromptSubmit hook, src/memoryrecall.js) --------
+
+const { recallRequestOf, recallReply, RECALL_HOOK_EVENT, MAX_RECALL_CONTEXT_CHARS } = require('../src/intake.js');
+
+const HOOK_INPUT = { session_id: 'abc', transcript_path: '/t.jsonl', cwd: '/repo', hook_event_name: 'UserPromptSubmit', prompt: 'Why does the install hang?' };
+
+/** A server whose tab s1 recalls through `recall` (absent = recall off for the tab). */
+async function recallServer(recall) {
+  const asked = [];
+  const store = { ...memoryStore() };
+  if (recall) {
+    store.recall = (prompt) => {
+      asked.push(prompt);
+      return recall(prompt);
+    };
+  }
+  const server = new IntakeServer({ storeFor: (id) => (id === 's1' ? store : null), version: '1.0.0', channel: createFollowupChannel({ ledger: createFollowupLedger() }) });
+  await server.start();
+  const auth = { authorization: `Bearer ${server.issueToken('s1')}`, 'content-type': 'application/json' };
+  return { server, auth, asked };
+}
+
+test('recallRequestOf takes the prompt of a UserPromptSubmit hook input and refuses anything else', () => {
+  assert.deepEqual(recallRequestOf(HOOK_INPUT), { ok: true, prompt: HOOK_INPUT.prompt });
+  assert.deepEqual(recallRequestOf({ prompt: 'no event name is fine' }), { ok: true, prompt: 'no event name is fine' });
+  assert.equal(recallRequestOf({ prompt: 'x'.repeat(20000) }).prompt.length, 8000);
+  for (const bad of [null, [], 'text', { ...HOOK_INPUT, hook_event_name: 'Stop' }, { ...HOOK_INPUT, prompt: 42 }, { hook_event_name: RECALL_HOOK_EVENT }]) {
+    assert.equal(recallRequestOf(bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test('recallReply is the hook output with the text as additionalContext, or nothing', () => {
+  assert.deepEqual(recallReply({ text: 'memory' }), { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'memory' } });
+  assert.equal(recallReply({ text: 'x'.repeat(10000) }).hookSpecificOutput.additionalContext.length, MAX_RECALL_CONTEXT_CHARS);
+  for (const none of [null, {}, { text: null }, { text: '' }, { keys: [] }]) assert.deepEqual(recallReply(none), {});
+});
+
+test('/recall needs the tab token, the local host, no origin and POST; a scoped token is refused', async () => {
+  const { server, auth } = await recallServer(async () => ({ text: 'memory' }));
+  try {
+    const port = server.port;
+    assert.equal(server.recallUrl(), `http://127.0.0.1:${port}/recall`);
+    const send = (headers) => post(port, { path: '/recall', headers, body: HOOK_INPUT });
+
+    const none = await send({ 'content-type': 'application/json' });
+    assert.equal(none.status, 401);
+    assert.deepEqual(none.json, { error: 'Unauthorized' });
+    assert.equal((await send({ authorization: 'Bearer nope' })).status, 401);
+    assert.equal((await send({ ...auth, origin: 'http://evil' })).status, 403);
+    assert.equal((await send({ ...auth, host: 'evil:1' })).status, 403);
+    assert.equal((await post(port, { path: '/recall', method: 'GET', headers: auth })).status, 405);
+    assert.equal((await post(port, { path: '/recall/x', headers: auth, body: HOOK_INPUT })).status, 403);
+
+    const scoped = { authorization: `Bearer ${server.issueToken('s1', WORKER_SCOPE)}`, 'content-type': 'application/json' };
+    assert.equal((await send(scoped)).status, 403);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('/recall validates its body: bad JSON, a wrong shape and a body past the cap are refused', async () => {
+  const { server, auth, asked } = await recallServer(async () => ({ text: 'memory' }));
+  try {
+    const port = server.port;
+    const raw = (text) =>
+      new Promise((resolve) => {
+        const req = http.request({ host: '127.0.0.1', port, path: '/recall', method: 'POST', headers: auth }, (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        });
+        // The server may close the socket on an oversized body before it is all sent.
+        req.on('error', () => resolve('closed'));
+        req.end(text);
+      });
+
+    assert.equal(await raw('{not json'), 400);
+    assert.equal((await post(port, { path: '/recall', headers: auth, body: { ...HOOK_INPUT, hook_event_name: 'PreToolUse' } })).status, 400);
+    assert.equal((await post(port, { path: '/recall', headers: auth, body: { prompt: 1 } })).status, 400);
+    assert.ok([413, 'closed'].includes(await raw(JSON.stringify({ prompt: 'x'.repeat(300 * 1024) }))));
+    assert.deepEqual(asked, []);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('/recall answers the hook output, {} without memories, and {} when recall is off or fails', async (t) => {
+  const hit = await recallServer(async () => ({ keys: ['github.com/acme/hud/a'], text: '## Luna Core Memory\n- a memory' }));
+  try {
+    const res = await post(hit.server.port, { path: '/recall', headers: hit.auth, body: HOOK_INPUT });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: '## Luna Core Memory\n- a memory' } });
+    assert.deepEqual(hit.asked, [HOOK_INPUT.prompt]);
+  } finally {
+    await hit.server.stop();
+  }
+
+  for (const recall of [async () => null, async () => ({ keys: [], text: null }), undefined]) {
+    const s = await recallServer(recall);
+    try {
+      const res = await post(s.server.port, { path: '/recall', headers: s.auth, body: HOOK_INPUT });
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.json, {});
+    } finally {
+      await s.server.stop();
+    }
+  }
+
+  const quiet = t.mock.method(console, 'error', () => {});
+  const failing = await recallServer(async () => {
+    throw new Error('vector store gone');
+  });
+  try {
+    const res = await post(failing.server.port, { path: '/recall', headers: failing.auth, body: HOOK_INPUT });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, {});
+    assert.equal(quiet.mock.callCount(), 1);
+  } finally {
+    await failing.server.stop();
+  }
+});

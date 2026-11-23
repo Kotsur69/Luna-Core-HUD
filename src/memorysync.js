@@ -45,6 +45,8 @@ function memoryPaths(configDir) {
     projects: path.join(configDir, 'memory-projects.local.json'),
     // The per-type auto-accept switches (src/memoryautoaccept.js), synced in the config scope.
     autoAccept: path.join(configDir, 'memory-autoaccept.local.json'),
+    // The auto-recall switch (src/memoryrecallhook.js), synced the same way.
+    recall: path.join(configDir, 'memory-recall.local.json'),
   };
 }
 
