@@ -18,7 +18,10 @@
 //
 // Two PCs can propose the same memory from different sessions. Near-duplicates
 // among the waiting entries are shown as ONE entry; approving or rejecting it
-// removes the others. An entry without a usefulness score shows, and on
+// removes the others. Near means by meaning when both have a vector of the
+// local embedding model, by words otherwise (memoryextract.nearDuplicate); the
+// caller passes the vectors in (`vectorOf`) and passes the same lookup to the
+// listing and to a decision, so a decision removes the group it showed. An entry without a usefulness score shows, and on
 // approval keeps, the best score of the twins folded into it.
 //
 // No Electron here: scripts/luna.js uses the same functions with the app closed.
@@ -43,12 +46,14 @@ const byAge = ([ka, a], [kb, b]) => a.created.localeCompare(b.created) || ka.loc
 /**
  * The waiting entries, near-duplicates folded into the oldest of them.
  * @param {[string, object][]} records [key, record] from memorystore.scan()
+ * @param {((record: object) => ArrayLike<number>|undefined)|null} [vectorOf] a memory's vector
+ *   (memoryembed vector store vectorFor); none = compared by words only
  * @returns {{key: string, record: object, duplicates: string[]}[]} oldest first
  */
-function groupPending(records) {
+function groupPending(records, vectorOf = null) {
   const groups = [];
   for (const [key, record] of records.filter(([, r]) => isPending(r)).sort(byAge)) {
-    const lead = groups.find((g) => g.record.project === record.project && nearDuplicate(g.record, record));
+    const lead = groups.find((g) => g.record.project === record.project && nearDuplicate(g.record, record, vectorOf));
     if (lead) lead.duplicates.push(key);
     else groups.push({ key, record, duplicates: [] });
   }
@@ -75,14 +80,14 @@ function withGroupScore(record, twins) {
 }
 
 /** A confirmed memory of the same project (or a global one) that says nearly the same. */
-function similarConfirmed(records, record) {
+function similarConfirmed(records, record, vectorOf = null) {
   const replaced = new Set(record.supersedes);
   const hit = records.find(
     ([, r]) =>
       !isPending(r) &&
       (r.project === record.project || r.project === GLOBAL) &&
       !(r.project === record.project && replaced.has(r.id)) &&
-      nearDuplicate(r, record),
+      nearDuplicate(r, record, vectorOf),
   );
   return hit ? { key: hit[0], title: hit[1].title } : null;
 }
@@ -100,18 +105,18 @@ function scoredGroup(group, byKey, { reads, today }) {
 
 /**
  * @param {string} dir the mirror folder (memoryPaths().dir)
- * @param {{reads?: Map<string, number>, today?: string|null}} [usage] this PC's recent reads
- *   (memoryuse.recentUsage); none = the final score counts no reads
+ * @param {{reads?: Map<string, number>, today?: string|null, vectorOf?: Function|null}} [usage] this PC's recent reads
+ *   (memoryuse.recentUsage); none = the final score counts no reads; vectorOf = see groupPending
  * @returns {{items: object[], total: number}} the final score highest first (memoryrecord.finalScore),
  *   an entry without one last, then by usefulness, newest first within the same score;
  *   total = entries waiting, duplicates folded
  */
-function listInbox(dir, { reads = new Map(), today = null } = {}) {
+function listInbox(dir, { reads = new Map(), today = null, vectorOf = null } = {}) {
   const { records } = scan(dir);
   const byKey = new Map(records);
   const usage = { reads: reads instanceof Map ? reads : new Map(), today };
   // Array.prototype.sort is stable: equal scores keep the newest-first order.
-  const groups = groupPending(listable(records))
+  const groups = groupPending(listable(records), vectorOf)
     .reverse()
     .map((g) => scoredGroup(g, byKey, usage))
     .sort(byFinalScore);
@@ -136,7 +141,7 @@ function listInbox(dir, { reads = new Map(), today = null } = {}) {
       .filter(Boolean)
       .map((r) => ({ id: r.id, title: r.title })),
     duplicates: duplicates.length,
-    similar: similarConfirmed(records, record),
+    similar: similarConfirmed(records, record, vectorOf),
     ...scoreOf(record),
     // Computed here, never stored: {score: 0-100|null, parts: {usefulness, confidence, usage}}.
     final,
@@ -160,14 +165,14 @@ function listable(records) {
 }
 
 /** The waiting entry with this key and the duplicates folded into it, or a reason. */
-function findPending(dir, key) {
+function findPending(dir, key, vectorOf = null) {
   if (!splitKey(key)) return { reason: 'bad-key' };
   const { records } = scan(dir);
   const found = records.find(([k]) => k === key);
   if (!found) return { reason: 'not-found' };
   if (!isPending(found[1])) return { reason: 'not-pending' };
   // The entry may be a folded duplicate itself: act on the whole group it is in.
-  const group = groupPending(records).find((g) => g.key === key || g.duplicates.includes(key));
+  const group = groupPending(records, vectorOf).find((g) => g.key === key || g.duplicates.includes(key));
   const others = [group.key, ...group.duplicates].filter((k) => k !== key);
   const byKey = new Map(records);
   return { record: found[1], others, twins: others.map((k) => byKey.get(k)) };
@@ -180,10 +185,11 @@ function findPending(dir, key) {
  * @param {string} today YYYY-MM-DD
  * @param {(event: string, record: object) => void} [decided] called once the
  *   decision is on disk, with 'approved' and the entry as it was (phase 5: the memory log)
+ * @param {{vectorOf?: Function|null}} [opts] the lookup the listing grouped with (groupPending)
  * @returns {{ok: true, key: string, removed: string[]}|{ok: false, reason: string}}
  */
-function approve(dir, key, today, decided = () => {}) {
-  const found = findPending(dir, key);
+function approve(dir, key, today, decided = () => {}, { vectorOf = null } = {}) {
+  const found = findPending(dir, key, vectorOf);
   if (!found.record) return { ok: false, reason: found.reason };
   // The score the inbox showed for the group stays with the memory: its twins are deleted next.
   const entry = withGroupScore(found.record, found.twins);
@@ -196,10 +202,11 @@ function approve(dir, key, today, decided = () => {}) {
 /**
  * Rejects one entry: it and its duplicates are deleted.
  * @param {(event: string, record: object) => void} [decided] called with 'rejected' and the deleted entry
+ * @param {{vectorOf?: Function|null}} [opts] the lookup the listing grouped with (groupPending)
  * @returns {{ok: true, key: string, removed: string[]}|{ok: false, reason: string}}
  */
-function reject(dir, key, decided = () => {}) {
-  const found = findPending(dir, key);
+function reject(dir, key, decided = () => {}, { vectorOf = null } = {}) {
+  const found = findPending(dir, key, vectorOf);
   if (!found.record) return { ok: false, reason: found.reason };
   for (const k of [key, ...found.others]) removeRecord(dir, k);
   decided('rejected', found.record);

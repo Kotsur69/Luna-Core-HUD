@@ -54,7 +54,7 @@ const os = require('os');
 const path = require('path');
 const { pathKey } = require('./gitattribution');
 const {
-  UUID_RE, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch,
+  UUID_RE, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch, AGY_TRANSCRIPT_FILES,
 } = require('./agytranscript');
 const { AgyTail } = require('./agytail');
 
@@ -62,7 +62,7 @@ const { AgyTail } = require('./agytail');
 const AGY_APP_DATA_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
 const SUMMARIES_DB = 'conversation_summaries.db';
 /** Full first: transcript.jsonl truncates large fields, which would undercount. */
-const TRANSCRIPT_FILES = Object.freeze(['transcript_full.jsonl', 'transcript.jsonl']);
+const TRANSCRIPT_FILES = AGY_TRANSCRIPT_FILES;
 const DEFAULT_INTERVAL_MS = 1500;
 /** At most this much is read per tick; a long history is caught up over several. */
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
