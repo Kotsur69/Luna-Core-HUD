@@ -294,6 +294,12 @@ const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOf
 const { createScanner: createMemoryScanner, createJobLock: createMemoryJobLock, SCAN_MODEL: MEMORY_SCAN_MODEL, SCAN_TIMEOUT_MS: MEMORY_SCAN_TIMEOUT_MS } = require('./memoryscan');
 const { createChecker: createMemoryChecker, CHECK_MODEL: MEMORY_CHECK_MODEL, CHECK_TIMEOUT_MS: MEMORY_CHECK_TIMEOUT_MS } = require('./memorycheck');
 const { registerMemoryBrainIpc } = require('./memorybrainipc');
+const {
+  createConsolidator: createMemoryConsolidator,
+  createConsolidationSchedule: createMemoryConsolidationSchedule,
+  CONSOLIDATE_MODEL: MEMORY_CONSOLIDATE_MODEL,
+  CONSOLIDATE_TIMEOUT_MS: MEMORY_CONSOLIDATE_TIMEOUT_MS,
+} = require('./memoryconsolidate');
 /** One Interrogate answer of the origin-session drawer: a short read of one excerpt. */
 const MEMORY_INTERROGATE_TIMEOUT_MS = 2 * 60 * 1000;
 const { createChangeTracker: createMemoryChangeTracker } = require('./memorychanges');
@@ -308,6 +314,8 @@ let memoryCapture = null;
 let memoryRunCapture = null;
 let handbackScanner = null;
 let memoryDecay = null;
+// The Sleep Pass's opt-in weekly timer (src/memoryconsolidate.js): set in registerIpc().
+let memoryConsolidateSchedule = null;
 // The notification hub (src/hubipc.js): set in registerIpc(), its done
 // provider joins the config sync.
 let hubApi = null;
@@ -3833,7 +3841,33 @@ function registerIpc() {
   // through the same headless runner as capture), conflicts and the archive.
   // The scan and "Check if still true" share one lock: one model job at a time.
   const memoryJobLock = createMemoryJobLock();
+  // The Sleep Pass (src/memoryconsolidate.js): one Sonnet call on the same lock, read-only
+  // tools in the project's folder when this PC has it; it only writes inbox proposals.
+  const memoryConsolidator = createMemoryConsolidator({
+    dir: () => memoryPaths(userDir()).dir,
+    run: ({ prompt, cwd }) =>
+      runMemoryJob({
+        prompt,
+        model: MEMORY_CONSOLIDATE_MODEL,
+        lean: true,
+        readOnly: Boolean(cwd),
+        cwd: cwd || null,
+        stdin: true,
+        env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+        timeoutMs: MEMORY_CONSOLIDATE_TIMEOUT_MS,
+      }),
+    roots: memoryRoots,
+    log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
+    lock: memoryJobLock,
+    settingsFile: () => memoryPaths(userDir()).consolidate,
+    onProgress: () => send('memory:changed', {}),
+    onWritten: () => {
+      if (memorySync) memorySync.soon();
+    },
+  });
+  memoryConsolidateSchedule = createMemoryConsolidationSchedule({ consolidator: memoryConsolidator });
   registerMemoryBrainIpc({
+    consolidator: memoryConsolidator,
     ipcMain,
     dir: () => memoryPaths(userDir()).dir,
     // "Check if still true" (src/memorycheck.js): Sonnet with Read / Grep / Glob only, in the project's folder.
@@ -4728,6 +4762,7 @@ app.whenReady().then(() => {
       },
     });
     memoryDecay.start();
+    if (memoryConsolidateSchedule) memoryConsolidateSchedule.start();
   }
   if (!probing) {
     orchestraStore.migrateLegacy((raw) => legacyRunProject(orchestraCtx, raw));
@@ -4877,6 +4912,7 @@ app.on('window-all-closed', () => {
   agyIntake.unregisterAll();
   if (memoryCapture) memoryCapture.stop();
   if (memoryDecay) memoryDecay.stop();
+  if (memoryConsolidateSchedule) memoryConsolidateSchedule.stop();
   intakeServer.stop().catch(() => {});
   if (memoryReader) memoryReader.close();
   sessions.clear();

@@ -43,6 +43,13 @@
 // Both checks start and return; the answer arrives as memory:changed. Every
 // memory:list item carries `check`, its last answer on this PC (or null).
 //
+// The Sleep Pass (src/memoryconsolidate.js): one Sonnet call proposes merges,
+// expiry, retirement and an architecture-map refresh, as inbox entries only.
+//   memory:consolidate        (project)      -> {ok} | {ok:false, reason: 'busy'|'bad-project'|'empty'|'failed'}
+//   memory:consolidate-status (project?)     -> {ok, status, busy, weekly, lastRun} | {ok:false, reason: 'bad-project'|'failed'}
+//                                               weekly / lastRun are of `project`; none given = false / null
+//   memory:consolidate-weekly ({project, on}) -> {ok, weekly} | {ok:false, reason}   the opt-in weekly schedule
+//
 // The renderer is untrusted: every payload is checked here, keys by
 // splitKey() (never a path), a project by validProject(). A conflict or a
 // merge suggestion can be settled only while it is listed, and only an
@@ -267,7 +274,8 @@ function projectsOf(records, gone, enabled) {
  *   the inbox found merge suggestions with (src/memoryembed.js), null = by words; origin = the
  *   folders the origin-session drawer may read: {transcriptsDir, runsDir, agyDir}, each
  *   () => string|null (Claude Code's projects folder, LunaCore's run reports, agy's brain
- *   folder); ask = the Interrogate model call (missionrunner.runJob, lean, no tools), null = it refuses
+ *   folder); ask = the Interrogate model call (missionrunner.runJob, lean, no tools), null = it refuses;
+ *   consolidator = memoryconsolidate.createConsolidator() (the Sleep Pass), null = its channels refuse
  */
 function registerMemoryBrainIpc({
   ipcMain,
@@ -283,6 +291,7 @@ function registerMemoryBrainIpc({
   vectors = sharedVectorStore,
   origin = {},
   ask = null,
+  consolidator = null,
 }) {
   /** The lookup the inbox listed its merge suggestions with: a pair it showed can be settled. */
   const vectorOf = () => {
@@ -441,6 +450,43 @@ function registerMemoryBrainIpc({
     if (title === null || body === null) return { ok: false, reason: 'bad-edits' };
     if (!log) return { ok: false, reason: 'failed' };
     return guarded('check-edit', () => editChecked({ dir: dir(), key, title, body, today: isoDate(now()), log }));
+  });
+
+  // The Sleep Pass (src/memoryconsolidate.js). A start writes nothing yet: its
+  // progress repaints, and its proposals sync through the consolidator's onWritten.
+  const consolidating = (label, fn) => {
+    if (!consolidator) return { ok: false, reason: 'failed' };
+    try {
+      return fn();
+    } catch (err) {
+      console.error(`[memory] ${label} failed:`, errText(err));
+      return { ok: false, reason: 'failed' };
+    }
+  };
+  ipcMain.handle('memory:consolidate', (_event, rawProject) => {
+    const project = projectArg(rawProject);
+    if (!project) return { ok: false, reason: 'bad-project' };
+    return consolidating('consolidate', () => consolidator.start(project));
+  });
+  ipcMain.handle('memory:consolidate-status', (_event, rawProject) => {
+    // No project yet (the window has not picked one) is fine; a malformed one is refused.
+    const none = rawProject === undefined || rawProject === null || rawProject === '';
+    const project = none ? null : projectArg(rawProject);
+    if (!none && !project) return { ok: false, reason: 'bad-project' };
+    return consolidating('consolidate status', () => ({
+      ok: true,
+      status: consolidator.status(),
+      busy: consolidator.busy(),
+      weekly: project ? consolidator.weeklyOf(project) : false,
+      lastRun: project ? consolidator.lastRunOf(project) : null,
+    }));
+  });
+  ipcMain.handle('memory:consolidate-weekly', (_event, req) => {
+    if (!isObject(req)) return { ok: false, reason: 'bad-request' };
+    const project = projectArg(req.project);
+    if (!project) return { ok: false, reason: 'bad-project' };
+    if (typeof req.on !== 'boolean') return { ok: false, reason: 'bad-request' };
+    return consolidating('consolidate weekly', () => consolidator.setWeekly(project, req.on));
   });
 
   // Read only: no onChanged, nothing is written.
