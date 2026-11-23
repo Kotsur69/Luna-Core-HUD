@@ -126,3 +126,48 @@ test('refusal codes: known ones get their own text, gone ones leave the list', (
   assert.equal(isGone('notFound'), true);
   assert.equal(isGone('failed'), false);
 });
+
+import { rejectPayload, searchPayload, searchFrom, swipeIntent, REJECT_REASONS, SWIPE_THRESHOLD_PX } from '../mobile/src/memorymodel.js';
+
+test('rejectPayload adds only a known reason chip', () => {
+  const item = { project: 'github.com/acme/hud', id: 'a' };
+  assert.deepEqual(rejectPayload(item, 'too-vague'), { project: 'github.com/acme/hud', id: 'a', reason: 'too-vague' });
+  assert.deepEqual(rejectPayload(item, 'made up'), { project: 'github.com/acme/hud', id: 'a' });
+  assert.deepEqual(rejectPayload(item), { project: 'github.com/acme/hud', id: 'a' });
+  assert.equal(rejectPayload({ project: 'x', id: 'A b' }, 'wrong'), null);
+  assert.ok(REJECT_REASONS.every((r) => r.length <= 80));
+});
+
+test('searchPayload trims, bounds and validates the project', () => {
+  assert.equal(searchPayload('   '), null);
+  assert.equal(searchPayload(5), null);
+  assert.deepEqual(searchPayload('  retry   busy '), { query: 'retry busy', limit: 10 });
+  assert.equal(searchPayload('x'.repeat(500)).query.length, 200);
+  assert.equal(searchPayload('q', '../bad').project, undefined);
+  assert.equal(searchPayload('q', 'github.com/acme/hud').project, 'github.com/acme/hud');
+});
+
+test('searchFrom keeps clean hits only', () => {
+  const good = { key: 'github.com/acme/hud/a', project: 'github.com/acme/hud', type: 'gotcha', title: 'T', trust: 'confirmed, never re-verified', source: 's', snippet: 'snip' };
+  const hits = searchFrom({
+    results: [good, good, { ...good, key: 'other/proj/zz' }, { ...good, key: 'github.com/acme/hud/B!' }, { ...good, title: ' ' }, null, { ...good, key: 'github.com/acme/hud/b', unreviewed: true, snippet: undefined }],
+  });
+  assert.deepEqual(hits.map((h) => h.key), ['github.com/acme/hud/a', 'github.com/acme/hud/b']);
+  assert.equal(hits[1].unreviewed, true);
+  assert.deepEqual(searchFrom(null), []);
+});
+
+test('swipeIntent needs a long, mostly horizontal drag', () => {
+  assert.equal(swipeIntent(SWIPE_THRESHOLD_PX, 0), 'approve');
+  assert.equal(swipeIntent(-SWIPE_THRESHOLD_PX - 20, 10), 'reject');
+  assert.equal(swipeIntent(SWIPE_THRESHOLD_PX - 1, 0), null);
+  assert.equal(swipeIntent(100, 80), null, 'diagonal drag is a scroll');
+  assert.equal(swipeIntent(0, 300), null);
+  assert.equal(swipeIntent(NaN, 0), null);
+});
+
+test('inboxFrom keeps originSessionId only when it is a session id', () => {
+  const base = { project: 'github.com/acme/hud', id: 'a', title: 'T' };
+  assert.equal(inboxFrom({ items: [{ ...base, originSessionId: 'abc-1' }] }).items[0].originSessionId, 'abc-1');
+  assert.equal(inboxFrom({ items: [{ ...base, originSessionId: '<b>x</b>' }] }).items[0].originSessionId, null);
+});
