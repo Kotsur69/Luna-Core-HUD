@@ -283,7 +283,7 @@ function expiryFields(raw) {
   const out = {};
   const days = expiresDaysOf(raw.expires_after_days);
   if (days !== undefined) out.expires_after_days = days;
-  const when = typeof raw.expires_when === 'string' ? cleanLine(raw.expires_when).slice(0, MAX_EXPIRES_WHEN).trim() : '';
+  const when = typeof raw.expires_when === 'string' ? cleanLine(raw.expires_when).slice(0, MAX_EXPIRES_WHEN).toWellFormed().trim() : '';
   if (when) out.expires_when = when;
   return out;
 }

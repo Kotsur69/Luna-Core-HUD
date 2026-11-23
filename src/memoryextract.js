@@ -306,6 +306,7 @@ const EXPIRY_LINES = [
   `- expires_after_days: optional, a whole number 1-${MAX_EXPIRES_DAYS}. Only for a temporary or in-progress constraint (a workaround`,
   '  until a fix ships, a freeze, a migration under way): after that many days it is shown for review. Leave it out otherwise.',
   `- expires_when: optional, one line of at most ${MAX_EXPIRES_WHEN} characters saying what ends the constraint ("until v2 ships").`,
+  '  Only together with expires_after_days: on its own it never brings the memory back for review.',
 ];
 
 /** The prompt lines that ask a session for its "where we stopped" status. */
