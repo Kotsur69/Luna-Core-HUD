@@ -228,3 +228,105 @@ test('recentUsage counts the reads of the last RECENT_READ_DAYS and names today'
   assert.equal(usage.reads.get('global/other'), 1);
   assert.deepEqual(recentUsage([], NOW).reads, new Map());
 });
+
+// ---- `luna memory audit` ---------------------------------------------------------
+
+const { auditReport } = require('../src/memoryuse.js');
+const DAY = 24 * 60 * 60 * 1000;
+const ago = (days) => NOW - days * DAY;
+const ev = (days, rest) => ({ at: ago(days), ...rest });
+
+test('auditReport on an empty log says so and still prints every section', () => {
+  const text = auditReport([], { days: 30, now: NOW });
+
+  assert.match(text, /^Memory audit: last 30 day\(s\)/);
+  assert.match(text, /No memory-log events in this window/);
+  assert.match(text, /overall: n\/a \(0 approved, 0 rejected\)/);
+  assert.match(text, /Graveyard: empty/);
+  assert.match(text, /Brief outcomes: 0 package\(s\)/);
+  assert.match(text, /Sync lag: no health data/);
+  assert.doesNotMatch(text, /!/);
+});
+
+test('auditReport counts decisions, graveyard, tool use, brief outcomes and sync lag', () => {
+  const events = [
+    ev(1, { ev: 'approved', key: key('a'), type: 'decision' }),
+    ev(1, { ev: 'approved', key: key('b'), type: 'decision' }),
+    ev(1, { ev: 'rejected', key: key('c'), type: 'gotcha' }),
+    ev(1, { ev: 'dropped', project: PROJECT, reason: 'duplicate' }),
+    ev(1, { ev: 'dropped', project: PROJECT, reason: 'duplicate' }),
+    ev(1, { ev: 'dropped', project: PROJECT, reason: 'too-short' }),
+    ev(1, { ev: 'card', session: 's1', loaded: true }),
+    ev(1, { ev: 'search', project: PROJECT, hits: [key('a')] }),
+    ev(1, { ev: 'get', key: key('a') }),
+    ev(1, { ev: 'proposed', key: key('d'), type: 'gotcha', by: 'session', usefulness: 80 }),
+    ev(1, { ev: 'recall', project: PROJECT, hits: [key('a')] }),
+    ev(1, { ev: 'brief-outcome', project: PROJECT, runId: 'r1', pkgId: 'p1', keys: [key('a')], outcome: 'clean' }),
+    ev(1, { ev: 'brief-outcome', project: PROJECT, runId: 'r1', pkgId: 'p2', keys: [key('a')], outcome: 'failed' }),
+  ];
+  const machines = [
+    { machine: 'HOME', at: NOW - 3 * 60 * 60 * 1000, self: true, silent: false },
+    { machine: 'WORK', at: NOW - 5 * DAY, silent: true },
+  ];
+
+  const text = auditReport(events, { days: 30, now: NOW, machines });
+
+  assert.match(text, /overall: 67% \(2 approved, 1 rejected\)/);
+  assert.match(text, /decision: 100% \(2 approved, 0 rejected\)/);
+  assert.match(text, /! gotcha: 0% \(0 approved, 1 rejected\)  <-- under 33%/);
+  assert.match(text, /Graveyard .*duplicate 2, too-short 1/);
+  assert.match(text, /1 card start\(s\), memory_search 1, memory_get 1, memory_propose 1, auto-recall 1/);
+  assert.match(text, /2 package\(s\): clean 1, retried 0, stalled 0, failed 1/);
+  assert.match(text, /HOME \(this PC\): last sync 3 h ago/);
+  assert.match(text, /WORK: last sync 5 d ago {2}<-- silent/);
+});
+
+test('auditReport flags only a rate under a third: exactly 1 of 3 is not red', () => {
+  const rows = (approved, rejected) => [
+    ...Array.from({ length: approved }, (_, i) => ev(1, { ev: 'approved', key: key(`a${i}`), type: 'fact' })),
+    ...Array.from({ length: rejected }, (_, i) => ev(1, { ev: 'rejected', key: key(`r${i}`), type: 'fact' })),
+  ];
+
+  assert.doesNotMatch(auditReport(rows(1, 2), { now: NOW }), /!/);
+  assert.match(auditReport(rows(1, 3), { now: NOW }), /! overall: 25%/);
+});
+
+test('auditReport puts usefulness scores in the right bucket at every boundary', () => {
+  const scores = [0, 49, 50, 69, 70, 89, 90, 100];
+  const events = scores.map((usefulness, i) => ev(1, { ev: 'proposed', key: key(`p${i}`), type: 'fact', usefulness }));
+  events.push(ev(1, { ev: 'proposed', key: key('none'), type: 'fact' }));
+
+  const text = auditReport(events, { now: NOW });
+
+  assert.match(text, / {2}<50: 2\n/);
+  assert.match(text, /50-69: 2\n/);
+  assert.match(text, /70-89: 2\n/);
+  assert.match(text, / {2}90\+: 2\n/);
+  assert.match(text, /no score: 1/);
+});
+
+test('auditReport only reads events inside the --days window', () => {
+  const events = [
+    ev(2, { ev: 'approved', key: key('new'), type: 'fact' }),
+    ev(10, { ev: 'rejected', key: key('old'), type: 'fact' }),
+  ];
+
+  assert.match(auditReport(events, { days: 7, now: NOW }), /overall: 100% \(1 approved, 0 rejected\)/);
+  assert.match(auditReport(events, { days: 30, now: NOW }), /overall: 50% \(1 approved, 1 rejected\)/);
+});
+
+test('luna memory audit validates --days and prints the report', (t) => {
+  const { dir } = setup(t);
+  const printed = [];
+  t.mock.method(process.stdout, 'write', (text) => {
+    printed.push(String(text));
+    return true;
+  });
+
+  assert.equal(main(['memory', 'audit', '--dir', dir, '--days', '7']), 0);
+  t.mock.restoreAll();
+  assert.match(printed.join(''), /Memory audit: last 7 day\(s\)/);
+  for (const bad of ['0', '-3', 'x', '1.5', '366']) {
+    assert.throws(() => main(['memory', 'audit', '--dir', dir, `--days=${bad}`]), /--days must be a whole number from 1 to 365/);
+  }
+});
