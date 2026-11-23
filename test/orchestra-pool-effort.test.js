@@ -231,6 +231,27 @@ test('an agy variant runs as its agy:<id>; one the list lacks falls back to the 
   assert.ok(gone.log.lines.some((l) => /variant agy:gemini-4-argon-low is not in the live/.test(l)));
 });
 
+// Decision (2026-11-24): an agy pool entry only selects the variant. The
+// level its id ends in is a badge label, never the tab's --effort: an agy tab
+// runs at the package's own effort (src/orchestraPoolEffort.js claudePoolEffort).
+test('an agy variant only picks the model: the agy tab keeps the package\'s own effort', async () => {
+  const chosen = [e('opus'), e('agy-argon', 'agy:gemini-4-argon-high')];
+  const onVariant = { poolModel: 'agy-argon', model: 'agy:gemini-4-argon-high', effort: 'max' };
+  assert.equal(effort.packagePoolEffort(chosen, onVariant), 'high');
+  assert.equal(mainRules.claudePoolEffort(chosen, onVariant), null);
+
+  const packages = [pkg('a', 'agy-argon', { effort: 'max' }), pkg('b', 'opus', { at: 2 })];
+  const { orch, log } = setup({ packages, extraDeps: agyDeps() });
+  const made = await orch.makePlan({ ...ctx, modelPool: chosen });
+  const res = await orch.launch(approve(made.plan, { workers: 'claude', modelPool: chosen }));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const tab = sessionOf(log, res.plan, 'a');
+  assert.equal(tab.task.model, 'agy:gemini-4-argon-high');
+  assert.equal(tab.task.effort, 'max');
+  const cmd = withTaskBrief('agy', { briefPath: '/wt/a/LUNA_BRIEF.md', model: tab.task.model, effort: tab.task.effort });
+  assert.match(cmd, /--model gemini-4-argon-high --effort max(\s|$)/);
+});
+
 test('at launch: a variant that left the list runs on the family\'s live variant, with a board note', async () => {
   const agyModels = fakeAgyModels();
   const packages = [pkg('a', 'agy-argon'), pkg('b', 'opus', { at: 2 })];
