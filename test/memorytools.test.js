@@ -775,3 +775,185 @@ test('the memory log keeps a `by` of session on a proposed event and drops any o
   assert.equal(sessionLabel('ab/../cd-ef12345'), 'abcd-ef1');
   assert.equal(sessionLabel(undefined), 'unknown');
 });
+
+// ---- repo doc chunks (decision 22) ---------------------------------------------
+
+const DOC_FILES = {
+  'README.md': '# HUD\nA desktop HUD for terminals.\n\n## Installer\nThe installer asset is named with dashes for the updater.\n',
+  'docs/reference/ENGINEERING_NOTES.md': '# Notes\n\n## Worktrees\nNever junction node_modules into a worktree: removal follows the junction.\n',
+  'CLAUDE.local.md': '# Private\nsecret installer notes',
+};
+
+function docRepo(t, files = DOC_FILES) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-memtools-docs-'));
+  t.after(() => fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 }));
+  for (const [rel, text] of Object.entries(files)) {
+    const file = path.join(dir, ...rel.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  }
+  return dir;
+}
+
+/** A reader whose project is mapped to a folder of docs. */
+function memoryWithDocs(t, { root = docRepo(t), project = PROJECT, mapped = PROJECT, records } = {}) {
+  return memoryOf(t, project, { projectRoot: (p) => (p === mapped ? root : null) }, records);
+}
+
+test('memory_search returns doc hits after the memories, with kind, source and the data note', (t) => {
+  const memory = memoryWithDocs(t);
+
+  const res = callMemoryTool('memory_search', { query: 'worktree junction node_modules' }, memory);
+
+  assert.equal(res.ok, true);
+  assert.equal(res.payload.note, DATA_NOTE);
+  const kinds = res.payload.results.map((r) => r.kind || 'memory');
+  assert.ok(kinds.includes('doc'), JSON.stringify(res.payload.results));
+  assert.ok(kinds.indexOf('doc') > kinds.lastIndexOf('memory'), 'every memory comes before the first doc');
+  const doc = res.payload.results.find((r) => r.kind === 'doc');
+  assert.equal(doc.source, 'docs/reference/ENGINEERING_NOTES.md#L3-L4');
+  assert.equal(doc.title, 'Worktrees');
+  assert.equal(doc.key, `doc:${PROJECT}/docs/reference/ENGINEERING_NOTES.md#L3-L4`);
+  assert.match(doc.trust, /not a memory/);
+  assert.match(doc.snippet, /junction/);
+  assert.equal(doc.created, undefined);
+});
+
+test('a doc outranks nothing: the doc hits always follow every memory hit', (t) => {
+  const memory = memoryWithDocs(t);
+
+  const res = callMemoryTool('memory_search', { query: 'installer asset dashes', limit: 3 }, memory);
+
+  const kinds = res.payload.results.map((r) => r.kind || 'memory');
+  assert.deepEqual(kinds, [...kinds].sort((a, b) => (a === 'doc') - (b === 'doc')));
+  assert.ok(kinds.includes('doc'));
+});
+
+test('.local. docs are not searchable', (t) => {
+  const memory = memoryWithDocs(t);
+
+  const res = callMemoryTool('memory_search', { query: 'secret installer notes private' }, memory);
+
+  assert.ok(!JSON.stringify(res.payload).includes('secret installer'));
+});
+
+test('without a mapped folder memory_search behaves exactly as before', (t) => {
+  const plain = callMemoryTool('memory_search', { query: 'worktree junction node_modules' }, memoryOf(t));
+  const unmapped = callMemoryTool('memory_search', { query: 'worktree junction node_modules' }, memoryWithDocs(t, { mapped: 'github.com/acme/other' }));
+  const noProject = callMemoryTool('memory_search', { query: 'worktree junction node_modules' }, memoryWithDocs(t, { project: null }));
+
+  assert.deepEqual(unmapped, plain);
+  assert.ok(plain.payload.results.every((r) => r.kind === undefined));
+  assert.deepEqual(
+    noProject.payload.results.map((r) => r.key),
+    plain.payload.results.map((r) => r.key),
+  );
+  assert.ok(noProject.payload.results.every((r) => r.kind === undefined));
+});
+
+test('a folder without docs, or a failing resolver, leaves memory search working', (t) => {
+  const plain = callMemoryTool('memory_search', { query: 'worktree junction' }, memoryOf(t));
+  const empty = callMemoryTool('memory_search', { query: 'worktree junction' }, memoryWithDocs(t, { root: docRepo(t, { 'package.json': '{}' }) }));
+  const original = console.error;
+  console.error = () => {};
+  t.after(() => {
+    console.error = original;
+  });
+  const broken = memoryOf(t, PROJECT, {
+    projectRoot: () => {
+      throw new Error('no folder');
+    },
+  });
+
+  assert.deepEqual(empty, plain);
+  assert.deepEqual(callMemoryTool('memory_search', { query: 'worktree junction' }, broken), plain);
+});
+
+test('doc hits are not written to the memory log', (t) => {
+  const memory = memoryWithDocs(t);
+  const events = [];
+  const logged = { ...memory, log: (e) => events.push(e) };
+
+  const res = callMemoryTool('memory_search', { query: 'worktree junction node_modules' }, logged);
+  const doc = res.payload.results.find((r) => r.kind === 'doc');
+  const got = callMemoryTool('memory_get', { key: doc.key }, logged);
+
+  assert.equal(got.ok, true);
+  assert.equal(events.filter((e) => e.ev === 'get').length, 0);
+  assert.ok(events[0].hits.every((k) => !k.startsWith('doc:')));
+});
+
+test('memory_get reads a doc chunk by its doc key, with the data note and a warning', (t) => {
+  const memory = memoryWithDocs(t);
+  const key = `doc:${PROJECT}/docs/reference/ENGINEERING_NOTES.md#L3-L4`;
+
+  const res = callMemoryTool('memory_get', { key }, memory);
+
+  assert.equal(res.ok, true);
+  assert.equal(res.payload.note, DATA_NOTE);
+  assert.equal(res.payload.kind, 'doc');
+  assert.equal(res.payload.key, key);
+  assert.equal(res.payload.source, 'docs/reference/ENGINEERING_NOTES.md#L3-L4');
+  assert.equal(res.payload.file, 'docs/reference/ENGINEERING_NOTES.md');
+  assert.match(res.payload.body, /Never junction node_modules/);
+  assert.match(res.payload.warning, /not a reviewed memory/);
+});
+
+test('memory_get of a doc chunk that is gone says which file and lines to read instead', (t) => {
+  const memory = memoryWithDocs(t);
+
+  const res = callMemoryTool('memory_get', { key: `doc:${PROJECT}/README.md#L40-L50` }, memory);
+
+  assert.equal(res.ok, false);
+  assert.match(res.error, /Read README\.md lines 40-50/);
+});
+
+test('memory_get of a doc key without a mapped folder, or a bad doc key, is a clear error', (t) => {
+  const unmapped = memoryOf(t);
+  const mapped = memoryWithDocs(t);
+
+  const noFolder = callMemoryTool('memory_get', { key: `doc:${PROJECT}/README.md#L1-L2` }, unmapped);
+  assert.equal(noFolder.ok, false);
+  assert.match(noFolder.error, /Read README\.md lines 1-2/);
+
+  for (const bad of [`doc:${PROJECT}/../../secret.md#L1-L2`, `doc:${PROJECT}/src/main.js#L1-L2`, 'doc:', `doc:${PROJECT}/README.md#L1-L2${'x'.repeat(300)}`]) {
+    const res = callMemoryTool('memory_get', { key: bad }, mapped);
+    assert.equal(res.ok, false, bad);
+    assert.match(res.error, /`doc:` key/);
+  }
+});
+
+test('a doc key of a project with no mapped folder is not read', (t) => {
+  const memory = memoryWithDocs(t);
+
+  const res = callMemoryTool('memory_get', { key: `doc:${OTHER}/README.md#L1-L2` }, memory);
+
+  assert.equal(res.ok, false);
+});
+
+test('doc chunks follow the files: an edited doc is found after the edit', (t) => {
+  const root = docRepo(t);
+  const memory = memoryWithDocs(t, { root });
+  const docHits = (query) => callMemoryTool('memory_search', { query }, memory).payload.results.filter((r) => r.kind === 'doc');
+  assert.equal(docHits('zebra crossing').length, 0);
+
+  const file = path.join(root, 'README.md');
+  fs.writeFileSync(file, '# HUD\nZebra crossing handling lives here.\n');
+  const later = new Date(Date.now() + 60000);
+  fs.utimesSync(file, later, later);
+
+  const found = docHits('zebra crossing');
+  assert.equal(found.length, 1);
+  assert.equal(found[0].source, 'README.md#L1-L2');
+});
+
+test('doc chunks stay out of the mirror folder', (t) => {
+  const dir = mirror(t);
+  const before = fs.readdirSync(dir, { recursive: true }).sort();
+  const reader = createMemoryReader(dir, { now: () => FIXED_NOW, projectRoot: () => docRepo(t) });
+  t.after(() => reader.close());
+
+  reader.search('worktree junction', { project: PROJECT });
+
+  assert.deepEqual(fs.readdirSync(dir, { recursive: true }).sort(), before);
+});
