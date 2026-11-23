@@ -51,6 +51,8 @@ function memoryPaths(configDir) {
     autoAccept: path.join(configDir, 'memory-autoaccept.local.json'),
     // The auto-recall switch (src/memoryrecallhook.js), synced the same way.
     recall: path.join(configDir, 'memory-recall.local.json'),
+    // The Sleep Pass's weekly opt-in and last runs (src/memoryconsolidate.js); this PC only, never synced.
+    consolidate: path.join(configDir, 'memory-consolidate.local.json'),
   };
 }
 

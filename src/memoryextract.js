@@ -503,6 +503,7 @@ module.exports = {
   duplicateWords,
   sameWords,
   wordsOf,
+  jaccard,
   outsideNote,
   withNote,
   sourceNotes,

@@ -18,7 +18,9 @@
 //                    or merge (the inbox edit form, prefilled). The loser, or
 //                    both merged ones, are superseded, never deleted.
 //   memoriesPanel    the "All memories" list of one project, its Scan button
-//                    and the scan's progress, archived memories with Restore,
+//                    and the scan's progress, the Sleep Pass's Consolidate
+//                    button and weekly switch (memoryconsolidateview.js),
+//                    archived memories with Restore,
 //                    a History expander per memory (memoryhistory.js), and
 //                    "Make a to-do" per memory (memorytodoform.js).
 //
@@ -437,12 +439,17 @@ export function memoriesPanel(list, ctx) {
     all.title = checkable ? t('mem.check.allHint') : t('mem.check.noFolderHint');
     bar.append(all);
   }
-  const lines = [scanLine(list.scan), check ? checkStatusLine(check.status(), list.project) : ''].filter(Boolean).join(' ');
+  // The Sleep Pass (memoryconsolidateview.js): Consolidate and the weekly switch.
+  const consolidate = ctx.consolidate || null;
+  if (consolidate) bar.append(...consolidate.controls(list.project));
+  const lines = [scanLine(list.scan), check ? checkStatusLine(check.status(), list.project) : '', consolidate ? consolidate.line(list.project) : '']
+    .filter(Boolean)
+    .join(' ');
   const status = el('p', 'hint mem-brain__status', lines);
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   panel.append(bar, status);
-  for (const problem of [ctx.scanError, check && check.startError()].filter(Boolean)) {
+  for (const problem of [ctx.scanError, check && check.startError(), consolidate && consolidate.startError()].filter(Boolean)) {
     const err = el('p', 'hint is-fail', t(problem));
     err.setAttribute('role', 'alert');
     panel.append(err);

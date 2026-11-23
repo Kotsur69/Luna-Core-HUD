@@ -23,10 +23,11 @@
 //   {"at": <ms>, "ev": "conflict", "key", "other", "note"?}   the usefulness scan's reason for a pair
 //   {"at": <ms>, "ev": "search",   "project", "hits": ["<key>", ...]}
 //   {"at": <ms>, "ev": "get",      "key"}
-//   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user" | "check" | "run", "note"?, "missing"?, "evidence"?, "run"?}
+//   {"at": <ms>, "ev": "verified" | "disputed", "key", "by": "tool" | "user" | "check" | "run" | "consolidate", "note"?, "missing"?, "evidence"?, "run"?}
 //                                  by 'check' = the "Check if still true" job said it holds (src/memorycheck.js);
 //                                  by 'run' = a God Mode run's capture says the run made it obsolete
-//                                  (src/memoryrunstale.js): disputed only, with that run's id in `run`
+//                                  (src/memoryrunstale.js): disputed only, with that run's id in `run`;
+//                                  by 'consolidate' = the Sleep Pass suggests retiring it (src/memoryconsolidate.js): disputed only
 //   {"at": <ms>, "ev": "checked",  "key", "verdict", "note"?, "evidence"?: ["file:line" | "<commit> ...", ...], "suggested"?}
 //                                  that job's last answer; verdict = holds | fixed | partly | fixable | unknown;
 //                                  suggested = a corrected body (verdict partly only)
@@ -89,7 +90,8 @@ const DECISIONS = ['approved', 'edited', 'rejected', 'retired', 'auto-accepted',
 const VERDICTS = ['verified', 'disputed'];
 // 'check' = the "Check if still true" job (src/memorycheck.js), never a person.
 // 'run' = a God Mode run's capture (src/memoryrunstale.js); it may only dispute.
-const BY = ['tool', 'user', 'check', 'run'];
+// 'consolidate' = the Sleep Pass (src/memoryconsolidate.js) suggests retiring it; it may only dispute.
+const BY = ['tool', 'user', 'check', 'run', 'consolidate'];
 /** A God Mode run id (orchestraReport.js RUN_ID_RE). */
 const RUN_ID_RE = /^[a-z0-9]{1,40}$/;
 /** A God Mode package id (orchestraSupervisor.js SLUG_RE). */
@@ -247,6 +249,7 @@ function cleanEvent(raw) {
     // A run only reports a memory as obsolete, and always names itself.
     const byRun = raw.by === 'run';
     if (byRun && (ev !== 'disputed' || typeof raw.run !== 'string' || !RUN_ID_RE.test(raw.run))) return null;
+    if (raw.by === 'consolidate' && ev !== 'disputed') return null;
     const note = line(raw.note, MAX_NOTE);
     const missing = Array.isArray(raw.missing) ? raw.missing.map((p) => line(p, MAX_PATH)).filter(Boolean).slice(0, MAX_MISSING) : [];
     return {

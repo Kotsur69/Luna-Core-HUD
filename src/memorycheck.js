@@ -433,6 +433,7 @@ module.exports = {
   checkOf,
   checkAllTargets,
   readGitLog,
+  folderOf,
   CHECK_MODEL,
   CHECK_TIMEOUT_MS,
   CHECK_ALL_CAP,
