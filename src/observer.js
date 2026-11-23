@@ -22,7 +22,7 @@ const { loadRates, rateFor, estimateCost } = require('./rates');
 // Diff-stat extraction for the Active-Files Heatmap (DONE_ACTIVE_FILES_HEATMAP_PLAN.md).
 const { fileStatFromEntry, estimateTokens } = require('./filestat');
 // A short sanitized `detail` on tool start events (shell summary, agent type, search pattern).
-const { claudeToolDetail } = require('./tooldetail');
+const { claudeToolDetail, errorPrefix } = require('./tooldetail');
 
 // ---- 1. Tool detection from stdout -----------------------------------------
 
@@ -397,9 +397,28 @@ function sumUsageByModel(text) {
 function toolsFromLines(text) {
   const tiles = new Set();
   for (const ev of toolEventsFromLines(text)) {
-    if (ev.phase === 'start') tiles.add(ev.tile);
+    // A tile-less start (the Skill tool: Live Work Map only) lights no tile.
+    if (ev.phase === 'start' && ev.tile) tiles.add(ev.tile);
   }
   return [...tiles];
+}
+
+/** A built-in tool with no Skill Tracker tile whose lifecycle the Live Work Map still wants. */
+const WORKMAP_ONLY_TOOL = 'Skill';
+
+/**
+ * What a tool_result says about a failure, for the end event: `isError`
+ * always, and only when set the entry's `toolDenialKind` (a hook refusal is
+ * written with one) and a short secret-scrubbed prefix of the message.
+ * @param {object} part the tool_result block
+ * @param {object} entry the whole transcript line
+ * @returns {{isError:boolean, toolDenialKind?:string, error?:string}}
+ */
+function errorFields(part, entry) {
+  const isError = Boolean(part.is_error);
+  const kind = entry && typeof entry.toolDenialKind === 'string' ? entry.toolDenialKind : '';
+  const error = isError ? errorPrefix(part.content) : '';
+  return { isError, ...(kind ? { toolDenialKind: kind } : {}), ...(error ? { error } : {}) };
 }
 
 /**
@@ -449,20 +468,25 @@ function toolEventsFromLines(text) {
       for (const part of content) {
         if (!part) continue;
         if (part.type === 'tool_use' && typeof part.id === 'string') {
-          const tile = TOOL_TO_TILE.get(part.name);
+          // The Skill tool has no Skill Tracker tile: it is forwarded with an
+          // empty tile for the Live Work Map, and the tile consumers (the
+          // tracker, toolsFromLines) skip an event whose tile is empty.
+          const tile = TOOL_TO_TILE.get(part.name) || (part.name === WORKMAP_ONLY_TOOL ? '' : undefined);
           // No tile (an MCP tool, say) means nothing to light - and skipping the
           // start means its end is later ignored as an orphan, which is correct.
-          if (tile) {
+          if (tile !== undefined) {
             const file = part.input && typeof part.input.file_path === 'string' ? part.input.file_path : '';
             // At most 80 characters, scrubbed of secrets (src/tooldetail.js); none for most tools.
             const detail = claudeToolDetail(part.name, part.input);
-            events.push(detail ? { phase: 'start', id: part.id, tile, at, file, detail } : { phase: 'start', id: part.id, tile, at, file });
+            const start = { phase: 'start', id: part.id, tile, toolName: part.name, at, file };
+            events.push(detail ? { ...start, detail } : start);
           }
         } else if (part.type === 'tool_result' && typeof part.tool_use_id === 'string') {
           events.push({
             phase: 'end',
             id: part.tool_use_id,
             at,
+            ...errorFields(part, obj),
             file: stat ? stat.file : '',
             added: stat ? stat.added : 0,
             removed: stat ? stat.removed : 0,
@@ -502,7 +526,7 @@ function toolEventsFromLines(text) {
  * itself (`added`/`removed`) is NOT joined through `open` - it travels on
  * the end event directly, straight from toolEventsFromLines().
  *
- * @param {Map<string,{tile:string, file:string}>} open live id -> {tile, file} map, mutated in place
+ * @param {Map<string,{tile:string, file:string, toolName?:string}>} open live id -> {tile, file, toolName} map, mutated in place
  * @param {{phase:string, id:string, tile?:string, at:number|null, file?:string, added?:number, removed?:number}[]} events
  * @returns {{phase:'start'|'end', id:string, tile:string, at:number|null, file:string, added?:number, removed?:number}[]}
  */
@@ -512,8 +536,9 @@ function foldToolEvents(open, events) {
     if (ev.phase === 'start') {
       if (open.has(ev.id)) continue; // already counted - re-read of the same line
       const file = ev.file || '';
-      open.set(ev.id, { tile: ev.tile, file });
-      const start = { phase: 'start', id: ev.id, tile: ev.tile, at: ev.at, file };
+      const toolName = ev.toolName || '';
+      open.set(ev.id, { tile: ev.tile, file, toolName });
+      const start = { phase: 'start', id: ev.id, tile: ev.tile, toolName, at: ev.at, file };
       out.push(ev.detail ? { ...start, detail: ev.detail } : start);
     } else {
       const opened = open.get(ev.id);
@@ -523,10 +548,14 @@ function foldToolEvents(open, events) {
         phase: 'end',
         id: ev.id,
         tile: opened.tile,
+        toolName: opened.toolName || '',
         at: ev.at,
         file: opened.file,
         added: ev.added || 0,
         removed: ev.removed || 0,
+        isError: ev.isError === true,
+        ...(ev.toolDenialKind ? { toolDenialKind: ev.toolDenialKind } : {}),
+        ...(ev.error ? { error: ev.error } : {}),
       });
     }
   }

@@ -55,6 +55,8 @@ const SPOKE_CLEAR_DEG = 40;
 const VIEW_MARGIN = 8;
 const LABEL_CHARS = 14;
 const LABEL_GAP = 9;
+/** Half the width a station's name / status line can take. */
+const LABEL_HALF_WIDTH = 45;
 const STEM_GAP = 3;
 // Mirrors src/sessionProcs.js' bounds: a snapshot is trusted no further.
 const MAX_SNAPSHOT_SESSIONS = 64;
@@ -172,6 +174,28 @@ function angleDist(a, b) {
 }
 
 /**
+ * Whether a satellite at `spot` stays off every OTHER station's disc and its
+ * two label lines. Needs geometry.stations (the station centres) and
+ * geometry.labelY (workmap.js stationLabelY()); without them nothing is
+ * excluded, which is what a ring of few stations needs.
+ */
+function clearOfNeighbours(spot, own, geometry) {
+  const { stations, labelY, stationR } = geometry;
+  if (!Array.isArray(stations) || typeof labelY !== 'function') return true;
+  for (const other of stations) {
+    if (other === own || (other.x === own.x && other.y === own.y)) continue;
+    if (Math.hypot(spot.x - other.x, spot.y - other.y) < stationR + SATELLITE_R + 2) return false;
+    const ys = labelY(other);
+    // A station's label lines are about 90 units wide, 14 high at their baselines.
+    if (Math.abs(spot.x - other.x) >= LABEL_HALF_WIDTH + SATELLITE_R) continue;
+    for (const baseline of [ys.name, ys.status]) {
+      if (spot.y + SATELLITE_R > baseline - 11 && spot.y - SATELLITE_R < baseline + 3) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * A station's satellite slots, best first: on a ring of SATELLITE_DIST around
  * it, in directions at least SPOKE_CLEAR_DEG from its spoke and
  * LABEL_CLEAR_DEG from its labels (above the disc in the map's upper half,
@@ -185,19 +209,26 @@ export function satelliteSlots(pos, geometry) {
   const { center, view } = geometry;
   const labelDeg = pos.y < center.y - 1 ? -90 : 90;
   const spokeDeg = (Math.atan2(center.y - pos.y, center.x - pos.x) * 180) / Math.PI;
+  const clampX = (x) => Math.min(view.w - VIEW_MARGIN, Math.max(VIEW_MARGIN, x));
+  const clampY = (y) => Math.min(view.h - VIEW_MARGIN, Math.max(VIEW_MARGIN, y));
+  const at = (a) => {
+    const rad = (a * Math.PI) / 180;
+    return { x: round2(clampX(pos.x + SATELLITE_DIST * Math.cos(rad))), y: round2(clampY(pos.y + SATELLITE_DIST * Math.sin(rad))) };
+  };
   const candidates = [];
   for (let a = 0; a < 360; a += SLOT_STEP_DEG) {
     const fromLabel = angleDist(a, labelDeg);
     const fromSpoke = angleDist(a, spokeDeg);
-    if (fromLabel >= LABEL_CLEAR_DEG && fromSpoke >= SPOKE_CLEAR_DEG) candidates.push({ a, open: Math.min(fromLabel, fromSpoke) });
+    if (fromLabel < LABEL_CLEAR_DEG || fromSpoke < SPOKE_CLEAR_DEG) continue;
+    // With many stations on the ring a neighbour's disc or labels can sit in reach.
+    const spot = at(a);
+    if (!clearOfNeighbours(spot, pos, geometry)) continue;
+    candidates.push({ a, open: Math.min(fromLabel, fromSpoke) });
   }
   candidates.sort((p, q) => q.open - p.open || p.a - q.a);
-  const clampX = (x) => Math.min(view.w - VIEW_MARGIN, Math.max(VIEW_MARGIN, x));
-  const clampY = (y) => Math.min(view.h - VIEW_MARGIN, Math.max(VIEW_MARGIN, y));
   return candidates.slice(0, MAX_SATELLITES_PER_STATION).map(({ a }) => {
     const rad = (a * Math.PI) / 180;
-    const x = round2(clampX(pos.x + SATELLITE_DIST * Math.cos(rad)));
-    const y = round2(clampY(pos.y + SATELLITE_DIST * Math.sin(rad)));
+    const { x, y } = at(a);
     const c = Math.cos(rad);
     if (c > 0.3) return { x, y, angleDeg: a, anchor: 'start', lx: x + LABEL_GAP, ly: y + 3 };
     if (c < -0.3) return { x, y, angleDeg: a, anchor: 'end', lx: x - LABEL_GAP, ly: y + 3 };

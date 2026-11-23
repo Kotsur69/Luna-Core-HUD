@@ -31,21 +31,21 @@
 // event was ignored, so a subscriber can skip a repaint with `===`. Malformed
 // input of any shape is ignored, never thrown on.
 //
-// What the feeds cannot tell us (recorded so the view does not pretend):
-//   - The Skill tool has no Skill Tracker tile, so observer.js drops it before
-//     it reaches metrics:tools. The Skills station is mapped (by tool name) but
-//     stays dark until the observer forwards that name.
-//   - A built-in tool's end event carries no error flag, so only MCP calls can
-//     be marked failed today. `ok === false` / `isError === true` on a tool end
-//     event is honoured for when the observer starts sending it.
-//   - Hook refusals (PreToolUse deny) are not visible either, for the same
-//     reason; there is no Hooks station. See the doc section named above.
+// What metrics:tools says beyond the tile (observer.js toolEventsFromLines):
+//   - `toolName` on every event. The Skill tool has no Skill Tracker tile
+//     (its events carry an empty one), so the name is what lights the Skills
+//     station.
+//   - On an end, `isError`, and when present `toolDenialKind` and `error` (a
+//     short secret-scrubbed prefix of the message). A hook refusal (a
+//     `toolDenialKind`, or an `error` starting `PreToolUse:`) is counted on
+//     the Hooks station, in red, instead of on the refused tool's station; any
+//     other built-in tool error is counted red on its own station.
 // ============================================================================
 
 'use strict';
 
 import {
-  addRecent, settleRecent, dropRunning, touchItem, endItem,
+  cleanText, addRecent, settleRecent, dropRunning, touchItem, endItem,
   toolCallInfo, mcpCallInfo, toolCallLines, noCallLines,
 } from './workmapactivity.js';
 
@@ -53,7 +53,12 @@ import {
 export { MAX_RECENT, MAX_ITEMS_PER_STATION, MAX_DETAIL_CHARS, cleanText } from './workmapactivity.js';
 
 /** Station ids, in the order the map lays them out around the model. */
-export const STATIONS = Object.freeze(['files', 'shell', 'network', 'memory', 'agents', 'skills', 'mcp', 'other']);
+export const STATIONS = Object.freeze(['files', 'shell', 'network', 'memory', 'agents', 'skills', 'hooks', 'mcp', 'other']);
+
+/** The station a hook refusal lights; no tool maps to it, only a refused call's end does. */
+const HOOKS_STATION = 'hooks';
+/** A PreToolUse refusal's message starts with this (`PreToolUse:Edit hook error: ...`). */
+const HOOK_ERROR_PREFIX = 'PreToolUse:';
 
 /** Upper bound on tracked in-flight calls per tab; a runaway feed cannot grow state without limit. */
 export const MAX_PULSES = 64;
@@ -371,26 +376,33 @@ function startCall(tab, callId, station, startedAt, info) {
 /**
  * @param {TabState} tab
  * @param {string} callId
- * @param {{at:number|null, message:string}|null} failure
+ * @param {{at:number|null, message:string, hook?:boolean}|null} failure hook = a hook refusal, counted on the Hooks station
  * @param {{added:number, removed:number, at:number|null}|null} outcome null = ended with no result
  */
 function endCall(tab, callId, failure, outcome) {
   const pulse = tab.pulses.find((p) => p.callId === callId);
   if (!pulse) return tab; // orphan: started before we attached, or never mapped
   const st = tab.stations[pulse.station];
-  const patch = { inFlight: Math.max(0, st.inFlight - 1) };
+  let next = withStation(tab, pulse.station, { inFlight: Math.max(0, st.inFlight - 1) });
+  // A hook refusal is the Hooks station's failure, not the tool's: the call
+  // itself never ran, so it must not read as a failed (or finished) Edit.
+  const failedOn = failure && failure.hook ? HOOKS_STATION : pulse.station;
   if (failure) {
-    patch.errors = st.errors + 1;
-    patch.lastError = { callId, at: failure.at, message: failure.message };
+    const target = next.stations[failedOn];
+    next = withStation(next, failedOn, {
+      errors: target.errors + 1,
+      // The refused call counts as one call that reached the Hooks station.
+      ...(failedOn === pulse.station ? {} : { total: target.total + 1 }),
+      lastError: { callId, at: failure.at, message: failure.message },
+    });
   }
-  const next = withStation(tab, pulse.station, patch);
   const lines = outcome ? { added: outcome.added, removed: outcome.removed } : { added: 0, removed: 0 };
   const status = failure ? 'failed' : outcome ? 'ok' : 'dropped';
   return {
     ...next,
     pulses: tab.pulses.filter((p) => p !== pulse),
     endedIds: withEnded(tab.endedIds, [callId]),
-    recent: settleRecent(tab.recent, callId, status, lines),
+    recent: settleRecent(tab.recent, callId, status, lines, failedOn === pulse.station ? null : failedOn),
     items: pulse.item ? endItem(tab.items, pulse.station, pulse.item, lines, !!failure, outcome ? outcome.at : null) : tab.items,
   };
 }
@@ -432,21 +444,37 @@ function foldCalls(tab, events, feed, now) {
     } else if (ev.phase === 'end') {
       const failure = feed.failureOf(ev);
       const outcome = { ...feed.linesOf(ev), at: at !== null ? at : now };
-      next = endCall(next, ev.id, failure ? { at, message: failure.message } : null, outcome);
+      next = endCall(next, ev.id, failure ? { at, message: failure.message, hook: failure.hook === true } : null, outcome);
     }
   }
   return next;
 }
 
 function toolStation(ev) {
-  // A future observer may send the real tool name; it is more precise than the tile.
-  if (typeof ev.name === 'string' && ev.name) return stationForTool(ev.name);
+  // The tool name (observer.js sends `toolName`) is more precise than the tile,
+  // and the only thing that says 'Skill': that tool has no tile.
+  const name = typeof ev.toolName === 'string' && ev.toolName ? ev.toolName : ev.name;
+  if (typeof name === 'string' && name) return stationForTool(name);
   return stationForTile(ev.tile);
 }
 
+/**
+ * Whether a tool end is a hook refusal (a PreToolUse hook denied the call):
+ * the transcript entry carries a `toolDenialKind`, and its message starts
+ * with `PreToolUse:`. Either one is enough.
+ * @param {unknown} ev a metrics:tools end event
+ * @returns {boolean}
+ */
+export function isHookRefusal(ev) {
+  if (!isObject(ev)) return false;
+  if (typeof ev.toolDenialKind === 'string' && ev.toolDenialKind) return true;
+  return typeof ev.error === 'string' && ev.error.trimStart().startsWith(HOOK_ERROR_PREFIX);
+}
+
 function toolFailure(ev) {
-  if (ev.ok === false || ev.isError === true) {
-    return { message: typeof ev.error === 'string' ? ev.error.slice(0, MAX_ERROR_CHARS) : '' };
+  const hook = isHookRefusal(ev);
+  if (hook || ev.ok === false || ev.isError === true) {
+    return { message: cleanText(ev.error, MAX_ERROR_CHARS), hook };
   }
   return null;
 }

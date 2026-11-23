@@ -513,7 +513,7 @@ test('toolEventsFromLines survives a torn line mid-write', () => {
 test('foldToolEvents resolves an end tile from the id that opened it', () => {
   const open = new Map();
   const out = foldToolEvents(open, toolEventsFromLines(useLine(['t0', 'MultiEdit'])));
-  assert.deepEqual(out, [{ phase: 'start', id: 't0', tile: 'Edit', at: Date.parse(TS), file: '' }]);
+  assert.deepEqual(out, [{ phase: 'start', id: 't0', tile: 'Edit', toolName: 'MultiEdit', at: Date.parse(TS), file: '' }]);
 
   const closed = foldToolEvents(open, toolEventsFromLines(resLine('t0')));
   assert.equal(closed[0].tile, 'Edit'); // the alias still maps to the Edit tile
@@ -550,8 +550,8 @@ test('foldToolEvents tracks concurrent tools sharing one tile', () => {
   assert.deepEqual(
     [...open.values()],
     [
-      { tile: 'Edit', file: '' },
-      { tile: 'Edit', file: '' },
+      { tile: 'Edit', file: '', toolName: 'Edit' },
+      { tile: 'Edit', file: '', toolName: 'NotebookEdit' },
     ]
   );
 
@@ -1006,4 +1006,66 @@ test('conversationIdFromCommand reads an agy resume id in both flag forms', () =
   assert.equal(conversationIdFromCommand('agy --conversation=not-a-uuid'), null);
   assert.equal(conversationIdFromCommand(`agy --conversationx=${id}`), null);
   assert.equal(conversationIdFromCommand(undefined), null);
+});
+
+// ---- Live Work Map: tool names, errors, hook refusals and the Skill tool ------
+
+/** User line closing ONE tool call with an error result; `extra` lands on the entry itself. */
+const errLine = (id, content, extra = {}) =>
+  JSON.stringify({
+    timestamp: TS,
+    ...extra,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content }] },
+  });
+
+test('toolEventsFromLines names the tool on every start event', () => {
+  const events = toolEventsFromLines(useLine(['t0', 'PowerShell'], ['t1', 'Read']));
+  assert.deepEqual(events.map((e) => [e.tile, e.toolName]), [['Shell', 'PowerShell'], ['Read', 'Read']]);
+});
+
+test('the Skill tool starts and ends with an empty tile, so no Skill Tracker tile lights', () => {
+  const text = [useLine(['s0', 'Skill', { skill: 'ecc:plan' }]), resLine('s0')].join('\n');
+  const events = toolEventsFromLines(text);
+  assert.deepEqual(events.map((e) => [e.phase, e.tile, e.toolName]), [['start', '', 'Skill'], ['end', undefined, undefined]]);
+  assert.equal(events[0].detail, 'ecc:plan');
+  const folded = foldToolEvents(new Map(), events);
+  assert.deepEqual(folded.map((e) => [e.phase, e.tile, e.toolName]), [['start', '', 'Skill'], ['end', '', 'Skill']]);
+  // The tile counter ignores it, alone or beside a real tool.
+  assert.deepEqual(toolsFromLines(useLine(['s0', 'Skill'])), []);
+  assert.deepEqual(toolsFromLines(useLine(['s0', 'Skill'], ['t1', 'Edit'])), ['Edit']);
+});
+
+test('an end carries isError false for a clean result and no error fields', () => {
+  const [, end] = toolEventsFromLines([useLine(['t0', 'Read']), resLine('t0')].join('\n'));
+  assert.equal(end.isError, false);
+  assert.equal('toolDenialKind' in end, false);
+  assert.equal('error' in end, false);
+});
+
+test('an error result carries isError and a short error prefix', () => {
+  const [, end] = toolEventsFromLines([useLine(['t0', 'Bash']), errLine('t0', 'Exit code 1\nboom')].join('\n'));
+  assert.equal(end.isError, true);
+  assert.equal(end.error, 'Exit code 1 boom');
+});
+
+test('a hook refusal carries its toolDenialKind and the PreToolUse prefix, through the fold', () => {
+  const text = [
+    useLine(['t0', 'Edit', { file_path: 'C:/repo/a.js' }]),
+    errLine('t0', [{ type: 'text', text: 'PreToolUse:Edit hook error: [gate] present the facts first' }], { toolDenialKind: 'hook' }),
+  ].join('\n');
+  const [, end] = foldToolEvents(new Map(), toolEventsFromLines(text));
+  assert.equal(end.isError, true);
+  assert.equal(end.toolDenialKind, 'hook');
+  assert.ok(end.error.startsWith('PreToolUse:Edit hook error:'));
+  assert.equal(end.toolName, 'Edit');
+});
+
+test('the error prefix is at most 160 characters and scrubbed of secrets', () => {
+  // Assembled at run time: a secret-shaped literal must never sit in the source.
+  const secret = ['gh', 'p_'].join('') + 'Ab1'.repeat(14);
+  const long = `Failed with ${secret} ${'x'.repeat(400)}`;
+  const [, end] = toolEventsFromLines([useLine(['t0', 'Bash']), errLine('t0', long)].join('\n'));
+  assert.ok(end.error.length <= 160, String(end.error.length));
+  assert.ok(!end.error.includes(secret));
+  assert.ok(end.error.startsWith('Failed with'));
 });
