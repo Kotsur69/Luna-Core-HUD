@@ -29,9 +29,22 @@
 // The digest is capped. When a session is longer, its start and its end are
 // kept and the middle is cut: the task is stated at the start, the outcome at
 // the end.
+//
+// ANTIGRAVITY (agy)
+// An agy tab writes its own log, one step per line (src/agytranscript.js).
+// digestAgyTranscript() reads it under the same rules and gives the same
+// shape: the prompt of a USER_INPUT step (without the metadata agy wraps
+// around it), a PLANNER_RESPONSE's text and tool calls, and the first lines
+// of a FAILED local call (read, edit, write, shell, search). Results, thinking,
+// system messages and checkpoint summaries are left out. Outside content is a
+// web call (search_web, read_url_content, ...), a browser, a subagent, swarm
+// or workflow, and an MCP server other than LunaCore's own.
 // ============================================================================
 
 'use strict';
+
+const { parseSteps } = require('./agytranscript');
+const { TOOL_TO_TILE, mcpCallOf, unquoteArg } = require('./agycalls');
 
 /** Tools whose failure text comes from this machine and may be quoted. */
 const LOCAL_TOOLS = new Set(['Bash', 'PowerShell', 'Read', 'Edit', 'Write', 'Grep', 'Glob', 'NotebookEdit']);
@@ -170,4 +183,140 @@ function digestTranscript(jsonl) {
   return { text: fit(blocks), userTurns, assistantTurns, outside };
 }
 
-module.exports = { digestTranscript, readsOutside, MAX_DIGEST_CHARS, LOCAL_TOOLS };
+// ---- Antigravity (agy) -----------------------------------------------------
+
+/** agy tiles (src/agycalls.js AGY_TOOL_TILES) whose failure text comes from this machine. */
+const AGY_LOCAL_TILES = new Set(['Read', 'Edit', 'Write', 'Shell', 'Grep', 'Glob']);
+/** agy tools that bring another agent's answer into the session. */
+const AGY_AGENT_TOOLS = new Set([
+  'invoke_subagent', 'browser_subagent', 'manage_subagents', 'send_message',
+  'swarm', 'manage_swarm', 'swarm_wait', 'read_board', 'run_workflow',
+]);
+/** agy's MCP tools: the server they call is an argument (src/agycalls.js mcpCallOf). */
+const AGY_MCP_TOOLS = new Set(['call_mcp_tool', 'read_resource', 'list_resources']);
+/** LunaCore's own server in agy: `lunacore`, or a tab's `lunacore-<tab id>` (src/agyintake.js). */
+const OWN_AGY_MCP_RE = /^lunacore(?:-[A-Za-z0-9_-]{1,64})?$/;
+/** The prompt itself, when agy wraps it with metadata. */
+const USER_REQUEST_RE = /<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/;
+/** Blocks agy adds to a prompt: not something the user said. */
+const AGY_INJECTED_RE = /<(ADDITIONAL_METADATA|USER_SETTINGS_CHANGE|SYSTEM_MESSAGE)>[\s\S]*?<\/\1>/g;
+/** agy's result header: "Created At: ...\nCompleted At: ...\n", repeated. */
+const AGY_RESULT_HEADER_RE = /^(?:(?:Created|Completed) At: [^\n]*\n)+/;
+/** The argument that says what an agy call was about (CLI and IDE tool names). */
+const AGY_SUBJECT = [
+  'CommandLine', 'Command', 'Path', 'AbsolutePath', 'TargetFile', 'FilePath', 'File',
+  'Query', 'Pattern', 'SearchPattern', 'Url', 'URL', 'TypeName', 'Role',
+];
+
+/**
+ * Whether an agy call brings outside text into the session. An MCP call that
+ * names no usable server may still have reached one, so it counts.
+ * @param {string} name
+ * @param {object} args
+ */
+function readsOutsideAgy(name, args) {
+  if (typeof name !== 'string') return false;
+  if (TOOL_TO_TILE.get(name) === 'Web' || AGY_AGENT_TOOLS.has(name) || name.startsWith('browser')) return true;
+  if (!AGY_MCP_TOOLS.has(name)) return false;
+  const call = mcpCallOf(name, args);
+  return !call || !OWN_AGY_MCP_RE.test(call.server);
+}
+
+function agyUserText(content) {
+  const wrapped = USER_REQUEST_RE.exec(content);
+  return (wrapped ? wrapped[1] : content).replace(AGY_INJECTED_RE, '').trim();
+}
+
+/** A string argument as agy wrote it (transcript.jsonl JSON-quotes them), or ''. */
+function agyArg(args, key) {
+  const v = unquoteArg(args[key]);
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+function agyToolLine({ name, args }) {
+  const shown = name.slice(0, 80);
+  const mcp = AGY_MCP_TOOLS.has(name) ? mcpCallOf(name, args) : null;
+  const key = AGY_SUBJECT.find((k) => agyArg(args, k));
+  const subject = mcp ? `${mcp.server} ${mcp.tool}` : key ? agyArg(args, key) : '';
+  return subject ? `  tool ${shown}: ${cut(oneLine(subject), MAX_SUBJECT_CHARS)}` : `  tool ${shown}`;
+}
+
+/**
+ * Each step once, in the place it first appeared, as its newest version: agy
+ * logs a step again when its status moves on (src/agytranscript.js).
+ */
+function latestSteps(steps) {
+  const order = [];
+  const slot = new Map();
+  for (const step of steps) {
+    const key = step.index === null ? null : `${step.index}|${step.type}|${step.at}`;
+    if (key !== null && slot.has(key)) {
+      order[slot.get(key)] = step;
+      continue;
+    }
+    if (key !== null) slot.set(key, order.length);
+    order.push(step);
+  }
+  return order;
+}
+
+/** The text a failed agy result gives: its error, else its content without the header. */
+const agyErrorText = (result) => result.error || result.content.replace(AGY_RESULT_HEADER_RE, '');
+
+/**
+ * @param {string} jsonl an agy transcript, or the part of one appended since the last capture
+ * @returns {{text: string, userTurns: number, assistantTurns: number, outside: number}}
+ *   the same shape and meaning as digestTranscript()
+ */
+function digestAgyTranscript(jsonl) {
+  const blocks = [];
+  /** Calls of the newest planner step still waiting for their result, in call order. */
+  let pending = [];
+  let userTurns = 0;
+  let assistantTurns = 0;
+  let outside = 0;
+
+  for (const step of latestSteps(parseSteps(jsonl).steps)) {
+    if (step.type === 'USER_INPUT') {
+      const text = agyUserText(step.content);
+      if (!text) continue;
+      userTurns++;
+      blocks.push(`User: ${cut(text, MAX_USER_CHARS)}`);
+    } else if (step.type === 'PLANNER_RESPONSE') {
+      const text = step.content.trim();
+      if (text) {
+        assistantTurns++;
+        blocks.push(`Assistant: ${cut(text, MAX_ASSISTANT_CHARS)}`);
+      }
+      // A new planner step ends the previous batch: its results are all in.
+      pending = step.toolCalls.map((call) => {
+        if (readsOutsideAgy(call.name, call.args)) outside++;
+        blocks.push(agyToolLine(call));
+        return { at: blocks.length - 1, local: AGY_LOCAL_TILES.has(TOOL_TO_TILE.get(call.name)) };
+      });
+    } else if (step.type === 'GENERIC' && pending.length > 0) {
+      const call = pending.shift();
+      if (step.status !== 'ERROR') continue;
+      const why = call.local ? cut(oneLine(agyErrorText(step)), MAX_ERROR_CHARS) : '';
+      blocks[call.at] += why ? ` -> failed: ${why}` : ' -> failed';
+    }
+  }
+  return { text: fit(blocks), userTurns, assistantTurns, outside };
+}
+
+/** Transcript kinds capture knows: Claude Code's JSONL, and agy's step log. */
+const DIGESTS = Object.freeze({ claude: digestTranscript, agy: digestAgyTranscript });
+
+/**
+ * The digest of a transcript of the given kind.
+ * @param {string} jsonl
+ * @param {'claude'|'agy'} kind
+ * @returns {{text: string, userTurns: number, assistantTurns: number, outside: number}}
+ */
+function digestOf(jsonl, kind) {
+  const digest = Object.hasOwn(DIGESTS, kind) ? DIGESTS[kind] : null;
+  if (!digest) throw new Error(`unknown transcript kind: ${String(kind).slice(0, 20)}`);
+  return digest(jsonl);
+}
+
+module.exports = { digestTranscript, digestAgyTranscript, digestOf, readsOutside, readsOutsideAgy, MAX_DIGEST_CHARS, LOCAL_TOOLS };

@@ -85,6 +85,9 @@ const MAX_SEEN_STEPS = 4096;
 /** MCP result text kept on an end event; the renderer shows a preview only. */
 const MAX_MCP_CONTENT_CHARS = 16 * 1024;
 
+/** The names a conversation's log is written under, full first (src/agywatcher.js reads them in this order). */
+const AGY_TRANSCRIPT_FILES = Object.freeze(['transcript_full.jsonl', 'transcript.jsonl']);
+
 /** "The user changed setting `Model Selection` from None to Gemini 4 Argon (Medium)." */
 const MODEL_SETTING_RE = /setting `Model Selection` from [^\n]*? to ([^\n]+?)\.(?:\s|$)/;
 /** agy model ids: gemini-4-hydrogen-xhigh, gemini-3.8-flash-low, ... */
@@ -741,7 +744,36 @@ function conversationIdFromCommand(command) {
   return m && UUID_RE.test(m[1]) ? m[1].toLowerCase() : null;
 }
 
+/** Segments between <appData> and a transcript file: brain/<id>/.system_generated/logs/<file>. */
+const AGY_TRANSCRIPT_DEPTH = 5;
+
+/**
+ * The conversation an agy transcript path belongs to, judged by its shape
+ * alone: <appDataDir>/brain/<uuid>/.system_generated/logs/<one of
+ * AGY_TRANSCRIPT_FILES>. The path must be absolute and already normalized, so
+ * `..`, `.` and doubled separators are refused rather than resolved away.
+ * Pure: whether the file exists or is a link is the caller's check.
+ * @param {unknown} file
+ * @param {unknown} appDataDir agy's app data folder (~/.gemini/antigravity-cli)
+ * @returns {string|null} the lowercase conversation id, or null
+ */
+function agyTranscriptConversation(file, appDataDir) {
+  if (typeof file !== 'string' || typeof appDataDir !== 'string' || !appDataDir) return null;
+  if (file.includes('\0') || !path.isAbsolute(file) || !path.isAbsolute(appDataDir)) return null;
+  if (path.normalize(file) !== file) return null;
+  const rel = path.relative(path.resolve(appDataDir), file);
+  if (!rel || path.isAbsolute(rel)) return null;
+  const parts = rel.split(path.sep);
+  if (parts.length !== AGY_TRANSCRIPT_DEPTH) return null;
+  const [brain, id, generated, logs, name] = parts;
+  if (brain !== 'brain' || generated !== '.system_generated' || logs !== 'logs') return null;
+  if (!UUID_RE.test(id) || !AGY_TRANSCRIPT_FILES.includes(name)) return null;
+  return id.toLowerCase();
+}
+
 module.exports = {
+  AGY_TRANSCRIPT_FILES,
+  agyTranscriptConversation,
   AGY_CONTEXT_LIMIT,
   AGY_TOOL_TILES,
   MAX_EVENTS_PER_STEP,
