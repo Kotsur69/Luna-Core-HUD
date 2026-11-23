@@ -15,6 +15,7 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 const PROJECT_RE = /^(global|[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*){1,7})$/;
 const TYPE_RE = /^[a-z][a-z-]{0,19}$/;
 const AREA_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const SESSION_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_PROJECT = 110;
 const MAX_TITLE = 200;
@@ -60,6 +61,7 @@ function cleanItem(raw) {
     clipped: raw.clipped === true,
     created: typeof raw.created === 'string' && DATE_RE.test(raw.created) ? raw.created : '',
     source: text(raw.source, MAX_SOURCE),
+    originSessionId: typeof raw.originSessionId === 'string' && SESSION_RE.test(raw.originSessionId) ? raw.originSessionId : null,
     usefulness,
     suggestedGlobal: raw.suggestedGlobal === true,
     outside: count(raw.outside),
@@ -89,6 +91,68 @@ export function inboxFrom(result) {
   }
   const total = isObject(result) && Number.isSafeInteger(result.total) ? Math.max(result.total, items.length) : items.length;
   return { items, total };
+}
+
+/** Quick rejection reasons (chip order); the slug is what the PC logs (src/hostmemory.js, max 80 chars). */
+export const REJECT_REASONS = ['too-vague', 'duplicate', 'temporary', 'wrong'];
+const REASON_SET = new Set(REJECT_REASONS);
+/** src/hostmemory.js MAX_QUERY_CHARS / MAX_SEARCH_LIMIT. */
+export const MAX_QUERY = 200;
+export const SEARCH_LIMIT = 10;
+const MAX_HITS = 15;
+const MAX_SNIPPET = 300;
+const MAX_TRUST = 120;
+
+/** The memory.reject payload: the decision plus a chip's reason (anything else is left out), or null. */
+export function rejectPayload(item, reason) {
+  const base = decisionPayload(item);
+  if (!base) return null;
+  return typeof reason === 'string' && REASON_SET.has(reason) ? { ...base, reason } : base;
+}
+
+/** The memory.search payload for what was typed, or null when there is nothing to search. */
+export function searchPayload(query, project) {
+  const q = typeof query === 'string' ? query.replace(/\s+/g, ' ').trim().slice(0, MAX_QUERY) : '';
+  if (!q) return null;
+  return { query: q, limit: SEARCH_LIMIT, ...(isProject(project) ? { project } : {}) };
+}
+
+/** A memory.search answer -> clean hits (untrusted: known fields only, each checked and capped). */
+export function searchFrom(result) {
+  const raw = isObject(result) && Array.isArray(result.results) ? result.results.slice(0, MAX_HITS * 2) : [];
+  const hits = [];
+  const seen = new Set();
+  for (const r of raw) {
+    if (!isObject(r) || !isProject(r.project)) continue;
+    const title = text(r.title, MAX_TITLE).trim();
+    const key = text(r.key, MAX_PROJECT + 82);
+    if (!title || !key.startsWith(`${r.project}/`) || !ID_RE.test(key.slice(r.project.length + 1)) || seen.has(key)) continue;
+    seen.add(key);
+    hits.push({
+      key,
+      project: r.project,
+      type: typeof r.type === 'string' && TYPE_RE.test(r.type) ? r.type : '',
+      title,
+      trust: text(r.trust, MAX_TRUST),
+      source: text(r.source, MAX_SOURCE),
+      snippet: text(r.snippet, MAX_SNIPPET),
+      unreviewed: r.unreviewed === true,
+    });
+    if (hits.length >= MAX_HITS) break;
+  }
+  return hits;
+}
+
+/** A horizontal drag this long (px) decides; shorter ones are a scroll or a wobble. */
+export const SWIPE_THRESHOLD_PX = 80;
+/** The drag must be this much more horizontal than vertical, so scrolling never triggers it. */
+const SWIPE_AXIS_RATIO = 2;
+
+/** A finished drag (dx, dy in px) -> 'approve' (right), 'reject' (left) or null (not a swipe). */
+export function swipeIntent(dx, dy) {
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null;
+  if (Math.abs(dx) < SWIPE_THRESHOLD_PX || Math.abs(dx) < Math.abs(dy) * SWIPE_AXIS_RATIO) return null;
+  return dx > 0 ? 'approve' : 'reject';
 }
 
 /** The memory.approve / memory.reject payload for an item, or null. */
@@ -128,7 +192,7 @@ const GONE = new Set(['notWaiting', 'notFound']);
 export const isGone = (code) => GONE.has(code);
 
 /** Host refusal codes with their own phone text (i18n key `memErr_<code>`). */
-const KNOWN_ERRORS = new Set(['needsHud', 'notWaiting', 'notFound', 'unknownProject', 'badId', 'badProject', 'badPayload', 'failed', 'unknown-kind', 'timeout']);
+const KNOWN_ERRORS = new Set(['badQuery', 'badLimit', 'badReason', 'needsHud', 'notWaiting', 'notFound', 'unknownProject', 'badId', 'badProject', 'badPayload', 'failed', 'unknown-kind', 'timeout']);
 
 /** A host refusal code -> its i18n key, or null (the code is shown as it came). */
 export function refusalKey(code) {
