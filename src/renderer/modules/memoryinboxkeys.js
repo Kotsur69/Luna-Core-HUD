@@ -12,6 +12,8 @@
 //   E                  edit                 ('To approve')
 //   G                  make global          ('To approve', a project entry only)
 //   V                  still true           ('To check')
+//   C                  show / hide the origin-session drawer: the excerpt the
+//                      memory was proposed from (both lists)
 //   Enter              save the open edit (Ctrl+Enter inside the text area)
 //   Escape             cancel the edit / the retire question, else clear the selection
 //
@@ -38,6 +40,7 @@ export const COMMANDS = Object.freeze({
   RETIRE_CONFIRM: 'retire-confirm',
   CANCEL_CONFIRM: 'cancel-confirm',
   CLEAR: 'clear',
+  CONTEXT: 'context',
 });
 
 const MOVES = { ArrowDown: COMMANDS.NEXT, j: COMMANDS.NEXT, ArrowUp: COMMANDS.PREV, k: COMMANDS.PREV };
@@ -114,6 +117,8 @@ export function keyCommand(event, ctx) {
   // Every action below acts on the selected entry. A held key repeats: it must
   // not approve or reject one entry after another as the selection advances.
   if (!ctx.selected || lower.length !== 1 || event.repeat) return null;
+  // Read only, so it works on both lists, even while the retire question is open.
+  if (lower === 'c' && (ctx.tab === 'inbox' || ctx.tab === 'review')) return COMMANDS.CONTEXT;
   if (ctx.tab === 'inbox') return inboxLetter(lower, ctx);
   if (ctx.tab === 'review') return reviewLetter(lower, ctx);
   return null;

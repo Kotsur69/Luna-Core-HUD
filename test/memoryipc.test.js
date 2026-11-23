@@ -555,3 +555,87 @@ test('approving an entry makes the shield forget the rejections it is close to',
   assert.equal(s.invoke('memory:approve', `${PROJECT}/kept`).ok, true);
   assert.deepEqual(s.remembered(), []);
 });
+
+// ---- "Export all" (src/memoryexport.js) -------------------------------------------
+
+/** The inbox IPC with a fake folder dialog: `pick` is what main's dialog answers. */
+function exportSetup(t, pick) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-memexport-'));
+  t.after(() => fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const dir = path.join(base, 'memory');
+  writeRecord(dir, rec('alpha', { confidence: 'confirmed' }));
+  writeRecord(dir, rec('beta'));
+  const dest = path.join(base, 'backups');
+  fs.mkdirSync(dest);
+  const handlers = {};
+  const asked = [];
+  let changed = 0;
+  registerMemoryIpc({
+    ipcMain: { handle: (channel, fn) => (handlers[channel] = fn) },
+    dir: () => dir,
+    onChanged: () => changed++,
+    now: () => NOW,
+    chooseFolder:
+      pick === undefined
+        ? undefined
+        : async (event) => {
+            asked.push(event);
+            return typeof pick === 'function' ? pick({ dir, dest }) : pick;
+          },
+  });
+  return { dir, dest, asked, changed: () => changed, invoke: (...args) => handlers['memory:export']({ sender: 'window' }, ...args) };
+}
+
+test('memory:export copies every memory to the folder main picked, never one the renderer sends', async (t) => {
+  const s = exportSetup(t, ({ dest }) => dest);
+  // Whatever the renderer passes is ignored: the folder comes from the dialog.
+  const res = await s.invoke('C:\\Windows\\System32', { destDir: '/etc' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.name, 'lunacore-memory-backup-2026-11-11');
+  assert.equal(res.folder, path.join(s.dest, res.name));
+  assert.equal(res.memories, 2);
+  assert.equal(res.files, 2);
+  assert.deepEqual(res.skipped, []);
+  assert.ok(fs.existsSync(path.join(res.folder, 'projects', 'github.com', 'acme', 'hud', 'alpha.md')));
+  assert.ok(fs.existsSync(path.join(res.folder, 'export-manifest.json')));
+  // The dialog got the event, so main can parent it to the asking window.
+  assert.deepEqual(s.asked, [{ sender: 'window' }]);
+  // Nothing in the mirror changed: no sync, no repaint.
+  assert.equal(s.changed(), 0);
+});
+
+test('memory:export: a cancelled dialog, a bad folder, a folder inside the mirror, no dialog at all', async (t) => {
+  assert.deepEqual(await exportSetup(t, null).invoke(), { ok: false, reason: 'cancelled' });
+  assert.deepEqual(await exportSetup(t, 42).invoke(), { ok: false, reason: 'bad-target' });
+  assert.deepEqual(await exportSetup(t, 'relative/folder').invoke(), { ok: false, reason: 'bad-target' });
+  assert.deepEqual(await exportSetup(t, ({ dir }) => dir).invoke(), { ok: false, reason: 'inside-memory-dir' });
+  assert.deepEqual(await exportSetup(t, ({ dest }) => path.join(dest, 'gone')).invoke(), { ok: false, reason: 'target-missing' });
+  assert.deepEqual(await exportSetup(t, () => Promise.reject(new Error('dialog broke'))).invoke(), { ok: false, reason: 'failed' });
+  assert.deepEqual(await exportSetup(t, undefined).invoke(), { ok: false, reason: 'failed' });
+});
+
+test('memory:export runs one export at a time', async (t) => {
+  let answer;
+  const s = exportSetup(t, () => new Promise((resolve) => (answer = resolve)));
+  const first = s.invoke();
+  while (!answer) await new Promise((r) => setImmediate(r));
+  assert.deepEqual(await s.invoke(), { ok: false, reason: 'busy' });
+  answer(s.dest);
+  assert.equal((await first).ok, true);
+  // Free again once the first one finished.
+  answer = null;
+  const third = s.invoke();
+  while (!answer) await new Promise((r) => setImmediate(r));
+  answer(null);
+  assert.deepEqual(await third, { ok: false, reason: 'cancelled' });
+});
+
+test('preload exposes memory:export with no argument, and main opens the dialog itself', () => {
+  const preload = read('src/preload.js');
+  assert.match(preload, /memoryExport: \(\) => ipcRenderer\.invoke\('memory:export'\)/);
+  const main = read('src/main.js');
+  assert.match(main, /chooseFolder: async \(event\) =>[\s\S]{0,300}dialog\.showOpenDialog\(parent, \{[^}]*properties: \['openDirectory', 'createDirectory'\]/);
+  const brain = read('src/renderer/modules/memorybrain.js');
+  assert.match(brain, /window\.lunacore\.memoryExport\(\)/);
+  assert.doesNotMatch(brain, /innerHTML|outerHTML|insertAdjacentHTML/);
+});

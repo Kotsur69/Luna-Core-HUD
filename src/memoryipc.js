@@ -56,6 +56,13 @@
 //   memory:todo-draft (key)                         -> {ok, key, text, details} | {ok:false, reason}
 //   memory:to-todo    (key, {text, details?, size?}) -> {ok, key, projectId, at} | {ok:false, reason}
 //
+// "Export all" (src/memoryexport.js): every valid memory and note copied to a
+// backup folder. The renderer sends nothing: main asks for the folder in its
+// own dialog (chooseFolder), so no path ever crosses the bridge.
+//
+//   memory:export ()  -> {ok, folder, name, files, memories, notes, projects, skipped, skippedCount}
+//                        | {ok:false, reason: 'cancelled'|'no-memory-dir'|'bad-target'|'target-missing'|'inside-memory-dir'|'name-taken'|'failed'}
+//
 // The renderer names a memory only by its key. src/memoryinbox.js checks the
 // key (splitKey: never a path) and refuses anything that is not waiting, so
 // these channels cannot touch a confirmed memory. Edited text is rebuilt by
@@ -79,6 +86,7 @@ const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memoryto
 const { cachedChanges, currentChanges } = require('./memorychanges');
 const { sharedVectorStore, vectorLookup, docText } = require('./memoryembed');
 const { rememberRejected, forgetSimilar } = require('./memoryshield');
+const { exportAll } = require('./memoryexport');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -156,7 +164,8 @@ function cleanSearchMode(raw) {
  *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js);
  *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none;
  *   vectors = the vector store (src/memoryembed.js): near-duplicates by meaning, and the
- *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield
+ *   Rejected-Embedding Shield (src/memoryshield.js); null = by words, no shield;
+ *   chooseFolder = main's folder dialog for "Export all": (event) => Promise<string|null>, null = cancelled
  */
 function registerMemoryIpc({
   ipcMain,
@@ -175,6 +184,7 @@ function registerMemoryIpc({
   todos = null,
   changes = null,
   vectors = sharedVectorStore,
+  chooseFolder = null,
 }) {
   /** The vector store right now, or null; a failure there means "by words", never a failed call. */
   const store = () => {
@@ -434,6 +444,26 @@ function registerMemoryIpc({
     // Some of a group's files may be gone even so: sync and repaint what is left.
     if (res.reason === 'remove-failed') onChanged();
     return res;
+  });
+
+  // "Export all". Takes no payload: the folder comes from main's own dialog.
+  // Writes outside the mirror only, so nothing syncs and nothing repaints.
+  let exporting = false;
+  ipcMain.handle('memory:export', async (event) => {
+    if (typeof chooseFolder !== 'function') return { ok: false, reason: 'failed' };
+    if (exporting) return { ok: false, reason: 'busy' };
+    exporting = true;
+    try {
+      const folder = await chooseFolder(event);
+      if (folder === null || folder === undefined) return { ok: false, reason: 'cancelled' };
+      if (typeof folder !== 'string') return { ok: false, reason: 'bad-target' };
+      return exportAll({ dir: dir(), destDir: folder, now: now() });
+    } catch (err) {
+      console.error('[memory] export failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    } finally {
+      exporting = false;
+    }
   });
 
   ipcMain.handle('memory:auto-undo', (_event, key) => {

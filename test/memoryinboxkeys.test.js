@@ -165,3 +165,39 @@ test('the key hint exists in Polish and English', () => {
     assert.equal(i18n.split('\n').filter((l) => l.includes(`'${key}':`)).length, 2, key);
   }
 });
+
+test('C opens the origin-session drawer on both lists, read only, never while editing or typing', () => {
+  assert.equal(COMMANDS.CONTEXT, 'context');
+  for (const ctx of [inbox(), review(), review({ confirming: true })]) {
+    assert.equal(keyCommand(press('c'), ctx), COMMANDS.CONTEXT);
+    assert.equal(keyCommand(press('C'), ctx), COMMANDS.CONTEXT);
+  }
+  // It acts on the selected entry: nothing selected, nothing to show.
+  assert.equal(keyCommand(press('c'), inbox({ selected: false })), null);
+  assert.equal(keyCommand(press('c'), inbox({ editing: true, typing: 'line' })), null);
+  assert.equal(keyCommand(press('c'), inbox({ typing: 'line' })), null);
+  // Ctrl+C stays copy, and a held C does not flicker the drawer.
+  assert.equal(keyCommand(press('c', { ctrlKey: true }), inbox()), null);
+  assert.equal(keyCommand(press('c', { repeat: true }), inbox()), null);
+  // The graveyard and the list of all memories take no letters.
+  assert.equal(keyCommand(press('c'), inbox({ tab: 'graveyard' })), null);
+});
+
+test('the window wires C to the drawer, which reads only through preload and writes text only', () => {
+  const panel = read('src/renderer/modules/memoryinbox.js');
+  const drawer = read('src/renderer/modules/memoryorigin.js');
+  assert.match(panel, /from '\.\/memoryorigin\.js'/);
+  assert.match(panel, /cmd === COMMANDS\.CONTEXT/);
+  assert.match(panel, /origin\.wrap\(panel\)/);
+  assert.doesNotMatch(drawer, /innerHTML|outerHTML|insertAdjacentHTML/);
+  const preload = read('src/preload.js');
+  for (const fn of new Set([...drawer.matchAll(/'(memory\w+)'/g)].map((m) => m[1]))) {
+    assert.match(preload, new RegExp(`\\b${fn}:`), `${fn} is missing in preload`);
+  }
+  assert.ok(drawer.includes("'memoryOriginSnippet'") && drawer.includes("'memoryInterrogate'"));
+  // The key hint names C in both languages.
+  const i18n = read('src/renderer/i18n.js').split('\n');
+  for (const key of ['mem.inbox.keys.inbox', 'mem.inbox.keys.review']) {
+    for (const line of i18n.filter((l) => l.includes(`'${key}':`))) assert.match(line, /C (origin|skad pochodzi)/, line);
+  }
+});
