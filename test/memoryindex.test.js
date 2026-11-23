@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createIndex, toMatch } = require('../src/memoryindex.js');
+const { createIndex, createDocIndex, toMatch, DOC_SCORE_FACTOR } = require('../src/memoryindex.js');
 const { keyOf } = require('../src/memoryrecord.js');
 
 const PROJECT = 'github.com/acme/hud';
@@ -90,6 +90,7 @@ test('a result carries what is needed to judge it', () => {
   assert.equal(hit.last_verified, null);
   assert.match(hit.snippet, /PrismaClient/);
   assert.ok(hit.score > 0);
+  assert.equal(DOC_SCORE_FACTOR, 0.55);
 });
 
 test('ranks the current project above another project with the same words', () => {
@@ -251,4 +252,100 @@ test('the project, superseded and `only` rules hold for meaning too', () => {
 
 test('a record the index cannot take fails the build instead of leaking it', () => {
   assert.throws(() => createIndex([['k', { ...rec('bad', 'title', 'body'), body: { not: 'text' } }]]));
+});
+
+// ---- repo doc chunks (decision 22): reference text below every memory -----------
+
+const chunk = (n, heading, text, over = {}) => ({
+  project: PROJECT,
+  file: 'docs/reference/NOTES.md',
+  heading,
+  startLine: n * 10,
+  endLine: n * 10 + 5,
+  text,
+  key: `doc:${PROJECT}/docs/reference/NOTES.md#L${n * 10}-L${n * 10 + 5}`,
+  ...over,
+});
+
+const DOC_CHUNKS = [
+  chunk(1, 'Installer naming', 'The installer asset is named with dashes so the auto-update download works.'),
+  chunk(2, 'Worktrees', 'A worktree needs its own node_modules; never junction it.'),
+  chunk(3, 'Unrelated', 'Colour tokens and spacing scale of the HUD.'),
+];
+
+function withDocs(t, chunks = DOC_CHUNKS) {
+  const docs = createDocIndex(chunks);
+  t.after(() => docs.close());
+  return docs;
+}
+
+test('a doc index finds a chunk by its words and returns kind, source and a scaled score', (t) => {
+  const docs = withDocs(t);
+
+  const [hit, ...rest] = docs.search('installer asset dashes', 5);
+
+  assert.equal(rest.length, 0);
+  assert.equal(hit.kind, 'doc');
+  assert.equal(hit.key, DOC_CHUNKS[0].key);
+  assert.equal(hit.source, 'docs/reference/NOTES.md#L10-L15');
+  assert.equal(hit.heading, 'Installer naming');
+  assert.match(hit.snippet, /installer/i);
+  assert.ok(hit.score > 0);
+  assert.deepEqual(docs.search('', 5), []);
+  assert.equal(docs.size, 3);
+});
+
+test('a doc hit never outranks a memory hit, however well it matches', (t) => {
+  // The doc says the same words many times; the memory mentions them once.
+  const strongDoc = chunk(4, 'installer installer installer', 'installer installer asset asset dashes dashes installer');
+  const docs = withDocs(t, [strongDoc]);
+  const idx = index();
+
+  const hits = idx.search('installer asset dashes', { project: PROJECT, docs: undefined });
+  const merged = createIndex(RECORDS.map((r) => [keyOf(r), r])).search('installer asset dashes', { project: PROJECT, docs });
+
+  assert.ok(hits.length > 0);
+  assert.deepEqual(
+    merged.map((h) => h.kind || 'memory'),
+    [...hits.map(() => 'memory'), 'doc'],
+  );
+  assert.deepEqual(merged.slice(0, hits.length).map((h) => h.key), hits.map((h) => h.key));
+});
+
+test('without a doc index a search is exactly what it was', () => {
+  const idx = index();
+
+  assert.deepEqual(idx.search('installer asset', { project: PROJECT }), idx.search('installer asset', { project: PROJECT, docs: null }));
+  assert.ok(idx.search('installer asset').every((h) => h.kind === undefined));
+});
+
+test('docs fill the free slots, and one slot is kept for them when memories would fill the limit', (t) => {
+  const many = Array.from({ length: 6 }, (_, i) => rec(`m${i}`, `Installer note ${i}`, 'installer asset notes'));
+  const docs = withDocs(t, [chunk(5, 'Installer naming', 'installer asset dashes')]);
+  const idx = createIndex(many.map((r) => [keyOf(r), r]));
+
+  const full = idx.search('installer asset', { limit: 5, docs });
+  assert.deepEqual(full.map((h) => h.kind || 'memory'), ['memory', 'memory', 'memory', 'memory', 'doc']);
+
+  const tiny = idx.search('installer asset', { limit: 2, docs });
+  assert.deepEqual(tiny.map((h) => h.kind || 'memory'), ['memory', 'memory']);
+
+  const few = createIndex([[keyOf(many[0]), many[0]]]).search('installer asset', { limit: 5, docs });
+  assert.deepEqual(few.map((h) => h.kind || 'memory'), ['memory', 'doc']);
+});
+
+test('a question that matches only docs returns the doc hits', (t) => {
+  const docs = withDocs(t);
+
+  const hits = index().search('colour tokens spacing', { project: PROJECT, docs });
+
+  assert.deepEqual(hits.map((h) => h.kind), ['doc']);
+  assert.equal(hits[0].heading, 'Unrelated');
+});
+
+test('a doc index of nothing searches to nothing and a bad chunk fails the build', () => {
+  const none = createDocIndex([]);
+  assert.deepEqual(none.search('anything', 5), []);
+  none.close();
+  assert.throws(() => createDocIndex([{ ...DOC_CHUNKS[0], text: { not: 'text' } }]));
 });

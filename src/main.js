@@ -1252,9 +1252,17 @@ function memorySearchStatus() {
   return vectors.mode();
 }
 
+/** The local folder a memory project is mapped to on this PC (for the repo-doc chunks of memory_search), or null. */
+function memoryProjectRoot(project) {
+  const mapped = projects.find((p) => p && p.path && projectFromRepoKey(memoryRepoKeys.resolve(p.path).key) === project);
+  return mapped ? mapped.path : null;
+}
+
 function memoryFor(session) {
   try {
-    if (!memoryReader) memoryReader = createMemoryReader(memoryPaths(userDir()).dir, { vectors: memoryVectorsOf() });
+    if (!memoryReader) {
+      memoryReader = createMemoryReader(memoryPaths(userDir()).dir, { vectors: memoryVectorsOf(), projectRoot: memoryProjectRoot });
+    }
   } catch (err) {
     // The to-do tools of the same server must keep working without memory.
     console.error('[memory] tools unavailable:', (err && (err.code || err.message)) || 'error');
