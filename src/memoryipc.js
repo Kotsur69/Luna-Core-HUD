@@ -56,6 +56,13 @@
 //   memory:todo-draft (key)                         -> {ok, key, text, details} | {ok:false, reason}
 //   memory:to-todo    (key, {text, details?, size?}) -> {ok, key, projectId, at} | {ok:false, reason}
 //
+// "Export all" (src/memoryexport.js): every valid memory and note copied to a
+// backup folder. The renderer sends nothing: main asks for the folder in its
+// own dialog (chooseFolder), so no path ever crosses the bridge.
+//
+//   memory:export ()  -> {ok, folder, name, files, memories, notes, projects, skipped, skippedCount}
+//                        | {ok:false, reason: 'cancelled'|'no-memory-dir'|'bad-target'|'target-missing'|'inside-memory-dir'|'name-taken'|'failed'}
+//
 // The renderer names a memory only by its key. src/memoryinbox.js checks the
 // key (splitKey: never a path) and refuses anything that is not waiting, so
 // these channels cannot touch a confirmed memory. Edited text is rebuilt by
@@ -77,6 +84,7 @@ const { listConflicts } = require('./memoryconflict');
 const graveyard = require('./memorygraveyard');
 const { cleanDraft, todoProjectFor, draftFor, moveToTodo } = require('./memorytodo');
 const { cachedChanges, currentChanges } = require('./memorychanges');
+const { exportAll } = require('./memoryexport');
 
 /** The window of the approval-rate line under the inbox. */
 const STATS_DAYS = 7;
@@ -152,7 +160,8 @@ function cleanSearchMode(raw) {
  *   searchStatus = how memory_search answers on this PC (the vector store's mode());
  *   todoProjects = LunaCore's projects ({id, path}); memoryProjectOf = a folder -> its memory
  *   project; todos = {read, write, changed} of the per-project To-do lists (src/todo.js);
- *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none
+ *   changes = memorychanges.createChangeTracker() ('changed' flags), null = none;
+ *   chooseFolder = main's folder dialog for "Export all": (event) => Promise<string|null>, null = cancelled
  */
 function registerMemoryIpc({
   ipcMain,
@@ -170,6 +179,7 @@ function registerMemoryIpc({
   memoryProjectOf = () => null,
   todos = null,
   changes = null,
+  chooseFolder = null,
 }) {
   /** Writes an inbox decision to the memory log. Only a rejected title is kept: it goes back to the extractor. */
   const decided = (ev, record) => {
@@ -388,6 +398,26 @@ function registerMemoryIpc({
     // Some of a group's files may be gone even so: sync and repaint what is left.
     if (res.reason === 'remove-failed') onChanged();
     return res;
+  });
+
+  // "Export all". Takes no payload: the folder comes from main's own dialog.
+  // Writes outside the mirror only, so nothing syncs and nothing repaints.
+  let exporting = false;
+  ipcMain.handle('memory:export', async (event) => {
+    if (typeof chooseFolder !== 'function') return { ok: false, reason: 'failed' };
+    if (exporting) return { ok: false, reason: 'busy' };
+    exporting = true;
+    try {
+      const folder = await chooseFolder(event);
+      if (folder === null || folder === undefined) return { ok: false, reason: 'cancelled' };
+      if (typeof folder !== 'string') return { ok: false, reason: 'bad-target' };
+      return exportAll({ dir: dir(), destDir: folder, now: now() });
+    } catch (err) {
+      console.error('[memory] export failed:', errText(err));
+      return { ok: false, reason: 'failed' };
+    } finally {
+      exporting = false;
+    }
   });
 
   ipcMain.handle('memory:auto-undo', (_event, key) => {

@@ -246,9 +246,67 @@ export function projectOption(p) {
  *   check = the "Check if still true" flow (memorycheckview.js createCheckFlow), or none
  * @returns {{node: HTMLElement, list: HTMLElement|null}}
  */
+// --- "Export all" (memory:export, src/memoryexport.js) ----------------------------
+// Main asks for the folder in its own dialog: the renderer sends nothing. The
+// bar is one node kept across repaints, so its result stays on screen while
+// the list repaints around it.
+
+/** The i18n key of a refused export, or null for a cancelled dialog (nothing to say). */
+export function exportReasonKey(reason) {
+  if (reason === 'cancelled') return null;
+  if (reason === 'inside-memory-dir') return 'mem.brain.export.err.insideMemoryDir';
+  if (reason === 'bad-target' || reason === 'target-missing' || reason === 'name-taken') return 'mem.brain.export.err.badTarget';
+  if (reason === 'no-memory-dir') return 'mem.brain.export.err.noMemoryDir';
+  if (reason === 'busy') return 'mem.brain.export.err.busy';
+  return 'mem.brain.export.err.failed';
+}
+
+/** The words of a finished export: {text, fail}, or null when there is nothing to show. */
+export function exportResultLine(res) {
+  if (!res) return null;
+  if (!res.ok) {
+    const key = exportReasonKey(res.reason);
+    return key ? { text: t(key), fail: true } : null;
+  }
+  const done = t('mem.brain.export.done', { count: res.files, name: res.name });
+  const skipped = res.skippedCount ? ` ${t('mem.brain.export.skipped', { count: res.skippedCount })}` : '';
+  return { text: done + skipped, fail: false };
+}
+
+let exportNode = null;
+
+function exportBar() {
+  if (exportNode) return exportNode;
+  const bar = el('div', 'mem-brain__export');
+  const status = el('p', 'hint mem-brain__exportStatus');
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  const btn = button('port-btn mem-inbox__btn', t('mem.brain.export.button'), async () => {
+    btn.disabled = true;
+    btn.textContent = t('mem.brain.export.running');
+    let res;
+    try {
+      res = await window.lunacore.memoryExport();
+    } catch {
+      res = { ok: false, reason: 'ipc' };
+    }
+    btn.disabled = false;
+    btn.textContent = t('mem.brain.export.button');
+    const line = exportResultLine(res);
+    status.textContent = line ? line.text : '';
+    status.classList.toggle('is-fail', Boolean(line && line.fail));
+  });
+  btn.title = t('mem.brain.export.hint');
+  bar.append(btn, status);
+  exportNode = bar;
+  return bar;
+}
+
 export function memoriesPanel(list, ctx) {
   const panel = el('div', 'mem-brain');
   panel.append(el('p', 'hint mem-inbox__intro', t('mem.brain.intro')));
+  // Every memory of every project, so it does not wait for a project to load.
+  panel.append(exportBar());
   if (!list || !list.ok) {
     panel.append(el('p', 'hint is-fail', t('mem.inbox.err.load')));
     return { node: panel, list: null };

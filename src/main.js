@@ -40,7 +40,7 @@ const {
 // The same for an Antigravity (agy) tab, from agy's own transcript: files it
 // touches and an ESTIMATED context fill (agy logs no token counts).
 const { transcriptKindFor, conversationIdFromCommand } = require('./agytranscript');
-const { AgyTranscriptWatcher } = require('./agywatcher');
+const { AgyTranscriptWatcher, AGY_APP_DATA_DIR } = require('./agywatcher');
 const { snapshotSessionProcs } = require('./sessionProcs');
 const { SessionProcsHub, registerSessionProcsIpc } = require('./sessionProcsIpc');
 // Session -> Markdown export: pure transcript renderer. The disk read + save
@@ -294,6 +294,8 @@ const { enforceAutoOff: enforceMemoryAutoOff, recentAutoOffs: recentMemoryAutoOf
 const { createScanner: createMemoryScanner, createJobLock: createMemoryJobLock, SCAN_MODEL: MEMORY_SCAN_MODEL, SCAN_TIMEOUT_MS: MEMORY_SCAN_TIMEOUT_MS } = require('./memoryscan');
 const { createChecker: createMemoryChecker, CHECK_MODEL: MEMORY_CHECK_MODEL, CHECK_TIMEOUT_MS: MEMORY_CHECK_TIMEOUT_MS } = require('./memorycheck');
 const { registerMemoryBrainIpc } = require('./memorybrainipc');
+/** One Interrogate answer of the origin-session drawer: a short read of one excerpt. */
+const MEMORY_INTERROGATE_TIMEOUT_MS = 2 * 60 * 1000;
 const { createChangeTracker: createMemoryChangeTracker } = require('./memorychanges');
 const { conflictCount: memoryConflictCount } = require('./memoryconflict');
 const { createDecayTimer: createMemoryDecay, createReferenceRecorder: createMemoryReferences } = require('./memorydecay');
@@ -3759,6 +3761,13 @@ function registerIpc() {
         if (todoSync) todoSync.soon();
       },
     },
+    // "Export all" (src/memoryexport.js): main asks for the folder; the renderer never sends a path.
+    chooseFolder: async (event) => {
+      const parent = (event && BrowserWindow.fromWebContents(event.sender)) || mainWindow;
+      if (!parent) return null;
+      const result = await dialog.showOpenDialog(parent, { title: 'Export all memories to a folder', properties: ['openDirectory', 'createDirectory'] });
+      return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
+    },
   });
   // The memory window's list of all memories, the usefulness scan (Sonnet,
   // through the same headless runner as capture), conflicts and the archive.
@@ -3817,6 +3826,22 @@ function registerIpc() {
     },
     // The 'changed' flags (src/memorychanges.js): memory:list refreshes them in the background.
     changes: memoryChanges,
+    // The inbox's origin-session drawer reads only these folders (src/memoryprovenance.js originSnippet).
+    origin: {
+      transcriptsDir: () => path.join(os.homedir(), '.claude', 'projects'),
+      runsDir: () => path.join(userDir(), RUN_REPORT_DIR),
+      agyDir: () => path.join(AGY_APP_DATA_DIR, 'brain'),
+    },
+    // Interrogate: one lean, tool-less Sonnet call, like the usefulness scan.
+    ask: ({ prompt }) =>
+      runMemoryJob({
+        prompt,
+        model: MEMORY_SCAN_MODEL,
+        lean: true,
+        stdin: true,
+        env: withClaudeOnPath(buildSessionEnv(process.env, {})),
+        timeoutMs: MEMORY_INTERROGATE_TIMEOUT_MS,
+      }),
     // read: this PC's reads (final score) and disputes (health line); roots: the anchor check.
     log: { add: (event) => memoryLogOf().add(event), read: () => memoryLogOf().read() },
     roots: memoryRoots,
