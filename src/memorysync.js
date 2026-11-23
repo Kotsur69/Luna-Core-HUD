@@ -32,7 +32,7 @@ const { readEnabled } = require('./memoryprojects');
 const { splitKey, extraFields } = require('./memoryrecord');
 const { createNoteProvider, projectOfNoteKey } = require('./memorynote');
 const { scrub } = require('./hostscrub');
-const { createSignalsProvider, publishSignals, collectSignals, readPeers, setPeerSource } = require('./memorysignals');
+const { createSignalsProvider, publishSignals, collectSignals, readPeers, setPeerSource, clearPeerSource } = require('./memorysignals');
 
 const SCOPE = 'memory';
 const SYNC_INTERVAL_MS = 60 * 1000;
@@ -162,14 +162,16 @@ function startMemory({ cloud, machine, configDir, onChanged = () => {}, log = nu
       console.error('[memory] heartbeat not written:', (err && (err.code || err.message)) || 'error');
     }
   }
-  setPeerSource(() => readPeers(p.signals, machine));
+  const peers = () => readPeers(p.signals, machine);
+  setPeerSource(peers);
 
   /** This PC's signals into the file, when due; they travel with this sync. A failure here must not stop the sync. */
   function signal() {
     if (!log || typeof log.read !== 'function') return;
     try {
       const now = Date.now();
-      publishSignals(p.signals, machine, () => collectSignals(log.read() || [], now), now);
+      // The peers are read after publishSignals has healed a broken file.
+      publishSignals(p.signals, machine, () => collectSignals(log.read() || [], now, readPeers(p.signals, machine, now)), now);
     } catch (err) {
       console.error('[memory] signals not written:', (err && (err.code || err.message)) || 'error');
     }
@@ -201,7 +203,7 @@ function startMemory({ cloud, machine, configDir, onChanged = () => {}, log = nu
     stop() {
       clearTimeout(timer);
       clearInterval(interval);
-      setPeerSource(null);
+      clearPeerSource(peers);
     },
     /** localStatus() plus the transport's {ready, lastSync, pending, error}. */
     status: () => ({ ...localStatus(configDir, machine), transport: cloud.memoryStatus() }),

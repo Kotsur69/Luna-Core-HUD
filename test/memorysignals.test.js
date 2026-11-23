@@ -323,3 +323,74 @@ test('peerSignals reads the registered source; a failing one yields none; recent
   assert.deepEqual(peerSignals(), []);
   assert.equal(recentUsage(events, NOW).reads.get(key('a')), 1);
 });
+
+// ---- after review: old settles, peer clocks, top reads, a broken file ---------------
+
+test('a "still true" older than the window is still published while a peer holds that dispute open', () => {
+  const old = NOW - 90 * DAY_MS;
+  const events = [
+    { ev: 'verified', key: key('kept'), by: 'user', missing: [], at: old },
+    { ev: 'verified', key: key('dropped'), by: 'user', missing: [], at: old },
+  ];
+  const peers = [peer('pc-b', { disputes: [{ key: key('kept'), note: 'x', at: old - 1000 }, { key: key('dropped'), note: 'newer report', at: old + 1000 }] })];
+  assert.deepEqual(collectSignals(events, NOW, peers).settled, { [key('kept')]: old });
+  assert.deepEqual(collectSignals(events, NOW).settled, {});
+});
+
+test('readPeers drops units and entries stamped more than a day ahead of this clock', (t) => {
+  const file = tmpFile(t);
+  const ahead = NOW + 2 * DAY_MS;
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      machines: {
+        'pc-b': {
+          at: NOW,
+          rejected: [{ project: PROJECT, title: 'Future', at: ahead }, { project: PROJECT, title: 'Now', at: NOW }],
+          disputes: [{ key: key('f'), note: '', at: ahead }],
+          settled: { [key('f')]: ahead, [key('ok')]: NOW - 1 },
+        },
+        'pc-c': { at: ahead },
+      },
+    }),
+  );
+  const peers = readPeers(file, 'pc-a', NOW);
+  assert.deepEqual(peers, [{ machine: 'pc-b', at: NOW, rejected: [{ project: PROJECT, title: 'Now', at: NOW }], disputes: [], reads: {}, settled: { [key('ok')]: NOW - 1 } }]);
+});
+
+test('the top reads are kept even when more than MAX_READS keys were read and the busiest come last', () => {
+  const events = [];
+  for (let i = 0; i < 250; i++) events.push({ ev: 'get', key: key(`k${i}`), at: NOW - 1000 });
+  for (let n = 0; n < 3; n++) events.push({ ev: 'get', key: key('busy'), at: NOW - 500 });
+  const s = collectSignals(events, NOW);
+  assert.equal(Object.keys(s.reads)[0], key('busy'));
+  assert.equal(s.reads[key('busy')], 3);
+});
+
+test('a signals file that does not parse is moved aside on the next publish', (t) => {
+  const file = tmpFile(t);
+  fs.writeFileSync(file, '{"machines": ');
+  t.mock.method(console, 'error', () => {});
+  assert.equal(publishSignals(file, 'pc-a', () => collectSignals([], NOW), NOW), true);
+  assert.equal(fs.readFileSync(`${file}.broken`, 'utf8'), '{"machines": ');
+  assert.deepEqual(
+    readPeers(file, 'nobody').map((p) => p.machine),
+    ['pc-a'],
+  );
+});
+
+test('clearPeerSource removes only the source it was given', (t) => {
+  const { clearPeerSource } = require('../src/memorysignals.js');
+  t.after(() => setPeerSource(null));
+  const first = () => [peer('pc-b')];
+  const second = () => [peer('pc-c')];
+  setPeerSource(first);
+  setPeerSource(second);
+  clearPeerSource(first);
+  assert.deepEqual(
+    peerSignals().map((p) => p.machine),
+    ['pc-c'],
+  );
+  clearPeerSource(second);
+  assert.deepEqual(peerSignals(), []);
+});

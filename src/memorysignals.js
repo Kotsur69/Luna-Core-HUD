@@ -12,8 +12,10 @@
 //     rejected: [{project, title, at}]   the last MAX_REJECTED inbox rejections, newest first,
 //     disputes: [{key, note, at}]        its open "this memory is wrong" reports, newest first,
 //     reads:    {"<key>": count}         its top MAX_READS reads of the last 30 days,
-//     settled:  {"<key>": at}            its user "still true" of the last 30 days: a dispute
-//                                        older than that is settled on every PC,
+//     settled:  {"<key>": at}            its user "still true" of the last 30 days, and any
+//                                        older one that settles a dispute another PC still
+//                                        holds open: a dispute older than it is settled on
+//                                        every PC, for as long as that PC keeps reporting it,
 //   }
 //
 // and keeps everyone's in memory-signals.local.json = {machines: {<machine>: signals}}.
@@ -26,7 +28,11 @@
 //     both when this PC publishes it and when a peer's arrives.
 //   - A peer's unit is untrusted input: validSignals() rebuilds it field by
 //     field. A unit without a valid `at` is dropped whole; a malformed entry
-//     inside it is dropped alone.
+//     inside it is dropped alone. readPeers() also drops what is stamped more
+//     than a day ahead of this PC's clock: a far-future settle would hide every
+//     dispute of a memory, a far-future rejection would crowd out the real ones.
+//   - A signals file that does not parse is moved aside to <file>.broken on the
+//     next publish, so one bad write does not silence this PC for good.
 //   - Publishing is throttled (publishSignals): a changed rejection, dispute
 //     or settle goes out after MIN_PUBLISH_MS at the earliest; reads alone
 //     after READS_PUBLISH_MS; an unchanged unit is refreshed after REFRESH_MS.
@@ -60,7 +66,10 @@ const MAX_SIGNAL_BYTES = 6 * 1024;
 /** A rejected title as it travels; longer ones are cut before publishing, dropped on arrival. */
 const MAX_SIGNAL_TITLE = 120;
 const MAX_SIGNAL_NOTE = 200;
-const MAX_READ_COUNT = 1e6;
+/** Reads of one memory in one unit: far above what 30 days give, and finalScore saturates long before. */
+const MAX_READ_COUNT = 10000;
+/** Entries of a unit's map looked at, valid or not: a huge peer row cannot make a read slow. */
+const MAX_RAW_ENTRIES = 5000;
 /** The window of `reads` and `settled`: the final score's. */
 const SIGNAL_DAYS = RECENT_READ_DAYS;
 const MINUTE_MS = 60 * 1000;
@@ -120,8 +129,9 @@ function listOf(raw, valid, idOf, max) {
 /** {key: n} with memory keys only, sorted by `n` (highest first), at most `max`. */
 function mapOf(raw, validValue, max) {
   if (!isPlainObject(raw)) return [];
+  // Sorted before the cut: the first entries of a map are not its best ones.
   return Object.entries(raw)
-    .slice(0, max * 2)
+    .slice(0, MAX_RAW_ENTRIES)
     .filter(([k, v]) => splitKey(k) !== null && validValue(v))
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, max);
@@ -174,8 +184,10 @@ function validSignals(raw) {
  * This PC's signals, from its memory log.
  * @param {object[]} events memorylog readLog(), oldest first
  * @param {number} now ms
+ * @param {object[]} [peers] the other PCs' signals (readPeers): a "still true" here that
+ *   settles a dispute one of them still holds open is published whatever its age
  */
-function collectSignals(events, now) {
+function collectSignals(events, now, peers = []) {
   const since = now - SIGNAL_DAYS * DAY_MS;
   const rejected = [];
   const seen = new Set();
@@ -188,9 +200,17 @@ function collectSignals(events, now) {
     rejected.push({ project: parts.project, title, at: e.at });
   }
   const disputes = [...openDisputes(events)].map(([key, d]) => ({ key, note: clip(d.note, MAX_SIGNAL_NOTE), at: d.at }));
-  const settled = {};
+  const verifiedAt = new Map();
   for (const e of events) {
-    if (e.ev === 'verified' && e.by === 'user' && e.at >= since) settled[e.key] = Math.max(settled[e.key] || 0, e.at);
+    if (e.ev === 'verified' && e.by === 'user' && validAt(e.at)) verifiedAt.set(e.key, Math.max(verifiedAt.get(e.key) || 0, e.at));
+  }
+  const disputedThere = new Map();
+  for (const p of peers) {
+    for (const d of p.disputes || []) disputedThere.set(d.key, Math.min(disputedThere.get(d.key) ?? Infinity, d.at));
+  }
+  const settled = {};
+  for (const [key, at] of verifiedAt) {
+    if (at >= since || at >= (disputedThere.get(key) ?? Infinity)) settled[key] = at;
   }
   return validSignals({
     at: now,
@@ -201,7 +221,7 @@ function collectSignals(events, now) {
   });
 }
 
-/** {<machine>: signals}; throws when the file exists but is unreadable. */
+/** {<machine>: signals}; throws when the file exists but is unreadable or does not parse. */
 function readMachines(file) {
   const doc = readDoc(file);
   const out = {};
@@ -219,6 +239,19 @@ function writeMachines(file, machines) {
 
 const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+/** readMachines(), but a file that does not parse is moved aside and starts over; a locked one still throws. */
+function readOrHeal(file) {
+  try {
+    return readMachines(file);
+  } catch (err) {
+    if (!(err instanceof SyntaxError) && !(err && err.message === 'not a JSON object')) throw err;
+    const aside = `${file}.broken`;
+    fs.renameSync(file, aside);
+    console.error(`[memory] ${path.basename(file)} did not parse, moved aside to ${path.basename(aside)}`);
+    return {};
+  }
+}
+
 /**
  * Records this PC's signals when they are due. `collect` is called only then:
  * reading the whole log every sync minute would be waste.
@@ -230,7 +263,7 @@ const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  */
 function publishSignals(file, machine, collect, now = Date.now()) {
   if (!MACHINE_RE.test(machine)) return false;
-  const machines = readMachines(file);
+  const machines = readOrHeal(file);
   const cur = machines[machine];
   const age = cur ? now - cur.at : Infinity;
   // A clock that went back is no reason to stay silent.
@@ -265,15 +298,27 @@ function createSignalsProvider(file) {
 }
 
 /**
- * Every other PC's signals in the file.
+ * Every other PC's signals in the file, without what is stamped more than a
+ * day ahead of this PC's clock (a unit, or one entry of it).
+ * @param {string} file
+ * @param {string} self this PC's machine name
+ * @param {number} [now] ms
  * @returns {{machine: string, at: number, rejected: object[], disputes: object[], reads: object, settled: object}[]}
  *   sorted by machine; throws when the file exists but is unreadable
  */
-function readPeers(file, self) {
+function readPeers(file, self, now = Date.now()) {
+  const limit = now + DAY_MS;
+  const notAhead = (x) => x.at <= limit;
   return Object.entries(readMachines(file))
-    .filter(([name]) => name !== self)
+    .filter(([name, s]) => name !== self && notAhead(s))
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([machine, s]) => ({ machine, ...s }));
+    .map(([machine, s]) => ({
+      machine,
+      ...s,
+      rejected: s.rejected.filter(notAhead),
+      disputes: s.disputes.filter(notAhead),
+      settled: Object.fromEntries(Object.entries(s.settled).filter(([, at]) => at <= limit)),
+    }));
 }
 
 let peerSource = null;
@@ -284,6 +329,11 @@ let peerSource = null;
  */
 function setPeerSource(fn) {
   peerSource = typeof fn === 'function' ? fn : null;
+}
+
+/** Unregisters `fn`, and only it: a newer registration stays. */
+function clearPeerSource(fn) {
+  if (peerSource === fn) peerSource = null;
 }
 
 /** The other PCs' signals, or [] without a source or when it fails (logged): a peer never breaks this PC. */
@@ -387,6 +437,7 @@ module.exports = {
   createSignalsProvider,
   readPeers,
   setPeerSource,
+  clearPeerSource,
   peerSignals,
   notWantedTitles,
   allDisputes,
@@ -398,6 +449,7 @@ module.exports = {
   MAX_READS,
   MAX_SIGNAL_TITLE,
   MAX_SIGNAL_NOTE,
+  MAX_READ_COUNT,
   MIN_PUBLISH_MS,
   READS_PUBLISH_MS,
   REFRESH_MS,
