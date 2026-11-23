@@ -79,7 +79,7 @@ const flowHooks = {
 const todo = createTodoFlow(flowHooks);
 const check = createCheckFlow(flowHooks);
 /** The origin-session drawer (C key, memoryorigin.js): read only, beside the inbox and review lists. */
-const origin = createOriginDrawer({ call: (...args) => call(...args) });
+const origin = createOriginDrawer({ call: (...args) => call(...args), onClosed: () => load(selected === null ? undefined : selected) });
 
 const call = (fn, ...args) => Promise.resolve().then(() => window.lunacore[fn](...args)).catch(() => ({ ok: false, reason: 'ipc' }));
 
@@ -533,6 +533,8 @@ function render(res, review, all, graves, focusKey, focusIndex, focusTab) {
   panel.setAttribute('role', 'tabpanel');
   panel.setAttribute('aria-labelledby', `mem-inbox-tab-${tab}`);
   const { nodes, list } = tab === 'all' ? allView(all) : listView(res, review, conflicts, graves);
+  // An entry approved, rejected or retired (here or on another PC) takes its drawer with it.
+  if (origin.isOpen() && !shownItems.some((i) => i.key === origin.openKey())) origin.close();
   panel.append(...nodes);
   const bar = tabBar({ inbox: waiting, review: review.total, graveyard: graves.total });
   const foot = el('p', 'hint mem-inbox__foot', captureLine(res.capture));

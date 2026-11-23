@@ -224,13 +224,19 @@ const MAX_CANDIDATE_FILES = 6;
 /** Keywords of the memory a window is matched against, and how many are reported back. */
 const MAX_KEYWORDS = 60;
 const MAX_MATCHED_SHOWN = 12;
-/** A session label (memorypropose.sessionLabel, a transcript name's start) and a God Mode run id. */
-const SESSION_REF_RE = /^[A-Za-z0-9-]{1,64}$/;
+/**
+ * A session label (memorypropose.sessionLabel and capture: a transcript name's first 8
+ * characters; auto-memory: the whole id) and a God Mode run id. The source line is synced
+ * from other PCs: a shorter label would match unrelated transcripts of any project.
+ */
+const SESSION_REF_RE = /^[A-Za-z0-9-]{8,64}$/;
 const RUN_REF_RE = /^[a-z0-9]{1,40}$/;
 /** agy's conversation transcripts, newest format first (src/agywatcher.js TRANSCRIPT_FILES). */
 const AGY_TRANSCRIPT_FILES = Object.freeze(['transcript_full.jsonl', 'transcript.jsonl']);
 
 const cutLine = (s) => (s.length > ORIGIN_LINE_CHARS ? `${s.slice(0, ORIGIN_LINE_CHARS).trimEnd()} ...` : s);
+/** Whether a path relative to a root stays inside it (a child named '..x' does). */
+const staysInside = (rel) => Boolean(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 
 /**
  * The real path of `file` when it is a regular file inside `root` (both
@@ -245,9 +251,7 @@ async function realInside(root, file) {
     const st = await fs.promises.lstat(file);
     if (!st.isFile() || st.isSymbolicLink()) return null;
     const [realRoot, realFile] = await Promise.all([fs.promises.realpath(root), fs.promises.realpath(file)]);
-    const rel = path.relative(realRoot, realFile);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    return realFile;
+    return staysInside(path.relative(realRoot, realFile)) ? realFile : null;
   } catch (err) {
     if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) return null;
     throw err;
@@ -268,12 +272,14 @@ async function entriesOf(dir) {
 async function readTail(file) {
   const handle = await fs.promises.open(file, 'r');
   try {
-    const { size } = await handle.stat();
-    const length = Math.min(size, ORIGIN_READ_BYTES);
+    const st = await handle.stat();
+    // The path was checked before it was opened: what got opened must still be a plain file.
+    if (!st.isFile()) return '';
+    const length = Math.min(st.size, ORIGIN_READ_BYTES);
     const buf = Buffer.alloc(length);
-    await handle.read(buf, 0, length, size - length);
-    const text = buf.toString('utf8');
-    return length < size ? text.slice(text.indexOf('\n') + 1) : text;
+    const { bytesRead } = await handle.read(buf, 0, length, st.size - length);
+    const text = buf.subarray(0, bytesRead).toString('utf8');
+    return length < st.size ? text.slice(text.indexOf('\n') + 1) : text;
   } finally {
     await handle.close();
   }
@@ -345,6 +351,7 @@ function linesOf(text, format) {
 /**
  * The window of ORIGIN_MAX_LINES lines that holds the most distinct keywords
  * (ties: the most hits, then the later window: a lesson tends to land late).
+ * Only full windows are compared, so the end of a file never yields a stub.
  * No hit at all: the last window. Pure.
  * @param {string[]} lines
  * @param {Set<string>} keywords
@@ -352,8 +359,9 @@ function linesOf(text, format) {
  */
 function bestWindow(lines, keywords) {
   const hits = lines.map((l) => [...wordsOf(l)].filter((w) => keywords.has(w)));
-  let best = { start: Math.max(0, lines.length - ORIGIN_MAX_LINES), distinct: 0, total: 0 };
-  for (let start = 0; start < lines.length; start++) {
+  const lastStart = Math.max(0, lines.length - ORIGIN_MAX_LINES);
+  let best = { start: lastStart, distinct: 0, total: 0 };
+  for (let start = 0; start <= lastStart; start++) {
     const slice = hits.slice(start, start + ORIGIN_MAX_LINES);
     const distinct = new Set(slice.flat()).size;
     const total = slice.reduce((n, h) => n + h.length, 0);
@@ -402,10 +410,17 @@ async function originSnippet({ record, transcriptsDir = null, runsDir = null, ag
   let best = null;
   let read = 0;
   for (const c of candidates) {
-    const real = await realInside(c.root, c.file);
-    if (!real) continue;
-    read++;
-    const lines = linesOf(await readTail(real), c.format);
+    let lines;
+    try {
+      const real = await realInside(c.root, c.file);
+      if (!real) continue;
+      read++;
+      lines = linesOf(await readTail(real), c.format);
+    } catch (err) {
+      // One locked or unreadable transcript (agy holds its file on Windows) must not hide the others.
+      console.error('[memory] origin candidate unreadable:', (err && (err.code || err.message)) || 'error');
+      continue;
+    }
     if (!lines.length) continue;
     const win = bestWindow(lines, keywords);
     if (!best || win.score > best.win.score) best = { c, lines, win };

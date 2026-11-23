@@ -11,11 +11,12 @@
 //     projects/<host>/<owner>/<repo>/_where-we-stopped.md
 //     export-manifest.json   {kind, version, date, exportedAt, counts, skipped}
 //
-// Only files that parse are copied (memorystore.scan, memorynote.scanNotes),
-// byte for byte as they are on disk; the bytes copied are the bytes checked.
-// Each one is checked again with the sync's secret guard (memorysync.hasSecret):
-// a file that trips it is skipped and listed in the manifest, never copied.
-// Files that do not parse are listed as skipped too.
+// Only plain files of the mirror that parse are copied (memorystore.scan,
+// memorynote.scanNotes; a symlink is not), byte for byte as they are on disk;
+// the bytes copied are the bytes checked. Each one is checked again with the
+// sync's secret guard (memorysync.hasSecret), on the parsed record and on its
+// raw text: a file that trips it is skipped and listed in the manifest, never
+// copied. Files that do not parse are listed as skipped too.
 //
 // A folder of that name that already exists is never written into: the next
 // free name (-2, -3, ...) is taken. Refused targets: a memory folder that does
@@ -63,7 +64,8 @@ function isFolder(p) {
 /** Whether `child` is `parent` or lies inside it, both real paths. */
 function within(parent, child) {
   const rel = path.relative(parent, child);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  // A child named '..x' is inside; only '..' itself or a '../' prefix leaves.
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 /**
@@ -96,9 +98,21 @@ function makeBackupFolder(destDir, date) {
   return null;
 }
 
-/** A file's text, or null when it is too big to be a memory. */
-function readSmall(file) {
-  if (fs.statSync(file).size > MAX_FILE_BYTES) return null;
+/**
+ * A file's text, or null when it is no plain file of the mirror: a symlink, a
+ * path whose real location is outside the mirror, or too big to be a memory.
+ */
+function readSmall(realDir, file) {
+  let st;
+  try {
+    st = fs.lstatSync(file);
+  } catch (err) {
+    // Deleted since the scan (a sync, an approval): listed as skipped, the rest still exports.
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  }
+  if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
+  if (!within(realDir, fs.realpathSync(file))) return null;
   return fs.readFileSync(file, 'utf8');
 }
 
@@ -118,21 +132,23 @@ function writeCopy(folder, rel, text) {
 function collect(dir) {
   const copies = [];
   const skipped = [];
+  const realDir = fs.realpathSync(dir);
   const { records, invalid } = scan(dir);
   for (const [key] of records) {
     const file = fileFor(dir, key);
     const { project, id } = splitKey(key);
-    const text = readSmall(file);
+    const text = readSmall(realDir, file);
     // The bytes copied are parsed and checked again: the file may have changed since the scan.
     const parsed = text === null ? {} : recordFromFile(text, { project, id });
     if (!parsed.record) skipped.push({ file: relOf(dir, file), reason: 'invalid' });
-    else if (hasSecret(parsed.record)) skipped.push({ file: relOf(dir, file), reason: 'secret' });
+    // The parsed record, and the raw text too: a frontmatter field the parser drops is still copied.
+    else if (hasSecret(parsed.record) || hasSecret({ text })) skipped.push({ file: relOf(dir, file), reason: 'secret' });
     else copies.push({ rel: relOf(dir, file), text, kind: 'memory', project });
   }
   const notes = scanNotes(dir);
   for (const [, note] of notes.notes) {
     const file = noteFile(dir, note.project);
-    const text = readSmall(file);
+    const text = readSmall(realDir, file);
     if (text === null) skipped.push({ file: relOf(dir, file), reason: 'invalid' });
     else if (hasSecret({ text })) skipped.push({ file: relOf(dir, file), reason: 'secret' });
     else copies.push({ rel: relOf(dir, file), text, kind: 'note', project: note.project });

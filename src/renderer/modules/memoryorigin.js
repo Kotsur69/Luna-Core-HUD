@@ -49,12 +49,13 @@ export function originFromLine(snippet) {
 }
 
 /**
- * @param {{call: (fn: string, ...args: any[]) => Promise<object>}} deps call = the window's IPC
- *   helper (never throws: a failure is {ok: false, reason})
+ * @param {{call: (fn: string, ...args: any[]) => Promise<object>, onClosed?: () => void}} deps call = the
+ *   window's IPC helper (never throws: a failure is {ok: false, reason}); onClosed = the close
+ *   button was used: the window repaints without the split
  * @returns {{toggle: (item: {key: string, title?: string}|null) => boolean, close: () => void,
  *   isOpen: () => boolean, openKey: () => string|null, wrap: (panel: HTMLElement) => HTMLElement}}
  */
-export function createOriginDrawer({ call }) {
+export function createOriginDrawer({ call, onClosed = () => {} }) {
   let item = null;
   /** null = loading; else main's answer. */
   let snippet = null;
@@ -99,16 +100,18 @@ export function createOriginDrawer({ call }) {
     const close = el('button', 'port-btn mem-origin__close', t('mem.brain.origin.close'));
     close.type = 'button';
     close.addEventListener('click', () => {
-      const node = root;
       closeDrawer();
-      // The split folds on the window's next repaint; until then the pane just goes.
-      if (node) node.remove();
+      onClosed();
     });
     head.append(el('h3', 'mem-origin__title', t('mem.brain.origin.title')), close);
     const status = el('div', 'mem-origin__answer');
     status.setAttribute('aria-live', 'polite');
     status.append(...replyNodes());
+    // A repaint rebuilds the buttons: the keyboard stays on the one it was on.
+    const focused = document.activeElement && root.contains(document.activeElement) ? document.activeElement.className : '';
     root.replaceChildren(head, el('p', 'mem-origin__memory', item.title || item.key), ...snippetNodes(), interrogateButton(), status);
+    const again = focused ? [...root.querySelectorAll('button')].find((b) => b.className === focused) : null;
+    if (again && !again.disabled) again.focus();
   }
 
   async function open(next) {
