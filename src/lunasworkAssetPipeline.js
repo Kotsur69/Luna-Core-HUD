@@ -727,10 +727,11 @@ const NO_RIPS_RULE = `Never assets ripped from existing games. Katana Zero, Zenl
  * The Unity part of an asset card's details: where the files go, which tool
  * makes what (lunacore MCP tools of src/lunasworkAssetTools.js), the skills,
  * the art direction and the GPU rule.
- * @param {{kind:string, slug:string, source:string, artRoot?:string}} a kind = an ASSETS.md type
+ * @param {{kind:string, slug:string, source:string, artRoot?:string, casting?:string[]}} a kind = an ASSETS.md type;
+ *   casting = the Director's cast (src/lunasworkAssetCasting.js renderCastingBrief), after the tool paragraph
  * @returns {string[]} paragraphs
  */
-function unityAssetBrief({ kind, slug, source, artRoot }) {
+function unityAssetBrief({ kind, slug, source, artRoot, casting }) {
   const k = own(KINDS, kind) ? kind : 'other';
   const root = artRootOf(artRoot);
   const model = KINDS[k].model === true;
@@ -741,6 +742,7 @@ function unityAssetBrief({ kind, slug, source, artRoot }) {
   return [
     `Files: the asset goes to ${root}/${KINDS[k].dir}/, its sources (Blender .blend, ComfyUI workflow + seed, Higgsfield record) to art/. Write only inside this repository.`,
     make,
+    ...(Array.isArray(casting) ? casting.filter((p) => typeof p === 'string' && p) : []),
     'Paid generation goes ONLY through luna_asset_higgsfield: it books the cost against this run\'s Higgsfield budget first. Use the higgsfield CLI / higgsfield-bridge directly only to look up models. When a tool answers capReached, stop using Higgsfield for this run.',
     'The luna_asset_* tools import the result into Unity through the Unity Pipeline (asset import, prefab for a model, material for a texture). When a result says the import failed, import it with your Unity MCP.',
     LIBRARY_RULE,

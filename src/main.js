@@ -1793,6 +1793,8 @@ const lunaswork = createLunasWorkRuntime({
   orchestra: lunasworkGodMode,
   builder: lunasworkBuilder,
   secretStore: lunasworkSecrets,
+  // Which asset-library keys are stored (booleans only) for the Director's asset casting.
+  assetKeyStatus: () => lunasworkAssetKeys.status(),
   godModeCheckCommand: () => readUiPrefs().orchestraCheckCommand,
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),

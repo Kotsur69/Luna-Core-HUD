@@ -72,6 +72,7 @@ const { MAX_TASKS_PER_CALL } = require('./intake');
 const { KINDS, artRootOf, unityAssetBrief } = require('./lunasworkAssetPipeline');
 const { isTurntableSheet } = require('./lunasworkBlenderScript');
 const cost = require('./lunasworkAssetCost');
+const casting = require('./lunasworkAssetCasting');
 
 const ASSETS_FILE = 'ASSETS.md';
 const RENDERS_DIR = 'asset-renders';
@@ -89,7 +90,8 @@ const DEFERRED_IMPORT_TEXT = 'This card prepares the asset files only and runs i
 const DEFERRED_TOOL_TEXT = 'A luna_asset_* answer that says the Unity import is deferred is expected, not a failure.';
 
 const TYPES = ['sprite', 'texture', 'model', 'material', 'animation', 'audio', 'ui', 'vfx', 'other'];
-const SOURCES = ['generated', 'blender', 'library'];
+// auto (or empty): the Director casts the source per asset (src/lunasworkAssetCasting.js).
+const SOURCES = ['generated', 'blender', 'library', 'auto'];
 const PLANNED = 'planned';
 const HELD = 'held';
 const DEFERRED = 'deferred';
@@ -197,7 +199,7 @@ function cleanRow(line, map) {
     name,
     type,
     spec,
-    source: SOURCES.includes(sourceText) ? sourceText : 'generated',
+    source: SOURCES.includes(sourceText) ? sourceText : sourceText ? 'generated' : casting.AUTO,
     file: oneLine(get('file'), MAX_FILE_CHARS),
     status: oneLine(get('status').toLowerCase(), MAX_STATUS_CHARS) || PLANNED,
     hash: specHash(type, spec, name),
@@ -358,16 +360,17 @@ const HOW = Object.freeze({
  * its folders under the art root, its lunacore tools, the art direction.
  * An asset-prep card (lunasworkScene.isAssetPrepCard): import / prefab deferred.
  * @param {object} row
- * @param {{unity?:boolean, artRoot?:string}} [opts]
+ * @param {{unity?:boolean, artRoot?:string, casting?:string[]}} [opts] casting = renderCastingBrief paragraphs
  */
 function assetCard(row, opts = {}) {
   const slug = slugOf(row);
   const unity = isObj(opts) && opts.unity === true;
   const folder = unity ? `${artRootOf(opts.artRoot)}/${KINDS[row.type] ? KINDS[row.type].dir : KINDS.other.dir}` : `${UNITY_ART_DIR}/${slug}`;
   const rawFile = `${folder}/${slug}.${RAW_EXT_BY_TYPE[row.type] || DEFAULT_RAW_EXT}`;
+  const cast = isObj(opts) && Array.isArray(opts.casting) ? opts.casting : [];
   const how = unity
-    ? unityAssetBrief({ kind: row.type, slug, source: row.source, artRoot: opts.artRoot }).filter((p) => !UNITY_IMPORT_PARAGRAPH_RE.test(p))
-    : [HOW[row.source]];
+    ? unityAssetBrief({ kind: row.type, slug, source: row.source, artRoot: opts.artRoot, casting: cast }).filter((p) => !UNITY_IMPORT_PARAGRAPH_RE.test(p))
+    : [HOW[row.source], ...cast];
   const details = [
     `Make the game asset "${row.name}" from design/${ASSETS_FILE} (hash ${row.hash}).`,
     `Type: ${row.type}. Source: ${row.source}. Spec: ${row.spec || row.name}`,
@@ -675,12 +678,14 @@ function styleCard(row, s) {
  * empty template.
  * @param {{todoStore:(projectId:string)=>{read:Function, write:Function, now?:Function},
  *   ask:(spec:object)=>{ok:boolean, id?:number, reason?:string},
- *   styleCheck?:(opts:object)=>Promise<object>, batchLimit?:number, artRoot?:()=>string,
+ *   styleCheck?:(opts:object)=>Promise<object>, casting?:(opts:object)=>Promise<object>, batchLimit?:number, artRoot?:()=>string,
  *   usdPerCredit?:()=>number, recordEstimate?:(estimate:object)=>void, now?:()=>number,
  *   logEvent:(text:string)=>void, logModel?:(role:string, model:string, reason:string)=>void}} deps
  */
 function createAssetStep(deps) {
   const logEvent = (text) => deps.logEvent(`assets: ${text}`);
+  // Valid casts of this step, per run and row hash: a held or re-planned row keeps its pick.
+  const castCache = new Map();
   const defaultLimit = Number.isInteger(deps.batchLimit) && deps.batchLimit > 0 ? Math.min(MAX_BATCH_LIMIT, deps.batchLimit) : DEFAULT_BATCH_LIMIT;
 
   /** Asks about the rows over the limit; they are held under the decision. */
@@ -704,7 +709,7 @@ function createAssetStep(deps) {
     if (!take.length) return rows;
     const unity = isObj(run.profile) && run.profile.adapter === 'unity';
     const artRoot = typeof deps.artRoot === 'function' ? deps.artRoot() : undefined;
-    const cards = new Map(take.map((r) => [r, assetCard(r, { unity, artRoot })]));
+    const cards = new Map(take.map((r) => [r, assetCard(r, { unity, artRoot, casting: casting.renderCastingBrief(r.casting) })]));
     const { ats, error } = fileCards(store, tag, [...cards.values()]);
     if (error) logEvent(`cards not saved (${oneLine(error, 120)}) - those assets stay planned`);
     const carded = take.filter((r) => ats.has(cards.get(r).text));
@@ -768,15 +773,20 @@ function createAssetStep(deps) {
       const limit = parsed.limit || defaultLimit;
       let rows = dedupeAssets(settleRows(parsed.rows, { decisions: run.decisions, cards: normalizeTodos(store.read()) }));
       const { take, ask } = selectBatch(rows, limit);
-      const spend = spendGate(run, gate(rows, ask, limit), take);
+      // Auto rows are cast before the spend gate, so the estimate prices the picked source.
+      const cast = await casting.castAutoRows({ run, rows: gate(rows, ask, limit), take, deps, logEvent, cache: castCache });
+      const spend = spendGate(run, cast.rows, cast.take);
       rows = card(run, spend.rows, spend.take, store, tag);
       rows = await styleCheck(run, rows, store, tag);
-      // `now` / `paidOk` are this pass's own flags (an `all` / `approve` answer), never written.
-      rows = rows.map(({ now, paidOk, ...r }) => r);
+      // `now` / `paidOk` / `casting` are this pass's own fields (an `all` / `approve` answer, the cast), never written.
+      rows = rows.map(({ now, paidOk, ...r }) => casting.uncast(r));
       const next = formatAssetList(parsed, rows);
       if (next !== parsed.lines.join('\n')) {
-        const written = pack.applyWrite(run.repoPath, { file: ASSETS_FILE, update: () => next });
+        // Never overwrite an ASSETS.md edited while the pass awaited the casting / style calls.
+        let edited = false;
+        const written = pack.applyWrite(run.repoPath, { file: ASSETS_FILE, update: (current) => (current === md ? next : ((edited = true), current)) });
         if (!written.ok) logEvent(`design/${ASSETS_FILE} not updated (${oneLine(written.error, 120)})`);
+        else if (edited) logEvent(`design/${ASSETS_FILE} was edited during the pass - kept as edited; its rows are picked up again next pass`);
       }
       const count = (status) => rows.filter((r) => isAsset(r) && r.status === status).length;
       return { queued: count(QUEUED), held: count(HELD), unpaid: count(UNPAID), deferred: count(DEFERRED), duplicates: count(DUPLICATE), restyle: count(RESTYLE), approved: count(APPROVED) };

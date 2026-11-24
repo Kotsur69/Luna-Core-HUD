@@ -394,6 +394,8 @@ function createLunasWork(deps) {
     todoStore: (projectId) => deps.todoStore(projectId),
     ask: (spec) => ask(spec),
     styleCheck: deps.styleCheck,
+    // The Director's casting of auto rows (src/lunasworkAssetCasting.js).
+    casting: deps.assetCasting,
     artRoot: deps.assetArtRoot,
     // The Asset Manifest Estimate: priced at the per-PC credit rate, kept on the run for the dashboard / report.
     usdPerCredit: deps.assetUsdPerCredit,
