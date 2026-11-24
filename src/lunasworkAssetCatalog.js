@@ -34,10 +34,14 @@ const EMPTY_CATALOG = Object.freeze({ sources: Object.freeze([]) });
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+const BOM_CODE = 0xfeff;
+const stripBom = (text) => (text.charCodeAt(0) === BOM_CODE ? text.slice(1) : text);
+
 /** Safe read + JSON parse; the reason is reported instead of thrown. */
 function readJson(file) {
   try {
-    return { ok: true, json: JSON.parse(fs.readFileSync(file, 'utf8')) };
+    // A BOM from a hand-edited file would break JSON.parse.
+    return { ok: true, json: JSON.parse(stripBom(fs.readFileSync(file, 'utf8'))) };
   } catch (err) {
     return { ok: false, reason: err && err.code === 'ENOENT' ? 'file missing' : `unreadable: ${err && err.message}` };
   }
@@ -159,7 +163,15 @@ function cleanSource(raw, warn) {
  * @returns {{sources: ReadonlyArray<{id:string, kinds:string[], costClass:string, needsKey:boolean, toonFit:string, models:Array<{id:string, kinds:string[], credits?:number}>}>}}
  */
 function loadCatalog(file = DEFAULT_CATALOG_FILE, opts = {}) {
-  const warn = typeof opts.warn === 'function' ? opts.warn : (msg) => console.warn(msg);
+  const log = isObj(opts) && typeof opts.warn === 'function' ? opts.warn : (msg) => console.warn(msg);
+  // A throwing logger must not break the never-throws contract; its failure goes to stderr instead.
+  const warn = (msg) => {
+    try {
+      log(msg);
+    } catch (err) {
+      console.error(`asset catalog: the logger failed (${err && err.message}) on: ${msg}`);
+    }
+  };
   const read = readJson(file);
   if (!read.ok) {
     warn(`asset catalog: ${file}: ${read.reason}, using an empty catalog`);

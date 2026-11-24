@@ -71,6 +71,8 @@ test('the bundled config agrees with the free source clients and the pipeline', 
   assert.equal(byId.higgsfield.costClass, 'paid');
   assert.deepEqual([...byId.comfyui.kinds].sort(), [...COMFY_KINDS].sort());
   assert.deepEqual([...byId.blender.kinds].sort(), [...MODEL_KINDS].sort());
+  assert.ok(byId.comfyui.models.length > 0 && byId.higgsfield.models.length > 0);
+  assert.ok(cat.sources.every((s) => Object.isFrozen(s) && Object.isFrozen(s.kinds) && Object.isFrozen(s.models)));
   assert.ok(byId.comfyui.models.every((m) => AMD_FAMILIES.includes(m.id)), 'only AMD-safe ComfyUI families');
   assert.ok(byId.higgsfield.models.every((m) => typeof m.credits === 'number' && m.credits > 0));
   assert.ok(!byId.higgsfield.kinds.includes('audio'), 'Higgsfield finals do not cover audio');
@@ -86,6 +88,19 @@ test('a missing, malformed or wrong-shape file gives an empty catalog without th
   }
   assert.equal(log.msgs.length, 8);
   assert.ok(log.msgs[0].includes('file missing'));
+});
+
+test('a BOM, a null opts or a throwing logger does not break loading', async () => {
+  const bom = await loadText(String.fromCharCode(0xfeff) + fs.readFileSync(C.DEFAULT_CATALOG_FILE, 'utf8'), () => {});
+  assert.ok(bom.sources.length > 0);
+  assert.ok(C.loadCatalog(C.DEFAULT_CATALOG_FILE, null).sources.length > 0);
+  const origError = console.error;
+  console.error = () => {};
+  try {
+    assert.deepEqual(C.loadCatalog(path.join(os.tmpdir(), 'luna-no-such-dir', 'nope.json'), { warn: () => { throw new Error('boom'); } }).sources, []);
+  } finally {
+    console.error = origError;
+  }
 });
 
 test('unknown source ids, unknown kinds and bad fields are dropped with a reason', async () => {
