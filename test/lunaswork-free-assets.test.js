@@ -311,7 +311,7 @@ test('ambientCG: a zipped texture set is unpacked (only maps, no DirectX normal)
   };
   const routes = {
     [`${ACG}?q=brick&type=Material,Decal,Atlas&limit=10&include=tagData`]: { foundAssets: [{ assetId: 'Bricks001', displayName: 'Bricks 001', dataType: 'Material', tags: ['brick'] }] },
-    [`${ACG}?id=Bricks001&include=tagData,downloadData`]: { foundAssets: [record] },
+    [`${ACG}?id=Bricks001&include=tagData,downloadData,imageData`]: { foundAssets: [record] },
     // The download link redirects to the CDN, as ambientCG's does.
     'https://ambientcg.com/get?file=Bricks001_2K-JPG.zip': () => ({ status: 302, ok: false, headers: { get: (h) => (h === 'location' ? 'https://cdn.ambientcg.com/Bricks001_2K-JPG.zip' : null) }, body: null }),
     'https://cdn.ambientcg.com/Bricks001_2K-JPG.zip': () => reply(zip),
@@ -332,7 +332,7 @@ test('ambientCG: a zipped texture set is unpacked (only maps, no DirectX normal)
 // ---- Freesound --------------------------------------------------------------------------
 
 const FS = 'https://freesound.org/apiv2';
-const FIELDS = 'id,name,username,license,url,tags,previews';
+const FIELDS = 'id,name,username,license,url,tags,previews,duration';
 const fsSound = (id, name, license) => ({ id, name, username: 'foley_kat', license, url: `https://freesound.org/people/foley_kat/sounds/${id}/`, tags: ['sword'], previews: { 'preview-hq-ogg': `https://cdn.freesound.org/previews/${id}-hq.ogg` } });
 
 test('Freesound: the key goes in a header (never the URL), the HQ OGG preview is imported and credited', async () => {
