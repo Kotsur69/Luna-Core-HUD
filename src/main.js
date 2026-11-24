@@ -138,7 +138,7 @@ const { readAllRepos, fetchRepo, scanForRepos, readRepoStatus, fetchDir, commitA
 // Active-Files Heatmap's second signal: git-sourced changes, for files a
 // session touched via Bash/PowerShell rather than Read/Edit/Write (see
 // src/gitfiles.js's header for why the transcript path alone misses these).
-const { GitFileWatcher, git, pathInsideCwd } = require('./gitfiles');
+const { GitFileWatcher, git, pathInsideCwd, realPathInsideCwd } = require('./gitfiles');
 // Per-terminal attribution for those git rows: the watcher reads the whole
 // repo, this decides which changes belong to which terminal.
 const { SessionAttribution } = require('./gitattribution');
@@ -3497,6 +3497,8 @@ function registerIpc() {
 
     const rel = pathInsideCwd(session.cwd, file);
     if (!rel) return fail('outside');
+    // Lexical is not enough: an in-repo symlink may point outside it.
+    if (!(await realPathInsideCwd(session.cwd, rel))) return fail('outside');
 
     const cwd = session.cwd;
     // No repo / no commits yet (no HEAD) / git hung or missing -> its own

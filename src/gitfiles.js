@@ -146,6 +146,69 @@ function pathInsideCwd(cwd, file) {
   return rel;
 }
 
+/** realpath failures that mean "not there (any more)": a deleted file still diffs against HEAD. */
+const MISSING_PATH_CODES = new Set(['ENOENT', 'ENOTDIR']);
+/** realPathOrAncestor(): nothing between the file and cwd exists, so only the lexical check applies. */
+const LEXICAL_ONLY = Symbol('lexicalOnly');
+
+/** Whether `real` lies strictly inside `realCwd` (both already resolved). */
+function isStrictlyInside(realCwd, real) {
+  const rel = path.relative(realCwd, real);
+  return Boolean(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+}
+
+/**
+ * The real path of `abs`, or of its nearest existing ancestor when it does
+ * not exist (a deleted file), walking up no further than `cwd`;
+ * LEXICAL_ONLY when nothing below cwd exists, null when a path on the way
+ * cannot be resolved for another reason (EACCES, ELOOP, ...).
+ * @returns {Promise<string|typeof LEXICAL_ONLY|null>}
+ */
+async function realPathOrAncestor(abs, cwd) {
+  let current = abs;
+  for (;;) {
+    try {
+      return await fs.promises.realpath(current);
+    } catch (err) {
+      if (!MISSING_PATH_CODES.has(err && err.code)) return null;
+      const parent = path.dirname(current);
+      // Reached cwd (or the root) without finding anything: lexical check only.
+      if (parent === current || path.relative(cwd, parent) === '') return LEXICAL_ONLY;
+      current = parent;
+    }
+  }
+}
+
+/**
+ * The symlink-aware half of the files:diff containment guard. pathInsideCwd()
+ * is lexical only, so a symlink inside the repo that points outside passes
+ * it; this resolves both the session's cwd and the file with realpath and
+ * accepts the file only when its real path is still strictly inside the real
+ * cwd. A file that does not exist (deleted, still diffs against HEAD) is
+ * judged by its nearest existing ancestor - for a plain deleted file that is
+ * its own folder, inside cwd. Any other resolution failure refuses (fails
+ * closed). Call it after pathInsideCwd(), not instead of it.
+ * @param {string} cwd absolute session directory
+ * @param {string} file renderer-supplied path (relative or absolute)
+ * @returns {Promise<boolean>}
+ */
+async function realPathInsideCwd(cwd, file) {
+  if (!pathInsideCwd(cwd, file)) return false;
+  const abs = path.resolve(cwd, file);
+  let realCwd;
+  try {
+    realCwd = await fs.promises.realpath(cwd);
+  } catch (err) {
+    // A cwd that is gone: nothing to resolve against, git reports its own reason.
+    return MISSING_PATH_CODES.has(err && err.code);
+  }
+  const real = await realPathOrAncestor(abs, cwd);
+  if (real === null) return false;
+  // Nothing on the way exists but cwd itself: only the lexical check applies.
+  if (real === LEXICAL_ONLY) return true;
+  return isStrictlyInside(realCwd, real);
+}
+
 /**
  * Snapshot of every dirty path at session start - the baseline that keeps
  * pre-existing uncommitted work from being misattributed to this session.
@@ -324,6 +387,7 @@ class GitFileWatcher {
 module.exports = {
   git,
   pathInsideCwd,
+  realPathInsideCwd,
   parseChangedPaths,
   parseNumstat,
   snapshotDirtyPaths,
