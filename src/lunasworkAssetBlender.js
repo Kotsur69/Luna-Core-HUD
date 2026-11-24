@@ -19,13 +19,20 @@
 // guards every final path again right before it moves the file in: the
 // .blend by a same-folder rename, the rest by a copy to a fresh guarded tmp
 // file ('excl') + rename - the same pattern as writeRepoFile.
+// Left open, as in writeRepoFile: the gap between a guard and the fs call
+// right after it (Node has no openat), and the gap between the guards made
+// before the run and Blender's first step (the .blend save). A .blend saved
+// outside in that gap has a random name, so it never replaces a file; it is
+// removed by that name afterwards.
 //
 // Repeated toon pass (the pass changes the open scene in place): the pass
 // marks the scene (custom property TOON_MARK), and the guarded save in the
 // script never saves a marked scene over a .blend that is already there. A
 // second call on the same open scene so keeps the untouched .blend of the
 // first call ('kept'); a marked scene is saved only when no .blend exists yet
-// ('toon'). The worker is told in both cases.
+// ('toon'), and even then it never replaces one that appeared during the run.
+// The worker is told in each case. There is no override on purpose: edits
+// made to a marked scene reach the FBX, never the .blend (reopen the .blend).
 // ============================================================================
 
 'use strict';
@@ -175,7 +182,13 @@ function createBlenderModel(deps) {
     try {
       files.remove(stage.blendRel);
     } catch (err) {
-      notes.push(`${stage.blendRel} could not be removed (${oneLine(errText(err), MAX_NOTE_CHARS)}).`);
+      // Refused (its folder now leads outside the repo): our own random-named
+      // file is removed by that name wherever it landed, never anything else.
+      try {
+        fs.unlinkSync(deps.abs(stage.blendRel));
+      } catch (unlinkErr) {
+        if (!unlinkErr || unlinkErr.code !== 'ENOENT') notes.push(`${stage.blendRel} could not be removed (${oneLine(errText(unlinkErr), MAX_NOTE_CHARS)}).`);
+      }
     }
     try {
       await fs.promises.rm(stage.dir, { recursive: true, force: true, maxRetries: STAGE_RM_RETRIES });
@@ -247,18 +260,37 @@ function createBlenderModel(deps) {
     }
     let blendState;
     try {
+      // A staged folder that now leads outside the repo is a refused write, not a Blender failure.
+      files.guard(stage.blendRel);
       blendState = readBlendState(stage.state);
+    } catch (err) {
+      return fail('writeFailed', `The Blender export was not moved into place: ${errText(err)}`);
+    }
+    // A marked scene never replaces a .blend that appeared while Blender ran.
+    if (blendState === 'toon' && isFileStat(files.stat(rels.blend))) blendState = 'kept';
+    try {
       checkOutputs(stage, rels, blendState);
     } catch (err) {
       return fail('blenderFailed', `Blender did not write the files: ${errText(err)}`);
     }
+    return placeOutputs(job, style, rels, stage, { output, blendState });
+  }
+
+  /** Moves the checked .blend, then the FBX, into place; the answer says which one landed when the other did not. */
+  async function placeOutputs(job, style, rels, stage, ran) {
+    let blendPlaced = false;
     try {
+      // The .blend first: a same-folder rename that a locked file can refuse, before the FBX reaches Unity.
+      if (ran.blendState !== 'kept') {
+        placeBlend(stage.blendRel, rels.blend);
+        blendPlaced = true;
+      }
       placeCopy(stage.fbx, rels.fbx);
-      if (blendState !== 'kept') placeBlend(stage.blendRel, rels.blend);
     } catch (err) {
-      return fail('writeFailed', `The Blender export was not moved into place: ${errText(err)}`);
+      const landed = blendPlaced ? ` (${rels.blend} was already updated)` : '';
+      return fail('writeFailed', `The Blender export was not moved into place: ${errText(err)}${landed}`);
     }
-    return finish(job, style, rels, { output, blendState, render: placeRender(stage, rels.render) });
+    return finish(job, style, rels, { ...ran, render: placeRender(stage, rels.render) });
   }
 
   /** Adds the staging cleanup notes to an answer: the note of a success, the detail of a failure. */
@@ -288,17 +320,22 @@ function createBlenderModel(deps) {
     try {
       stage = prepareStage(job, rels);
     } catch (err) {
-      return fail('blenderFailed', errText(err));
+      return fail('writeFailed', errText(err));
     }
     let result;
+    let thrown = null;
     try {
       result = await exportStaged(job, style, rels, stage);
-    } finally {
-      // Runs on a throw too (a failed ledger or Unity call): no staging file is left behind.
-      const notes = await cleanupStage(stage);
-      if (result) result = withNotes(result, notes);
+    } catch (err) {
+      thrown = err;
     }
-    return result;
+    // Also after a throw (a failed ledger or Unity call): no staging file is left behind.
+    const notes = await cleanupStage(stage);
+    if (thrown) {
+      if (notes.length && thrown instanceof Error) thrown.message += ` (${notes.join(' ')})`;
+      throw thrown;
+    }
+    return withNotes(result, notes);
   }
 
   return blenderModel;

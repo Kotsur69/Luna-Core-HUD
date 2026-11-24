@@ -444,7 +444,8 @@ function blenderExportScript(blendAbs, fbxAbs, options) {
   return [
     'import bpy',
     ...(extra ? pyHeader(o) : []),
-    o.blend ? PY_GUARDED_SAVE.trim().replace(SAVE_AT, `    ${save}`) : save,
+    // A replacer function: a '$' in the repo path is never read as a replacement pattern.
+    o.blend ? PY_GUARDED_SAVE.trim().replace(SAVE_AT, () => `    ${save}`) : save,
     ...(extra ? [PY_HELPERS.trim()] : []),
     ...(toon ? [PY_TOON.trim()] : []),
     ...(o.render ? [PY_RENDER.trim()] : []),

@@ -174,6 +174,10 @@ test('blenderExportScript: the toon pass marks the scene before it changes it; t
   for (const blend of [{ exists: 'yes', statePath }, { exists: true, statePath: 'rel.txt' }, { exists: true }, 'x']) {
     assert.throws(() => B.blenderExportScript('/r/a.blend', '/r/a.fbx', { blend }), /blend needs/);
   }
+  // A '$' pattern in the repo path stays literal in the spliced save line.
+  const dollar = path.resolve('/r/$&/$$/a.blend');
+  const lit = B.blenderExportScript(dollar, '/r/a.fbx', { blend: { exists: false, statePath } }).match(/save_as_mainfile\(filepath=("(?:[^"\\]|\\.)*"), copy=True\)/)[1];
+  assert.equal(JSON.parse(lit), dollar.split(path.sep).join('/'));
   // Without the blend options the save stays the plain first step.
   assert.match(B.blenderExportScript('/r/a.blend', '/r/a.fbx', { stylePass: B.TOON_PASS }), /^bpy\.ops\.wm\.save_as_mainfile\(/m);
 });
@@ -217,6 +221,53 @@ test('blenderModel: a toon-marked scene with no .blend yet is saved and the work
   assert.equal(res.blend, 'saved');
   assert.match(res.note, /art\/blender\/crate\.blend was saved from a scene that already carries the toon pass/);
   assert.match(read(dir, 'art/blender/crate.blend'), /toon$/);
+});
+
+test('blenderModel: a toon-marked save never replaces a .blend that appeared while Blender ran', async (t) => {
+  const dir = await tempDir(t, 'lw-blender-race-');
+  const blender = sceneBlender({ marked: true });
+  const original = blender.executeCode;
+  blender.executeCode = async (code) => {
+    const out = await original(code);
+    fs.writeFileSync(path.join(dir, 'art', 'blender', 'crate.blend'), Buffer.concat([BLEND, Buffer.from(' other run', 'latin1')]));
+    return out;
+  };
+  const res = await pipeline(dir, blender).p.blenderModel({ name: 'Crate', kind: 'prop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.blend, 'kept');
+  assert.match(read(dir, 'art/blender/crate.blend'), /other run$/);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'art', 'blender')), ['crate.blend']);
+});
+
+test('blenderModel: a throw after the export (ledger) still removes the staging files and is rethrown', async (t) => {
+  const dir = await tempDir(t, 'lw-blender-throw-');
+  const A = require('../src/lunasworkAssetBlender.js');
+  const abs = (rel) => path.join(dir, ...rel.split('/'));
+  const statOrNull = (rel) => (fs.existsSync(abs(rel)) ? fs.statSync(abs(rel)) : null);
+  const blender = sceneBlender();
+  const model = A.createBlenderModel({
+    blender,
+    cleanJob: (raw) => ({ ok: true, name: raw.name, slug: 'crate', kind: 'prop', prompt: '' }),
+    paths: () => ({ blend: 'art/blender/crate.blend', fbx: `${ART}/Props/crate.fbx` }),
+    isBlend: (buf) => buf.subarray(0, 7).toString('latin1') === 'BLENDER',
+    isFbx: (buf) => buf.subarray(0, 18).toString('latin1') === 'Kaydara FBX Binary',
+    abs,
+    files: {
+      guard: abs,
+      mkdirFor: (rel) => fs.mkdirSync(path.dirname(abs(rel)), { recursive: true }),
+      stat: statOrNull,
+      head: (rel) => fs.readFileSync(abs(rel)).subarray(0, 64),
+      remove: (rel) => fs.rmSync(abs(rel), { force: true }),
+    },
+    ledgerGenerated: async () => { throw new Error('ledger locked'); },
+    importToUnity: async () => ({ ok: true }),
+    importNote: () => null,
+    log: () => true,
+    ledgerFile: 'design/ASSET_LICENSES.md',
+  });
+  await assert.rejects(model({ name: 'Crate', kind: 'prop' }), /ledger locked/);
+  assert.equal(fs.existsSync(path.dirname(pyString(blender.scripts[0], 'SHEET_PATH'))), false);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'art', 'blender')), ['crate.blend']);
 });
 
 test('blenderModel: a "kept" state with no .blend left is a failed export, never a silent success', async (t) => {
@@ -301,14 +352,15 @@ test('blenderModel: FBX, render and .blend folders swapped to junctions mid-rend
   assert.equal(r.run.logged.length, 0);
 });
 
-test('blenderModel: the FBX folder swapped to a junction mid-render -> refused, nothing outside, no .blend replaced', async (t) => {
+test('blenderModel: the FBX folder swapped to a junction mid-render -> refused, nothing outside, the answer names the .blend that landed', async (t) => {
   const r = await swapRun(t, [`${ART}/Props`]);
   if (!r) return;
   assert.deepEqual([r.res.ok, r.res.error], [false, 'writeFailed']);
-  assert.match(r.res.detail, /Props\/crate\.fbx/);
+  assert.match(r.res.detail, /Props\/crate\.fbx resolves outside.*\(art\/blender\/crate\.blend was already updated\)/);
   assert.deepEqual(filesUnder(r.outside), []);
-  // The FBX failed, so the staged .blend never replaced anything and was removed.
-  assert.deepEqual(fs.readdirSync(path.join(r.dir, 'art', 'blender')), []);
+  // The .blend goes first (a same-folder rename); no staged file is left behind.
+  assert.deepEqual(fs.readdirSync(path.join(r.dir, 'art', 'blender')), ['crate.blend']);
+  assert.equal(exists(r.dir, `${ART}/Props-real/crate.fbx`), false);
 });
 
 test('blenderModel: the render folder swapped to a junction mid-render -> no sheet outside, the export still lands', async (t) => {
@@ -325,7 +377,7 @@ test('blenderModel: the render folder swapped to a junction mid-render -> no she
 test('blenderModel: the .blend folder swapped to a junction after the save -> refused, nothing outside', async (t) => {
   const r = await swapRun(t, ['art/blender']);
   if (!r) return;
-  assert.deepEqual([r.res.ok, r.res.error], [false, 'blenderFailed']);
+  assert.deepEqual([r.res.ok, r.res.error], [false, 'writeFailed']);
   assert.match(r.res.detail, /refused: art\/blender\/crate\.[0-9a-f]+\.tmp\.blend resolves outside/);
   assert.deepEqual(filesUnder(r.outside), []);
   assert.equal(exists(r.dir, `${ART}/Props/crate.fbx`), false);
