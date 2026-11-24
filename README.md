@@ -7,7 +7,22 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.38.0 — Luna memory audit quality-gate report.**
+> **Current release: v0.39.0 — Add asset source catalog.**
+> - luna_asset_blender from= runs a Higgsfield result through Blender
+> - luna_asset_judge ranks asset candidates; Higgsfield cost guard
+> - Director casting picks the source and model of auto asset rows
+> - add asset source catalog
+> - translatable display names for agy families in the pick menus
+> - Fix: harden luna_asset_blender from= after review
+> - Fix: harden the asset judge after review
+> - Fix: harden asset casting after review
+> - Fix: keep the asset catalog loader throw-free on a BOM, null opts or a
+>   throwing logger
+> - Fix: only a fresh, unrounded 100% quota reading counts as out
+> - Fix: translate agy family names in the worker badge; stub i18n in the
+>   pool-effort test
+>
+> **v0.38.0 — Luna memory audit quality-gate report.**
 > - luna memory audit quality-gate report
 > - weekly Sleep Pass consolidation with clustering and architecture-map
 >   refresh
