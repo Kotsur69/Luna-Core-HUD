@@ -677,3 +677,30 @@ test('runFreePassed: only the record of the same run, only a well-formed latest 
   assert.equal(runFreePassed(rec([e('free pass - ok')]), null, 'prop', 'wood-crate'), null);
   assert.equal(runFreePassed(rec([e('free pass - ok')]), '', 'prop', 'wood-crate'), null);
 });
+
+test('a newer free pass the run log refused still blocks, though the record holds an older no pass', async () => {
+  const s = guardSetup(9);
+  try {
+    const run = fakeRun('lw-a');
+    assert.equal(run.recordAsset({ tool: 'judge', kind: 'prop', name: 'Wood Crate', prompt: 'no pass - candidate-1 scored 2/10', path: 'art/drafts/a.png' }), true);
+    // The run log refuses the new verdict (say the record is full or the run just ended).
+    const refusing = { recordAsset: () => false, judgeVerdicts: () => run.judgeVerdicts() };
+    const tools = s.freshTools();
+    const judged = await s.judge(s.ctxOf(tools, refusing, 'lw-a'));
+    assert.equal(judged.payload.pass, true);
+    assert.match(judged.payload.note, /could not log this verdict/);
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(tools, refusing, 'lw-a'))), 'freeCandidatePassed');
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('the Critic call is lean: no user settings, plugins or MCP servers ride along', () => {
+  const { buildStyleArgs } = require('../src/lunasworkAssets.js');
+  const args = buildStyleArgs();
+  assert.equal(args[args.indexOf('--setting-sources') + 1], '');
+  assert.ok(args.includes('--strict-mcp-config'));
+  assert.deepEqual(JSON.parse(args[args.indexOf('--mcp-config') + 1]), { mcpServers: {} });
+  assert.equal(args[args.indexOf('--tools') + 1], 'Read');
+});

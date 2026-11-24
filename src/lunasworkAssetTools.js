@@ -594,7 +594,9 @@ function createAssetToolsFor(deps) {
   return function assetsFor(ctx) {
     if (!isObj(ctx) || typeof ctx.repoPath !== 'string') return null;
     const runId = typeof ctx.runId === 'string' && ctx.runId ? ctx.runId : null;
-    // The run record first (survives a restart, spans the run's worktrees); the memory store only when it has no say.
+    // The run record survives a restart and spans the run's worktrees; this process's store
+    // also holds a verdict the run log refused. Either one's free pass blocks a paid final:
+    // when they disagree, the guard errs on the side of not spending.
     const freeCandidatePassed = (job) => {
       let fromRun = null;
       try {
@@ -602,7 +604,7 @@ function createAssetToolsFor(deps) {
       } catch (err) {
         log(`[lunaswork-assets] judge verdicts unreadable, using this process's verdicts: ${oneLine(errText(err), 200)}`);
       }
-      return fromRun !== null ? fromRun : verdicts.freePassed(ctx.repoPath, job.kind, job.slug, runId);
+      return fromRun === true || verdicts.freePassed(ctx.repoPath, job.kind, job.slug, runId);
     };
     // A library call that throws (not one that answers a failure) still never shows a stored key.
     const keyed = (fn) => Promise.resolve().then(fn).catch((err) => ({
@@ -637,7 +639,10 @@ function createAssetToolsFor(deps) {
         cappedTools: ctx.cappedTools,
         freeCandidatePassed,
         logAsset: (entry) => {
-          if (!ctx.recordAsset(entry)) log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);
+          if (ctx.recordAsset(entry)) return;
+          log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);
+          // The pipeline's log() turns this into false, so the caller can say so in its answer.
+          throw new Error('the run report refused the entry');
         },
       });
     };

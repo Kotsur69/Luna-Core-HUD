@@ -1061,9 +1061,6 @@ function createLunasWork(deps) {
       // Paid tools past the run's spend cap: read again for every worker tab, so a
       // cap reached mid-build closes the tool for the tabs that start after it.
       cappedTools: () => toolGuard.cappedTools(),
-    // The judge's verdicts in the run record ({runId, entries}): the Higgsfield cost guard reads them.
-    judgeVerdicts: () => toolGuard.judgeVerdicts(),
-    runId: () => (run ? run.id : null),
       // Plans this run made may be replaced; anyone else's open plan may not.
       ownPlanIds: run.planIds,
       onPlan: (planId) => {
@@ -2016,6 +2013,9 @@ function createLunasWork(deps) {
     // Asset pipeline (src/lunasworkAssetPipeline.js): one made asset for the run report.
     recordAsset: (entry) => toolGuard.recordAsset(entry),
     cappedTools: () => toolGuard.cappedTools(),
+    // The judge's verdicts in the run record ({runId, entries}): the Higgsfield cost guard reads them.
+    judgeVerdicts: () => toolGuard.judgeVerdicts(),
+    runId: () => (run ? run.id : null),
     status,
     subscribe,
     godModeBlock,

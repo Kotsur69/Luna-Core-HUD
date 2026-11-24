@@ -177,3 +177,25 @@ test('a reserve-held Director step makes the run wait until the reserve reset, a
     await removeDir(repoDir);
   }
 });
+
+// ---- the controller: the judge's verdicts for the asset tools (main.js lunasworkAssetsFor) ----
+
+test('the controller exposes runId() and judgeVerdicts() from the run record', async () => {
+  const fake = noSpawn();
+  const repoDir = packRepo();
+  try {
+    const h = controllerOn(repoDir, fake.exec);
+    assert.equal(h.ctl.runId(), null);
+    assert.equal(h.ctl.judgeVerdicts(), null);
+    await h.ctl.start({ projectId: 'game' });
+    for (let i = 0; i < 5; i += 1) await h.ctl.idle();
+    assert.equal(h.ctl.runId(), 'lwreserve1');
+    assert.equal(h.ctl.recordAsset({ tool: 'judge', kind: 'prop', name: 'Wood Crate', prompt: 'free pass - candidate-1 scored 9/10', path: 'art/a.png' }), true);
+    assert.equal(h.ctl.recordAsset({ tool: 'comfyui', kind: 'prop', name: 'Wood Crate', prompt: 'crate', path: 'art/b.png' }), true);
+    const read = h.ctl.judgeVerdicts();
+    assert.equal(read.runId, 'lwreserve1');
+    assert.deepEqual(read.entries.map((e) => [e.tool, e.name, e.prompt.slice(0, 10)]), [['judge', 'Wood Crate', 'free pass ']]);
+  } finally {
+    await removeDir(repoDir);
+  }
+});

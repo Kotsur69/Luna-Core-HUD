@@ -33,11 +33,11 @@
 // Where the guard looks (runFreePassed): first the run record - the judge
 // entries of the run's asset log, read back through the run (src/lunaswork.js
 // judgeVerdicts), keyed by run id, asset kind and slug - so it survives a
-// LunaCore restart and covers every package worktree of the run. Only when the
-// record has no entry for the asset (no reader, another run, a verdict the log
-// refused) does the in-memory verdict store answer: one per LunaCore process,
-// keyed by run id, the worker's repo path, kind and slug, entries expiring
-// after VERDICT_TTL_MS.
+// LunaCore restart and covers every package worktree of the run. The in-memory
+// verdict store is the fallback (no reader, an unreadable record, a verdict
+// the run log refused): one per LunaCore process, keyed by run id, the
+// worker's repo path, kind and slug, entries expiring after VERDICT_TTL_MS.
+// A free pass in either one blocks the paid final (createAssetToolsFor).
 //
 // Boundaries: a candidate path must stay inside the repo with no `..`, must
 // not pass through a junction or symlink (realpath compared with the plain
