@@ -220,7 +220,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: JUDGE_TOOL,
-    description: `Luna's Work asset judge: the Critic ranks ${MIN_CANDIDATES} to ${MAX_CANDIDATES} candidates for ONE asset against design/references/ and the art direction, BEFORE you import or pay for anything. A candidate is a repo image path under art/ or the art root (a ComfyUI draft, a Higgsfield result, a render) or a luna_asset_search result {source, id}, judged on its library preview (saved under ${CANDIDATES_DIR}/). Kind "audio" is judged on metadata only (name, tags, duration, license). Answers {ranking, winner, pass, reason}: import only the winner; pass false means move to the next rung of the fallback ladder. After a passing free or local winner, luna_asset_higgsfield refuses this asset (freeCandidatePassed). Logged in the run report.`,
+    description: `Luna's Work asset judge: the Critic ranks ${MIN_CANDIDATES} to ${MAX_CANDIDATES} candidates for ONE asset against design/references/ and the art direction, BEFORE you import or pay for anything. A candidate is a repo image path under art/ or the art root (a ComfyUI draft, a Higgsfield result), a luna_asset_blender turntable sheet at design/asset-renders/<slug>.png, or a luna_asset_search result {source, id}, judged on its library preview (saved under ${CANDIDATES_DIR}/). Kind "audio" is judged on metadata only (name, tags, duration, license). Answers {ranking, winner, pass, reason}: import only the winner; pass false means move to the next rung of the fallback ladder. After a passing free or local winner, luna_asset_higgsfield refuses this asset (freeCandidatePassed). Logged in the run report.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,

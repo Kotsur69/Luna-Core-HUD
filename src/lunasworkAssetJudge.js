@@ -6,7 +6,9 @@
 // which one to keep BEFORE anything is imported or paid for:
 //
 //   judge({name, kind, candidates})   2 to 8 candidates; each one is
-//       - a repo-relative image path under art/ or the art root, or
+//       - a repo-relative image path under art/ or the art root, or a
+//         luna_asset_blender turntable sheet directly in design/asset-renders/
+//         (read-only: the judge never writes there), or
 //       - a library result {source, id} (src/lunasworkFreeSources.js): its
 //         preview image (item.preview) is downloaded through the public-https
 //         downloader (src/lunasworkAssetTools.js createDownloader: no key, no
@@ -34,7 +36,8 @@
 //
 // Boundaries: a candidate path must stay inside the repo with no `..`, must
 // not pass through a junction or symlink (realpath compared with the plain
-// path) and must not be a hard link, must sit under art/ or the art root, and
+// path) and must not be a hard link, must sit under art/, the art root or
+// directly in design/asset-renders/ (Blender renders, no subfolders), and
 // have an image extension and image magic bytes (PNG, JPEG, WEBP). Model
 // output only scores; it never names a file this module reads or writes.
 // Library text in the Critic's prompt is stripped of quotes and brackets and
@@ -50,6 +53,7 @@ const { imageKind, audioKind } = require('./lunasworkComfy');
 const { isWritablePath } = require('./lunasworkToolkit');
 const { KINDS, ART_DIRECTION_RULE, SOURCE_DIRS, slugOf, artRootOf } = require('./lunasworkAssetPipeline');
 const { SOURCE_IDS, redact } = require('./lunasworkFreeSources');
+const { RENDER_DIR } = require('./lunasworkAssetBlender');
 
 const MIN_CANDIDATES = 2;
 const MAX_CANDIDATES = 8;
@@ -137,7 +141,13 @@ function readHead(abs) {
   }
 }
 
-/** Path shape only: repo-relative, no traversal, under art/ or the art root. */
+/** True for a file directly in design/asset-renders/: a Blender turntable sheet, never a subfolder. */
+function isRenderPath(segments) {
+  const dir = RENDER_DIR.split('/');
+  return segments.length === dir.length + 1 && dir.every((s, i) => segments[i] === s);
+}
+
+/** Path shape only: repo-relative, no traversal, under art/, the art root or design/asset-renders/. */
 function relOf(raw, artRoot) {
   if (typeof raw !== 'string' || !raw || raw.length > MAX_PATH_CHARS || CONTROL_RE.test(raw)) return fail('badPath', 'a candidate path must be a short repo-relative path');
   const slashed = raw.replace(/\\/g, '/');
@@ -145,7 +155,8 @@ function relOf(raw, artRoot) {
   const segments = slashed.split('/').filter((s) => s && s !== '.');
   if (segments.includes('..')) return fail('pathTraversal', `${oneLine(raw, 120)} contains ".."`);
   const rel = segments.join('/');
-  if (![ART_DIR, artRootOf(artRoot)].some((root) => rel.startsWith(`${root}/`))) return fail('notArtPath', `${rel} is not under ${ART_DIR}/ or ${artRootOf(artRoot)}/`);
+  const underArt = [ART_DIR, artRootOf(artRoot)].some((root) => rel.startsWith(`${root}/`));
+  if (!underArt && !isRenderPath(segments)) return fail('notArtPath', `${rel} is not under ${ART_DIR}/, ${artRootOf(artRoot)}/ or directly in ${RENDER_DIR}/`);
   return { ok: true, rel, segments };
 }
 
