@@ -6,23 +6,28 @@
 //
 //   library   free library imports (luna_asset_search / luna_asset_import)
 //   local     free local generations: Blender (source `blender`, or any 3D
-//             `model` row - unityAssetBrief sends those to Blender) and
+//             model / character / prop / environment row - unityAssetBrief
+//             sends those to Blender) and
 //             ComfyUI (generated audio / animation / material: Higgsfield
 //             makes images and GLBs only)
 //   paid      Higgsfield finals: every other `generated` row, with credits
 //             per model and USD at the per-PC credit rate
 //
-// A row's model comes from `model: <id>` in its spec (or entry.model). A row
-// without one uses DEFAULT_FINAL_CREDITS; a NAMED model this table does not
-// know uses the same default and is flagged (`unknownModel`), so the number
-// is never silently low. The credit numbers are planning estimates on the
-// high side, like DEFAULT_USD_PER_CREDIT: the real cost is booked by
-// luna_asset_higgsfield (`generate cost`) against the run's spend cap.
+// A row's model comes from `model: <id>` in its spec (or entry.model). The
+// credits per model come from the asset source catalog's Higgsfield models
+// (config/lunaswork-asset-catalog.json, the one source of truth the Director
+// casts from). A row without a model uses DEFAULT_FINAL_CREDITS; a NAMED
+// model the catalog does not list uses the same default and is flagged
+// (`unknownModel`), so the number is never silently low. The credit numbers
+// are planning estimates on the high side, like DEFAULT_USD_PER_CREDIT: the
+// real cost is booked by luna_asset_higgsfield (`generate cost`) against the
+// run's spend cap.
 //
 // The spend gate: paid finals not yet approved whose projected USD goes over
 // the run's remaining Higgsfield cap (run.spendCaps - run.spend) are held for
 // a decision (default skip) before their cards are filed (runSpendGate, the
-// asset step's seam; everything else here is pure). An approval does not
+// asset step's seam; everything else here is pure, apart from the one cached
+// catalog read). An approval does not
 // raise the cap: luna_asset_higgsfield still books each final against it.
 // cleanAssetEstimate is the trust boundary for a stored run
 // (src/lunasworkRun.js) and for the dashboard view.
@@ -32,15 +37,8 @@
 
 const { DEFAULT_USD_PER_CREDIT } = require('./lunasworkAssetPipeline');
 const { normalizeSpendCaps, normalizeSpend } = require('./lunasworkToolkit');
+const { loadCatalog, higgsfieldCredits } = require('./lunasworkAssetCatalog');
 
-// Higgsfield credits per final, by model id: planning estimates on the high side.
-const HIGGSFIELD_MODEL_CREDITS = Object.freeze({
-  soul: 3,
-  'nano-banana': 3,
-  seedream: 4,
-  'flux-kontext': 5,
-  'image-to-3d': 30,
-});
 // A final whose model is not named or not known.
 const DEFAULT_FINAL_CREDITS = 10;
 // The spend gate's answers (distinct from the batch gate's capped / all).
@@ -59,7 +57,8 @@ const MAX_NAME_CHARS = 80;
 const MAX_UNKNOWN = 20;
 const MAX_LIST_IN_TEXT = 6;
 // Types Higgsfield cannot make: a `generated` row of these runs on local ComfyUI / Blender.
-const LOCAL_GENERATED_TYPES = Object.freeze(['model', 'audio', 'animation', 'material']);
+// The 3D kinds (character, prop, environment) are local like `model`: unityAssetBrief sends them to Blender.
+const LOCAL_GENERATED_TYPES = Object.freeze(['model', 'character', 'prop', 'environment', 'audio', 'animation', 'material']);
 const MODEL_IN_SPEC_RE = /\bmodel\s*[:=]\s*([a-z0-9][a-z0-9_.-]{0,63})/i;
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 
@@ -90,9 +89,16 @@ function modelOf(row) {
   return m ? m[1].toLowerCase() : null;
 }
 
-/** The credit table: the built-in estimates, overridden by valid opts.modelCredits entries. */
+let cachedCatalogCredits = null;
+/** Higgsfield credits per final by model id, from the bundled asset catalog (read once). */
+function catalogModelCredits() {
+  if (!cachedCatalogCredits) cachedCatalogCredits = higgsfieldCredits(loadCatalog());
+  return cachedCatalogCredits;
+}
+
+/** The credit table: the catalog's credits, overridden by valid opts.modelCredits entries. */
 function creditTable(extra) {
-  const out = { ...HIGGSFIELD_MODEL_CREDITS };
+  const out = { ...catalogModelCredits() };
   if (!isObj(extra)) return out;
   for (const [k, v] of Object.entries(extra)) {
     if (MODEL_ID_RE.test(k) && Number.isFinite(v) && v >= 0 && v <= MAX_CREDITS_PER_FINAL) out[k] = v;
@@ -300,7 +306,7 @@ function estimateLines(raw) {
 }
 
 module.exports = {
-  HIGGSFIELD_MODEL_CREDITS,
+  catalogModelCredits,
   DEFAULT_FINAL_CREDITS,
   SPEND_APPROVE,
   SPEND_SKIP,

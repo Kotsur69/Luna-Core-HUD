@@ -178,3 +178,23 @@ test('comfyModelsForKind', () => {
   assert.deepEqual(C.comfyModelsForKind(cat, 'animation'), []);
   assert.deepEqual(C.comfyModelsForKind(C.EMPTY_CATALOG, 'audio'), []);
 });
+
+test('higgsfieldCredits: the priced Higgsfield models by lower-case id', () => {
+  const cat = C.loadCatalog(C.DEFAULT_CATALOG_FILE, { warn: () => {} });
+  const credits = C.higgsfieldCredits(cat);
+  const hf = cat.sources.find((s) => s.id === 'higgsfield');
+  assert.deepEqual(Object.keys(credits).sort(), hf.models.filter((m) => typeof m.credits === 'number').map((m) => m.id.toLowerCase()).sort());
+  assert.equal(typeof credits.gpt_image_2_6, 'number');
+  assert.equal(credits.SDXL, undefined, 'a ComfyUI family is not priced');
+  assert.deepEqual(C.higgsfieldCredits(C.EMPTY_CATALOG), {});
+  assert.deepEqual(C.higgsfieldCredits(undefined), {});
+});
+
+test('higgsfieldCredits leaves out a model without credits and lower-cases ids', async () => {
+  await withTempDir(async (dir) => {
+    const file = path.join(dir, 'catalog.json');
+    const models = [{ id: 'Mixed_Case', kinds: ['ui'], credits: 7 }, { id: 'free-ish', kinds: ['ui'] }];
+    fs.writeFileSync(file, JSON.stringify({ sources: [{ id: 'higgsfield', kinds: ['ui'], costClass: 'paid', needsKey: false, toonFit: 'x', models }] }));
+    assert.deepEqual(C.higgsfieldCredits(C.loadCatalog(file, { warn: () => {} })), { mixed_case: 7 });
+  });
+});

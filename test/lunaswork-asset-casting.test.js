@@ -179,6 +179,21 @@ test('validateCasting rejects an unknown source', () => {
   assert.match(audio.rejected[0].why, /blender is not in the catalog for audio/);
 });
 
+test('validateCasting accepts a prop row cast to Blender or a 3D library', () => {
+  const [row] = A.parseAssetList(`${HEADER}\n| Barrel | prop | wooden barrel |  |  |  |  |  |`).rows;
+  assert.equal(row.type, 'prop');
+  const rows = [{ name: row.name, type: row.type }];
+  const blender = C.validateCasting({ casts: [{ name: 'Barrel', primary: { source: 'blender' }, fallbacks: [], candidates: 1, reason: 'x' }] }, ctxFor(rows));
+  assert.deepEqual(blender.rejected, []);
+  assert.equal(blender.plans.get('Barrel').primary.source, 'blender');
+  const library = C.validateCasting({ casts: [{ name: 'Barrel', primary: { source: 'library', librarySources: ['blenderkit', 'polyhaven'] }, fallbacks: [], candidates: 1, reason: 'x' }] }, ctxFor(rows));
+  assert.deepEqual(library.rejected, []);
+  assert.deepEqual(library.plans.get('Barrel').primary, { source: 'library', librarySources: ['blenderkit', 'polyhaven'] });
+  // The same pick on a row that is still typed `other` is refused: that is why the type matters.
+  const other = C.validateCasting({ casts: [{ name: 'Barrel', primary: { source: 'blender' }, fallbacks: [], candidates: 1, reason: 'x' }] }, ctxFor([{ name: 'Barrel', type: 'other' }]));
+  assert.equal(other.plans.size, 0);
+});
+
 test('validateCasting rejects a keyed library whose key is not stored', () => {
   const rows = [{ name: 'Crate', type: 'model' }];
   // polypizza's status value is the key string, not `true`: it counts as not stored.
