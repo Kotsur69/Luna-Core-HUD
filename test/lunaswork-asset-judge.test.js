@@ -348,7 +348,8 @@ test('every verdict is logged in the asset log with tool "judge"', async () => {
   assert.equal(s.logged.length, 1);
   const e = s.logged[0];
   assert.deepEqual([e.tool, e.kind, e.name, e.path, e.costUsd, e.imported], ['judge', 'keyart', 'Key Art', b, 0, false]);
-  assert.match(e.prompt, /^pass - candidate-2 scored 8\/10/);
+  // A local winner passed: the run record marks it a free pass (the cost guard reads that back).
+  assert.match(e.prompt, /^free pass - candidate-2 scored 8\/10/);
   assert.deepEqual(e.sources, ['candidate-2 8/10', 'candidate-1 4/10']);
 });
 

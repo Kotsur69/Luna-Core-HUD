@@ -526,3 +526,154 @@ test('luna_asset_judge through createAssetToolsFor: previews fetched without the
     await fsx.promises.rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+// ---- the cost guard reads the run record ------------------------------------------------
+
+const { createToolGuard } = require('../src/lunasworkToolGuard.js');
+const { runFreePassed } = require('../src/lunasworkAssetJudge.js');
+
+/**
+ * A run kept the way src/lunaswork.js keeps it: the real tool guard writes
+ * run.assets, and restart() round-trips the run through JSON (the run file).
+ */
+function fakeRun(id) {
+  let run = { id, phase: 'build', assets: [] };
+  const guard = () => createToolGuard({ run: () => run, update: (f) => { run = { ...run, ...f }; }, logEvent: () => {}, armWait: () => {}, fileCards: () => [], now: () => 0 });
+  let live = guard();
+  return {
+    recordAsset: (e) => live.recordAsset(e),
+    judgeVerdicts: () => live.judgeVerdicts(),
+    restart: () => { run = JSON.parse(JSON.stringify(run)); live = guard(); },
+    edit: (fn) => { run = fn(run); },
+  };
+}
+
+/** A temp repo with two local drafts, and a tool factory over a fresh (empty) verdict store. */
+function guardSetup(score) {
+  const fsx = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const repo = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-judge-run-'));
+  fsx.mkdirSync(path.join(repo, 'art', 'drafts'), { recursive: true });
+  for (const f of ['a.png', 'b.png']) fsx.writeFileSync(path.join(repo, 'art', 'drafts', f), PNG_BYTES);
+  const execCalls = [];
+  const scores = [{ name: 'candidate-1', score, reference: '', notes: 'fits', silhouette: score, palette: score }, { name: 'candidate-2', score: 3, reference: '', notes: 'off', silhouette: 3, palette: 3 }];
+  const freshTools = () => T.createAssetToolsFor({
+    assetTools: () => ({ comfyuiPort: 8188, blenderPort: 9876, higgsfieldUsdPerCredit: 0.1, artRoot: 'Assets/X/Art' }),
+    execFile: (...args) => { execCalls.push(args); throw new Error('higgsfield stub: not installed'); },
+    runClaude: async () => ({ stdout: JSON.stringify({ structured_output: { scores } }) }),
+  });
+  const ctxOf = (assetsFor, run, runId, repoPath = repo) => assetsFor({
+    repoPath,
+    runId,
+    recordSpend: () => ({ ok: true }),
+    recordAsset: (e) => run.recordAsset(e),
+    cappedTools: () => [],
+    judgeVerdicts: () => run.judgeVerdicts(),
+  });
+  const judge = (ctx) => T.callAssetTool(T.JUDGE_TOOL, { name: 'Wood Crate', kind: 'prop', candidates: ['art/drafts/a.png', 'art/drafts/b.png'] }, ctx);
+  const paid = (ctx) => T.callAssetTool(T.HIGGSFIELD_TOOL, { name: 'Wood Crate', kind: 'prop', prompt: 'crate', model: 'gpt_image_2_6' }, ctx);
+  const refusedCode = (res) => (res && res.error && res.error.error) || null;
+  const cleanup = () => fsx.promises.rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  return { repo, execCalls, freshTools, ctxOf, judge, paid, refusedCode, cleanup };
+}
+
+test('the Higgsfield guard survives a restart: a passing free verdict in the run record still refuses a paid final', async () => {
+  const s = guardSetup(8);
+  try {
+    const run = fakeRun('lw-a');
+    const judged = await s.judge(s.ctxOf(s.freshTools(), run, 'lw-a'));
+    assert.equal(judged.ok, true, JSON.stringify(judged));
+    assert.equal(judged.payload.pass, true);
+    // LunaCore restarts: the run comes back from its file, the tools (and their memory store) are new.
+    run.restart();
+    assert.equal(run.judgeVerdicts().entries.length, 1);
+    const res = await s.paid(s.ctxOf(s.freshTools(), run, 'lw-a'));
+    assert.equal(s.refusedCode(res), 'freeCandidatePassed', JSON.stringify(res));
+    // Another package of the same run, in its own worktree, sees the same verdict.
+    const other = await s.paid(s.ctxOf(s.freshTools(), run, 'lw-a', require('path').join(s.repo, 'elsewhere')));
+    assert.equal(s.refusedCode(other), 'freeCandidatePassed');
+    assert.deepEqual(s.execCalls, [], 'no Higgsfield CLI call, not even the estimate');
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('a judge verdict of another run never blocks a paid final, from the record or from memory', async () => {
+  const s = guardSetup(8);
+  try {
+    const runA = fakeRun('lw-a');
+    const tools = s.freshTools();
+    assert.equal((await s.judge(s.ctxOf(tools, runA, 'lw-a'))).ok, true);
+    // A tab of run B reads run A's record (the active run changed under it): the record has no say.
+    const crossed = await s.paid(s.ctxOf(tools, runA, 'lw-b'));
+    assert.notEqual(s.refusedCode(crossed), 'freeCandidatePassed', JSON.stringify(crossed));
+    // Run B in the same worktree and process: the verdict run A left in memory does not count either.
+    const fresh = await s.paid(s.ctxOf(tools, fakeRun('lw-b'), 'lw-b'));
+    assert.notEqual(s.refusedCode(fresh), 'freeCandidatePassed', JSON.stringify(fresh));
+    assert.equal(s.execCalls.length > 0, true, 'the paid path ran (the CLI stub was reached)');
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('the latest verdict in the run record counts; junk entries and other assets never block', async () => {
+  const s = guardSetup(3);
+  try {
+    const run = fakeRun('lw-a');
+    // A free pass first (written by hand), then a real failing verdict from the judge.
+    assert.equal(run.recordAsset({ tool: 'judge', kind: 'prop', name: 'Wood Crate', prompt: 'free pass - candidate-1 scored 9/10', path: 'art/drafts/a.png' }), true);
+    const failed = await s.judge(s.ctxOf(s.freshTools(), run, 'lw-a'));
+    assert.equal(failed.payload.pass, false);
+    run.restart();
+    const res = await s.paid(s.ctxOf(s.freshTools(), run, 'lw-a'));
+    assert.notEqual(s.refusedCode(res), 'freeCandidatePassed', 'a later failed verdict withdraws the pass');
+
+    // A hand-edited run file: junk is dropped, a pass for another kind or name does not count.
+    run.edit((r) => ({
+      ...r,
+      assets: [42, null, { tool: 'judge' }, { tool: 'judge', kind: 'prop', name: 7, prompt: 'free pass - x', path: 'p' },
+        { tool: 'judge', kind: 'texture', name: 'Wood Crate', prompt: 'free pass - x', path: 'p' },
+        { tool: 'judge', kind: 'prop', name: 'Iron Crate', prompt: 'free pass - x', path: 'p' }],
+    }));
+    run.restart();
+    // name 7 survives as the string "7" (another asset); 42, null and the bare entry are dropped.
+    assert.deepEqual(run.judgeVerdicts().entries.map((x) => x.name), ['7', 'Wood Crate', 'Iron Crate']);
+    const junk = await s.paid(s.ctxOf(s.freshTools(), run, 'lw-a'));
+    assert.notEqual(s.refusedCode(junk), 'freeCandidatePassed');
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('a run record that is unreadable or has no entry leaves the guard to this process memory store', async () => {
+  const s = guardSetup(9);
+  try {
+    const tools = s.freshTools();
+    // The run log refuses the verdict (recordAsset false) and answers garbage when read.
+    const garbage = { recordAsset: () => false, judgeVerdicts: () => ({ runId: 'lw-a', entries: 'nope' }) };
+    const judged = await s.judge(s.ctxOf(tools, garbage, 'lw-a'));
+    assert.equal(judged.payload.pass, true);
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(tools, garbage, 'lw-a'))), 'freeCandidatePassed');
+    const throwing = { recordAsset: () => false, judgeVerdicts: () => { throw new Error('run file gone'); } };
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(tools, throwing, 'lw-a'))), 'freeCandidatePassed');
+    const empty = { recordAsset: () => false, judgeVerdicts: () => ({ runId: 'lw-a', entries: [] }) };
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(tools, empty, 'lw-a'))), 'freeCandidatePassed');
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('runFreePassed: only the record of the same run, only a well-formed latest entry', () => {
+  const e = (prompt, extra = {}) => ({ tool: 'judge', kind: 'prop', name: 'Wood Crate', prompt, path: 'x', ...extra });
+  const rec = (entries, runId = 'lw-a') => ({ runId, entries });
+  assert.equal(runFreePassed(rec([e('free pass - ok')]), 'lw-a', 'prop', 'wood-crate'), true);
+  assert.equal(runFreePassed(rec([e('free pass - ok')]), 'lw-b', 'prop', 'wood-crate'), null);
+  assert.equal(runFreePassed(rec([e('free pass - ok'), e('no pass - bad')]), 'lw-a', 'prop', 'wood-crate'), false);
+  assert.equal(runFreePassed(rec([e('pass - paid winner')]), 'lw-a', 'prop', 'wood-crate'), false);
+  assert.equal(runFreePassed(rec([e('free pass - ok', { tool: 'higgsfield' })]), 'lw-a', 'prop', 'wood-crate'), null);
+  for (const bad of [null, [], 'x', { runId: 'lw-a' }, { runId: 'lw-a', entries: {} }]) assert.equal(runFreePassed(bad, 'lw-a', 'prop', 'wood-crate'), null);
+  assert.equal(runFreePassed(rec([e('free pass - ok')]), null, 'prop', 'wood-crate'), null);
+  assert.equal(runFreePassed(rec([e('free pass - ok')]), '', 'prop', 'wood-crate'), null);
+});
