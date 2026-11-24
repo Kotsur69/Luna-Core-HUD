@@ -362,9 +362,24 @@ function createFreeAssets(deps) {
     return { ok: true, id, kind: raw.kind, resolution: raw.resolution, audioPost: audio.post };
   }
 
-  /** One import per repo at a time: two imports must never pick the same free name. */
-  function importAsset(raw) {
-    return withLedgerLock(importLockKey, () => importOne(raw));
+  // Marks a saved import whose opted-in ffmpeg pass still has to run, outside the import lock.
+  const AUDIO_PENDING = Symbol('audioPending');
+  const importLocked = (fn) => withLedgerLock(importLockKey, fn);
+
+  /**
+   * One import per repo at a time: two imports must never pick the same free
+   * name. The opted-in ffmpeg pass is the exception: it runs between two holds
+   * of the lock (fetch, write and ledger before it; Unity import and the run
+   * report after it), and only the rename of each processed file takes the
+   * lock, briefly. A large audio pack no longer blocks every other import of
+   * the repo for its whole ffmpeg run.
+   */
+  async function importAsset(raw) {
+    const first = await importLocked(() => importOne(raw));
+    const saved = first && first[AUDIO_PENDING];
+    if (!saved) return first;
+    const audioNote = await postProcessAudio(saved.job, saved.item, saved.written);
+    return importLocked(() => finishImport(saved, audioNote));
   }
 
   async function importOne(raw) {
@@ -406,13 +421,18 @@ function createFreeAssets(deps) {
     if (!job.audioPost || item.type !== 'audio') return null;
     if (typeof shared.normalizeAudio !== 'function') return 'Audio post-process is not available here; the original audio was kept.';
     try {
-      return (await shared.normalizeAudio(written, job.audioPost)).note;
+      // Called outside the import lock: the normalizer takes it per file, around the rename only.
+      return (await shared.normalizeAudio(written, job.audioPost, { commitLock: importLocked })).note;
     } catch (err) {
       return `Audio post-process failed (${oneLine(errText(err), 120)}); the original audio was kept.`;
     }
   }
 
-  /** Write -> ledger row + credits (or take the files out again) -> Unity import -> run report. */
+  /**
+   * Write -> ledger row + credits (or take the files out again), then the
+   * Unity import and the run report. An opted-in audio pass comes back
+   * pending instead, for importAsset to run outside the lock.
+   */
   async function saveAndLedger({ job, client, item, lic, name, slug, files }) {
     const written = [];
     let placed = null;
@@ -431,7 +451,12 @@ function createFreeAssets(deps) {
       const left = removeAll(written, placed);
       return fail('ledgerFailed', `the license row could not be written (${errText(err)}), so the files were taken out again${left.length ? `; delete by hand: ${left.join(', ')}` : ''}`);
     }
-    const audioNote = await postProcessAudio(job, item, written);
+    const saved = { job, client, item, lic, name, files, written, ledger, author };
+    return job.audioPost && item.type === 'audio' ? { [AUDIO_PENDING]: saved } : finishImport(saved, null);
+  }
+
+  /** Unity import (textures and buffers before the main file) -> run report -> the answer. */
+  async function finishImport({ job, client, item, lic, name, files, written, ledger, author }, audioNote) {
     const mainAt = files.findIndex((f) => f.main);
     const imports = [];
     // Textures and buffers first, so a model finds them when it is imported.

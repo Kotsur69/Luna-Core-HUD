@@ -728,13 +728,20 @@ test('the script report is validated; junk is null; the PNG header tells a turnt
 const DRAFT_WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(16, 1)]);
 const NORMALIZED_WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WAVE', 'latin1'), Buffer.alloc(2048, 9)]);
 
-/** A fake execFile for ffmpeg: 'ok' writes `bytes` to the last token, 'enoent' / 'fail' fail. */
+// The ffmpeg binary is resolved to an absolute, existing file; the fake execFile never runs it.
+const FAKE_FFMPEG = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lw-ffmpeg-bin-')), 'ffmpeg.exe');
+fs.writeFileSync(FAKE_FFMPEG, '');
+// loudnorm's measuring-pass JSON: -20 LUFS, -8 dBTP -> a plain +6 dB gain fits under -1.5 dBTP.
+const MEASURED = '{\n  "input_i" : "-20.00",\n  "input_tp" : "-8.00",\n  "input_lra" : "3.00",\n  "input_thresh" : "-30.00",\n  "target_offset" : "0.10"\n}\n';
+
+/** A fake execFile for ffmpeg: 'ok' answers the measuring pass and writes `bytes` to the last token, 'enoent' / 'fail' fail. */
 function fakeFfmpeg(outcome, bytes) {
   const calls = [];
   const fn = (cmd, args, opts, cb) => {
     calls.push({ cmd, args, opts });
     if (outcome === 'enoent') return setImmediate(() => cb(Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' }), '', ''));
     if (outcome === 'fail') return setImmediate(() => cb(Object.assign(new Error('Command failed'), { code: 1 }), '', 'Unknown encoder\n'));
+    if (args.includes('null')) return setImmediate(() => cb(null, '', `[Parsed_loudnorm_3 @ 0x1]\n${MEASURED}`));
     fs.writeFileSync(args[args.length - 1], bytes);
     return setImmediate(() => cb(null, '', ''));
   };
@@ -747,21 +754,28 @@ const draftDir = (dir) => path.join(dir, 'Assets', 'BladeBullet', 'Art', 'Audio'
 test('ComfyUI audio draft with audioPost: ffmpeg argument array, no shell, normalized file replaces the draft before import', async () => {
   const dir = tempRepo();
   const ffmpeg = fakeFfmpeg('ok', NORMALIZED_WAV);
-  const { p, unity } = pipeline(dir, { comfy: audioComfy(), execFile: ffmpeg.fn });
+  const { p, unity } = pipeline(dir, { comfy: audioComfy(), execFile: ffmpeg.fn, ffmpegPath: FAKE_FFMPEG });
   const res = await p.comfyDraft({ name: 'Hit Stop', kind: 'audio', prompt: 'sharp clang', workflow: 'concept.json', seed: 3, audioPost: { targetBpm: 60, bpm: 240 } });
   assert.equal(res.ok, true, JSON.stringify(res));
   const rel = `${ART}/Audio/hit-stop-draft-3.wav`;
   assert.deepEqual(res.files, [rel]);
   const target = path.join(dir, ...rel.split('/'));
-  assert.equal(ffmpeg.calls.length, 1);
-  const { cmd, args, opts } = ffmpeg.calls[0];
-  assert.equal(cmd, 'ffmpeg');
+  // Two passes: loudnorm measures (padded to 1 s), then the measured gain is applied as a plain volume.
+  assert.equal(ffmpeg.calls.length, 2);
+  const shaping = 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=0.5,atempo=0.5';
+  assert.deepEqual(ffmpeg.calls[0].args, [
+    '-hide_banner', '-nostats', '-loglevel', 'info', '-nostdin', '-protocol_whitelist', 'file', '-i', target, '-vn',
+    '-af', `${shaping},apad=whole_dur=1,loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json`, '-f', 'null', '-',
+  ]);
+  const { cmd, args, opts } = ffmpeg.calls[1];
+  assert.equal(cmd, FAKE_FFMPEG, 'the absolute binary, never a bare name');
+  assert.equal(ffmpeg.calls[0].cmd, FAKE_FFMPEG);
   assert.equal(opts.shell, undefined);
   const out = args[args.length - 1];
   assert.equal(path.dirname(out), path.dirname(target));
   assert.deepEqual(args, [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-n', '-protocol_whitelist', 'file', '-i', target, '-vn',
-    '-af', 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=0.5,atempo=0.5,loudnorm=I=-14:TP=-1.5:LRA=11',
+    '-af', `${shaping},volume=6dB`,
     '-ar', '48000', out,
   ]);
   assert.deepEqual(fs.readFileSync(target), NORMALIZED_WAV);
@@ -771,9 +785,9 @@ test('ComfyUI audio draft with audioPost: ffmpeg argument array, no shell, norma
 });
 
 test('ComfyUI audio draft with audioPost: ENOENT and a failed run keep the draft bytes and add a note', async () => {
-  for (const [outcome, why] of [['enoent', /ffmpeg was not found on PATH/], ['fail', /ffmpeg failed \(Unknown encoder\)/]]) {
+  for (const [outcome, why] of [['enoent', /ffmpeg was not found/], ['fail', /ffmpeg failed \(Unknown encoder\)/]]) {
     const dir = tempRepo();
-    const { p } = pipeline(dir, { comfy: audioComfy(), execFile: fakeFfmpeg(outcome).fn });
+    const { p } = pipeline(dir, { comfy: audioComfy(), execFile: fakeFfmpeg(outcome).fn, ffmpegPath: FAKE_FFMPEG });
     const res = await p.comfyDraft({ name: 'Tick', kind: 'audio', prompt: 'clock tick', workflow: 'concept.json', seed: 4, audioPost: { trim: true, loudnorm: true } });
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.deepEqual(fs.readFileSync(path.join(dir, ...res.files[0].split('/'))), DRAFT_WAV, outcome);

@@ -239,7 +239,8 @@ function cleanAssetEntry(raw) {
  *   recordSpend:(p:{tool:string, costUsd:number})=>{ok:boolean, reason:string|null},
  *   cappedTools?:()=>string[], logAsset?:(entry:object)=>void,
  *   fsImpl?:object, now?:()=>number, randomSeed?:()=>number,
- *   execFile?:Function}} deps  execFile = child_process.execFile for the optional ffmpeg audio post-process (tests fake it)
+ *   execFile?:Function, ffmpegPath?:string}} deps  execFile = child_process.execFile for the optional ffmpeg audio post-process (tests fake it);
+ *   ffmpegPath = a fixed absolute ffmpeg binary (unset: LUNACORE_FFMPEG_PATH, else ffmpeg found on PATH, resolved to an absolute path)
  */
 function createAssetPipeline(deps) {
   const d = isObj(deps) ? deps : {};
@@ -448,7 +449,7 @@ function createAssetPipeline(deps) {
   }
 
   // The optional ffmpeg audio post-process (src/lunasworkAudioNormalize.js), on the guarded paths.
-  const audioNormalizer = createAudioNormalizer({ execFile: d.execFile, fs: fsx, guard: guardPath });
+  const audioNormalizer = createAudioNormalizer({ execFile: d.execFile, fs: fsx, guard: guardPath, ffmpegPath: d.ffmpegPath });
 
   // ---- Blender -------------------------------------------------------------------------
 
@@ -687,7 +688,8 @@ function createAssetPipeline(deps) {
     importNote,
     log,
     updateLedger,
-    normalizeAudio: (rels, post) => normalizeAll(audioNormalizer, rels, post),
+    // opts.commitLock = the caller's lock, taken per file around the rename only (never around ffmpeg).
+    normalizeAudio: (rels, post, opts) => normalizeAll(audioNormalizer, rels, post, opts),
   };
   return { blenderModel, comfyDraft, higgsfieldFinal, artRoot, usdPerCredit, shared };
 }
