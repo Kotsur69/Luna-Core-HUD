@@ -460,12 +460,13 @@ function createAssetPipeline(deps) {
     isBlend,
     isFbx,
     abs,
-    files: { guard: guardPath, mkdirFor: (rel) => fsx.mkdirSync(path.dirname(abs(rel)), { recursive: true }), stat: statOf, head: readHead, remove: removeRepoFile },
+    files: { guard: guardPath, mkdirFor: (rel) => fsx.mkdirSync(path.dirname(abs(rel)), { recursive: true }), stat: statOf, head: readHead, remove: removeRepoFile, read: readRepoFile },
     ledgerGenerated,
     importToUnity,
     importNote,
     log,
     ledgerFile: licenses.LEDGER_FILE,
+    repoPath, artRoot, higgsfieldDir: SOURCE_DIRS.higgsfield, kinds: KINDS, // the checks of a `from` Higgsfield result
   });
 
   // ---- ComfyUI -------------------------------------------------------------------------
@@ -739,7 +740,7 @@ function unityAssetBrief({ kind, slug, source, artRoot, casting }) {
   const model = KINDS[k].model === true;
   const library = `Take it from a free asset library: luna_asset_search, then luna_asset_import {source, id, name, kind: "${k}"}; it lands under ${root}/${KINDS[k].dir}/.`;
   const make = source === 'library' ? library : source === 'blender' || model
-    ? `Make it in Blender through the Blender MCP (Blender must be running with its MCP add-on; load the blender-game-assets skill), then call the lunacore tool luna_asset_blender {name, kind: "${k}"}: it saves art/blender/${slug}.blend, exports ${root}/${KINDS[k].dir}/${slug}.fbx for Unity and makes the prefab.`
+    ? `Make it in Blender through the Blender MCP (Blender must be running with its MCP add-on; load the blender-game-assets skill), then call the lunacore tool luna_asset_blender {name, kind: "${k}"}: it saves art/blender/${slug}.blend, exports ${root}/${KINDS[k].dir}/${slug}.fbx for Unity and makes the prefab. A Higgsfield concept, texture or GLB for this asset never goes straight into Unity: pass the saved file to luna_asset_blender {name, kind: "${k}", from: "<the saved Higgsfield file>"} (an image becomes the base color texture of the Blender object named like the asset, a GLB is imported), so it gets the toon pass, decimation and the FBX + prefab export.`
     : `Drafts: the lunacore tool luna_asset_comfy {name, kind: "${k}", prompt, workflow} runs a workflow from ${COMFY_WORKFLOW_DIR}/ (API format, "{{prompt}}" placeholder) on the local ComfyUI and saves the workflow and seed under ${SOURCE_DIRS.comfyRuns}/. Finals: luna_asset_higgsfield {name, kind: "${k}", prompt, model} (load the higgsfield-media skill).`;
   return [
     `Files: the asset goes to ${root}/${KINDS[k].dir}/, its sources (Blender .blend, ComfyUI workflow + seed, Higgsfield record) to art/. Write only inside this repository.`,

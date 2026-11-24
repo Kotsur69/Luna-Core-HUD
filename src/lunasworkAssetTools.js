@@ -11,7 +11,8 @@
 // not as a failure.
 //
 //   luna_asset_blender      save the open Blender scene + FBX export + prefab,
-//                           optional toon pass, turntable sheet for the Critic
+//                           optional toon pass, turntable sheet for the Critic;
+//                           `from` runs a saved Higgsfield texture / GLB through it
 //   luna_asset_comfy        a ComfyUI draft from a repo workflow (art/comfyui/)
 //   luna_asset_higgsfield   a paid Higgsfield final, booked against the run's cap
 //   luna_asset_search       free CC0 / CC-BY assets on a library's official API
@@ -139,7 +140,7 @@ const PROMPT_PROP = { type: 'string', description: 'The generation prompt (the A
 const ASSET_TOOLS = Object.freeze([
   {
     name: BLENDER_TOOL,
-    description: "Luna's Work asset pipeline: after you built the model in Blender through the Blender MCP, save the open Blender scene to art/blender/<slug>.blend, render a 4-panel turntable sheet (front, side, 3/4, silhouette) to design/asset-renders/<slug>.png for the Critic's style check, export it as FBX for Unity (-Z forward, Y up, scale applied) under the art root, import it through the Unity Pipeline and make its prefab. stylePass \"blade-bullet-toon\" first holds the model to its triangle budget (Decimate), zeroes the root and applies scale, checks a character's height against 1.6 m and adds an inverted-hull black outline. Logged in the run report." + DEFERRED_IMPORT_DESCRIPTION,
+    description: "Luna's Work asset pipeline: after you built the model in Blender through the Blender MCP, save the open Blender scene to art/blender/<slug>.blend, render a 4-panel turntable sheet (front, side, 3/4, silhouette) to design/asset-renders/<slug>.png for the Critic's style check, export it as FBX for Unity (-Z forward, Y up, scale applied) under the art root, import it through the Unity Pipeline and make its prefab. stylePass \"blade-bullet-toon\" first holds the model to its triangle budget (Decimate), zeroes the root and applies scale, checks a character's height against 1.6 m and adds an inverted-hull black outline. from = a saved Higgsfield result (luna_asset_higgsfield output) that goes through Blender instead of straight into Unity: a png / jpg / webp becomes the Base Color texture of the Blender object named like the asset (material made when missing), a self-contained .glb is imported into the scene; the toon pass is then the default, and the run report and the license ledger name its Higgsfield record. Logged in the run report." + DEFERRED_IMPORT_DESCRIPTION,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -150,6 +151,7 @@ const ASSET_TOOLS = Object.freeze([
         prompt: PROMPT_PROP,
         stylePass: { type: 'string', enum: [...STYLE_PASSES], default: DEFAULT_STYLE_PASS, description: 'The style pass before the export: "blade-bullet-toon" (poly budget, outline, zeroed root, character height check) or "none".' },
         polyBudget: { type: 'integer', minimum: MIN_POLY_BUDGET, maximum: MAX_POLY_BUDGET, description: `Triangle budget of the model in the toon pass (default ${PROP_POLY_BUDGET} for props, ${CHARACTER_POLY_BUDGET} for characters); the outline hull on top roughly doubles the exported count (style.report.trisExported).` },
+        from: { type: 'string', maxLength: 300, description: 'Optional: the repo-relative path of a saved Higgsfield result under art/higgsfield/ or the art root, e.g. "Assets/BladeBullet/Art/Props/crate.png" (a texture: png, jpg, webp) or "Assets/BladeBullet/Art/Props/crate.glb" (a self-contained GLB model). .gltf and .fbx are refused.' },
       },
     },
   },

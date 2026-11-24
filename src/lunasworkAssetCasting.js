@@ -419,7 +419,8 @@ function describeRung(r) {
   if (r.source === 'library') return `free library ${r.librarySources.join(', ')} (luna_asset_search, then luna_asset_import)`;
   if (r.source === 'comfyui') return `local ComfyUI with the workflow ${COMFY_WORKFLOW_DIR}/${r.comfyWorkflow} (luna_asset_comfy)`;
   if (r.source === 'blender') return 'local Blender through the Blender MCP (luna_asset_blender)';
-  return `paid Higgsfield with the model ${r.higgsfieldModel} (luna_asset_higgsfield)`;
+  // A 3D asset's Higgsfield result (texture or GLB) is a Blender input, never a Unity import.
+  return `paid Higgsfield with the model ${r.higgsfieldModel} (luna_asset_higgsfield; for a 3D model kind its saved texture or GLB then goes through luna_asset_blender with from=<the saved file>, never straight into Unity)`;
 }
 
 /**

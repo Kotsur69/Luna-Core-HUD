@@ -336,6 +336,20 @@ test('luna_asset_blender schema: stylePass is "none" or "blade-bullet-toon", pol
   assert.equal(schema.additionalProperties, false);
 });
 
+test('luna_asset_blender schema exposes the optional `from` Higgsfield result path; it reaches the pipeline as given', async () => {
+  const schema = T.ASSET_TOOLS.find((t) => t.name === T.BLENDER_TOOL).inputSchema;
+  assert.equal(schema.properties.from.type, 'string');
+  assert.ok(schema.properties.from.maxLength > 0);
+  assert.match(schema.properties.from.description, /art\/higgsfield\/ or the art root/);
+  assert.match(schema.properties.from.description, /\.gltf and \.fbx are refused/);
+  assert.ok(!schema.required.includes('from'));
+  assert.match(T.ASSET_TOOLS.find((t) => t.name === T.BLENDER_TOOL).description, /from = a saved Higgsfield result/);
+  const seen = [];
+  const res = await T.callAssetTool(T.BLENDER_TOOL, { name: 'a', kind: 'prop', from: 'art/higgsfield/prop/a.png' }, { blenderModel: async (a) => { seen.push(a); return { ok: true, files: ['x.fbx'] }; } });
+  assert.equal(res.ok, true);
+  assert.deepEqual(seen, [{ name: 'a', kind: 'prop', from: 'art/higgsfield/prop/a.png' }]);
+});
+
 test('luna_asset_blender refuses a bad stylePass or polyBudget before the pipeline runs', async () => {
   const seen = [];
   const tools = { blenderModel: async (a) => { seen.push(a); return { ok: true, files: ['x.fbx'] }; } };

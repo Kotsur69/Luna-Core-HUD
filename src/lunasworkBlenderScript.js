@@ -4,8 +4,12 @@
 // Builds the Python the Blender MCP add-on runs for blenderModel
 // (src/lunasworkAssetPipeline.js):
 //
+//   from        optional: a saved Higgsfield result enters the scene first -
+//               an image as the Base Color texture of the named object's
+//               material (material and nodes made when missing), or a GLB
+//               imported (src/lunasworkBlenderFrom.js checks the file)
 //   save        the open scene is saved as a copy to art/blender/<slug>.blend
-//               (the untouched source, before any pass below)
+//               (the source, before any pass below)
 //   toon pass   stylePass "blade-bullet-toon": the triangle count is held to a
 //               poly budget (an applied Decimate when over it), the root is
 //               zeroed and its scale applied, a character's height is checked
@@ -338,6 +342,96 @@ if KIND == 'character':
 luna_step('outline', luna_outline, luna_objs)
 `;
 
+// luna_asset_blender `from` (src/lunasworkBlenderFrom.js): a saved Higgsfield result enters the
+// scene before the .blend save, so the source file holds what is exported. A failure raises:
+// the call fails rather than exporting a model without the Higgsfield result.
+const PY_FROM = String.raw`
+def luna_from_targets():
+    # Only the mesh named like the asset, or the only mesh: never every mesh of a busy scene.
+    objs = luna_meshes()
+    named = [o for o in objs if o.name == FROM_TARGET]
+    if named:
+        return named
+    if len(objs) == 1:
+        return objs
+    raise RuntimeError('no mesh named %s and %d meshes in the scene: name the object like the asset' % (FROM_TARGET, len(objs)))
+
+def luna_base_color(mat, img):
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = next((n for n in nodes if n.type == 'BSDF_PRINCIPLED'), None)
+    if bsdf is None:
+        bsdf = nodes.new('ShaderNodeBsdfPrincipled')
+        out = next((n for n in nodes if n.type == 'OUTPUT_MATERIAL'), None)
+        if out is None:
+            out = nodes.new('ShaderNodeOutputMaterial')
+        links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
+    tex = nodes.get('LunaHiggsfieldTexture')
+    if tex is None:
+        tex = nodes.new('ShaderNodeTexImage')
+        tex.name = 'LunaHiggsfieldTexture'
+    tex.image = img
+    links.new(tex.outputs['Color'], bsdf.inputs['Base Color'])
+
+def luna_from_material(o):
+    slot = next((s for s in o.material_slots if s.material is not None and s.material.name != 'LunaOutline'), None)
+    if slot is None:
+        slot = next((s for s in o.material_slots if s.material is None), None)
+        if slot is None:
+            o.data.materials.append(None)
+            slot = o.material_slots[len(o.material_slots) - 1]
+        slot.material = bpy.data.materials.new('Luna_' + o.name)
+    elif slot.material.users > 1:
+        # A material shared with other meshes is copied: only the target gets the texture.
+        slot.material = slot.material.copy()
+    return slot.material
+
+def luna_from_texture():
+    objs = luna_from_targets()
+    img = bpy.data.images.load(FROM_PATH, check_existing=False)
+    # Packed: the saved .blend holds the texture, not an absolute path on this PC.
+    img.pack()
+    for o in objs:
+        luna_base_color(luna_from_material(o), img)
+        if not o.data.uv_layers:
+            luna_warn('%s has no UV map: the Higgsfield texture will not show on it' % o.name)
+    LUNA_REPORT['fromApplied'] = len(objs)
+
+def luna_glb_uris(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == 'uri' and isinstance(v, str):
+                yield v
+            else:
+                yield from luna_glb_uris(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from luna_glb_uris(v)
+
+def luna_glb_check():
+    # Checked again right before the import (LunaCore checked it too): no uri may name a file.
+    import struct
+    with open(FROM_PATH, 'rb') as f:
+        head = f.read(20)
+        if len(head) < 20 or head[:4] != b'glTF' or head[16:20] != b'JSON':
+            raise RuntimeError('the from file is not a binary glTF')
+        doc = json.loads(f.read(struct.unpack('<I', head[12:16])[0]).decode('utf-8'))
+    if any(not u.startswith('data:') for u in luna_glb_uris(doc)):
+        raise RuntimeError('the GLB references an external file')
+
+def luna_from_model():
+    luna_glb_check()
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=FROM_PATH)
+    added = [o for o in bpy.data.objects if o not in before]
+    if not added:
+        raise RuntimeError('the GLB import added no object')
+    LUNA_REPORT['fromApplied'] = len(added)
+`;
+
+const PY_FROM_CALL = Object.freeze({ texture: 'luna_from_texture()', model: 'luna_from_model()' });
+
 const PY_RENDER = String.raw`
 try:
     luna_turntable(luna_meshes())
@@ -348,6 +442,15 @@ except Exception as err:
 
 /** A path as a Python string literal: forward slashes, JSON-escaped (valid Python). */
 const pyPath = (p) => JSON.stringify(String(p).split(path.sep).join('/'));
+
+/**
+ * Any text as a Python string literal: JSON-escaped, and every non-ASCII
+ * character as \u / \U, so no line or paragraph separator reaches the source.
+ */
+const pyText = (s) => JSON.stringify(String(s)).replace(/[^\x20-\x7e]/gu, (c) => {
+  const cp = c.codePointAt(0);
+  return cp > 0xffff ? `\\U${cp.toString(16).padStart(8, '0')}` : `\\u${cp.toString(16).padStart(4, '0')}`;
+});
 
 /** The validated script options; throws on a value that must never reach Python. */
 function scriptOptions(options) {
@@ -365,7 +468,18 @@ function scriptOptions(options) {
     }
     render = { sheet: r.sheet, panels: [...r.panels] };
   }
-  return { kind, stylePass: style.stylePass, polyBudget: polyBudgetFor(kind, style.polyBudget), render };
+  return { kind, stylePass: style.stylePass, polyBudget: polyBudgetFor(kind, style.polyBudget), render, from: fromOption(o.from) };
+}
+
+/** The validated `from` option: {type: texture | model, path: absolute, target: object name}, or null. */
+function fromOption(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (!isObj(raw) || !Object.prototype.hasOwnProperty.call(PY_FROM_CALL, raw.type) || typeof raw.path !== 'string' || !path.isAbsolute(raw.path)) {
+    throw new Error('from needs a type (texture or model) and an absolute path');
+  }
+  const target = oneLine(raw.target, 80);
+  if (raw.type === 'texture' && !target) throw new Error('a from texture needs the target object name');
+  return { type: raw.type, path: raw.path, target };
 }
 
 /** The Python header: every variable value, as a number or a JSON literal. */
@@ -382,6 +496,7 @@ function pyHeader(o) {
   if (o.render) {
     lines.push(`SHEET_PATH = ${pyPath(o.render.sheet)}`, `PANEL_PATHS = [${o.render.panels.map(pyPath).join(', ')}]`);
   }
+  if (o.from) lines.push(`FROM_PATH = ${pyPath(o.from.path)}`, `FROM_TARGET = ${pyText(o.from.target)}`);
   return lines;
 }
 
@@ -392,18 +507,23 @@ function pyHeader(o) {
  * @param {string} blendAbs
  * @param {string} fbxAbs
  * @param {{kind?:string, stylePass?:string, polyBudget?:number|null,
- *   render?:{sheet:string, panels:string[]}|null}} [options]
+ *   render?:{sheet:string, panels:string[]}|null,
+ *   from?:{type:'texture'|'model', path:string, target:string}|null}} [options] from = a checked Higgsfield result
+ *   (src/lunasworkBlenderFrom.js): a texture on the target object's material, or a GLB imported, before the save
  * @returns {string}
  */
 function blenderExportScript(blendAbs, fbxAbs, options) {
   const o = scriptOptions(options);
   const toon = o.stylePass === TOON_PASS;
-  const extra = toon || o.render;
+  const extra = toon || o.render || o.from;
+  // With `from`, the helpers come first: the Higgsfield result enters the scene before the save.
+  const helpers = extra ? [PY_HELPERS.trim()] : [];
   return [
     'import bpy',
     ...(extra ? pyHeader(o) : []),
+    ...(o.from ? [...helpers, PY_FROM.trim(), PY_FROM_CALL[o.from.type]] : []),
     `bpy.ops.wm.save_as_mainfile(filepath=${pyPath(blendAbs)}, copy=True)`,
-    ...(extra ? [PY_HELPERS.trim()] : []),
+    ...(o.from ? [] : helpers),
     ...(toon ? [PY_TOON.trim()] : []),
     ...(o.render ? [PY_RENDER.trim()] : []),
     `bpy.ops.export_scene.fbx(filepath=${pyPath(fbxAbs)}, use_selection=False,`,
@@ -433,7 +553,7 @@ const int = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
  * when there is none or it does not parse.
  * @returns {null|{stylePass:string|null, polyBudget:number|null, trisBefore:number|null, trisAfter:number|null,
  *   decimateRatio:number|null, roots:number|null, rootZeroed:string|null, outlined:number|null,
- *   height:number|null, heightTarget:number|null, heightOk:boolean|null, render:string|null, warnings:string[]}}
+ *   height:number|null, heightTarget:number|null, heightOk:boolean|null, render:string|null, fromApplied:number|null, warnings:string[]}}
  */
 function parseScriptReport(result) {
   // Only a line that starts with the mark: a scene object name inside the JSON can never pose as one.
@@ -456,6 +576,7 @@ function parseScriptReport(result) {
     roots: int(raw.roots),
     rootZeroed: typeof raw.rootZeroed === 'string' ? oneLine(raw.rootZeroed, 80) : null,
     outlined: int(raw.outlined),
+    fromApplied: int(raw.fromApplied),
     height: num(raw.height),
     heightTarget: num(raw.heightTarget),
     heightOk: typeof raw.heightOk === 'boolean' ? raw.heightOk : null,

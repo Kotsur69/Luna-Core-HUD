@@ -4,7 +4,9 @@
 // blenderModel saves the open Blender scene to art/blender/<slug>.blend, runs
 // the optional toon style pass, renders the 4-panel turntable sheet the
 // Critic's style check reads (design/asset-renders/<slug>.png) and exports the
-// model to Unity as FBX + prefab. The Python comes from
+// model to Unity as FBX + prefab. With `from`, a saved Higgsfield result
+// (an image as the texture, or a GLB imported) goes through the same passes
+// first (src/lunasworkBlenderFrom.js). The Python comes from
 // src/lunasworkBlenderScript.js; the guarded repo files, Unity import, ledger
 // and asset log come from src/lunasworkAssetPipeline.js (createAssetPipeline),
 // so every path stays inside the project repo.
@@ -13,6 +15,7 @@
 'use strict';
 
 const blenderScript = require('./lunasworkBlenderScript');
+const { cleanFrom, resolveFrom } = require('./lunasworkBlenderFrom');
 
 // The Critic's style check reads the turntable sheet from here (lunasworkAssets renderOf).
 const RENDER_DIR = 'design/asset-renders';
@@ -29,8 +32,10 @@ const fail = (error, detail) => ({ ok: false, error, ...(detail ? { detail: oneL
  *   cleanJob:(raw:object)=>object, paths:(job:object)=>{blend:string, fbx:string},
  *   isBlend:(buf:Buffer)=>boolean, isFbx:(buf:Buffer)=>boolean, abs:(rel:string)=>string,
  *   files:{guard:(rel:string)=>string, mkdirFor:(rel:string)=>void, stat:(rel:string)=>object|null,
- *     head:(rel:string)=>Buffer, remove:(rel:string)=>void},
- *   ledgerGenerated:Function, importToUnity:Function, importNote:Function, log:Function, ledgerFile:string}} deps
+ *     head:(rel:string)=>Buffer, remove:(rel:string)=>void, read:(rel:string, max:number)=>Buffer},
+ *   ledgerGenerated:Function, importToUnity:Function, importNote:Function, log:Function, ledgerFile:string,
+ *   repoPath:string, artRoot:string, higgsfieldDir:string, kinds:object}} deps  files.read(rel, max) reads a
+ *   guarded repo file (the Higgsfield record of a `from`)
  * @returns {(raw:object)=>Promise<object>} blenderModel
  */
 function createBlenderModel(deps) {
@@ -67,7 +72,7 @@ function createBlenderModel(deps) {
   }
 
   /** Guards and prepares every target, then runs the script. Returns the add-on's answer. */
-  async function runScript(job, style, rels) {
+  async function runScript(job, style, rels, from) {
     for (const rel of [rels.blend, rels.fbx, rels.render, ...rels.panels]) {
       files.guard(rel);
       files.mkdirFor(rel);
@@ -80,9 +85,23 @@ function createBlenderModel(deps) {
       stylePass: style.stylePass,
       polyBudget: style.polyBudget,
       render: { sheet: deps.abs(rels.render), panels: rels.panels.map(deps.abs) },
+      from: from ? { type: from.type, path: from.abs, target: job.name } : null,
     });
     const output = await deps.blender.executeCode(script);
     return { before, output };
+  }
+
+  /** The checked `from` (null when the call names none) and the style options; a Higgsfield result defaults to the toon pass. */
+  function cleanInputs(raw) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    const named = cleanFrom(r.from, { artRoot: deps.artRoot, higgsfieldDir: deps.higgsfieldDir });
+    if (!named.ok) return named;
+    const toonByDefault = named.from && (r.stylePass === undefined || r.stylePass === null);
+    const style = blenderScript.cleanStyleOptions(toonByDefault ? { ...r, stylePass: blenderScript.TOON_PASS } : r);
+    if (!style.ok) return fail(style.error, style.detail);
+    if (!named.from) return { ok: true, style, from: null };
+    const from = resolveFrom(named.from, { repoPath: deps.repoPath, artRoot: deps.artRoot, higgsfieldDir: deps.higgsfieldDir, kinds: deps.kinds, files });
+    return from.ok ? { ok: true, style, from } : from;
   }
 
   /**
@@ -90,13 +109,16 @@ function createBlenderModel(deps) {
    * "blade-bullet-toon": poly budget, outline, zeroed root, character height),
    * renders the turntable sheet for the Critic and exports it to Unity as FBX
    * + prefab. A model of the same name is exported again in place (the editor
-   * keeps its GUID), unlike a paid Higgsfield final.
+   * keeps its GUID), unlike a paid Higgsfield final. With `from` (a saved
+   * Higgsfield texture or GLB) the result enters the scene first, the toon
+   * pass is the default, and the log and the ledger name its record.
    */
   async function blenderModel(raw) {
     const job = deps.cleanJob(raw);
     if (!job.ok) return job;
-    const style = blenderScript.cleanStyleOptions(raw);
-    if (!style.ok) return fail(style.error, style.detail);
+    const inputs = cleanInputs(raw);
+    if (!inputs.ok) return inputs;
+    const { style, from } = inputs;
     if (!deps.blender || typeof deps.blender.executeCode !== 'function') return fail('toolDown', 'blender not connected');
     const { blend: blendRel, fbx: fbxRel } = deps.paths(job);
     const rels = {
@@ -107,7 +129,7 @@ function createBlenderModel(deps) {
     };
     let ran;
     try {
-      ran = await runScript(job, style, rels);
+      ran = await runScript(job, style, rels, from);
     } catch (err) {
       return fail('blenderFailed', errText(err));
     }
@@ -119,15 +141,22 @@ function createBlenderModel(deps) {
     }
     const render = checkRender(rels.render, ran.before[2], rels.panels);
     const report = blenderScript.parseScriptReport(ran.output);
-    const ledgerNote = await deps.ledgerGenerated('Blender', job, [fbxRel], blendRel);
+    // The Higgsfield record (else the file itself) is the source a `from` asset was made from.
+    const higgsfield = from ? [...new Set([from.record, from.rel].filter(Boolean))] : [];
+    const ledgerNote = from
+      ? await deps.ledgerGenerated('Higgsfield + Blender', job, [fbxRel], higgsfield[0])
+      : await deps.ledgerGenerated('Blender', job, [fbxRel], blendRel);
     const imp = await deps.importToUnity(fbxRel, job.kind);
-    deps.log({ tool: 'blender', kind: job.kind, name: job.name, prompt: job.prompt, seed: null, costUsd: 0, path: fbxRel, sources: [blendRel, ...render.renders], imported: imp.ok });
-    const note = [deps.importNote(imp), ledgerNote, ...blenderScript.reportNotes(report), ...render.notes].filter(Boolean).join(' ') || null;
+    // cleanAssetEntry keeps 4 sources: .blend, the Higgsfield record and file, the render.
+    deps.log({ tool: 'blender', kind: job.kind, name: job.name, prompt: job.prompt, seed: null, costUsd: 0, path: fbxRel, sources: [blendRel, ...higgsfield, ...render.renders], imported: imp.ok });
+    const fromNote = from && !from.record ? `No Higgsfield record lists ${from.rel}: the ledger names the file itself as the source.` : null;
+    const note = [deps.importNote(imp), ledgerNote, fromNote, ...blenderScript.reportNotes(report), ...render.notes].filter(Boolean).join(' ') || null;
     const toon = style.stylePass === blenderScript.TOON_PASS;
     return {
       ok: true,
       files: [fbxRel],
-      sources: [blendRel],
+      sources: [blendRel, ...higgsfield],
+      ...(from ? { from: { path: from.rel, type: from.type, record: from.record } } : {}),
       renders: render.renders,
       style: { pass: style.stylePass, polyBudget: toon ? blenderScript.polyBudgetFor(job.kind, style.polyBudget) : null, report },
       prefab: imp.ok ? fbxRel.replace(/\.fbx$/, '.prefab') : null,
