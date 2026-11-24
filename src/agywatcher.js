@@ -96,6 +96,13 @@ const CHILD_SCAN_WINDOW_MS = 60 * 1000;
 const CHILD_IDLE_MS = 10 * 60 * 1000;
 /** Let-go children remembered with how far they were read, so a revived one is not replayed. */
 const MAX_RETIRED_CHILDREN = 256;
+/**
+ * Let-go children whose token totals one tab keeps. They outlive `retired`
+ * (MAX_RETIRED_CHILDREN): a child taken up again counts no lower than them.
+ * Past this many the oldest is folded into one sum, and that child, should
+ * it come back, is counted again from the start.
+ */
+const MAX_RETIRED_USAGE = 4096;
 /** Subagent conversations named anywhere, so no tab picks one as its own. */
 const MAX_KNOWN_SUBAGENTS = 1024;
 
@@ -266,9 +273,9 @@ class AgyTranscriptWatcher {
     this.children = new Map();
     /** child id -> bytes read, for children let go after going idle (oldest first). */
     this.retired = new Map();
-    /** child id -> its token totals per model when it was let go (same keys as `retired`). */
+    /** child id -> its token totals per model when it was let go (outlives `retired`, see MAX_RETIRED_USAGE). */
     this.retiredUsage = new Map();
-    /** Token totals of let-go children that fell out of `retired` (never taken up again). */
+    /** Token totals of let-go children that fell out of `retiredUsage`. */
     this.droppedUsage = {};
     /** The last byModel sent, as JSON: a child's reading re-sends only when it changed. */
     this.lastUsageKey = '';
@@ -441,7 +448,8 @@ class AgyTranscriptWatcher {
     const childMoved = this.tickChildren(now);
     // A line still being written changes nothing: no repeat of the same reading.
     const mainRead = Boolean(res) && res.status === 'read' && (!this.emitted || res.moved);
-    if (!mainRead && !childMoved) return;
+    // A subagent alone never sends the first reading: the tab's own window is unread yet.
+    if (!mainRead && (!childMoved || !this.emitted)) return;
     // Still inside the history it was pinned with: its totals are part-way.
     const byModel = this.main.historyUntil > 0 ? null : this.usageByModel();
     const usageKey = byModel ? JSON.stringify(byModel) : '';
@@ -612,8 +620,10 @@ class AgyTranscriptWatcher {
     claimedAgyConversations.delete(child.key);
     this.children.delete(id);
     this.retired.set(id, child.tail.offset);
+    this.retiredUsage.delete(id); // re-inserted: the map's order stays oldest-first
     this.retiredUsage.set(id, childUsage(child));
-    if (this.retired.size > MAX_RETIRED_CHILDREN) this.forgetRetired(this.retired.keys().next().value);
+    if (this.retired.size > MAX_RETIRED_CHILDREN) this.retired.delete(this.retired.keys().next().value);
+    if (this.retiredUsage.size > MAX_RETIRED_USAGE) this.foldOldestRetiredUsage();
     try {
       this.deliver({ ...ended, children: [] }, now);
     } catch (err) {
@@ -621,13 +631,11 @@ class AgyTranscriptWatcher {
     }
   }
 
-  /** Forgets the oldest let-go child; its tokens still count, folded into droppedUsage. */
-  forgetRetired(id) {
-    this.retired.delete(id);
-    if (this.retiredUsage.has(id)) {
-      this.droppedUsage = sumAgyByModel([this.droppedUsage, this.retiredUsage.get(id)]);
-      this.retiredUsage.delete(id);
-    }
+  /** Folds the oldest let-go child's totals into droppedUsage: they still count. */
+  foldOldestRetiredUsage() {
+    const [id, usage] = this.retiredUsage.entries().next().value;
+    this.droppedUsage = sumAgyByModel([this.droppedUsage, usage]);
+    this.retiredUsage.delete(id);
   }
 
   /** Asks the summaries database for children of the conversations followed. */

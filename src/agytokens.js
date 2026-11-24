@@ -28,9 +28,17 @@ const MAX_USAGE_MODELS = 24;
 /** The key a step with no model of its own (and none named before it) is booked under. */
 const UNKNOWN_AGY_MODEL = AGY_MODEL;
 
-/** A model id usable as a plain object key (orchestraUsage.js' modelKey rule): never __proto__ and friends. */
+/** A model id shape orchestraUsage.js' modelKey accepts. */
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
-const modelIdOf = (model) => (typeof model === 'string' && MODEL_ID_RE.test(model) ? model : UNKNOWN_AGY_MODEL);
+/**
+ * Whether a model id is safe as a plain object key: the right shape and not
+ * an Object.prototype member (`constructor`, `toString`, ...), which a plain
+ * object lookup would find inherited - and downstream sums would turn to NaN.
+ */
+const isSafeModelId = (model) => typeof model === 'string' && MODEL_ID_RE.test(model) && !(model in Object.prototype);
+const modelIdOf = (model) => (isSafeModelId(model) ? model : UNKNOWN_AGY_MODEL);
+/** A byModel entry, own properties only. */
+const entryOf = (byModel, model) => (Object.hasOwn(byModel, model) ? byModel[model] : zeroUsage());
 
 const USAGE_KEYS = Object.freeze(['input', 'output', 'cacheRead', 'cacheWrite']);
 const zeroUsage = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
@@ -46,8 +54,8 @@ function sumAgyByModel(parts) {
   for (const part of Array.isArray(parts) ? parts : []) {
     if (!part || typeof part !== 'object') continue;
     for (const [model, numbers] of Object.entries(part)) {
-      if (!numbers || typeof numbers !== 'object' || !MODEL_ID_RE.test(model)) continue;
-      const prev = out[model] || zeroUsage();
+      if (!numbers || typeof numbers !== 'object' || !isSafeModelId(model)) continue;
+      const prev = entryOf(out, model);
       out[model] = Object.fromEntries(USAGE_KEYS.map((k) => [k, prev[k] + (Number(numbers[k]) || 0)]));
     }
   }
@@ -65,7 +73,7 @@ function sumAgyByModel(parts) {
 function maxAgyByModel(a, b) {
   const out = sumAgyByModel([a]);
   for (const [model, numbers] of Object.entries(sumAgyByModel([b]))) {
-    const prev = out[model] || zeroUsage();
+    const prev = entryOf(out, model);
     out[model] = Object.fromEntries(USAGE_KEYS.map((k) => [k, Math.max(prev[k], numbers[k])]));
   }
   return out;

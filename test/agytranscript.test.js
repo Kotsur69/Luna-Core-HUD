@@ -1556,21 +1556,36 @@ test('usage: a step logged again is counted once, with its newest counts', () =>
   // The same index with another time is a NEW step, and counts on top.
   state.fold(parseSteps(plannerLine(1, '2026-11-22T20:05:00Z', [1, 2, 3])).steps);
   assert.deepEqual(state.usageByModel(), { 'gemini-4-argon-medium': { input: 121, output: 10, cacheRead: 12, cacheWrite: 0 } });
-  // A rewritten file read again from the start books nothing twice.
+  // A rewritten file read again from the start books nothing twice: the
+  // restarted state keeps what was booked, before and after the re-read.
+  const before = state.usageByModel();
   const next = state.restarted();
-  next.fold(parseSteps([plannerLine(1, at, [120, 10, 7]), plannerLine(1, '2026-11-22T20:05:00Z', [1, 2, 3])].join('\n')).steps);
-  assert.deepEqual(next.usageByModel(), state.usageByModel());
+  assert.notEqual(next.usageBook, state.usageBook, 'a copy, not the same book');
+  assert.deepEqual(next.usageByModel(), before, 'kept across the restart');
+  next.fold(parseSteps(plannerLine(1, at, [120, 10, 7])).steps);
+  assert.deepEqual(next.usageByModel(), before);
 });
 
-test('usage: a step without a model of its own is booked under the model named before it, never under an unsafe key', () => {
+test('usage: a planner step without a model of its own is booked under the model named before it', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const bare = line({ step_index: 2, type: 'PLANNER_RESPONSE', created_at: '2026-11-22T20:00:02Z', input_tokens: 5, cache_read_tokens: 0, output_tokens: 1 });
+  state.fold(parseSteps([plannerLine(1, '2026-11-22T20:00:01Z', [10, 0, 2], 'gemini-4-neon-low'), bare].join('\n')).steps);
+  assert.deepEqual(state.usageByModel(), { 'gemini-4-neon-low': { input: 15, output: 3, cacheRead: 0, cacheWrite: 0 } });
+});
+
+test('usage: with no model known, or an unsafe one, a step is booked under "agy"', () => {
   const book = new AgyUsageBook();
   const step = (index, usage) => ({ index, type: 'PLANNER_RESPONSE', at: index, usage });
   book.book(step(1, { input: 1, cacheRead: 0, output: 1 }), '');
   book.book(step(2, { input: 2, cacheRead: 0, output: 2 }), '__proto__');
+  book.book(step(4, { input: 0, cacheRead: 0, output: 0 }), 'constructor');
   book.book({ index: 3, type: 'USER_INPUT', at: 3, usage: { input: 9, cacheRead: 9, output: 9 } }, 'x');
   assert.deepEqual(book.byModel(), { agy: { input: 3, output: 3, cacheRead: 0, cacheWrite: 0 } });
   assert.deepEqual(sumAgyByModel([{ a: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } }, { a: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0 } }]),
     { a: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0 } });
+  // An Object.prototype name is never looked up as an inherited member (that summed to NaN).
+  const proto = { constructor: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, toString: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };
+  assert.deepEqual(sumAgyByModel([proto, proto]), {});
 });
 
 test('usage: the watcher emits the tab\'s totals with its subagents\', and no price is invented for agy models', () => {
@@ -1644,7 +1659,7 @@ const PARENT_I = 'efefefef-9999-4999-8999-efefefefefef';
 const CHILD_J = '12121212-aaaa-4aaa-8aaa-121212121212';
 const RESUMED_K = '34343434-bbbb-4bbb-8bbb-343434343434';
 
-test('usage: a subagent taken up again and read back in small chunks never lowers the tab\'s totals', () => {
+test('usage: a subagent taken up again (even out of `retired`) and read back in small chunks is neither lowered nor counted twice', () => {
   const tabDir = makeTabDir();
   const root = makeAppData(null);
   writeSummaryRows(root, [{ id: PARENT_I, folder: tabDir }]);
@@ -1662,6 +1677,8 @@ test('usage: a subagent taken up again and read back in small chunks never lower
   clock += 11 * 60 * 1000;
   watcher.safeTick();
   assert.equal(watcher.children.has(CHILD_J), false, 'let go');
+  // Pushed out of `retired` (past MAX_RETIRED_CHILDREN): its new reader starts at byte 0.
+  watcher.retired.delete(CHILD_J);
   fs.appendFileSync(childFile, `${plannerLine(5, '2026-11-22T20:12:00Z', [7, 0, 0])}\n`);
   fs.appendFileSync(parent, `${named(3)}\n`);
   drain(watcher, 10);

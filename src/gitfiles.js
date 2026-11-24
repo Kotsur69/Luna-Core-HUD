@@ -202,7 +202,9 @@ async function realPathOrAncestor(abs, cwd) {
  * cwd. A file that does not exist (deleted, still diffs against HEAD) is
  * judged by its nearest existing ancestor - for a plain deleted file that is
  * its own folder, inside cwd. Any other resolution failure refuses (fails
- * closed). Call it after pathInsideCwd(), not instead of it.
+ * closed). Call it after pathInsideCwd(), not instead of it. The check and
+ * git's later read are not atomic; refusing links with a missing target
+ * keeps that window to a link swapped in between.
  * @param {string} cwd absolute session directory
  * @param {string} file renderer-supplied path (relative or absolute)
  * @returns {Promise<boolean>}
