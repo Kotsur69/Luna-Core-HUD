@@ -54,6 +54,7 @@ const { isClaudeCommand, isAgyCommand } = require('./launch');
 const { estimateTokens } = require('./filestat');
 const { pathKey } = require('./gitattribution');
 const { isAgyTurnEndStep } = require('./ttsExtract');
+const { AgyUsageBook } = require('./agytokens');
 const {
   AGY_TOOL_TILES, TOOL_TO_TILE, FILE_TILES, CHILD_SPAWNING_TOOLS, UUID_RE,
   unquoteArg, normalizeAgyPath, filePathOf, editStatOf, resultEditStat,
@@ -293,6 +294,10 @@ class AgyTranscriptState {
     this.model = '';
     /** Real token counts of the newest planner step that logged them, or null. */
     this.usage = null;
+    /** The model id the newest planner step named ('' until one does). */
+    this.modelId = '';
+    /** Every planner step's real token counts, per model (src/agytokens.js). */
+    this.usageBook = new AgyUsageBook();
     /** Tiled calls that ended with no result step - a sign the format differs. */
     this.unresolved = 0;
     /** step_index -> {index, type, at, chars, calls, tiled, quietCalls} of the steps seen, oldest first. */
@@ -438,8 +443,17 @@ class AgyTranscriptState {
   noteModel(step) {
     if (step.type === 'USER_INPUT') this.model = modelFromUserInput(step.content) || this.model;
     if (step.type !== 'PLANNER_RESPONSE') return;
-    if (step.model) this.model = agyModelLabel(step.model);
+    if (step.model) {
+      this.model = agyModelLabel(step.model);
+      this.modelId = step.model;
+    }
     if (step.usage) this.usage = step.usage;
+    this.usageBook.book(step, step.model || this.modelId);
+  }
+
+  /** Token totals per model, in observer.js' metrics.byModel shape (a copy). */
+  usageByModel() {
+    return this.usageBook.byModel();
   }
 
   /** A planner step: the previous batch is over, this one's calls start. */
@@ -564,6 +578,9 @@ class AgyTranscriptState {
     next.callSeq = this.callSeq; // new ids never repeat old ones
     next.model = this.model;
     next.usage = this.usage;
+    next.modelId = this.modelId;
+    // A re-read books each step once: what was booked stays booked.
+    next.usageBook = this.usageBook.clone();
     next.turnStartedAt = this.turnStartedAt;
     return next;
   }

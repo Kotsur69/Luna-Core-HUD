@@ -42,6 +42,14 @@
 // pick goes by time and claims alone. A database agy holds locked right now
 // is read again next tick instead.
 //
+// Tokens. Every reading carries `byModel` ({<model id>: {input, output,
+// cacheRead, cacheWrite}}, observer.js' shape): the real counts agy logs on
+// each planner step (src/agytokens.js), summed over the tab's conversation
+// and every subagent conversation it followed - a subagent's spend is the
+// tab's. A child let go keeps its totals here until it is taken up again (its
+// new reader books it from the start). The window stays assumed, so the
+// reading stays `estimated`; no cost is ever put on it.
+//
 // Nothing here writes to agy's files, and a symlinked transcript is ignored.
 // Every read is validated; whatever cannot be read is logged with its reason
 // and skipped, never thrown.
@@ -57,6 +65,7 @@ const {
   UUID_RE, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch, AGY_TRANSCRIPT_FILES,
 } = require('./agytranscript');
 const { AgyTail } = require('./agytail');
+const { sumAgyByModel } = require('./agytokens');
 
 /** agy CLI's app data folder (the IDE and Antigravity 2.0 use sibling folders). */
 const AGY_APP_DATA_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
@@ -251,6 +260,12 @@ class AgyTranscriptWatcher {
     this.children = new Map();
     /** child id -> bytes read, for children let go after going idle (oldest first). */
     this.retired = new Map();
+    /** child id -> its token totals per model when it was let go (same keys as `retired`). */
+    this.retiredUsage = new Map();
+    /** Token totals of let-go children that fell out of `retired` (never taken up again). */
+    this.droppedUsage = {};
+    /** The last byModel sent, as JSON: a child's reading re-sends only when it changed. */
+    this.lastUsageKey = '';
     /** child id -> when it was first named, for children whose transcript is not there yet. */
     this.childrenWaiting = new Map();
     /** Until when the summaries database is asked for children (after an agent call). */
@@ -291,6 +306,8 @@ class AgyTranscriptWatcher {
     this.children.clear();
     this.childrenWaiting.clear();
     this.retired.clear();
+    this.retiredUsage.clear();
+    this.droppedUsage = {};
     this.pinned = null;
     this.main = null;
   }
@@ -415,15 +432,37 @@ class AgyTranscriptWatcher {
     if (this.main.state.unresolved > 0) {
       this.warnOnce('unresolved', `an agy tool call in ${file} got no result step (cancelled, or a transcript format LunaCore does not know)`);
     }
-    this.tickChildren(now);
-    if (!res || res.status !== 'read') return;
+    const childMoved = this.tickChildren(now);
     // A line still being written changes nothing: no repeat of the same reading.
-    if (this.emitted && !res.moved) return;
-    this.emitted = true;
+    const mainRead = Boolean(res) && res.status === 'read' && (!this.emitted || res.moved);
+    if (!mainRead && !childMoved) return;
+    const byModel = this.usageByModel();
+    const usageKey = JSON.stringify(byModel);
+    // A subagent that moved without booking tokens changes nothing the tab shows.
+    if (!mainRead && usageKey === this.lastUsageKey) return;
+    this.lastUsageKey = usageKey;
+    if (mainRead) this.emitted = true;
     const state = this.main.state;
-    this.onMetrics(agyContextMetrics(state.contextChars, {
-      file, elapsedMs: now - this.startedAt, model: state.model, usage: state.usage,
-    }));
+    this.onMetrics({
+      ...agyContextMetrics(state.contextChars, {
+        file, elapsedMs: now - this.startedAt, model: state.model, usage: state.usage,
+      }),
+      byModel,
+    });
+  }
+
+  /**
+   * The tab's real token totals per model: its own conversation plus every
+   * subagent conversation it followed, live or let go.
+   * @returns {Record<string, {input:number, output:number, cacheRead:number, cacheWrite:number}>}
+   */
+  usageByModel() {
+    return sumAgyByModel([
+      this.state.usageByModel(),
+      ...[...this.children.values()].map((child) => child.tail.state.usageByModel()),
+      ...this.retiredUsage.values(),
+      this.droppedUsage,
+    ]);
   }
 
   /**
@@ -530,6 +569,8 @@ class AgyTranscriptWatcher {
     if (historyUntil === null) return true;
     claimedAgyConversations.add(key);
     this.retired.delete(id);
+    // Its new reader starts at byte 0 and books every step again.
+    this.retiredUsage.delete(id);
     this.children.set(id, {
       key,
       tail: this.tailFor(found, { historyUntil, idPrefix: `agy:${id}:` }),
@@ -563,11 +604,21 @@ class AgyTranscriptWatcher {
     claimedAgyConversations.delete(child.key);
     this.children.delete(id);
     this.retired.set(id, child.tail.offset);
-    if (this.retired.size > MAX_RETIRED_CHILDREN) this.retired.delete(this.retired.keys().next().value);
+    this.retiredUsage.set(id, child.tail.state.usageByModel());
+    if (this.retired.size > MAX_RETIRED_CHILDREN) this.forgetRetired(this.retired.keys().next().value);
     try {
       this.deliver({ ...ended, children: [] }, now);
     } catch (err) {
       this.warnOnce(`tick:${errText(err)}`, `tick failed: ${errText(err)}`);
+    }
+  }
+
+  /** Forgets the oldest let-go child; its tokens still count, folded into droppedUsage. */
+  forgetRetired(id) {
+    this.retired.delete(id);
+    if (this.retiredUsage.has(id)) {
+      this.droppedUsage = sumAgyByModel([this.droppedUsage, this.retiredUsage.get(id)]);
+      this.retiredUsage.delete(id);
     }
   }
 
@@ -589,15 +640,20 @@ class AgyTranscriptWatcher {
     return [...this.children.values()].some((child) => child.tail.hasOpenTask());
   }
 
+  /** @returns {boolean} whether any followed child read something new */
   tickChildren(now) {
     const scanDue = now - this.lastChildScan >= CHILD_SCAN_INTERVAL_MS;
     if (scanDue && (now < this.childScanUntil || this.hasOpenTask())) this.scanChildren(now);
     if (this.childrenWaiting.size > 0) this.adoptWaitingChildren(now);
+    let moved = false;
     for (const [id, child] of this.children) {
       const res = this.pollTail(child.tail, now);
-      if (res && res.moved) child.movedAt = now;
-      else if (now - child.movedAt > CHILD_IDLE_MS) this.retireChild(id, child, now);
+      if (res && res.moved) {
+        child.movedAt = now;
+        moved = true;
+      } else if (now - child.movedAt > CHILD_IDLE_MS) this.retireChild(id, child, now);
     }
+    return moved;
   }
 }
 
