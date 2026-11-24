@@ -72,6 +72,8 @@ const usdRate = (v) => (typeof v === 'number' && v > 0 && v <= MAX_USD_PER_CREDI
 
 /** 'library' | 'local' | 'paid' for one ASSETS.md row. */
 function costClass(row) {
+  // A row the Director cast (src/lunasworkAssetCasting.js) is priced by its picked source.
+  if (isObj(row.casting) && ['library', 'local', 'paid'].includes(row.casting.costClass)) return row.casting.costClass;
   if (row.source === 'library') return 'library';
   if (row.source === 'blender') return 'local';
   return LOCAL_GENERATED_TYPES.includes(row.type) ? 'local' : 'paid';
@@ -79,6 +81,9 @@ function costClass(row) {
 
 /** The model a row names (entry.model, else `model: <id>` in its spec), lower-case, or null. */
 function modelOf(row) {
+  // A cast row's paid rung (its primary or a fallback) names the model.
+  const cast = isObj(row.casting) ? row.casting.paidModel : null;
+  if (typeof cast === 'string' && MODEL_ID_RE.test(cast.toLowerCase())) return cast.toLowerCase();
   const direct = typeof row.model === 'string' ? row.model.trim().toLowerCase() : '';
   if (MODEL_ID_RE.test(direct)) return direct;
   const m = typeof row.spec === 'string' ? row.spec.match(MODEL_IN_SPEC_RE) : null;
