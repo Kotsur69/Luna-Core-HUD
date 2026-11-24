@@ -1,0 +1,100 @@
+{
+  "_comment": "Luna's Work asset source catalog: which source fits which asset kind (kinds = KINDS of src/lunasworkAssetPipeline.js). Read by src/lunasworkAssetCatalog.js; the Director (casting) and the Critic (judging) use it as a fixed menu. costClass: free = a free library, local = runs on this PC, paid = spends Higgsfield credits. needsKey = an API key in LunaCore's asset key store is needed to import from the source (Higgsfield uses its own CLI login, so it is false there). ComfyUI model families come only from the AMD GPU rule (AMD_GPU_RULE). Higgsfield model ids are ASSUMED: the real Higgsfield model list cannot be checked offline, so only ids already used in this repo are listed (gpt_image_2_6 from the asset tools and their tests; soul, nano-banana, seedream, flux-kontext and image-to-3d from HIGGSFIELD_MODEL_CREDITS in src/lunasworkAssetCost.js). Their credits are rough planning estimates per final, not prices.",
+  "sources": [
+    {
+      "id": "polyhaven",
+      "kinds": ["prop", "environment", "model", "texture", "material"],
+      "costClass": "free",
+      "needsKey": false,
+      "toonFit": "Mostly photoreal scans and PBR textures: usable for shapes and layout, but every asset needs a toon pass (flat colors, cel shader, outlines). HDRIs only light a scene."
+    },
+    {
+      "id": "sketchfab",
+      "kinds": ["character", "prop", "environment", "model"],
+      "costClass": "free",
+      "needsKey": true,
+      "toonFit": "Mixed styles from many authors: search for stylized or low-poly downloadable models; photoreal ones need a toon pass."
+    },
+    {
+      "id": "polypizza",
+      "kinds": ["character", "prop", "environment", "model"],
+      "costClass": "free",
+      "needsKey": true,
+      "toonFit": "Low-poly with flat colors: a good fit for a toon / cel-shaded game, usually only a material swap to the toon shader."
+    },
+    {
+      "id": "ambientcg",
+      "kinds": ["texture", "material", "environment"],
+      "costClass": "free",
+      "needsKey": false,
+      "toonFit": "PBR textures and HDRIs: realistic surfaces; use them as a base for hand-painted or flattened toon textures, not as they are."
+    },
+    {
+      "id": "freesound",
+      "kinds": ["audio"],
+      "costClass": "free",
+      "needsKey": true,
+      "toonFit": "Large SFX and ambience library; style-neutral, a good fit for SFX after normalization."
+    },
+    {
+      "id": "smithsonian",
+      "kinds": ["prop", "model"],
+      "costClass": "free",
+      "needsKey": true,
+      "toonFit": "Photoreal museum scans with dense meshes: needs retopology and a toon pass; best as reference or for rare props."
+    },
+    {
+      "id": "blenderkit",
+      "kinds": ["character", "prop", "environment", "model"],
+      "costClass": "free",
+      "needsKey": false,
+      "toonFit": "Mixed styles, many realistic: pick stylized models; the rest need a toon material pass in Blender."
+    },
+    {
+      "id": "lotsofsounds",
+      "kinds": ["audio"],
+      "costClass": "free",
+      "needsKey": false,
+      "toonFit": "Sound effects library; style-neutral, a good fit for SFX."
+    },
+    {
+      "id": "comfyui",
+      "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other", "character", "prop", "environment", "model", "audio"],
+      "costClass": "local",
+      "needsKey": false,
+      "toonFit": "Local drafts: prompt for cel-shaded, flat-color, clean-outline styles; image results are drafts, 3D results need cleanup and a toon material.",
+      "models": [
+        { "id": "SD 1.5", "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other"] },
+        { "id": "SDXL", "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other"] },
+        { "id": "Flux", "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other"] },
+        { "id": "Hunyuan3D-2", "kinds": ["character", "prop", "environment", "model"] },
+        { "id": "TripoSR", "kinds": ["character", "prop", "environment", "model"] },
+        { "id": "Kokoro-82M", "kinds": ["audio"] },
+        { "id": "F5-TTS", "kinds": ["audio"] },
+        { "id": "Stable Audio Open", "kinds": ["audio"] }
+      ]
+    },
+    {
+      "id": "blender",
+      "kinds": ["character", "prop", "environment", "model"],
+      "costClass": "local",
+      "needsKey": false,
+      "toonFit": "Modeled to the art direction through the Blender MCP: the best fit, toon shading and outlines are built in from the start."
+    },
+    {
+      "id": "higgsfield",
+      "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other", "character", "prop", "environment", "model"],
+      "costClass": "paid",
+      "needsKey": false,
+      "toonFit": "Paid finals: strong at stylized and anime-like images when the prompt asks for cel shading; 3D results still need a toon material.",
+      "models": [
+        { "id": "gpt_image_2_6", "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other"], "credits": 3 },
+        { "id": "nano-banana", "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other"], "credits": 3 },
+        { "id": "seedream", "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other"], "credits": 4 },
+        { "id": "flux-kontext", "kinds": ["concept", "keyart", "sprite", "texture", "ui", "vfx", "other"], "credits": 5 },
+        { "id": "soul", "kinds": ["concept", "keyart"], "credits": 3 },
+        { "id": "image-to-3d", "kinds": ["character", "prop", "environment", "model"], "credits": 30 }
+      ]
+    }
+  ]
+}
