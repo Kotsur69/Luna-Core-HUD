@@ -74,6 +74,13 @@ function liveEfforts(pool, agyList) {
  * The --effort level a Claude pool package runs at because its model's
  * entry fixes one (src/orchestra.js effortFor, below an escalation
  * override); null for "Per plan", agy / free packages and runs without a pool.
+ *
+ * Null for agy on purpose (decided 2026-11-24): an agy entry's setting is a
+ * VARIANT ('agy:<id>'), not an effort level. It only selects the model the
+ * package runs on (entryModel); the level packagePoolEffort reads off the
+ * id's tail is a label for the badge and the report, and the variant already
+ * carries it. An agy tab therefore gets the package's own effort as --effort
+ * through effortFor's later steps (Settings level, planner pick, default).
  * @param {unknown} pool the plan's modelPool
  * @param {object} pkg
  * @returns {string|null}

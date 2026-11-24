@@ -1336,7 +1336,9 @@ function createOrchestra(deps) {
 
   /**
    * Escalation override, then the level a pool's Claude model fixes, then a
-   * forced Settings level, then the planner's pick, then medium.
+   * forced Settings level, then the planner's pick, then medium. An agy pool
+   * entry only selects the variant (the model); claudePoolEffort is null for
+   * it, so an agy tab gets the package's own effort as --effort.
    */
   const effortFor = (pkg) =>
     normalizeEffort(pkg.effortOverride) ||

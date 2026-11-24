@@ -48,7 +48,10 @@ const SESSION_ID_DECIDED =
 // prompt as its value; headless calls pipe stdin instead (src/orchestraAgy.js).
 // A worker task's model 'agy:<id>' becomes `--model <id>` and its God Mode
 // effort `--effort <level>`, each unless the profile's command already sets
-// it; plain 'agy' passes no --model (agy's own default model). Main checks the
+// it; plain 'agy' passes no --model (agy's own default model). In a Workers
+// pool run the agy entry only selects the variant (the --model); the
+// --effort is the package's own effort, never a level from the pool entry
+// (src/orchestraPoolEffort.js claudePoolEffort). Main checks the
 // id against the live list before it gets here; this file checks its shape.
 // Not found, so never injected: a flag that SETS a new session's id (no
 // pinning for agy tabs), and any flag that passes MCP servers (agy reads them
