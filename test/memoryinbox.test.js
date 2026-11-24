@@ -410,8 +410,10 @@ test('a graveyard entry restored to the inbox is an ordinary waiting entry: list
   const { graveyardPath, bury, readGraveyard, restoreEntry } = require('../src/memorygraveyard.js');
   const { LOW_USEFULNESS } = require('../src/memoryextract.js');
   const dir = mirror(t, []);
-  const file = graveyardPath(path.dirname(dir));
-  t.after(() => fs.promises.rm(file, { force: true }));
+  // A private config dir: the shared os.tmpdir() would race other test files under the parallel suite.
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-inbox-grave-'));
+  t.after(() => fs.promises.rm(configDir, { recursive: true, force: true, maxRetries: 5 }));
+  const file = graveyardPath(configDir);
   const now = Date.parse('2026-11-11T12:00:00Z');
   bury(file, [{ title: 'Low score but right', reason: LOW_USEFULNESS, record: rec('low-but-right', 'Low score but right', { usefulness: 20 }) }], now);
   const [entry] = readGraveyard(file, now);
