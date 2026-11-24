@@ -46,9 +46,12 @@
 // cacheRead, cacheWrite}}, observer.js' shape): the real counts agy logs on
 // each planner step (src/agytokens.js), summed over the tab's conversation
 // and every subagent conversation it followed - a subagent's spend is the
-// tab's. A child let go keeps its totals here until it is taken up again (its
-// new reader books it from the start). The window stays assumed, so the
-// reading stays `estimated`; no cost is ever put on it.
+// tab's. A child let go keeps its totals here; taken up again, its new reader
+// books it from the start and counts no lower than them meanwhile. While the
+// tab's own conversation is still being read as history (a resumed one,
+// caught up over several ticks) no `byModel` is sent: a part-way total would
+// drop below an earlier tab's reading and be counted twice. The window stays
+// assumed, so the reading stays `estimated`; no cost is ever put on it.
 //
 // Nothing here writes to agy's files, and a symlinked transcript is ignored.
 // Every read is validated; whatever cannot be read is logged with its reason
@@ -65,7 +68,7 @@ const {
   UUID_RE, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch, AGY_TRANSCRIPT_FILES,
 } = require('./agytranscript');
 const { AgyTail } = require('./agytail');
-const { sumAgyByModel } = require('./agytokens');
+const { sumAgyByModel, maxAgyByModel } = require('./agytokens');
 
 /** agy CLI's app data folder (the IDE and Antigravity 2.0 use sibling folders). */
 const AGY_APP_DATA_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
@@ -117,6 +120,9 @@ function noteSubagent(id) {
     knownSubagentConversations.delete(knownSubagentConversations.keys().next().value);
   }
 }
+
+/** A followed child's token totals: what its reader booked, never below what was counted before. */
+const childUsage = (child) => maxAgyByModel(child.floor, child.tail.state.usageByModel());
 
 const defaultLog = (msg) => console.warn(`[agy-transcript] ${msg}`);
 const errText = (err) => (err && (err.code || err.message)) || String(err);
@@ -256,7 +262,7 @@ class AgyTranscriptWatcher {
     this.idleState = new AgyTranscriptState({ cwd: this.cwd });
     /** Whether a reading of the pinned file went out yet (an empty conversation still shows 0 %). */
     this.emitted = false;
-    /** child id -> {key, tail, movedAt} of the subagent conversations followed. */
+    /** child id -> {key, floor, tail, movedAt} of the subagent conversations followed. */
     this.children = new Map();
     /** child id -> bytes read, for children let go after going idle (oldest first). */
     this.retired = new Map();
@@ -436,19 +442,18 @@ class AgyTranscriptWatcher {
     // A line still being written changes nothing: no repeat of the same reading.
     const mainRead = Boolean(res) && res.status === 'read' && (!this.emitted || res.moved);
     if (!mainRead && !childMoved) return;
-    const byModel = this.usageByModel();
-    const usageKey = JSON.stringify(byModel);
+    // Still inside the history it was pinned with: its totals are part-way.
+    const byModel = this.main.historyUntil > 0 ? null : this.usageByModel();
+    const usageKey = byModel ? JSON.stringify(byModel) : '';
     // A subagent that moved without booking tokens changes nothing the tab shows.
-    if (!mainRead && usageKey === this.lastUsageKey) return;
-    this.lastUsageKey = usageKey;
+    if (!mainRead && (!byModel || usageKey === this.lastUsageKey)) return;
+    if (byModel) this.lastUsageKey = usageKey;
     if (mainRead) this.emitted = true;
     const state = this.main.state;
-    this.onMetrics({
-      ...agyContextMetrics(state.contextChars, {
-        file, elapsedMs: now - this.startedAt, model: state.model, usage: state.usage,
-      }),
-      byModel,
+    const metrics = agyContextMetrics(state.contextChars, {
+      file, elapsedMs: now - this.startedAt, model: state.model, usage: state.usage,
     });
+    this.onMetrics(byModel ? { ...metrics, byModel } : metrics);
   }
 
   /**
@@ -459,7 +464,7 @@ class AgyTranscriptWatcher {
   usageByModel() {
     return sumAgyByModel([
       this.state.usageByModel(),
-      ...[...this.children.values()].map((child) => child.tail.state.usageByModel()),
+      ...[...this.children.values()].map((child) => childUsage(child)),
       ...this.retiredUsage.values(),
       this.droppedUsage,
     ]);
@@ -569,10 +574,13 @@ class AgyTranscriptWatcher {
     if (historyUntil === null) return true;
     claimedAgyConversations.add(key);
     this.retired.delete(id);
-    // Its new reader starts at byte 0 and books every step again.
+    // Its new reader starts at byte 0 and books every step again; until it
+    // has caught up, what was counted before is the floor.
+    const floor = this.retiredUsage.get(id) || {};
     this.retiredUsage.delete(id);
     this.children.set(id, {
       key,
+      floor,
       tail: this.tailFor(found, { historyUntil, idPrefix: `agy:${id}:` }),
       movedAt: this.now(),
     });
@@ -604,7 +612,7 @@ class AgyTranscriptWatcher {
     claimedAgyConversations.delete(child.key);
     this.children.delete(id);
     this.retired.set(id, child.tail.offset);
-    this.retiredUsage.set(id, child.tail.state.usageByModel());
+    this.retiredUsage.set(id, childUsage(child));
     if (this.retired.size > MAX_RETIRED_CHILDREN) this.forgetRetired(this.retired.keys().next().value);
     try {
       this.deliver({ ...ended, children: [] }, now);

@@ -213,3 +213,11 @@ test('realPathInsideCwd accepts a symlink that stays inside cwd', async (t) => {
   if (!link(path.join(repo, 'src', 'main.js'), path.join(repo, 'alias.js'), 'file')) return;
   assert.equal(await realPathInsideCwd(repo, 'alias.js'), true);
 });
+
+test('realPathInsideCwd refuses a path through a link whose target does not exist yet', async (t) => {
+  const { repo, outside, link } = makeSandbox(t);
+  // The target could be created between the check and git's read.
+  if (!link(path.join(outside, 'not-yet'), path.join(repo, 'dangling'), 'junction')) return;
+  assert.equal(await realPathInsideCwd(repo, 'dangling/file.txt'), false);
+  assert.equal(await realPathInsideCwd(repo, 'dangling'), false);
+});

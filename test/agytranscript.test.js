@@ -1628,3 +1628,59 @@ test('usage: a subagent let go keeps its tokens, and taken up again is not count
   assert.deepEqual(child(), { input: 150, output: 11, cacheRead: 5, cacheWrite: 0 });
   watcher.stop();
 });
+
+/** Whether no model's input, output or cacheRead ever drops from one reading to the next. */
+function neverDrops(readings) {
+  for (let i = 1; i < readings.length; i++) {
+    for (const [model, before] of Object.entries(readings[i - 1])) {
+      const now = readings[i][model];
+      if (!now || ['input', 'output', 'cacheRead'].some((k) => now[k] < before[k])) return false;
+    }
+  }
+  return true;
+}
+
+const PARENT_I = 'efefefef-9999-4999-8999-efefefefefef';
+const CHILD_J = '12121212-aaaa-4aaa-8aaa-121212121212';
+const RESUMED_K = '34343434-bbbb-4bbb-8bbb-343434343434';
+
+test('usage: a subagent taken up again and read back in small chunks never lowers the tab\'s totals', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: PARENT_I, folder: tabDir }]);
+  let clock = Date.parse('2026-11-22T20:00:00Z');
+  // One step line per read: the re-read takes several ticks.
+  const { watcher, out } = makeFullWatcher(root, tabDir, { now: () => clock, chunkBytes: 400 });
+  const named = (step) => [
+    line({ type: 'PLANNER_RESPONSE', step_index: step, tool_calls: [{ name: 'invoke_subagent', args: {} }] }),
+    line({ type: 'GENERIC', step_index: step + 1, status: 'DONE', content: `{"conversationId": "${CHILD_J}"}` }),
+  ].join('\n');
+  const steps = [1, 2, 3, 4].map((i) => plannerLine(i, `2026-11-22T20:00:0${i}Z`, [100, 10, 1]));
+  const childFile = writeTranscript(root, CHILD_J, `${steps.join('\n')}\n`);
+  const parent = writeTranscript(root, PARENT_I, `${named(1)}\n`);
+  drain(watcher, 10);
+  clock += 11 * 60 * 1000;
+  watcher.safeTick();
+  assert.equal(watcher.children.has(CHILD_J), false, 'let go');
+  fs.appendFileSync(childFile, `${plannerLine(5, '2026-11-22T20:12:00Z', [7, 0, 0])}\n`);
+  fs.appendFileSync(parent, `${named(3)}\n`);
+  drain(watcher, 10);
+  const readings = out.metrics.filter((m) => m.byModel).map((m) => m.byModel);
+  assert.ok(neverDrops(readings), 'a part-way re-read must not read as a transcript that started over');
+  assert.deepEqual(readings[readings.length - 1]['gemini-4-argon-medium'], { input: 407, output: 4, cacheRead: 40, cacheWrite: 0 });
+  watcher.stop();
+});
+
+test('usage: a resumed conversation sends no byModel until its history is read', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  const steps = [1, 2, 3, 4].map((i) => plannerLine(i, `2026-11-22T20:00:0${i}Z`, [100, 0, 10]));
+  writeTranscript(root, RESUMED_K, `${steps.join('\n')}\n`);
+  const { watcher, out } = makeFullWatcher(root, tabDir, { conversationId: RESUMED_K, chunkBytes: 400 });
+  drain(watcher, 10);
+  assert.equal(watcher.pinned.id, RESUMED_K);
+  const withUsage = out.metrics.filter((m) => m.byModel);
+  assert.equal(withUsage.length, 1, 'one reading, once caught up');
+  assert.deepEqual(withUsage[0].byModel, { 'gemini-4-argon-medium': { input: 400, output: 40, cacheRead: 0, cacheWrite: 0 } });
+  watcher.stop();
+});

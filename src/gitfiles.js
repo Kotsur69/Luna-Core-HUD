@@ -158,10 +158,24 @@ function isStrictlyInside(realCwd, real) {
 }
 
 /**
+ * Whether `p` exists as a link (symlink or junction) although realpath could
+ * not resolve it. Not there at all (a deleted file) is false; a failing lstat
+ * for another reason counts as a link, so the caller refuses (fails closed).
+ */
+async function isDanglingLink(p) {
+  try {
+    return (await fs.promises.lstat(p)).isSymbolicLink();
+  } catch (err) {
+    return !MISSING_PATH_CODES.has(err && err.code);
+  }
+}
+
+/**
  * The real path of `abs`, or of its nearest existing ancestor when it does
  * not exist (a deleted file), walking up no further than `cwd`;
  * LEXICAL_ONLY when nothing below cwd exists, null when a path on the way
- * cannot be resolved for another reason (EACCES, ELOOP, ...).
+ * cannot be resolved for another reason (EACCES, ELOOP, ...) or is a link
+ * whose target is missing - that target could appear before git reads it.
  * @returns {Promise<string|typeof LEXICAL_ONLY|null>}
  */
 async function realPathOrAncestor(abs, cwd) {
@@ -171,6 +185,7 @@ async function realPathOrAncestor(abs, cwd) {
       return await fs.promises.realpath(current);
     } catch (err) {
       if (!MISSING_PATH_CODES.has(err && err.code)) return null;
+      if (await isDanglingLink(current)) return null;
       const parent = path.dirname(current);
       // Reached cwd (or the root) without finding anything: lexical check only.
       if (parent === current || path.relative(cwd, parent) === '') return LEXICAL_ONLY;

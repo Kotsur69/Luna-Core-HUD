@@ -54,6 +54,23 @@ function sumAgyByModel(parts) {
   return out;
 }
 
+/**
+ * Per model and per field, the larger of two byModel objects. For a reader
+ * catching up on a conversation another reader already counted: until it has
+ * read as far, its totals are below the old ones, and a total that drops reads
+ * as a transcript that started over (orchestraUsage.js banks it, then counts
+ * everything again on top).
+ * @returns {Record<string, {input:number, output:number, cacheRead:number, cacheWrite:number}>}
+ */
+function maxAgyByModel(a, b) {
+  const out = sumAgyByModel([a]);
+  for (const [model, numbers] of Object.entries(sumAgyByModel([b]))) {
+    const prev = out[model] || zeroUsage();
+    out[model] = Object.fromEntries(USAGE_KEYS.map((k) => [k, Math.max(prev[k], numbers[k])]));
+  }
+  return out;
+}
+
 class AgyUsageBook {
   constructor() {
     /** model id -> {input, output, cacheRead, cacheWrite} */
@@ -118,4 +135,4 @@ function sameCounts(a, b) {
   return a.input === b.input && a.output === b.output && a.cacheRead === b.cacheRead;
 }
 
-module.exports = { AgyUsageBook, sumAgyByModel, UNKNOWN_AGY_MODEL, MAX_BOOKED_STEPS };
+module.exports = { AgyUsageBook, sumAgyByModel, maxAgyByModel, UNKNOWN_AGY_MODEL, MAX_BOOKED_STEPS };
