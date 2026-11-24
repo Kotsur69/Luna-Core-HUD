@@ -641,7 +641,7 @@ test('blenderModel: toon pass options reach the script; the turntable PNG is che
   assert.match(code, /^STYLE_PASS = "blade-bullet-toon"$/m);
   assert.match(code, /^POLY_BUDGET = 25000$/m);
   assert.match(code, /^KIND = "character"$/m);
-  assert.equal(pyString(code, 'SHEET_PATH'), posixOf(path.join(dir, 'design', 'asset-renders', 'ronin-hero.png')));
+  assert.equal(path.basename(pyString(code, 'SHEET_PATH')), 'ronin-hero.png'); // staged outside the repo, moved in by Node
 
   assert.deepEqual(res.renders, ['design/asset-renders/ronin-hero.png']);
   assert.deepEqual(res.sources, ['art/blender/ronin-hero.blend']);

@@ -5,7 +5,11 @@
 // (src/lunasworkAssetPipeline.js):
 //
 //   save        the open scene is saved as a copy to art/blender/<slug>.blend
-//               (the untouched source, before any pass below)
+//               (the untouched source, before any pass below). The toon pass
+//               marks the scene it changes (custom property TOON_MARK); a
+//               marked scene never replaces a .blend that is already there,
+//               so a repeated call keeps the untouched source (blend-state
+//               file: clean | toon | kept, read back by the caller)
 //   toon pass   stylePass "blade-bullet-toon": the triangle count is held to a
 //               poly budget (an applied Decimate when over it), the root is
 //               zeroed and its scale applied, a character's height is checked
@@ -30,6 +34,10 @@ const path = require('path');
 const STYLE_PASSES = Object.freeze(['none', 'blade-bullet-toon']);
 const DEFAULT_STYLE_PASS = 'none';
 const TOON_PASS = 'blade-bullet-toon';
+// The scene custom property the toon pass sets: the open scene was changed in place.
+const TOON_MARK = 'luna_toon_pass';
+// What the guarded save did, written to the blend-state file.
+const BLEND_STATES = Object.freeze(['clean', 'toon', 'kept']);
 // Triangle budgets when the call names none: props (and other models) vs. characters.
 const PROP_POLY_BUDGET = 15000;
 const CHARACTER_POLY_BUDGET = 25000;
@@ -328,6 +336,8 @@ def luna_turntable(objs):
 `;
 
 const PY_TOON = String.raw`
+# Marked before any change: a later call must never save this scene over the untouched .blend.
+bpy.context.scene[TOON_MARK] = STYLE_PASS
 LUNA_REPORT['stylePass'] = STYLE_PASS
 luna_objs = luna_meshes()
 luna_step('hiding the outline', luna_outline_shown, luna_objs, False)
@@ -344,6 +354,22 @@ try:
 except Exception as err:
     LUNA_REPORT['render'] = 'failed'
     luna_warn('turntable render failed: %s' % err)
+`;
+
+// The save when the caller passes the blend options: a scene the toon pass already
+// changed (TOON_MARK on any scene) never replaces an existing .blend; the outcome goes
+// to BLEND_STATE_PATH. The save line itself is spliced in at SAVE_AT.
+const SAVE_AT = '    # <save>';
+const PY_GUARDED_SAVE = String.raw`
+luna_toon_marked = any(s.get(TOON_MARK) for s in bpy.data.scenes)
+if luna_toon_marked and BLEND_EXISTS:
+    # The open scene is already toon-processed: keep the untouched .blend.
+    luna_blend_state = 'kept'
+else:
+    # <save>
+    luna_blend_state = 'toon' if luna_toon_marked else 'clean'
+with open(BLEND_STATE_PATH, 'w', encoding='utf-8') as luna_state_file:
+    luna_state_file.write(luna_blend_state)
 `;
 
 /** A path as a Python string literal: forward slashes, JSON-escaped (valid Python). */
@@ -365,7 +391,15 @@ function scriptOptions(options) {
     }
     render = { sheet: r.sheet, panels: [...r.panels] };
   }
-  return { kind, stylePass: style.stylePass, polyBudget: polyBudgetFor(kind, style.polyBudget), render };
+  let blend = null;
+  if (o.blend !== undefined && o.blend !== null) {
+    const b = o.blend;
+    if (!isObj(b) || typeof b.exists !== 'boolean' || typeof b.statePath !== 'string' || !path.isAbsolute(b.statePath)) {
+      throw new Error('blend needs a boolean exists and an absolute statePath');
+    }
+    blend = { exists: b.exists, statePath: b.statePath };
+  }
+  return { kind, stylePass: style.stylePass, polyBudget: polyBudgetFor(kind, style.polyBudget), render, blend };
 }
 
 /** The Python header: every variable value, as a number or a JSON literal. */
@@ -378,9 +412,13 @@ function pyHeader(o) {
     `HEIGHT_TOLERANCE = ${String(HEIGHT_TOLERANCE_M)}`,
     `OUTLINE_THICKNESS = ${String(OUTLINE_THICKNESS_M)}`,
     `PANEL_PX = ${String(TURNTABLE_PANEL_PX)}`,
+    `TOON_MARK = ${JSON.stringify(TOON_MARK)}`,
   ];
   if (o.render) {
     lines.push(`SHEET_PATH = ${pyPath(o.render.sheet)}`, `PANEL_PATHS = [${o.render.panels.map(pyPath).join(', ')}]`);
+  }
+  if (o.blend) {
+    lines.push(`BLEND_EXISTS = ${o.blend.exists ? 'True' : 'False'}`, `BLEND_STATE_PATH = ${pyPath(o.blend.statePath)}`);
   }
   return lines;
 }
@@ -388,21 +426,25 @@ function pyHeader(o) {
 /**
  * The Python the Blender MCP add-on runs: save the open scene as a copy, run
  * the style pass and the turntable render when asked, then export FBX for
- * Unity. The two-argument call keeps the plain save + export script.
+ * Unity. The two-argument call keeps the plain save + export script. With
+ * `blend` the save is guarded: a toon-marked scene never replaces an existing
+ * .blend (blend.exists), and the outcome is written to blend.statePath.
  * @param {string} blendAbs
  * @param {string} fbxAbs
  * @param {{kind?:string, stylePass?:string, polyBudget?:number|null,
- *   render?:{sheet:string, panels:string[]}|null}} [options]
+ *   render?:{sheet:string, panels:string[]}|null,
+ *   blend?:{exists:boolean, statePath:string}|null}} [options]
  * @returns {string}
  */
 function blenderExportScript(blendAbs, fbxAbs, options) {
   const o = scriptOptions(options);
   const toon = o.stylePass === TOON_PASS;
-  const extra = toon || o.render;
+  const extra = toon || o.render || o.blend;
+  const save = `bpy.ops.wm.save_as_mainfile(filepath=${pyPath(blendAbs)}, copy=True)`;
   return [
     'import bpy',
     ...(extra ? pyHeader(o) : []),
-    `bpy.ops.wm.save_as_mainfile(filepath=${pyPath(blendAbs)}, copy=True)`,
+    o.blend ? PY_GUARDED_SAVE.trim().replace(SAVE_AT, `    ${save}`) : save,
     ...(extra ? [PY_HELPERS.trim()] : []),
     ...(toon ? [PY_TOON.trim()] : []),
     ...(o.render ? [PY_RENDER.trim()] : []),
@@ -479,6 +521,8 @@ module.exports = {
   STYLE_PASSES,
   DEFAULT_STYLE_PASS,
   TOON_PASS,
+  TOON_MARK,
+  BLEND_STATES,
   PROP_POLY_BUDGET,
   CHARACTER_POLY_BUDGET,
   MIN_POLY_BUDGET,
