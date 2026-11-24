@@ -31,9 +31,12 @@
 //                         the Luna's Work run (a native dialog in main)
 //
 // Tool kit (src/lunasworkToolkit.js): workerTools(pkg) gives God Mode each
-// package tab's kit - the scene worker runs as the `asset` role, every other
-// package as `builder` - and wrapPlanner adds the kit's note (tools, skills,
-// guardrails) to every package prompt. Tools past their spend cap
+// package tab's kit - the scene worker and every asset-prep package
+// (scene.isAssetPrepPackageOf: its files are only raw asset files) run as the
+// `asset` role, every other package as `builder`, so a custom builder kit
+// without Blender / ComfyUI / Higgsfield never strands asset generation - and
+// wrapPlanner adds that same role's kit note (tools, skills, guardrails) to
+// every package prompt. Tools past their spend cap
 // (opts.cappedTools) are denied for the whole build.
 //
 // A Unity project (LW 3.36b) also gets UnityYAMLMerge as its merge driver
@@ -302,10 +305,16 @@ function createGodModeBuilder(deps) {
     return Array.isArray(list) ? list.filter((t) => typeof t === 'string') : [];
   }
 
+  /** The scene worker and asset-prep packages make assets (`asset` kit); every other package builds. */
+  function kitRole(pkg) {
+    if (!isObj(pkg)) return 'builder';
+    return pkg.id === scene.SCENE_WORKER_ID || scene.isAssetPrepPackageOf(pkg, active.cards) ? 'asset' : 'builder';
+  }
+
   /** The kit of one package's role during a build; null when idle, without toolsFor or on a failure. */
   function kitOf(pkg) {
     if (!active || typeof deps.toolsFor !== 'function') return null;
-    const role = isObj(pkg) && pkg.id === scene.SCENE_WORKER_ID ? 'asset' : 'builder';
+    const role = kitRole(pkg);
     try {
       return deps.toolsFor({ projectId: active.projectId, repoPath: active.repoPath, role, capped: cappedNow() });
     } catch (err) {

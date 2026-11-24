@@ -158,6 +158,28 @@ function isAssetPrepPackage(pkg, assetAts, codeAts) {
   return ats.length > 0 && ats.every((at) => assetAts.has(at));
 }
 
+/** The `at`s of the build's asset-prep cards and of its code cards (cards listing other files). */
+function cardKinds(cards) {
+  const all = list(cards);
+  const assetAts = new Set(all.filter(isAssetPrepCard).map((c) => c.at));
+  const codeAts = new Set(all.filter((c) => isObj(c) && list(c.files).length > 0 && !isAssetPrepCard(c)).map((c) => c.at));
+  return { assetAts, codeAts };
+}
+
+/**
+ * True for an asset-prep package of a build with these cards (the same rule
+ * routeScenePackages uses); never for the scene worker or a scene package.
+ * @param {unknown} pkg a planned package (id, files, todoAts)
+ * @param {object[]} cards the build's cards
+ */
+function isAssetPrepPackageOf(pkg, cards) {
+  if (!isObj(pkg) || pkg.id === SCENE_WORKER_ID || list(pkg.files).some(isSceneFile)) return false;
+  const sceneAts = new Set(list(cards).filter(isSceneCard).map((c) => c.at));
+  if (list(pkg.todoAts).some((at) => sceneAts.has(at))) return false;
+  const { assetAts, codeAts } = cardKinds(cards);
+  return isAssetPrepPackage(pkg, assetAts, codeAts);
+}
+
 /** Ids reachable from `starts` through dependsOn. */
 function closure(starts, depsOf) {
   const seen = new Set();
@@ -235,8 +257,7 @@ function mergeScenePackages(members, memberIds, feeders) {
  * and not waiting for it themselves (that edge would close a cycle).
  */
 function feederPackages(plain, memberIds, cards) {
-  const assetAts = new Set(cards.filter(isAssetPrepCard).map((c) => c.at));
-  const codeAts = new Set(cards.filter((c) => isObj(c) && list(c.files).length > 0 && !isAssetPrepCard(c)).map((c) => c.at));
+  const { assetAts, codeAts } = cardKinds(cards);
   const depsOf = new Map(plain.map((p) => [p.id, list(p.dependsOn)]));
   const waitsForScene = (p) => [...closure(list(p.dependsOn), depsOf)].some((id) => id === SCENE_WORKER_ID || memberIds.has(id));
   return plain.filter((p) => !memberIds.has(p.id) && isAssetPrepPackage(p, assetAts, codeAts) && !waitsForScene(p));
@@ -422,6 +443,7 @@ module.exports = {
   isSceneCard,
   isAssetPrepFile,
   isAssetPrepCard,
+  isAssetPrepPackageOf,
   routeScenePackages,
   sceneOwnership,
   isUnityProject,

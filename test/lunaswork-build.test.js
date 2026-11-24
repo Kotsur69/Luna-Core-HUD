@@ -378,3 +378,58 @@ test('one build at a time; a throwing orchestra is a plain failure', async () =>
   assert.deepEqual(await broken.builder.build(buildOpts()), { ok: false, error: 'failed' });
   assert.equal(broken.builder.ownsMerge(), false);
 });
+
+test('asset-prep packages get the asset kit even when a custom builder kit lacks the asset tools', async () => {
+  const ASSET_TOOLS = ['mcp__blender', 'mcp__comfyui', 'Bash(higgsfield:*)'];
+  const KITS = {
+    asset: { allowedTools: ASSET_TOOLS, disallowedTools: [], mcpConfigPath: '/kits/asset.json', addDirs: [], note: 'ASSET KIT NOTE' },
+    builder: { allowedTools: ['mcp__unity'], disallowedTools: ASSET_TOOLS, mcpConfigPath: '/kits/builder.json', addDirs: [], note: 'BUILDER KIT NOTE' },
+  };
+  const roles = [];
+  const orchestra = fakeOrchestra();
+  const builder = createGodModeBuilder({
+    orchestra,
+    profileId: () => null,
+    env: () => ({}),
+    isUnityProject: () => false,
+    toolsFor: (req) => {
+      roles.push(req.role);
+      return KITS[req.role];
+    },
+  });
+  const cards = [
+    { at: 1, text: 'Hero sprite', files: ['art/hero.png', 'design/ASSETS.md'] },
+    { at: 2, text: 'Login form', files: ['src/login.js'] },
+    { at: 3, text: 'Place the hero', files: ['Assets/Scenes/Main.unity'] },
+  ];
+  const packages = [
+    { id: 'art', todoAts: [1], prompt: 'make the hero', files: ['art/hero.png', 'design/ASSETS.md'], dependsOn: [] },
+    { id: 'code', todoAts: [2], prompt: 'build login', files: ['src/login.js'], dependsOn: [] },
+    { id: 'scene', todoAts: [3], prompt: 'place it', files: ['Assets/Scenes/Main.unity'], dependsOn: [] },
+  ];
+  const planner = builder.wrapPlanner(async () => ({ ok: true, raw: { packages } }));
+  const building = builder.build({ projectId: 'game', repoPath: '/repo', cards, checkCommand: '' });
+  await tick();
+  const planned = (await planner({})).raw.packages;
+  const byId = Object.fromEntries(planned.map((p) => [p.id, p]));
+  assert.deepEqual(Object.keys(byId).sort(), ['art', 'code', 'scene-worker']);
+  // The kit note follows the same role as the launch kit.
+  assert.ok(byId.art.prompt.endsWith('ASSET KIT NOTE'));
+  assert.ok(byId['scene-worker'].prompt.endsWith('ASSET KIT NOTE'));
+  assert.ok(byId.code.prompt.endsWith('BUILDER KIT NOTE'));
+
+  const art = builder.workerTools(byId.art);
+  assert.deepEqual(art.allowedTools, ASSET_TOOLS);
+  assert.equal(art.mcpConfigPath, '/kits/asset.json');
+  assert.deepEqual(art.disallowedTools, []);
+  const code = builder.workerTools(byId.code);
+  assert.equal(code.mcpConfigPath, '/kits/builder.json');
+  assert.deepEqual(code.disallowedTools, ASSET_TOOLS);
+  assert.equal(builder.workerTools(byId['scene-worker']).mcpConfigPath, '/kits/asset.json');
+  // A package that also covers a code card is not asset-prep.
+  assert.equal(builder.workerTools({ id: 'mixed', todoAts: [1, 2], files: [] }).mcpConfigPath, '/kits/builder.json');
+  assert.ok(roles.includes('asset') && roles.includes('builder'));
+
+  orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await building;
+});
