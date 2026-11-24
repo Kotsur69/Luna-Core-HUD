@@ -430,3 +430,94 @@ test('Poly Haven, Sketchfab, Poly Pizza and BlenderKit items carry the preview i
   records[0][1].thumbnail_url = 'http://cdn.polyhaven.com/rusty.png';
   assert.equal('preview' in (await src.polyhaven.info('rusty')), false, 'a non-https preview is dropped');
 });
+
+// ---- ambientCG / Smithsonian previews and library sound durations ------------------------
+
+/** A fetch stub over [urlPrefix, reply] pairs; an unknown URL answers 404. */
+function libraryFetch(records) {
+  return async (url) => {
+    const hit = records.find(([prefix]) => url.startsWith(prefix));
+    const buf = Buffer.from(JSON.stringify(hit ? hit[1] : {}));
+    return { status: hit ? 200 : 404, ok: !!hit, headers: { get: () => null }, arrayBuffer: async () => buf };
+  };
+}
+
+test('ambientCG and Smithsonian items carry an https preview from their API; a non-https one is dropped', async () => {
+  const { createFreeSources } = require('../src/lunasworkFreeSources.js');
+  // Recorded shapes: ambientCG full_json with include=imageData, Smithsonian /content/<id>.
+  const acg = {
+    assetId: 'Bricks001', displayName: 'Bricks 001', dataType: 'Material', tags: ['brick'],
+    previewImage: {
+      '64-PNG': 'https://acg-media.struffelproductions.com/file/ambientCG-Web/media/thumbnail/64-PNG/Bricks001.png',
+      '512-PNG': 'https://acg-media.struffelproductions.com/file/ambientCG-Web/media/thumbnail/512-PNG/Bricks001.png',
+      '512-WEBP-242424': 'https://acg-media.struffelproductions.com/file/ambientCG-Web/media/thumbnail/512-WEBP/Bricks001.webp',
+      '2048-JPG-242424': 'https://acg-media.struffelproductions.com/file/ambientCG-Web/media/thumbnail/2048-JPG/Bricks001.jpg',
+      odd: 42,
+    },
+  };
+  const si = {
+    id: 'ld1-1643399756728-1643399760534-0', title: 'Apollo 11 Command Module', unitCode: 'NASM',
+    content: { descriptiveNonRepeating: { record_link: 'https://www.si.edu/object/nasm_A19700102000', online_media: { mediaCount: 2, media: [
+      { type: '3d_package', content: 'https://3d-api.si.edu/content/document/x/model.zip' },
+      { type: '3d_voyager', content: 'https://3d-api.si.edu/voyager/x', thumbnail: 'https://3d-api.si.edu/content/document/x/thumb.jpg', resources: [{ label: 'Low resolution', url: 'https://3d-api.si.edu/content/document/x/model-low.glb' }] },
+    ] } } },
+  };
+  const records = [
+    ['https://ambientcg.com/api/v2/full_json?id=Bricks001', { foundAssets: [acg] }],
+    ['https://api.si.edu/openaccess/api/v1.0/content/', { response: si }],
+  ];
+  const src = createFreeSources({ fetch: libraryFetch(records), keys: { get: (s) => (s === 'smithsonian' ? 'si-key-for-tests' : null) } });
+  assert.equal((await src.ambientcg.info('Bricks001')).preview, acg.previewImage['512-PNG'], 'the mid-size PNG/JPG preview');
+  assert.equal((await src.smithsonian.info(si.id)).preview, 'https://3d-api.si.edu/content/document/x/thumb.jpg');
+
+  acg.previewImage = { '512-PNG': 'http://acg-media.struffelproductions.com/512.png' };
+  assert.equal('preview' in (await src.ambientcg.info('Bricks001')), false, 'a non-https ambientCG preview is dropped');
+  si.content.descriptiveNonRepeating.online_media.media[1].thumbnail = 'http://3d-api.si.edu/thumb.jpg';
+  assert.equal('preview' in (await src.smithsonian.info(si.id)), false, 'a non-https Smithsonian preview is dropped');
+  // Odd shapes never throw: no map, a list instead of a map, no online_media.
+  acg.previewImage = ['https://x.example/a.png'];
+  assert.equal('preview' in (await src.ambientcg.info('Bricks001')), false);
+  si.content.descriptiveNonRepeating.online_media = 'none';
+  assert.equal('preview' in (await src.smithsonian.info(si.id)), false);
+});
+
+test('Freesound and Lots of Sounds items carry the duration their API gives, only when it is valid', async () => {
+  const { createFreeSources } = require('../src/lunasworkFreeSources.js');
+  const fsSound = { id: 101, name: 'Sword Slash', username: 'foley', license: 'http://creativecommons.org/publicdomain/zero/1.0/', url: 'https://freesound.org/people/foley/sounds/101/', tags: ['sword'], previews: { 'preview-hq-ogg': 'https://cdn.freesound.org/previews/0/101-hq.ogg' }, duration: 1.234567 };
+  const losSound = { id: 'katana-1', name: 'Katana', duration: 0.8, download_url: '/files/katana-1.wav' };
+  const records = [
+    ['https://freesound.org/apiv2/sounds/101/', fsSound],
+    ['https://api.lotsofsounds.com/api/v1/sounds/sample/katana-1', { data: losSound }],
+  ];
+  const fetchStub = libraryFetch(records);
+  const urls = [];
+  const src = createFreeSources({ fetch: (url, o) => { urls.push(url); return fetchStub(url, o); }, keys: { get: (s) => (s === 'freesound' ? 'fs-key-for-tests' : null) } });
+  assert.equal((await src.freesound.info('101')).duration, 1.23);
+  assert.match(urls[0], /fields=[^&]*\bduration\b/, 'Freesound is asked for the duration field');
+  assert.equal((await src.lotsofsounds.info('katana-1')).duration, 0.8);
+  for (const bad of [undefined, null, -1, 'long', Number.NaN, Infinity, '3']) {
+    fsSound.duration = bad;
+    losSound.duration = bad;
+    assert.equal('duration' in (await src.freesound.info('101')), false, `freesound duration ${String(bad)} is omitted`);
+    assert.equal('duration' in (await src.lotsofsounds.info('katana-1')), false, `lotsofsounds duration ${String(bad)} is omitted`);
+  }
+  delete losSound.duration;
+  losSound.duration_seconds = 2;
+  assert.equal((await src.lotsofsounds.info('katana-1')).duration, 2);
+});
+
+test('the audio judge prompt shows the duration a library sound carries', async () => {
+  const { createFreeSources } = require('../src/lunasworkFreeSources.js');
+  const sound = (id, name, duration) => ({ id, name, username: 'foley', license: 'http://creativecommons.org/publicdomain/zero/1.0/', url: `https://freesound.org/people/foley/sounds/${id}/`, tags: ['sword'], previews: {}, duration });
+  const records = [
+    ['https://freesound.org/apiv2/sounds/201/', sound(201, 'Parry Clang', 2.5)],
+    ['https://freesound.org/apiv2/sounds/202/', sound(202, 'Blade Ring', undefined)],
+  ];
+  const lib = createFreeSources({ fetch: libraryFetch(records), keys: { get: (s) => (s === 'freesound' ? 'fs-key-for-tests' : null) } });
+  const s = setup({ scores: { 'candidate-1': 8, 'candidate-2': 6 }, sources: { freesound: lib.freesound } });
+  const res = await s.judge({ name: 'Parry', kind: 'audio', candidates: [{ source: 'freesound', id: '201' }, { source: 'freesound', id: '202' }] });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const lines = s.calls[0].prompt.split('\n');
+  assert.ok(lines.some((l) => l.includes('Parry Clang') && l.includes('duration: 2.5 s')), 'the library duration is shown');
+  assert.ok(lines.some((l) => l.includes('Blade Ring') && l.includes('duration: unknown')), 'a sound without one still says unknown');
+});
