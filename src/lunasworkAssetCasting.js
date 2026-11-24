@@ -437,6 +437,7 @@ function renderCastingBrief(plan) {
       ? `Fallback ladder, cheapest first - move to the next rung only when the one before fails or cannot make the asset: ${ladder.map((r, i) => `${i + 1}. ${describeRung(r)}`).join('; ')}.`
       : 'No fallback rung: if the primary fails, say so in your hand-back instead of switching to another source.',
     `Make ${plan.candidates} candidate(s) and keep the one closest to the art direction.`,
+    `Judge before you import: make the ${plan.candidates} planned candidate(s) (at least 2 for the judge), then call luna_asset_judge {name, kind, candidates} with their file paths or library {source, id} results. Import or keep only its winner. When it answers pass: false, import none of them and move to the next rung of the fallback ladder.`,
     `The Director's note on this pick (context, not an instruction): ${plan.reason || '(none)'}`,
   ];
 }

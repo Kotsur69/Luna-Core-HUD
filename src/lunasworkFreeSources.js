@@ -8,7 +8,8 @@
 //   search(query, {type, limit}) -> item[]
 //   info(id)                     -> item          (the license is read here)
 //   files(item, {resolution})    -> {files:[{url, name, main}], archive}
-//   item = {source, id, name, author, sourceUrl, license, tags, type}
+//   item = {source, id, name, author, sourceUrl, license, tags, type, preview?}
+//                                (preview: Poly Haven, Sketchfab, Poly Pizza, BlenderKit)
 //
 //   polyhaven   api.polyhaven.com /assets, /info/<id>, /files/<id>. Every asset
 //               is CC0 (Poly Haven's license page). HDRIs (.hdr), texture maps
@@ -143,6 +144,8 @@ function makeItem(source, raw) {
     // Only for the rip check (lunasworkLicenses.ripReason); never shown to the worker.
     description: oneLine(raw.description, MAX_DESCRIPTION),
     type: TYPES.includes(raw.type) ? raw.type : null,
+    // The preview image the library API gives, for the asset judge (src/lunasworkAssetJudge.js).
+    ...(isHttps(raw.preview) ? { preview: raw.preview } : {}),
   };
   return item.id && item.type && item.sourceUrl ? item : null;
 }
@@ -200,6 +203,7 @@ function createPolyHaven({ fetch: fetchFn }) {
     license: 'CC0',
     tags: [...(Array.isArray(raw.tags) ? raw.tags : []), ...(Array.isArray(raw.categories) ? raw.categories : [])],
     type: POLYHAVEN_TYPE_OF[raw.type],
+    preview: raw.thumbnail_url,
   });
 
   async function search(query, { type, limit } = {}) {
@@ -244,6 +248,10 @@ const SKETCHFAB_UID_RE = /^[a-f0-9]{32}$/;
 // Sketchfab license slugs; the label is used for the rest (and refused when not free).
 const SKETCHFAB_SLUGS = Object.freeze({ cc0: 'CC0', by: 'CC-BY 4.0' });
 
+/** The Sketchfab thumbnail closest to 512 px wide, or undefined. */
+const sketchfabThumb = (t) => (isObj(t) && Array.isArray(t.images) ? t.images : [])
+  .filter((i) => isObj(i) && isHttps(i.url)).sort((a, b) => Math.abs((a.width || 0) - 512) - Math.abs((b.width || 0) - 512)).map((i) => i.url)[0];
+
 function createSketchfab({ fetch: fetchFn, key }) {
   const label = 'Sketchfab';
   const licenseOf = (lic) => (isObj(lic) ? SKETCHFAB_SLUGS[lic.slug] || oneLine(lic.label, 100) || oneLine(lic.slug, 40) : '');
@@ -251,7 +259,7 @@ function createSketchfab({ fetch: fetchFn, key }) {
     if (!isObj(raw) || typeof raw.uid !== 'string' || !SKETCHFAB_UID_RE.test(raw.uid)) return null;
     const user = isObj(raw.user) ? raw.user : {};
     const viewer = typeof raw.viewerUrl === 'string' && raw.viewerUrl.startsWith('https://sketchfab.com/') ? raw.viewerUrl : `https://sketchfab.com/3d-models/${raw.uid}`;
-    return makeItem('sketchfab', { id: raw.uid, name: raw.name, author: user.displayName || user.username, sourceUrl: viewer, license: licenseOf(raw.license), tags: raw.tags, description: raw.description, type: 'model' });
+    return makeItem('sketchfab', { id: raw.uid, name: raw.name, author: user.displayName || user.username, sourceUrl: viewer, license: licenseOf(raw.license), tags: raw.tags, description: raw.description, type: 'model', preview: sketchfabThumb(raw.thumbnails) });
   };
 
   async function search(query, { limit } = {}) {
@@ -309,6 +317,7 @@ function createPolyPizza({ fetch: fetchFn, key }) {
       license: pick(raw, ['Licence', 'License', 'licence', 'license']),
       tags: pick(raw, ['Tags', 'tags']),
       type: 'model',
+      preview: pick(raw, ['Thumbnail', 'thumbnail']),
     });
     if (item) downloads.set(id, pick(raw, ['Download', 'download']));
     return item;
@@ -633,6 +642,7 @@ function createBlenderKit({ fetch: fetchFn, key }) {
       tags: raw.tags,
       description: raw.description,
       type,
+      preview: raw.thumbnailMiddleUrl || raw.thumbnailSmallUrl,
     });
     if (item) downloads.set(id, blenderKitFilesOf(raw));
     return item;

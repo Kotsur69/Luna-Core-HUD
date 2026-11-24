@@ -4,7 +4,7 @@
 // The God Mode workers of a Luna's Work build on a Unity project - the
 // asset-prep packages in their parallel worktrees, and the scene worker
 // (lunasworkScene.SCENE_WORKER_ID) - reach the asset pipeline
-// (src/lunasworkAssetPipeline.js) through five tools on the MCP server every
+// (src/lunasworkAssetPipeline.js) through six tools on the MCP server every
 // LunaCore tab already has (src/intake.js), next to luna_todo_* and memory_*.
 // An asset-prep worker has no Unity editor: its answers report the Unity
 // import / prefab step as deferred to the scene worker (withDeferredImport),
@@ -17,6 +17,8 @@
 //   luna_asset_search       free CC0 / CC-BY assets on a library's official API
 //   luna_asset_import       one of them, license checked again, ledgered
 //                           (src/lunasworkFreeAssets.js, src/lunasworkFreeSources.js)
+//   luna_asset_judge        the Critic ranks 2-8 candidates before import or a
+//                           paid final (src/lunasworkAssetJudge.js)
 //
 // Only a God Mode worker tab of the project Luna's Work is building gets them
 // (main.js decides, then createAssetToolsFor); every other tab never sees
@@ -63,11 +65,13 @@ const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-ht
 const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
 const { ALL_SOURCES } = require('./lunasworkAssetFanout');
 const { createFreeSources, SOURCE_IDS, TYPES: LIBRARY_TYPES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
+const { createAssetJudge, createVerdictStore, MIN_CANDIDATES, MAX_CANDIDATES, CANDIDATES_DIR } = require('./lunasworkAssetJudge');
 
 const BLENDER_TOOL = 'luna_asset_blender';
 const COMFY_TOOL = 'luna_asset_comfy';
 const HIGGSFIELD_TOOL = 'luna_asset_higgsfield';
 const SEARCH_TOOL = 'luna_asset_search';
+const JUDGE_TOOL = 'luna_asset_judge';
 const IMPORT_TOOL = 'luna_asset_import';
 const BLENDER_HOST = '127.0.0.1';
 const DEFAULT_BLENDER_PORT = 9876;
@@ -212,6 +216,30 @@ const ASSET_TOOLS = Object.freeze([
       },
     },
   },
+  {
+    name: JUDGE_TOOL,
+    description: `Luna's Work asset judge: the Critic ranks ${MIN_CANDIDATES} to ${MAX_CANDIDATES} candidates for ONE asset against design/references/ and the art direction, BEFORE you import or pay for anything. A candidate is a repo image path under art/ or the art root (a ComfyUI draft, a Higgsfield result, a render) or a luna_asset_search result {source, id}, judged on its library preview (saved under ${CANDIDATES_DIR}/). Kind "audio" is judged on metadata only (name, tags, duration, license). Answers {ranking, winner, pass, reason}: import only the winner; pass false means move to the next rung of the fallback ladder. After a passing free or local winner, luna_asset_higgsfield refuses this asset (freeCandidatePassed). Logged in the run report.`,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'kind', 'candidates'],
+      properties: {
+        name: NAME_PROP,
+        kind: { type: 'string', enum: Object.keys(KINDS) },
+        candidates: {
+          type: 'array',
+          minItems: MIN_CANDIDATES,
+          maxItems: MAX_CANDIDATES,
+          items: {
+            anyOf: [
+              { type: 'string', description: 'A repo-relative file path under art/ or the art root.' },
+              { type: 'object', additionalProperties: false, required: ['source', 'id'], properties: { source: { type: 'string', enum: [...SOURCE_IDS] }, id: { type: 'string' } } },
+            ],
+          },
+        },
+      },
+    },
+  },
 ]);
 const TOOL_NAMES = new Set(ASSET_TOOLS.map((t) => t.name));
 const RUNNER_OF = Object.freeze({
@@ -220,6 +248,7 @@ const RUNNER_OF = Object.freeze({
   [HIGGSFIELD_TOOL]: 'higgsfieldFinal',
   [SEARCH_TOOL]: 'librarySearch',
   [IMPORT_TOOL]: 'libraryImport',
+  [JUDGE_TOOL]: 'assetJudge',
 });
 
 /** The pipeline's note for a failed import (lunasworkAssetPipeline importNote). */
@@ -546,14 +575,17 @@ function createDownloader(opts = {}) {
  * The asset tools of one worker tab, or null when it gets none.
  * @param {{assetTools:()=>{comfyuiPort:number, blenderPort:number, higgsfieldUsdPerCredit:number, artRoot:string},
  *   keys?:{get:(source:string)=>string|null, secrets:()=>string[]},
- *   net?:object, execFile?:Function, fetch?:Function, lookup?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void}} deps
+ *   net?:object, execFile?:Function, fetch?:Function, lookup?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void,
+ *   runClaude?:Function, verdicts?:object}} deps  runClaude / verdicts = the judge's Critic runner and verdict store (tests)
  *   keys = the asset library keys (src/lunasworkAssetKeys.js); none -> the keyed libraries answer noKey
  * @returns {(ctx:{repoPath:string, recordSpend:Function, recordAsset:Function, cappedTools:Function}|null)
- *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function, librarySearch:Function, libraryImport:Function}}
+ *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function, librarySearch:Function, libraryImport:Function, assetJudge:Function}}
  */
 function createAssetToolsFor(deps) {
   const log = deps.log || (() => {});
   const keys = isObj(deps.keys) ? deps.keys : { get: () => null, secrets: () => [] };
+  // One store for the process: the judge's passing free verdicts outlive the per-call pipelines.
+  const verdicts = deps.verdicts || createVerdictStore();
   return function assetsFor(ctx) {
     if (!isObj(ctx) || typeof ctx.repoPath !== 'string') return null;
     // A library call that throws (not one that answers a failure) still never shows a stored key.
@@ -587,6 +619,7 @@ function createAssetToolsFor(deps) {
         unity: createPipelineClient({ projectDir: ctx.repoPath, fetch: deps.fetch }),
         recordSpend: ctx.recordSpend,
         cappedTools: ctx.cappedTools,
+        freeCandidatePassed: (job) => verdicts.freePassed(ctx.repoPath, job.kind, job.slug),
         logAsset: (entry) => {
           if (!ctx.recordAsset(entry)) log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);
         },
@@ -598,6 +631,22 @@ function createAssetToolsFor(deps) {
       higgsfieldFinal: (a) => pipeline().higgsfieldFinal(a),
       librarySearch: (a) => keyed(() => library().search(a)),
       libraryImport: (a) => keyed(() => library().importAsset(a)),
+      assetJudge: (a) => keyed(() => {
+        const made = pipeline();
+        return createAssetJudge({
+          repoPath: made.shared.repoPath,
+          artRoot: made.artRoot,
+          files: made.shared.files,
+          log: made.shared.log,
+          sources: createFreeSources({ fetch: deps.fetch, keys }),
+          // The preview download: public https only, never a key or an auth header.
+          download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
+          verdicts,
+          runClaude: deps.runClaude,
+          env: deps.env ? deps.env() : undefined,
+          secrets: () => keys.secrets(),
+        }).judge(a);
+      }),
     };
   };
 }
@@ -608,6 +657,7 @@ module.exports = {
   COMFY_TOOL,
   HIGGSFIELD_TOOL,
   SEARCH_TOOL,
+  JUDGE_TOOL,
   IMPORT_TOOL,
   DEFAULT_BLENDER_PORT,
   callAssetTool,
