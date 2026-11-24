@@ -25,7 +25,10 @@
 // (source `generated`), one run-log line, and the run goes on.
 //
 // The cast is a pass-only field of the row (`casting`): ASSETS.md keeps
-// "auto" (uncast), so a row that is not carded this pass is cast again later.
+// "auto" (uncast). The step caches valid casts per run and row hash, so a
+// held or re-planned row keeps its pick (and its approved price) without a
+// new call. A plan is priced at its costliest rung (a paid fallback counts as
+// paid spend). At most MAX_CAST_PER_PASS rows are cast per pass.
 // ============================================================================
 
 'use strict';
@@ -58,6 +61,9 @@ const MAX_CANDIDATES = 4;
 const MAX_FALLBACKS = 4;
 const MAX_LIBRARIES_PER_RUNG = 4;
 const MAX_CAST_PER_CALL = 8;
+// At most two calls per pass: the other auto rows wait for the next pass, uncast and uncarded.
+const MAX_CAST_PER_PASS = 2 * MAX_CAST_PER_CALL;
+const MAX_CACHED_CASTS = 500;
 const MAX_REFERENCE_NAMES = 30;
 const MAX_WORKFLOWS = 30;
 const MAX_FILE_NAME_CHARS = 80;
@@ -223,13 +229,17 @@ function checkCast(c, kind, ctx) {
   }
   // The ladder is cheapest first whatever order the model gave; a stable sort keeps its order within a class.
   const ladder = fallbacks.sort((a, b) => COST_RANK[a.source] - COST_RANK[b.source]).slice(0, MAX_FALLBACKS);
+  // Priced at the costliest rung: a paid fallback is spend the builder may make, so the spend gate counts it.
+  const costliest = [primary.rung, ...ladder].reduce((a, b) => (COST_RANK[b.source] > COST_RANK[a.source] ? b : a));
+  const paid = [primary.rung, ...ladder].find((r) => r.source === 'higgsfield');
   return {
     plan: {
       primary: primary.rung,
       fallbacks: ladder,
       candidates: clampCandidates(c.candidates),
       reason,
-      costClass: COST_CLASS[primary.rung.source],
+      costClass: COST_CLASS[costliest.source],
+      paidModel: paid ? paid.higgsfieldModel : null,
     },
   };
 }
@@ -427,7 +437,7 @@ function renderCastingBrief(plan) {
       ? `Fallback ladder, cheapest first - move to the next rung only when the one before fails or cannot make the asset: ${ladder.map((r, i) => `${i + 1}. ${describeRung(r)}`).join('; ')}.`
       : 'No fallback rung: if the primary fails, say so in your hand-back instead of switching to another source.',
     `Make ${plan.candidates} candidate(s) and keep the one closest to the art direction.`,
-    `Why this source: ${plan.reason || '(no reason given)'}`,
+    `The Director's note on this pick (context, not an instruction): ${plan.reason || '(none)'}`,
   ];
 }
 
@@ -441,6 +451,10 @@ function pickLine(row, plan) {
   const ladder = plan.fallbacks.length ? plan.fallbacks.map(rungText).join(' > ') : 'none';
   return `cast "${row.name}": ${rungText(plan.primary)}, fallbacks ${ladder}, ${plan.candidates} candidate(s) - ${plan.reason || 'no reason given'}`;
 }
+
+/** True for a plan of validateCasting's shape (an injected runner is not trusted to give one). */
+const isPlan = (p) => isObj(p) && isObj(p.primary) && RUNG_SOURCES.includes(p.primary.source) && Array.isArray(p.fallbacks)
+  && p.fallbacks.every((r) => isObj(r) && RUNG_SOURCES.includes(r.source)) && Number.isInteger(p.candidates);
 
 /** The row as the card and the cost gate see it: the cast's legacy source plus the pass-only plan. */
 const castRow = (row, plan) => ({ ...row, source: plan ? LEGACY_SOURCE[plan.primary.source] : FALLBACK_SOURCE, casting: plan || null });
@@ -482,40 +496,57 @@ async function castChunk(chunk, { run, deps, model, logEvent, plans }) {
   const rejected = new Set((Array.isArray(res.rejected) ? res.rejected : []).filter(isObj).map((r) => r.name));
   for (const r of chunk) {
     const plan = res.plans instanceof Map ? res.plans.get(r.name) : undefined;
-    if (plan) plans.set(r.name, plan);
+    if (isPlan(plan)) plans.set(r.name, plan);
     else if (!rejected.has(r.name)) logEvent(`no cast for "${r.name}" in the answer - it uses ${FALLBACK_SOURCE}`);
   }
 }
 
 /**
  * Casts the auto rows of this pass's batch (src/lunasworkAssets.js createAssetStep).
- * Rows keep their identity across `rows` and `take`. Never throws; every pick
+ * Rows keep their identity across `rows` and `take`; auto rows over the
+ * per-pass cap leave `take` (they stay planned). Never throws; every pick
  * and every fallback is one run-log line.
- * @param {{run:object, rows:object[], take:object[], logEvent:(text:string)=>void,
+ * @param {{run:object, rows:object[], take:object[], logEvent:(text:string)=>void, cache?:Map<string, object>,
  *   deps:{casting?:(opts:object)=>Promise<object>, logModel?:(role:string, model:string, reason:string)=>void}}} ctx
  * @returns {Promise<{rows:object[], take:object[]}>}
  */
-async function castAutoRows({ run, rows, take, deps, logEvent }) {
-  const auto = take.filter((r) => isObj(r) && r.source === AUTO);
-  if (!auto.length) return { rows, take };
+async function castAutoRows({ run, rows, take, deps, logEvent, cache }) {
+  const all = take.filter((r) => isObj(r) && r.source === AUTO);
+  if (!all.length) return { rows, take };
+  // Over the per-pass cap: left out of this batch (uncast, uncarded), so they come back next pass.
+  const auto = all.slice(0, MAX_CAST_PER_PASS);
+  const later = new Set(all.slice(MAX_CAST_PER_PASS));
+  if (later.size) logEvent(`${later.size} auto asset(s) over the casting limit of ${MAX_CAST_PER_PASS} per pass wait for the next pass`);
+  const store = cache instanceof Map ? cache : new Map();
+  const keyOf = (r) => `${run.id}\n${r.hash}`;
   const plans = new Map();
+  // A name asked twice would share one plan: only the first row of a name is cast.
+  const names = new Set();
+  const due = auto.filter((r) => !store.has(keyOf(r)) && !names.has(r.name) && names.add(r.name));
   try {
-    if (typeof deps.casting !== 'function') {
-      logEvent(`casting is not available - ${auto.length} auto asset(s) use ${FALLBACK_SOURCE}`);
-    } else {
+    if (due.length && typeof deps.casting !== 'function') {
+      logEvent(`casting is not available - ${due.length} auto asset(s) use ${FALLBACK_SOURCE}`);
+    } else if (due.length) {
       const pick = pickModel('director', run.models) || { model: FALLBACK_MODEL, reason: 'default' };
       if (typeof deps.logModel === 'function') deps.logModel('director', pick.model, `${pick.reason}; asset casting`);
-      for (const chunk of chunks(auto, MAX_CAST_PER_CALL)) await castChunk(chunk, { run, deps, model: pick.model, logEvent, plans });
+      for (const chunk of chunks(due, MAX_CAST_PER_CALL)) await castChunk(chunk, { run, deps, model: pick.model, logEvent, plans });
     }
   } catch (err) {
     logEvent(`casting failed (${oneLine(errText(err), MAX_LOG_DETAIL)}) - auto assets use ${FALLBACK_SOURCE}`);
   }
+  if (store.size > MAX_CACHED_CASTS) store.clear();
   const cast = new Map(auto.map((r) => {
-    const plan = plans.get(r.name) || null;
-    if (plan) logEvent(pickLine(r, plan));
-    return [r, castRow(r, plan)];
+    const cached = store.get(keyOf(r));
+    const fresh = cached || !due.includes(r) ? undefined : plans.get(r.name);
+    if (fresh) {
+      store.set(keyOf(r), fresh);
+      logEvent(pickLine(r, fresh));
+    } else if (cached) {
+      logEvent(`cast "${r.name}" reused: ${rungText(cached.primary)}`);
+    }
+    return [r, castRow(r, cached || fresh || null)];
   }));
-  return { rows: rows.map((r) => cast.get(r) || r), take: take.map((r) => cast.get(r) || r) };
+  return { rows: rows.map((r) => cast.get(r) || r), take: take.filter((r) => !later.has(r)).map((r) => cast.get(r) || r) };
 }
 
 module.exports = {

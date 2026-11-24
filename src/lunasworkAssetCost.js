@@ -81,7 +81,8 @@ function costClass(row) {
 
 /** The model a row names (entry.model, else `model: <id>` in its spec), lower-case, or null. */
 function modelOf(row) {
-  const cast = isObj(row.casting) && isObj(row.casting.primary) ? row.casting.primary.higgsfieldModel : null;
+  // A cast row's paid rung (its primary or a fallback) names the model.
+  const cast = isObj(row.casting) ? row.casting.paidModel : null;
   if (typeof cast === 'string' && MODEL_ID_RE.test(cast.toLowerCase())) return cast.toLowerCase();
   const direct = typeof row.model === 'string' ? row.model.trim().toLowerCase() : '';
   if (MODEL_ID_RE.test(direct)) return direct;

@@ -199,7 +199,7 @@ function cleanRow(line, map) {
     name,
     type,
     spec,
-    source: SOURCES.includes(sourceText) ? sourceText : casting.AUTO,
+    source: SOURCES.includes(sourceText) ? sourceText : sourceText ? 'generated' : casting.AUTO,
     file: oneLine(get('file'), MAX_FILE_CHARS),
     status: oneLine(get('status').toLowerCase(), MAX_STATUS_CHARS) || PLANNED,
     hash: specHash(type, spec, name),
@@ -684,6 +684,8 @@ function styleCard(row, s) {
  */
 function createAssetStep(deps) {
   const logEvent = (text) => deps.logEvent(`assets: ${text}`);
+  // Valid casts of this step, per run and row hash: a held or re-planned row keeps its pick.
+  const castCache = new Map();
   const defaultLimit = Number.isInteger(deps.batchLimit) && deps.batchLimit > 0 ? Math.min(MAX_BATCH_LIMIT, deps.batchLimit) : DEFAULT_BATCH_LIMIT;
 
   /** Asks about the rows over the limit; they are held under the decision. */
@@ -772,7 +774,7 @@ function createAssetStep(deps) {
       let rows = dedupeAssets(settleRows(parsed.rows, { decisions: run.decisions, cards: normalizeTodos(store.read()) }));
       const { take, ask } = selectBatch(rows, limit);
       // Auto rows are cast before the spend gate, so the estimate prices the picked source.
-      const cast = await casting.castAutoRows({ run, rows: gate(rows, ask, limit), take, deps, logEvent });
+      const cast = await casting.castAutoRows({ run, rows: gate(rows, ask, limit), take, deps, logEvent, cache: castCache });
       const spend = spendGate(run, cast.rows, cast.take);
       rows = card(run, spend.rows, spend.take, store, tag);
       rows = await styleCheck(run, rows, store, tag);
@@ -780,8 +782,11 @@ function createAssetStep(deps) {
       rows = rows.map(({ now, paidOk, ...r }) => casting.uncast(r));
       const next = formatAssetList(parsed, rows);
       if (next !== parsed.lines.join('\n')) {
-        const written = pack.applyWrite(run.repoPath, { file: ASSETS_FILE, update: () => next });
+        // Never overwrite an ASSETS.md edited while the pass awaited the casting / style calls.
+        let edited = false;
+        const written = pack.applyWrite(run.repoPath, { file: ASSETS_FILE, update: (current) => (current === md ? next : ((edited = true), current)) });
         if (!written.ok) logEvent(`design/${ASSETS_FILE} not updated (${oneLine(written.error, 120)})`);
+        else if (edited) logEvent(`design/${ASSETS_FILE} was edited during the pass - kept as edited; its rows are picked up again next pass`);
       }
       const count = (status) => rows.filter((r) => isAsset(r) && r.status === status).length;
       return { queued: count(QUEUED), held: count(HELD), unpaid: count(UNPAID), deferred: count(DEFERRED), duplicates: count(DUPLICATE), restyle: count(RESTYLE), approved: count(APPROVED) };

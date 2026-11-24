@@ -100,8 +100,10 @@ test('an empty Source reads as auto; explicit sources and auto keep their value'
     '| Ship | model | teal ship | blender |  |  |  |  |',
     '| Grass | texture | grass | library |  |  |  |  |',
     '| Logo | ui | logo | generated |  |  |  |  |',
+    '| Odd | ui | odd | midjourney |  |  |  |  |',
   ].join('\n'));
-  assert.deepEqual(rows.map((r) => r.source), ['auto', 'auto', 'blender', 'library', 'generated']);
+  // An unknown non-empty value keeps today's generated: only an empty Source is cast.
+  assert.deepEqual(rows.map((r) => r.source), ['auto', 'auto', 'blender', 'library', 'generated', 'generated']);
   assert.ok(A.SOURCES.includes('auto'));
   assert.match(Pack.GAME_TEMPLATES['ASSETS.md'], /auto \(or empty\): the Director picks the source/);
 });
@@ -128,7 +130,7 @@ test('an auto row is cast: its card names the source, the workflow, the fallback
   assert.match(card.details, /Primary: local ComfyUI with the workflow art\/comfyui\/draft\.json/);
   assert.match(card.details, /Fallback ladder, cheapest first[^\n]*1\. free library polyhaven[^\n]*2\. paid Higgsfield with the model gpt_image_2_6/);
   assert.match(card.details, /Make 3 candidate\(s\)/);
-  assert.match(card.details, /Why this source: a flat toon grass tile is a quick local draft/);
+  assert.match(card.details, /The Director's note on this pick \(context, not an instruction\): a flat toon grass tile is a quick local draft/);
   assert.match(card.details, /Source: generated/, 'a ComfyUI cast is a generated asset for the card');
   // Every pick and its reason is in the run log; the Director's model is logged.
   assert.ok(events.some((e) => /cast "Grass Tile": comfyui draft\.json, fallbacks library polyhaven > higgsfield gpt_image_2_6, 3 candidate\(s\) - a flat toon grass/.test(e)), events.join('\n'));
@@ -327,7 +329,7 @@ test('rows with an explicit source are never cast and their card is unchanged', 
 });
 
 test('the spend estimate prices a cast row by its picked source and model', () => {
-  const plan = (primary) => ({ primary, fallbacks: [], candidates: 1, reason: 'x', costClass: { library: 'library', comfyui: 'local', blender: 'local', higgsfield: 'paid' }[primary.source] });
+  const plan = (primary) => ({ primary, fallbacks: [], candidates: 1, reason: 'x', costClass: { library: 'library', comfyui: 'local', blender: 'local', higgsfield: 'paid' }[primary.source], paidModel: primary.higgsfieldModel || null });
   const est = Cost.assetManifestEstimate([
     { name: 'A', type: 'sprite', source: 'generated', spec: 'a', casting: plan({ source: 'comfyui', comfyWorkflow: 'draft.json' }) },
     { name: 'B', type: 'model', source: 'library', spec: 'b', casting: plan({ source: 'library', librarySources: ['polyhaven'] }) },
@@ -344,4 +346,84 @@ test('renderCastingBrief gives nothing for no plan', () => {
   assert.deepEqual(C.renderCastingBrief(null), []);
   assert.deepEqual(C.renderCastingBrief({ primary: { source: 'nope' } }), []);
   assert.match(C.renderCastingBrief({ primary: { source: 'blender' }, fallbacks: [], candidates: 1, reason: '' }).join('\n'), /No fallback rung/);
+});
+
+// ---- review fixes: paid fallbacks, the per-pass cap, the cache, concurrent edits ------------
+
+test('a paid fallback rung prices the plan as paid, with its model', () => {
+  const { plans } = C.validateCasting({ casts: [{ name: 'Crate', primary: { source: 'library', librarySources: ['polyhaven'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }], candidates: 1, reason: 'x' }] }, ctxFor([{ name: 'Crate', type: 'model' }]));
+  const plan = plans.get('Crate');
+  assert.equal(plan.costClass, 'paid');
+  assert.equal(plan.paidModel, 'image-to-3d');
+  const est = Cost.assetManifestEstimate([{ name: 'Crate', type: 'model', source: 'library', spec: 'x', casting: plan }]);
+  assert.equal(est.paid.count, 1);
+  assert.equal(est.paid.credits, 30);
+  const free = C.validateCasting({ casts: [{ name: 'Crate', primary: { source: 'blender' }, fallbacks: [{ source: 'library', librarySources: ['polyhaven'] }], candidates: 1, reason: 'x' }] }, ctxFor([{ name: 'Crate', type: 'model' }]));
+  assert.equal(free.plans.get('Crate').costClass, 'local');
+  assert.equal(free.plans.get('Crate').paidModel, null);
+});
+
+const autoRow = (i) => ({ name: `Tree ${i}`, type: 'model', spec: `tree ${i}`, source: 'auto', hash: `h${i}`, status: 'planned' });
+const blenderCast = (call) => ({ stdout: JSON.stringify({ structured_output: { casts: [...call.prompt.matchAll(/^- "([^"]+)"/gm)].map((m) => ({ name: m[1], primary: { source: 'blender' }, fallbacks: [], candidates: 1, reason: 'modeled to the art direction' })) } }) });
+
+test('at most two casting calls per pass; the other auto rows leave the batch and wait', async (t) => {
+  const dir = fakeRepo(t, []);
+  const rows = Array.from({ length: 20 }, (_, i) => autoRow(i + 1));
+  const { runner, calls } = stubRunner(blenderCast);
+  const events = [];
+  const res = await C.castAutoRows({ run: baseRun(dir), rows, take: rows, deps: { casting: (o) => C.runCasting({ ...o, runClaude: runner }) }, logEvent: (e) => events.push(e) });
+  assert.equal(calls.length, 2);
+  assert.equal(res.take.length, 16);
+  assert.ok(res.take.every((r) => r.casting && r.source === 'blender'));
+  assert.equal(res.rows.length, 20);
+  assert.equal(res.rows.filter((r) => r.source === 'auto').length, 4, 'the waiting rows are untouched');
+  assert.ok(events.some((e) => /4 auto asset\(s\) over the casting limit of 16 per pass wait/.test(e)));
+});
+
+test('a valid cast is reused for the same run and row hash without a new call', async (t) => {
+  const dir = fakeRepo(t, []);
+  const rows = [autoRow(1)];
+  const { runner, calls } = stubRunner(blenderCast);
+  const cache = new Map();
+  const events = [];
+  const deps = { casting: (o) => C.runCasting({ ...o, runClaude: runner }) };
+  await C.castAutoRows({ run: baseRun(dir), rows, take: rows, deps, logEvent: (e) => events.push(e), cache });
+  const again = await C.castAutoRows({ run: baseRun(dir), rows, take: rows, deps, logEvent: (e) => events.push(e), cache });
+  assert.equal(calls.length, 1);
+  assert.equal(again.take[0].casting.primary.source, 'blender');
+  assert.ok(events.some((e) => /cast "Tree 1" reused: blender/.test(e)));
+  // A changed spec is a different hash: cast again.
+  const changed = [{ ...autoRow(1), hash: 'other' }];
+  await C.castAutoRows({ run: baseRun(dir), rows: changed, take: changed, deps, logEvent: () => {}, cache });
+  assert.equal(calls.length, 2);
+});
+
+test('a malformed plan from an injected casting runner is ignored', async (t) => {
+  const dir = fakeRepo(t, []);
+  const rows = [autoRow(1)];
+  const events = [];
+  const bad = async () => ({ ok: true, plans: new Map([['Tree 1', { primary: { source: 'blender' } }]]), rejected: [] });
+  const res = await C.castAutoRows({ run: baseRun(dir), rows, take: rows, deps: { casting: bad }, logEvent: (e) => events.push(e) });
+  assert.equal(res.take[0].source, 'generated');
+  assert.equal(res.take[0].casting, null);
+  assert.ok(events.some((e) => /no cast for "Tree 1"/.test(e)));
+});
+
+test('an ASSETS.md edited while the casting call runs is not overwritten', async (t) => {
+  const dir = fakeRepo(t, ['| Crate | model | wooden crate |  |  |  |  |  |']);
+  const file = path.join(dir, 'design', 'ASSETS.md');
+  const store = memStore();
+  const { runner } = stubRunner((call) => {
+    fs.appendFileSync(file, '| Barrel | model | oak barrel |  |  |  |  |  |\n');
+    return blenderCast(call);
+  });
+  const { step, events } = makeStep(store, runner);
+  await step.beforeDirecting(baseRun(dir));
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /Barrel/);
+  assert.ok(events.some((e) => /was edited during the pass - kept as edited/.test(e)), events.join('\n'));
+  // The card was filed; the next pass finds it open and does not file it twice.
+  assert.equal(assetCards(store).length, 1);
+  await makeStep(store, stubRunner(blenderCast).runner).step.beforeDirecting(baseRun(dir));
+  assert.equal(assetCards(store).filter((c) => c.text === 'Asset: Crate (model)').length, 1);
 });
