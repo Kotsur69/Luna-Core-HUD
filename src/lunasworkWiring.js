@@ -67,6 +67,7 @@ const { runDirector } = require('./lunasworkDirector');
 const { runCritic, gateStatus } = require('./lunasworkCritic');
 const { runResearch } = require('./lunasworkResearch');
 const { runStyleCheck } = require('./lunasworkAssets');
+const { runCasting } = require('./lunasworkAssetCasting');
 const { runPlaytest } = require('./lunasworkPlaytest');
 const { createAdapter } = require('./lunasworkAdapters');
 const { planWaitDecision } = require('./orchestraPlanWait');
@@ -403,6 +404,8 @@ function createLunasWorkRuntime(ctx) {
     research: (opts) => runResearch({ ...opts, env: ctx.env(), log: ctx.log, runClaude: runHeadless }),
     // LW 3.37: the Critic's art-direction check of new game assets (design/ASSETS.md).
     styleCheck: (opts) => runStyleCheck({ ...opts, env: ctx.env(), runClaude: runHeadless }),
+    // The Director casts the source of auto asset rows; library key status is booleans only.
+    assetCasting: (opts) => runCasting({ ...opts, env: ctx.env(), keyStatus: ctx.assetKeyStatus, runClaude: runHeadless }),
     // Asset cards on a Unity run name the asset pipeline's art root (per-PC setting).
     assetArtRoot: () => settingsStore.assetToolsFor(settingsStore.readSettings()).artRoot,
     // The Higgsfield credit price the asset cost estimate uses (per-PC setting).

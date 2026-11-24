@@ -174,7 +174,8 @@ const GAME_TEMPLATES = Object.freeze({
      per asset; the asset step (src/lunasworkAssets.js) never generates a
      name or a spec hash twice and files one builder card per planned row.
      Type: sprite, texture, model, material, animation, audio, ui, vfx, other.
-     Source: generated (a generation API), blender (Blender MCP) or library.
+     Source: generated (a generation API), blender (Blender MCP), library, or
+     auto (or empty): the Director picks the source and model per asset.
      Status: leave "planned" (or empty) for new rows; the run moves it through
      queued -> done -> approved / restyle. Hash is filled in by the run. -->
 
