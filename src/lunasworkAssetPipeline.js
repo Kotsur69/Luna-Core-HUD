@@ -237,7 +237,7 @@ function cleanAssetEntry(raw) {
  *   blender?:{executeCode:(code:string)=>Promise<unknown>},
  *   unity?:{exec:(command:string, parameters:object)=>Promise<unknown>},
  *   recordSpend:(p:{tool:string, costUsd:number})=>{ok:boolean, reason:string|null},
- *   cappedTools?:()=>string[], logAsset?:(entry:object)=>void, freeCandidatePassed?:(job:{name:string, slug:string})=>boolean,
+ *   cappedTools?:()=>string[], logAsset?:(entry:object)=>void, freeCandidatePassed?:(job:{name:string, kind:string, slug:string})=>boolean,
  *   fsImpl?:object, now?:()=>number, randomSeed?:()=>number,
  *   execFile?:Function}} deps  execFile = child_process.execFile for the optional ffmpeg audio post-process (tests fake it)
  */

@@ -619,7 +619,7 @@ function createAssetToolsFor(deps) {
         unity: createPipelineClient({ projectDir: ctx.repoPath, fetch: deps.fetch }),
         recordSpend: ctx.recordSpend,
         cappedTools: ctx.cappedTools,
-        freeCandidatePassed: (job) => verdicts.freePassed(ctx.repoPath, job.slug),
+        freeCandidatePassed: (job) => verdicts.freePassed(ctx.repoPath, job.kind, job.slug),
         logAsset: (entry) => {
           if (!ctx.recordAsset(entry)) log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);
         },
