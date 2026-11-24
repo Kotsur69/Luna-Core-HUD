@@ -253,7 +253,7 @@ test('only a store with the asset pipeline lists and answers the luna_asset_* to
     higgsfieldFinal: async () => { throw new Error('boom'); },
   };
   const listed = handleRpc(rpc('tools/list'), store({ assets }));
-  assert.deepEqual(listed.result.tools.filter((t) => t.name.startsWith('luna_asset_')).map((t) => t.name), [T.BLENDER_TOOL, T.COMFY_TOOL, T.HIGGSFIELD_TOOL, T.SEARCH_TOOL, T.IMPORT_TOOL]);
+  assert.deepEqual(listed.result.tools.filter((t) => t.name.startsWith('luna_asset_')).map((t) => t.name), [T.BLENDER_TOOL, T.COMFY_TOOL, T.HIGGSFIELD_TOOL, T.SEARCH_TOOL, T.IMPORT_TOOL, T.JUDGE_TOOL]);
   // A store whose pipeline lacks the library runners answers toolDown, never a crash.
   const noLibrary = await handleRpc(rpc('tools/call', { name: T.SEARCH_TOOL, arguments: { source: 'polyhaven', query: 'x' } }), store({ assets }));
   assert.equal(noLibrary.result.isError, true);
@@ -435,5 +435,80 @@ test('a paid Higgsfield final without the editor is still booked first; only the
 test('the asset tools that import into Unity tell the worker about the deferred import', () => {
   for (const name of [T.BLENDER_TOOL, T.COMFY_TOOL, T.HIGGSFIELD_TOOL, T.IMPORT_TOOL]) {
     assert.match(T.ASSET_TOOLS.find((t) => t.name === name).description, /deferred to the scene-worker/, name);
+  }
+});
+
+// ---- luna_asset_judge ------------------------------------------------------------------
+
+test('luna_asset_judge schema: name, kind and 2 to 8 candidates, each a path or a library {source, id}', () => {
+  const schema = T.ASSET_TOOLS.find((t) => t.name === T.JUDGE_TOOL).inputSchema;
+  assert.equal(T.JUDGE_TOOL, 'luna_asset_judge');
+  assert.deepEqual(schema.required, ['name', 'kind', 'candidates']);
+  assert.deepEqual([schema.properties.candidates.minItems, schema.properties.candidates.maxItems], [2, 8]);
+  const [file, library] = schema.properties.candidates.items.anyOf;
+  assert.equal(file.type, 'string');
+  assert.deepEqual(library.required, ['source', 'id']);
+  assert.ok(library.properties.source.enum.includes('polypizza'));
+  assert.ok(schema.properties.kind.enum.includes('audio'));
+});
+
+test('luna_asset_judge through createAssetToolsFor: previews fetched without the key, verdict logged, then Higgsfield refused', async () => {
+  const fsx = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const repo = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-judge-tools-'));
+  try {
+    // Assembled at runtime: a library key must never show up in a preview download.
+    const key = ['pp', 'k'.repeat(24)].join('-');
+    const fetched = [];
+    const reply = (buf) => ({ status: 200, ok: true, headers: { get: () => null }, arrayBuffer: async () => buf });
+    const fetch = async (url, init = {}) => {
+      fetched.push({ url, init });
+      if (url.startsWith('https://api.poly.pizza/')) {
+        const id = url.split('/').pop();
+        return reply(Buffer.from(JSON.stringify({ model: { ID: id, Title: `Crate ${id}`, Creator: { Username: 'u' }, Licence: 'CC0', Tags: ['box'], Download: `https://static.poly.pizza/${id}.glb`, Thumbnail: `https://static.poly.pizza/${id}.webp` } })));
+      }
+      return reply(PNG_BYTES);
+    };
+    const prompts = [];
+    const execCalls = [];
+    const recorded = [];
+    const assetsFor = T.createAssetToolsFor({
+      assetTools: () => ({ comfyuiPort: 8188, blenderPort: 9876, higgsfieldUsdPerCredit: 0.1, artRoot: 'Assets/X/Art' }),
+      keys: { get: (source) => (source === 'polypizza' ? key : null), secrets: () => [key] },
+      fetch,
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+      execFile: (...args) => { execCalls.push(args); throw new Error('higgsfield must not run'); },
+      runClaude: async (call) => {
+        prompts.push(call.prompt);
+        return { stdout: JSON.stringify({ structured_output: { scores: [{ name: 'candidate-1', score: 8, reference: '', notes: 'fits', silhouette: 8, palette: 8 }, { name: 'candidate-2', score: 4, reference: '', notes: 'off', silhouette: 4, palette: 4 }] } }) };
+      },
+    });
+    const ctx = () => assetsFor({ repoPath: repo, recordSpend: () => ({ ok: true }), recordAsset: (e) => { recorded.push(e); return true; }, cappedTools: () => [] });
+    const res = await T.callAssetTool(T.JUDGE_TOOL, { name: 'Wood Crate', kind: 'prop', candidates: [{ source: 'polypizza', id: 'abc' }, { source: 'polypizza', id: 'def' }] }, ctx());
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.deepEqual(res.payload.winner.candidate, { source: 'polypizza', id: 'abc' });
+    assert.equal(res.payload.pass, true);
+
+    const api = fetched.filter((f) => f.url.startsWith('https://api.poly.pizza/'));
+    const previews = fetched.filter((f) => f.url.startsWith('https://static.poly.pizza/'));
+    assert.equal(api.length, 2);
+    assert.equal(api[0].init.headers['x-auth-token'], key, 'the API call itself is keyed');
+    assert.deepEqual(previews.map((f) => f.url), ['https://static.poly.pizza/abc.webp', 'https://static.poly.pizza/def.webp']);
+    for (const p of previews) {
+      assert.equal(p.init.headers, undefined, 'no header at all on a preview download');
+      assert.ok(!JSON.stringify(p).includes(key), 'the key never reaches a preview download');
+    }
+    assert.ok(fsx.existsSync(path.join(repo, 'art', 'candidates', 'wood-crate', 'polypizza-abc.png')));
+    assert.ok(prompts[0].includes('art/candidates/wood-crate/polypizza-abc.png'));
+    assert.deepEqual(recorded.map((e) => [e.tool, e.name]), [['judge', 'Wood Crate']]);
+
+    // A new tool set (main.js builds one per request) still sees the verdict.
+    const paid = await T.callAssetTool(T.HIGGSFIELD_TOOL, { name: 'Wood Crate', kind: 'prop', prompt: 'crate', model: 'gpt_image_2_6' }, ctx());
+    assert.equal(paid.ok, false);
+    assert.equal(paid.error.error, 'freeCandidatePassed');
+    assert.deepEqual(execCalls, [], 'no Higgsfield CLI call, not even the estimate');
+  } finally {
+    await fsx.promises.rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

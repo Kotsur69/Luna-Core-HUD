@@ -198,8 +198,8 @@ function resultExt(buf) {
 
 // ---- the asset log ------------------------------------------------------------------------
 
-// 'library': a free asset imported from an asset library (src/lunasworkFreeAssets.js).
-const ASSET_TOOLS = Object.freeze(['blender', 'comfyui', 'higgsfield', 'library']);
+// 'library': a free asset imported from an asset library (src/lunasworkFreeAssets.js); 'judge': a candidate verdict (src/lunasworkAssetJudge.js).
+const ASSET_TOOLS = Object.freeze(['blender', 'comfyui', 'higgsfield', 'library', 'judge']);
 const MAX_LEDGER_BYTES = 2 * 1024 * 1024;
 const NO_CREDITS_TEXT = 'Third-party assets\n\nNone yet.\n';
 const MAX_LOG_PATH_CHARS = 300;
@@ -237,7 +237,7 @@ function cleanAssetEntry(raw) {
  *   blender?:{executeCode:(code:string)=>Promise<unknown>},
  *   unity?:{exec:(command:string, parameters:object)=>Promise<unknown>},
  *   recordSpend:(p:{tool:string, costUsd:number})=>{ok:boolean, reason:string|null},
- *   cappedTools?:()=>string[], logAsset?:(entry:object)=>void,
+ *   cappedTools?:()=>string[], logAsset?:(entry:object)=>void, freeCandidatePassed?:(job:{name:string, slug:string})=>boolean,
  *   fsImpl?:object, now?:()=>number, randomSeed?:()=>number,
  *   execFile?:Function}} deps  execFile = child_process.execFile for the optional ffmpeg audio post-process (tests fake it)
  */
@@ -661,6 +661,8 @@ function createAssetPipeline(deps) {
   async function higgsfieldFinal(raw) {
     const req = higgsfieldRequest(raw);
     if (!req.ok) return req;
+    // A passing free / local luna_asset_judge verdict for this asset makes a paid final unnecessary.
+    if (typeof d.freeCandidatePassed === 'function' && d.freeCandidatePassed(req.job)) return fail('freeCandidatePassed', `luna_asset_judge already passed a free or local candidate for "${req.job.name}" in this run: import that winner instead of paying for a Higgsfield final`);
     const paid = await bookHiggsfield(req.request);
     if (!paid.ok) return paid;
     const { job, request } = req;
