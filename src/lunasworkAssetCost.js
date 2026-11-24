@@ -90,10 +90,17 @@ function modelOf(row) {
 }
 
 let cachedCatalogCredits = null;
-/** Higgsfield credits per final by model id, from the bundled asset catalog (read once). */
+/**
+ * Higgsfield credits per final by model id, from the bundled asset catalog.
+ * Only a read that found priced models is cached: a missing or broken file
+ * (logged by loadCatalog) is read again next time instead of pricing every
+ * named model as unknown for the rest of the process.
+ */
 function catalogModelCredits() {
-  if (!cachedCatalogCredits) cachedCatalogCredits = higgsfieldCredits(loadCatalog());
-  return cachedCatalogCredits;
+  if (cachedCatalogCredits) return cachedCatalogCredits;
+  const credits = higgsfieldCredits(loadCatalog());
+  if (Object.keys(credits).length) cachedCatalogCredits = credits;
+  return credits;
 }
 
 /** The credit table: the catalog's credits, overridden by valid opts.modelCredits entries. */
