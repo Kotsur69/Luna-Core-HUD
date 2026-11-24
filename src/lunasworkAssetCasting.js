@@ -69,9 +69,6 @@ const MAX_WORKFLOWS = 30;
 const MAX_FILE_NAME_CHARS = 80;
 const MAX_REASON_CHARS = 200;
 const MAX_LOG_DETAIL = 120;
-// A paid primary while a free or local rung exists needs a reason this long that names the cheaper option.
-const MIN_PAID_REASON_CHARS = 20;
-const CHEAPER_WORDS_RE = new RegExp(`\\b(free|librar\\w*|local|comfy\\w*|blender|${SOURCE_IDS.join('|')})\\b`, 'i');
 const WORKFLOW_FILE_RE = /^[\w-]{1,80}\.json$/;
 
 const CASTING_EFFORT = 'medium';
@@ -193,7 +190,23 @@ function checkRung(raw, kind, ctx) {
   return { rung: { source, higgsfieldModel: model } };
 }
 
-/** True when a free library (keyless or keyed) or a local tool can make `kind` here. */
+/**
+ * True when a free or local option can make `kind` in this context. The
+ * paid-Higgsfield rule is structural: while this is true a Higgsfield primary
+ * is rejected whatever its reason says (a reason is model text, so it can
+ * never buy a paid primary).
+ *
+ * "Available" is read conservatively, on the side of not spending money:
+ * - a free library that serves the kind counts when it needs no key, or when
+ *   its key is stored (keyFlags: exactly `true`);
+ * - ComfyUI counts when it serves the kind and art/comfyui/ holds at least one
+ *   workflow file (any workflow: the run cannot tell from a file name whether
+ *   it fits the kind, so its presence is enough);
+ * - Blender counts whenever the catalog lists it for the kind (the Blender MCP
+ *   is a local tool the builder can start; the cast cannot probe it).
+ * Higgsfield stays usable as a fallback rung, and as the primary for a kind
+ * no free or local option serves here.
+ */
 function cheaperRungExists(kind, ctx) {
   return sourcesForKind(ctx.catalog, kind).some((id) => {
     if (id === 'blender') return true;
@@ -214,43 +227,84 @@ function clampCandidates(v) {
  * One cast entry -> a plan, or the reason it is rejected.
  * @returns {{plan?:object, why?:string}}
  */
-function checkCast(c, kind, ctx) {
-  const primary = checkRung(c.primary, kind, ctx);
-  if (!primary.rung) return { why: `primary: ${primary.why}` };
-  const reason = oneLine(c.reason, MAX_REASON_CHARS);
-  if (primary.rung.source === 'higgsfield' && cheaperRungExists(kind, ctx)
-    && (reason.length < MIN_PAID_REASON_CHARS || !CHEAPER_WORDS_RE.test(reason))) {
-    return { why: 'paid Higgsfield primary while a free or local option exists, and the reason does not say why that option does not fit' };
-  }
-  const fallbacks = [];
-  for (const raw of Array.isArray(c.fallbacks) ? c.fallbacks : []) {
+/** The primary rung, or why it cannot be the primary (an invalid rung, or a disallowed paid one). */
+function checkPrimary(raw, kind, ctx, cheaper) {
+  const res = checkRung(raw, kind, ctx);
+  if (!res.rung) return res;
+  if (res.rung.source === 'higgsfield' && cheaper) return { why: 'paid Higgsfield primary while a free or local option exists' };
+  return res;
+}
+
+/** The valid fallback rungs, without duplicates (of each other or of `primary`), cheapest first. */
+function checkLadder(rawList, kind, ctx, primary) {
+  const rungs = [];
+  for (const raw of Array.isArray(rawList) ? rawList : []) {
     const f = checkRung(raw, kind, ctx);
-    if (f.rung && !sameRung(f.rung, primary.rung) && !fallbacks.some((x) => sameRung(x, f.rung))) fallbacks.push(f.rung);
+    if (f.rung && !(primary && sameRung(f.rung, primary)) && !rungs.some((x) => sameRung(x, f.rung))) rungs.push(f.rung);
   }
-  // The ladder is cheapest first whatever order the model gave; a stable sort keeps its order within a class.
-  const ladder = fallbacks.sort((a, b) => COST_RANK[a.source] - COST_RANK[b.source]).slice(0, MAX_FALLBACKS);
+  // Cheapest first whatever order the model gave; a stable sort keeps its order within a class.
+  return rungs.sort((a, b) => COST_RANK[a.source] - COST_RANK[b.source]);
+}
+
+/** A short, log-safe name of a raw (possibly invalid) rung: its source and its model or workflow. */
+function rawRungText(raw) {
+  if (!isObj(raw)) return 'none';
+  const libs = Array.isArray(raw.librarySources) ? raw.librarySources.filter((v) => typeof v === 'string').join('/') : '';
+  const what = [raw.source, libs, raw.higgsfieldModel, raw.comfyWorkflow].filter((v) => typeof v === 'string' && v);
+  return oneLine(what.join(' '), 80) || 'none';
+}
+
+/**
+ * One cast entry -> a plan, or the reason it is rejected. A primary that is
+ * invalid (or a paid primary the structural rule forbids) does not sink the
+ * cast: the cheapest valid fallback rung is promoted to primary, and
+ * `promoted` says what was replaced and why. Only with no usable rung left is
+ * the cast rejected (and the row falls back to `generated`).
+ * @returns {{plan?:object, why?:string, promoted?:{from:string, why:string}}}
+ */
+function checkCast(c, kind, ctx) {
+  const cheaper = cheaperRungExists(kind, ctx);
+  const first = checkPrimary(c.primary, kind, ctx, cheaper);
+  let reason = oneLine(c.reason, MAX_REASON_CHARS);
+  let primary = first.rung;
+  let ladder = checkLadder(c.fallbacks, kind, ctx, primary);
+  let promoted;
+  if (!primary) {
+    // A promoted Higgsfield rung obeys the same paid-primary rule as a picked one.
+    const usable = ladder.filter((r) => !(r.source === 'higgsfield' && cheaper));
+    if (!usable.length) return { why: `primary: ${first.why}` };
+    [primary] = usable;
+    ladder = ladder.filter((r) => r !== primary);
+    promoted = { from: rawRungText(c.primary), why: first.why };
+    // The Director's reason was about the rejected pick: the card says so.
+    reason = oneLine(`promoted fallback (the primary ${promoted.from} was rejected: ${first.why}); the Director's note: ${reason || 'none'}`, 2 * MAX_REASON_CHARS);
+  }
+  ladder = ladder.slice(0, MAX_FALLBACKS);
   // Priced at the costliest rung: a paid fallback is spend the builder may make, so the spend gate counts it.
-  const costliest = [primary.rung, ...ladder].reduce((a, b) => (COST_RANK[b.source] > COST_RANK[a.source] ? b : a));
-  const paid = [primary.rung, ...ladder].find((r) => r.source === 'higgsfield');
+  const costliest = [primary, ...ladder].reduce((a, b) => (COST_RANK[b.source] > COST_RANK[a.source] ? b : a));
+  const paid = [primary, ...ladder].find((r) => r.source === 'higgsfield');
   return {
     plan: {
-      primary: primary.rung,
+      primary,
       fallbacks: ladder,
       candidates: clampCandidates(c.candidates),
       reason,
       costClass: COST_CLASS[costliest.source],
       paidModel: paid ? paid.higgsfieldModel : null,
     },
+    ...(promoted ? { promoted } : {}),
   };
 }
 
 /**
  * The trust boundary of the casting call. Unknown names, a second entry for a
- * name and invalid primaries are dropped (their rows keep the fallback);
- * invalid fallback rungs are dropped from the ladder.
+ * name are dropped; invalid fallback rungs are dropped from the ladder. An
+ * invalid primary is replaced by the cheapest valid fallback rung (listed in
+ * `promoted`); a cast with no valid rung at all is rejected (its row keeps
+ * the fallback source).
  * @param {unknown} raw the model's structured output
  * @param {{rows:{name:string, type:string}[], catalog:object, keys:Record<string, boolean>, workflows:string[]}} ctx
- * @returns {{plans:Map<string, object>, rejected:{name:string, why:string}[]}}
+ * @returns {{plans:Map<string, object>, rejected:{name:string, why:string}[], promoted:{name:string, from:string, why:string}[]}}
  */
 function validateCasting(raw, ctx) {
   const c = isObj(ctx) ? ctx : {};
@@ -262,6 +316,7 @@ function validateCasting(raw, ctx) {
   const kindOf = new Map((Array.isArray(c.rows) ? c.rows : []).filter(isObj).map((r) => [r.name, r.type]));
   const plans = new Map();
   const rejected = [];
+  const promoted = [];
   const seen = new Set();
   for (const entry of isObj(raw) && Array.isArray(raw.casts) ? raw.casts : []) {
     if (!isObj(entry) || typeof entry.name !== 'string' || !kindOf.has(entry.name) || seen.has(entry.name)) continue;
@@ -269,8 +324,9 @@ function validateCasting(raw, ctx) {
     const res = checkCast(entry, kindOf.get(entry.name), check);
     if (res.plan) plans.set(entry.name, res.plan);
     else rejected.push({ name: entry.name, why: res.why });
+    if (res.promoted) promoted.push({ name: entry.name, ...res.promoted });
   }
-  return { plans, rejected };
+  return { plans, rejected, promoted };
 }
 
 // ---- the call -----------------------------------------------------------------------------
@@ -371,7 +427,7 @@ function buildCastingPrompt({ rows, catalog, keys, references, workflows, remain
     `- comfyui: comfyWorkflow = one of the workflow files listed above (file name only).`,
     '- higgsfield: higgsfieldModel = a catalog Higgsfield model that makes the kind.',
     '- Prefer the cheapest source that fits the art direction: a free library, then local ComfyUI or Blender, then paid Higgsfield.',
-    '- Higgsfield is the primary only when no free or local option fits; then the reason must name that cheaper option and say why it does not fit.',
+    '- Higgsfield may be the primary only when no free library (keyless or with a stored key), ComfyUI workflow or Blender serves the asset kind here; otherwise a Higgsfield primary is rejected whatever the reason says, so put Higgsfield in the fallbacks.',
     '- fallbacks: the other usable rungs, cheapest first.',
     `- candidates: how many candidates to make, ${MIN_CANDIDATES} to ${MAX_CANDIDATES}.`,
     '- reason: one line.',
@@ -383,11 +439,11 @@ function buildCastingPrompt({ rows, catalog, keys, references, workflows, remain
  * One casting call. Always resolves.
  * @param {{repoDir:string, rows:{name:string, type:string, spec:string}[], model?:string, remainingUsd?:number,
  *   keyStatus?:()=>object, catalog?:object, runClaude?:Function, env?:object, timeoutMs?:number, budgetUsd?:number}} opts
- * @returns {Promise<{ok:boolean, plans:Map<string, object>, rejected:object[], costUsd:number|null, error?:string, detail?:string}>}
+ * @returns {Promise<{ok:boolean, plans:Map<string, object>, rejected:object[], promoted:object[], costUsd:number|null, error?:string, detail?:string}>}
  */
 async function runCasting(opts) {
   const o = isObj(opts) ? opts : {};
-  const fail = (error, detail) => ({ ok: false, plans: new Map(), rejected: [], costUsd: null, error, ...(detail ? { detail: oneLine(detail, 300) } : {}) });
+  const fail = (error, detail) => ({ ok: false, plans: new Map(), rejected: [], promoted: [], costUsd: null, error, ...(detail ? { detail: oneLine(detail, 300) } : {}) });
   try {
     if (!checkCwd(o.repoDir).ok) return fail('noRepo');
     const rows = (Array.isArray(o.rows) ? o.rows : []).filter(isObj).slice(0, MAX_CAST_PER_CALL);
@@ -406,8 +462,8 @@ async function runCasting(opts) {
     if (!isObj(call) || call.error) return fail((isObj(call) && call.error) || 'failed', isObj(call) ? call.detail : undefined);
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
-    const { plans, rejected } = validateCasting(parsed.raw, { rows, catalog, keys, workflows });
-    return { ok: true, plans, rejected, costUsd: parsed.costUsd };
+    const { plans, rejected, promoted } = validateCasting(parsed.raw, { rows, catalog, keys, workflows });
+    return { ok: true, plans, rejected, promoted, costUsd: parsed.costUsd };
   } catch (err) {
     return fail('failed', errText(err));
   }
@@ -496,8 +552,13 @@ async function castChunk(chunk, { run, deps, model, logEvent, plans }) {
     if (isObj(r)) logEvent(`cast "${oneLine(r.name, 80)}" rejected (${oneLine(r.why, MAX_LOG_DETAIL)}) - it uses ${FALLBACK_SOURCE}`);
   }
   const rejected = new Set((Array.isArray(res.rejected) ? res.rejected : []).filter(isObj).map((r) => r.name));
+  const promoted = new Map((Array.isArray(res.promoted) ? res.promoted : []).filter(isObj).map((p) => [p.name, p]));
   for (const r of chunk) {
     const plan = res.plans instanceof Map ? res.plans.get(r.name) : undefined;
+    const p = promoted.get(r.name);
+    if (p && isPlan(plan)) {
+      logEvent(`cast "${oneLine(r.name, 80)}": primary ${oneLine(p.from, 80)} rejected (${oneLine(p.why, MAX_LOG_DETAIL)}) - promoted ${rungText(plan.primary)}`);
+    }
     if (isPlan(plan)) plans.set(r.name, plan);
     else if (!rejected.has(r.name)) logEvent(`no cast for "${r.name}" in the answer - it uses ${FALLBACK_SOURCE}`);
   }

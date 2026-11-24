@@ -212,18 +212,89 @@ test('validateCasting rejects an unknown Higgsfield model, and one that does not
   assert.match(wrongKind.rejected[0].why, /does not make ui/);
 });
 
-test('higgsfield as the primary is rejected while a free or local rung exists, unless the reason says why', () => {
+test('higgsfield as the primary is rejected whenever a free or local option exists, whatever the reason says', () => {
   const rows = [{ name: 'Crate', type: 'model' }];
   const cast = (reason) => ({ casts: [{ name: 'Crate', primary: { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }, fallbacks: [], candidates: 1, reason }] });
-  const bare = C.validateCasting(cast(''), ctxFor(rows));
-  assert.equal(bare.plans.size, 0);
-  assert.match(bare.rejected[0].why, /paid Higgsfield primary while a free or local option exists/);
-  assert.equal(C.validateCasting(cast('looks great'), ctxFor(rows)).plans.size, 0, 'a reason that does not name the cheaper option');
-  const why = C.validateCasting(cast('the free library crates are photoreal and Blender would take too long for this hero prop'), ctxFor(rows));
-  assert.equal(why.plans.get('Crate').primary.higgsfieldModel, 'image-to-3d');
-  // A kind with no free or local rung here (no workflow for ComfyUI, no library serves ui): higgsfield is fine.
-  const ui = C.validateCasting({ casts: [{ name: 'Logo', primary: { source: 'higgsfield', higgsfieldModel: 'gpt_image_2_6' }, fallbacks: [], candidates: 1, reason: '' }] }, ctxFor([{ name: 'Logo', type: 'ui' }], { workflows: [] }));
+  for (const reason of [
+    '',
+    'looks great',
+    // Keyword gaming: names every cheaper option and the words the old check looked for, justifies nothing.
+    'free library local comfyui blender polyhaven sketchfab - free local library blender comfy',
+    'the free library crates are photoreal and Blender would take too long for this hero prop',
+  ]) {
+    const res = C.validateCasting(cast(reason), ctxFor(rows));
+    assert.equal(res.plans.size, 0, reason);
+    assert.match(res.rejected[0].why, /paid Higgsfield primary while a free or local option exists/);
+  }
+});
+
+test('higgsfield as the primary passes when no free or local option exists for the kind here', () => {
+  const hf = (name, model) => ({ casts: [{ name, primary: { source: 'higgsfield', higgsfieldModel: model }, fallbacks: [], candidates: 1, reason: '' }] });
+  // ui: no library serves it, Blender does not make it, and there is no ComfyUI workflow.
+  const ui = C.validateCasting(hf('Logo', 'gpt_image_2_6'), ctxFor([{ name: 'Logo', type: 'ui' }], { workflows: [] }));
+  assert.equal(ui.plans.get('Logo').primary.higgsfieldModel, 'gpt_image_2_6');
   assert.equal(ui.plans.get('Logo').costClass, 'paid');
+  // The same row with a ComfyUI workflow present: a local option exists, the paid primary is rejected.
+  assert.equal(C.validateCasting(hf('Logo', 'gpt_image_2_6'), ctxFor([{ name: 'Logo', type: 'ui' }])).plans.size, 0);
+  const concept = C.validateCasting(hf('Art', 'soul'), ctxFor([{ name: 'Art', type: 'concept' }], { workflows: [] }));
+  assert.equal(concept.plans.get('Art').primary.source, 'higgsfield');
+});
+
+// ---- an invalid primary promotes the cheapest valid fallback ---------------------------------
+
+test('an invalid primary promotes the cheapest valid fallback rung', () => {
+  const rows = [{ name: 'Crate', type: 'model' }, { name: 'Tile', type: 'texture' }, { name: 'Icon', type: 'ui' }];
+  const { plans, rejected, promoted } = C.validateCasting({
+    casts: [
+      // A disallowed paid primary whose reason games the old keyword check; the ladder holds an unstored
+      // keyed library (invalid), Blender, Higgsfield and polyhaven.
+      {
+        name: 'Crate',
+        primary: { source: 'higgsfield', higgsfieldModel: 'image-to-3d' },
+        fallbacks: [{ source: 'blender' }, { source: 'library', librarySources: ['smithsonian'] }, { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }, { source: 'library', librarySources: ['polyhaven'] }],
+        candidates: 2,
+        reason: 'free library local blender comfy',
+      },
+      // An unknown source; the ladder holds a missing workflow and a valid one.
+      { name: 'Tile', primary: { source: 'midjourney' }, fallbacks: [{ source: 'comfyui', comfyWorkflow: 'missing.json' }, { source: 'comfyui', comfyWorkflow: 'draft.json' }], candidates: 1, reason: 'x' },
+      // A missing workflow as the primary, Higgsfield the only fallback: a local option (draft.json) exists,
+      // so the paid rung cannot be promoted either.
+      { name: 'Icon', primary: { source: 'comfyui', comfyWorkflow: 'nope.json' }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'gpt_image_2_6' }], candidates: 1, reason: 'x' },
+    ],
+  }, ctxFor(rows));
+  const crate = plans.get('Crate');
+  assert.deepEqual(crate.primary, { source: 'library', librarySources: ['polyhaven'] });
+  assert.deepEqual(crate.fallbacks, [{ source: 'blender' }, { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }]);
+  assert.equal(crate.costClass, 'paid', 'the paid fallback is still priced');
+  assert.match(crate.reason, /^promoted fallback \(the primary higgsfield image-to-3d was rejected: paid Higgsfield primary/);
+  assert.deepEqual(plans.get('Tile').primary, { source: 'comfyui', comfyWorkflow: 'draft.json' });
+  assert.deepEqual(plans.get('Tile').fallbacks, []);
+  assert.equal(plans.has('Icon'), false);
+  assert.deepEqual(rejected.map((r) => r.name), ['Icon']);
+  assert.match(rejected[0].why, /^primary: workflow "nope\.json" is not a file/);
+  assert.deepEqual(promoted.map((p) => [p.name, p.from]), [['Crate', 'higgsfield image-to-3d'], ['Tile', 'midjourney']]);
+  assert.match(promoted[1].why, /unknown source "midjourney"/);
+});
+
+test('a promoted primary is logged and carded; no valid rung still falls back to generated', async (t) => {
+  const dir = fakeRepo(t, ['| Crate | model | wooden crate | auto |  |  |  |  |', '| Barrel | model | oak barrel | auto |  |  |  |  |']);
+  const store = memStore();
+  const { runner } = stubRunner([
+    { name: 'Crate', primary: { source: 'library', librarySources: ['polypizza'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }, { source: 'blender' }], candidates: 1, reason: 'low-poly crates' },
+    { name: 'Barrel', primary: { source: 'midjourney' }, fallbacks: [{ source: 'library', librarySources: ['smithsonian'] }], candidates: 1, reason: 'x' },
+  ]);
+  const { step, events } = makeStep(store, runner);
+  await step.beforeDirecting(baseRun(dir));
+  const log = events.join('\n');
+  assert.ok(events.some((e) => /cast "Crate": primary library polypizza rejected \(library polypizza needs a key that is not stored\) - promoted blender$/.test(e)), log);
+  assert.ok(events.some((e) => /cast "Crate": blender, fallbacks higgsfield image-to-3d/.test(e)), log);
+  assert.ok(events.some((e) => /cast "Barrel" rejected \(primary: unknown source "midjourney"\) - it uses generated/.test(e)), log);
+  const crate = assetCards(store).find((c) => c.text === 'Asset: Crate (model)');
+  assert.match(crate.details, /Primary: local Blender/);
+  assert.match(crate.details, /Source: blender/);
+  const barrel = assetCards(store).find((c) => c.text === 'Asset: Barrel (model)');
+  assert.match(barrel.details, /Source: generated/);
+  assert.doesNotMatch(barrel.details, /Casting:/);
 });
 
 test('validateCasting drops invalid fallback rungs, orders the ladder cheapest first and clamps candidates', () => {
