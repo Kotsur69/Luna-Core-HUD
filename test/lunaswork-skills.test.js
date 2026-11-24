@@ -350,6 +350,39 @@ test('commitPaths refuses unsafe paths and commits nothing new twice', async () 
   assert.deepEqual(same, { ok: true, committed: false });
 });
 
+test('commitPaths builds its throwaway index in a private folder and removes it, also when git fails', async () => {
+  const repo = gitRepo();
+  // A private base: the shared os.tmpdir() root is where `git read-tree` failed on the work PC.
+  const base = tmp('lw-commit-base-');
+  try {
+    const seen = [];
+    const spyExec = (file, args, opts, cb) => {
+      if (opts.env && opts.env.GIT_INDEX_FILE) seen.push(opts.env.GIT_INDEX_FILE);
+      return require('child_process').execFile(file, args, opts, cb);
+    };
+    fs.writeFileSync(path.join(repo, 'app.js'), 'two\n');
+    const ok = await createCommitter({ execImpl: spyExec, tmpBase: base }).commitPaths({ repoPath: repo, paths: ['app.js'], message: 'two' });
+    assert.equal(ok.committed, true, JSON.stringify(ok));
+    assert.ok(seen.length > 0);
+    for (const index of seen) {
+      assert.equal(path.dirname(path.dirname(index)), base, 'the index sits in a subfolder of the base, never in its root');
+      assert.match(path.basename(path.dirname(index)), /^lw-commit-/);
+    }
+    assert.deepEqual(fs.readdirSync(base), [], 'the scratch folder is gone after a commit');
+
+    const failingExec = (file, args, opts, cb) => {
+      if (args[0] === 'read-tree') return cb(new Error('read-tree failed'), '', 'fatal: unable to write new index file');
+      return require('child_process').execFile(file, args, opts, cb);
+    };
+    fs.writeFileSync(path.join(repo, 'app.js'), 'three\n');
+    const failed = await createCommitter({ execImpl: failingExec, tmpBase: base }).commitPaths({ repoPath: repo, paths: ['app.js'], message: 'three' });
+    assert.deepEqual(failed, { ok: false, committed: false, error: 'notStaged', detail: 'fatal: unable to write new index file' });
+    assert.deepEqual(fs.readdirSync(base), [], 'the scratch folder is gone after a failure too');
+  } finally {
+    await fs.promises.rm(base, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
 // ---- the builder brief ------------------------------------------------------------------------
 
 test('builder briefs name the project skills when the repo has them', () => {

@@ -21,9 +21,9 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
+const { withScratchIndex } = require('./gitScratchIndex');
 
 const GIT_TIMEOUT_MS = 30 * 1000;
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -43,10 +43,12 @@ function safeRelPath(p) {
 }
 
 /**
- * @param {{execImpl?:Function, env?:()=>object}} [deps] execImpl: child_process.execFile compatible
+ * @param {{execImpl?:Function, env?:()=>object, tmpBase?:string}} [deps] execImpl: child_process.execFile
+ *   compatible; tmpBase: where the per-call scratch index folder is made (default os.tmpdir())
  */
 function createCommitter(deps = {}) {
   const execImpl = typeof deps.execImpl === 'function' ? deps.execImpl : execFile;
+  const tmpBase = typeof deps.tmpBase === 'string' && deps.tmpBase ? deps.tmpBase : undefined;
   const envOf = () => (typeof deps.env === 'function' ? deps.env() : process.env);
 
   function git(cwd, args, extraEnv = {}) {
@@ -61,10 +63,10 @@ function createCommitter(deps = {}) {
   }
 
   /** HEAD's tree plus the paths, built in a throwaway index. */
-  async function treeWith(repoPath, paths) {
-    const tmpIndex = path.join(os.tmpdir(), `lw-commit-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.index`);
-    const extra = { GIT_INDEX_FILE: tmpIndex };
-    try {
+  // The index lives in a private folder, never in the temp root (see src/gitScratchIndex.js).
+  function treeWith(repoPath, paths) {
+    return withScratchIndex('lw-commit-', async (tmpIndex) => {
+      const extra = { GIT_INDEX_FILE: tmpIndex };
       // -f: a project that ignores .claude/ still gets exactly these files.
       for (const args of [['read-tree', 'HEAD'], ['add', '-f', '--', ...paths]]) {
         const res = await git(repoPath, args, extra);
@@ -72,9 +74,7 @@ function createCommitter(deps = {}) {
       }
       const tree = await git(repoPath, ['write-tree'], extra);
       return tree.ok ? { tree: tree.out } : { err: tree.err };
-    } finally {
-      fs.rmSync(tmpIndex, { force: true });
-    }
+    }, { base: tmpBase });
   }
 
   async function commitUnsafe(repoPath, paths, message) {

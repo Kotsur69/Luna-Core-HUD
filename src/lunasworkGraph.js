@@ -48,12 +48,12 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { parsePlannerOutput } = require('./orchestraPlan');
 const { execClaude } = require('./lunasworkCritic');
 const { resolveOnPath } = require('./lunasworkSecondOpinion');
+const { withScratchIndex } = require('./gitScratchIndex');
 
 const CODEMAPS_DIR = 'docs/CODEMAPS';
 const CLI_COMMAND = 'codebase-memory-mcp';
@@ -169,9 +169,11 @@ function parseStatus(out) {
 
 /**
  * @param {{runClaude?:Function, execImpl?:Function, resolveCli?:(command:string)=>string|null,
- *   env?:()=>object, log?:(line:string)=>void, timeoutMs?:number}} [deps]
+ *   env?:()=>object, log?:(line:string)=>void, timeoutMs?:number, tmpBase?:string}} [deps]
+ *   tmpBase: where the per-call scratch index folder is made (default os.tmpdir())
  */
 function createGraphRefresher(deps = {}) {
+  const tmpBase = typeof deps.tmpBase === 'string' && deps.tmpBase ? deps.tmpBase : undefined;
   const runClaude = typeof deps.runClaude === 'function' ? deps.runClaude : execClaude;
   const execImpl = typeof deps.execImpl === 'function' ? deps.execImpl : execFile;
   const envOf = () => (typeof deps.env === 'function' ? deps.env() : process.env);
@@ -268,20 +270,18 @@ function createGraphRefresher(deps = {}) {
    * HEAD's tree with the current docs/CODEMAPS, built in a throwaway index so
    * the checkout's own index is never touched. @returns {Promise<{tree?:string, err?:string}>}
    */
-  async function codemapsTree(repoPath) {
-    const tmpIndex = path.join(os.tmpdir(), `lw-codemaps-${process.pid}-${Date.now()}.index`);
-    const env = { ...envOf(), GIT_INDEX_FILE: tmpIndex };
-    const step = (args) => run('git', args, repoPath, GIT_TIMEOUT_MS, env);
-    try {
+  function codemapsTree(repoPath) {
+    // The index lives in a private folder, never in the temp root (see src/gitScratchIndex.js).
+    return withScratchIndex('lw-codemaps-', async (tmpIndex) => {
+      const env = { ...envOf(), GIT_INDEX_FILE: tmpIndex };
+      const step = (args) => run('git', args, repoPath, GIT_TIMEOUT_MS, env);
       for (const args of [['read-tree', 'HEAD'], ['add', '-A', '--', CODEMAPS_DIR]]) {
         const res = await step(args);
         if (!res.ok) return { err: res.err };
       }
       const tree = await step(['write-tree']);
       return tree.ok ? { tree: tree.out } : { err: tree.err };
-    } finally {
-      fs.rmSync(tmpIndex, { force: true });
-    }
+    }, { base: tmpBase, onCleanupError: (err, dir) => log(`codemaps scratch index not removed: ${dir} (${clip(err && err.message)})`) });
   }
 
   /**
