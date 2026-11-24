@@ -10,8 +10,12 @@
 
 'use strict';
 
-// Mirrors src/todorows.js MAX_TEXT_CHARS.
+// Mirrors src/todorows.js MAX_TEXT_CHARS, MAX_DETAILS_CHARS,
+// MAX_ACCEPTANCE_CHARS (one bullet) and MAX_ENTRY_CHARS (verify, one file).
 export const MAX_TEXT_CHARS = 20000;
+export const MAX_DETAILS_CHARS = 20000;
+export const MAX_ACCEPTANCE_CHARS = 1000;
+export const MAX_ENTRY_CHARS = 300;
 // Mirrors src/todorows.js (main normalizes every write; this only keeps the
 // form from sending what main would drop anyway).
 export const STEER_TAG = 'steer';
@@ -82,6 +86,17 @@ export function cardPrompt(item) {
   if (item.files) parts.push(`Files: ${item.files.join(', ')}`);
   if (item.verify) parts.push(`Verify with: ${item.verify}`);
   return parts.join('\n\n');
+}
+
+/**
+ * Whether a bullet of the acceptance box (one per line, or a list) is longer
+ * than main stores: main would cut it, so the edit form refuses it instead.
+ * @param {string|string[]} value
+ * @returns {boolean}
+ */
+export function longAcceptanceLine(value) {
+  const lines = Array.isArray(value) ? value : String(value ?? '').split('\n');
+  return lines.some((line) => String(line).trim().length > MAX_ACCEPTANCE_CHARS);
 }
 
 /** One form value cleaned for storage, or null when it was emptied. */

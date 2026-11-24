@@ -13,7 +13,7 @@
 
 import { h, icon, ICONS } from '../dom.js';
 import { t, tf } from '../i18n.js';
-import { lists, addUnit, toggleUnit, toggleManualUnit, toggleTagUnit, hasTag, deleteUnit, STEER_TAG, MAX_TEXT_CHARS } from '../todomodel.js';
+import { lists, addUnit, toggleUnit, toggleManualUnit, toggleTagUnit, hasTag, isCut, deleteUnit, STEER_TAG, MAX_TEXT_CHARS } from '../todomodel.js';
 import { PICK_KEY } from '../cloud.js';
 import { hostList } from '../hostmodel.js';
 import { godmodeHosts, pickGodmodeHost, projectIdFor, pickableCards, defaultSelection, toggleSelection, planPayload } from '../godmodestart.js';
@@ -74,6 +74,15 @@ export function mountTodos(main, { cloud, toast }) {
     }
   }
 
+  /** A tick / tag / manual change, refused with a notice when this build would save the item cut. */
+  function change(item, build) {
+    if (isCut(item)) {
+      toast(t('todoTooLong'), true);
+      return Promise.resolve(false);
+    }
+    return act(build());
+  }
+
   function itemRow(key, item) {
     const del = () => {
       if (confirm(t('confirmDelete'))) act(deleteUnit(key, item));
@@ -88,7 +97,7 @@ export function mountTodos(main, { cloud, toast }) {
       { class: `todo${item.done ? ' is-done' : ''}${manual ? ' is-manual' : ''}${steer ? ' is-steer' : ''}` },
       h(
         'button',
-        { class: 'todo-check', role: 'checkbox', 'aria-checked': String(item.done), onclick: () => act(toggleUnit(key, item)) },
+        { class: 'todo-check', role: 'checkbox', 'aria-checked': String(item.done), onclick: () => change(item, () => toggleUnit(key, item)) },
         h('span', { class: 'box' }, item.done ? icon(ICONS.check) : null),
         h('span', { class: 'todo-text' }, item.text),
         manual ? h('span', { class: 'todo-chip' }, t('manual')) : null,
@@ -100,7 +109,7 @@ export function mountTodos(main, { cloud, toast }) {
           class: 'icon-btn todo-steer-btn',
           'aria-pressed': String(steer),
           'aria-label': `${t(steer ? 'steerOff' : 'steerOn')}: ${item.text}`,
-          onclick: () => act(toggleTagUnit(key, item, STEER_TAG)),
+          onclick: () => change(item, () => toggleTagUnit(key, item, STEER_TAG)),
         },
         '🧭',
       ),
@@ -110,7 +119,7 @@ export function mountTodos(main, { cloud, toast }) {
           class: 'icon-btn todo-manual-btn',
           'aria-pressed': String(manual),
           'aria-label': `${t(manual ? 'manualOff' : 'manualOn')}: ${item.text}`,
-          onclick: () => act(toggleManualUnit(key, item)),
+          onclick: () => change(item, () => toggleManualUnit(key, item)),
         },
         '✋',
       ),

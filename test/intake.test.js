@@ -617,3 +617,81 @@ test('/recall answers the hook output, {} without memories, and {} when recall i
     await failing.server.stop();
   }
 });
+
+// ---- limits: over-limit fields are refused, never stored cut -----------------
+
+/** One tools/call through the dispatcher, with a store that counts writes. */
+function callWithCountingStore(name, args, initial = []) {
+  const store = memoryStore(initial);
+  let writes = 0;
+  const write = store.write;
+  store.write = (next) => {
+    writes += 1;
+    return write(next);
+  };
+  const msg = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } };
+  const result = handleRpc(msg, store, '1.0.0').result;
+  return { result, store, writes: () => writes };
+}
+
+test('luna_todo_add refuses over-limit details with field, length and limit, and writes nothing', () => {
+  const { result, store, writes } = callWithCountingStore('luna_todo_add', {
+    tasks: [{ text: 'ok' }, { text: 'long', details: 'd'.repeat(20001) }],
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /tasks\[1\]\.details is 20001 characters; the limit is 20000/);
+  assert.equal(writes(), 0);
+  assert.deepEqual(store.list, []);
+});
+
+test('luna_todo_add refuses an over-limit acceptance bullet and too many bullets', () => {
+  const long = callWithCountingStore('luna_todo_add', { tasks: [{ text: 'x', acceptance: ['fine', 'a'.repeat(1001)] }] });
+  assert.equal(long.result.isError, true);
+  assert.match(long.result.content[0].text, /tasks\[0\]\.acceptance\[1\] is 1001 characters; the limit is 1000/);
+  assert.equal(long.writes(), 0);
+  const many = applyAdd([], [{ text: 'x', acceptance: Array.from({ length: 21 }, (_v, i) => `b${i}`) }], NOW);
+  assert.equal(many.ok, false);
+  assert.match(many.error, /tasks\[0\]\.acceptance has 21 entries; the limit is 20/);
+});
+
+test('luna_todo_add stores 19000-char details and 1000-char bullets intact', () => {
+  const details = `## Plan\n${'step '.repeat(3798)}end`;
+  assert.ok(details.length > 19000 && details.length <= 20000);
+  const bullet = 'b'.repeat(1000);
+  const out = applyAdd([], [{ text: 'big card', details, acceptance: [bullet, 'short'] }], NOW);
+  assert.equal(out.ok, true);
+  assert.equal(out.added[0].details, details);
+  assert.deepEqual(out.added[0].acceptance, [bullet, 'short']);
+});
+
+test('luna_todo_update refuses an over-limit field and leaves the card as it was', () => {
+  const card = normalizeTodo({ text: 'card', details: 'keep me', at: 5 });
+  const { result, store, writes } = callWithCountingStore('luna_todo_update', { at: 5, patch: { acceptance: ['a'.repeat(1001)] } }, [card]);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /patch\.acceptance\[0\] is 1001 characters; the limit is 1000/);
+  assert.equal(writes(), 0);
+  assert.deepEqual(store.list, [card]);
+  const details = applyUpdate([card], 5, { details: 'd'.repeat(20001) });
+  assert.equal(details.ok, false);
+  assert.match(details.error, /patch\.details is 20001 characters; the limit is 20000/);
+  const fine = applyUpdate([card], 5, { acceptance: ['a'.repeat(1000)] });
+  assert.equal(fine.ok, true);
+  assert.equal(fine.card.acceptance[0].length, 1000);
+});
+
+test('the tool schemas tell the model every card limit', () => {
+  const add = TOOLS.find((t) => t.name === 'luna_todo_add').inputSchema.properties.tasks.items.properties;
+  const update = TOOLS.find((t) => t.name === 'luna_todo_update').inputSchema.properties.patch.properties;
+  for (const props of [add, update]) {
+    assert.equal(props.text.maxLength, 20000);
+    assert.equal(props.details.maxLength, 20000);
+    assert.match(props.details.description, /20000 characters/);
+    assert.equal(props.acceptance.maxItems, 20);
+    assert.equal(props.acceptance.items.maxLength, 1000);
+    assert.match(props.acceptance.description, /1000 characters/);
+    assert.match(props.acceptance.description, /20 bullets/);
+    assert.equal(props.files.items.maxLength, 300);
+    assert.equal(props.verify.maxLength, 300);
+  }
+  assert.match(TOOLS.find((t) => t.name === 'luna_todo_add').description, /refused/);
+});

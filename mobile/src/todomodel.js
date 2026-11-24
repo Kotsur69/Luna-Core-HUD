@@ -16,9 +16,9 @@ import todoRows from '../../src/todorows.js';
 
 const { splitTodoKey, MAX_KEY } = rows;
 const { validKey } = ledger;
-const { normalizeTodo, MAX_TEXT_CHARS, MAX_TAGS, STEER_TAG } = todoRows;
+const { normalizeTodo, cardLimitError, MAX_TEXT_CHARS, MAX_DETAILS_CHARS, MAX_ACCEPTANCE_CHARS, MAX_TAGS, STEER_TAG } = todoRows;
 
-export { STEER_TAG, MAX_TEXT_CHARS };
+export { STEER_TAG, MAX_TEXT_CHARS, MAX_DETAILS_CHARS, MAX_ACCEPTANCE_CHARS };
 
 const validAt = (at) => Number.isSafeInteger(at) && at > 0;
 
@@ -47,10 +47,14 @@ export function lists(mirror) {
     if (!split || row.d !== null) continue;
     const [key, at] = split;
     if (!validKey(key) || key === 'other') continue;
-    const todo = normalizeTodo(row.v && typeof row.v === 'object' ? { ...row.v, at } : null);
+    const raw = row.v && typeof row.v === 'object' ? { ...row.v, at } : null;
+    const todo = normalizeTodo(raw);
     if (!todo || !validAt(todo.at)) continue;
     if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push({ ...todo, u: row.u });
+    // `cut`: a newer build wrote this card past this build's limits, so the
+    // copy shown here is shortened. The units below refuse to save it: a
+    // saved copy would carry the newest stamp and cut the card everywhere.
+    byKey.get(key).push(cardLimitError(raw) ? { ...todo, u: row.u, cut: true } : { ...todo, u: row.u });
   }
   return [...byKey]
     .map(([key, items]) => ({ key, name: projectName(key), items: items.sort(byState) }))
@@ -72,8 +76,14 @@ export function addUnit(key, text, now = Date.now(), tags = []) {
   return v ? { k: `${key}:${at}`, v, u: at, d: null } : null;
 }
 
-/** The item ticked or unticked; card fields ride along untouched. */
+/** Whether lists() had to shorten this item: it must not be saved back (see lists()). */
+export function isCut(item) {
+  return Boolean(item && item.cut === true);
+}
+
+/** The item ticked or unticked; card fields ride along untouched. Null for a cut item. */
 export function toggleUnit(key, item, now = Date.now()) {
+  if (isCut(item)) return null;
   const { u, ...rest } = item;
   const v = normalizeTodo({ ...rest, done: !item.done });
   return v ? { k: `${key}:${item.at}`, v, u: stampAfter(u, now), d: null } : null;
@@ -82,8 +92,10 @@ export function toggleUnit(key, item, now = Date.now()) {
 /**
  * The item's `manual` opt-out flipped (kept out of God Mode and Orchestra on
  * the PC). Clearing drops the key, as normalizeTodo stores it only when true.
+ * Null for a cut item.
  */
 export function toggleManualUnit(key, item, now = Date.now()) {
+  if (isCut(item)) return null;
   const { u, manual, ...rest } = item;
   const v = normalizeTodo(manual === true ? rest : { ...rest, manual: true });
   return v ? { k: `${key}:${item.at}`, v, u: stampAfter(u, now), d: null } : null;
@@ -96,9 +108,11 @@ export function hasTag(item, tag) {
 
 /**
  * `tag` added to the item, or removed if it has it (the Steer toggle).
- * Removing the last tag drops the key. Null when the list is already full.
+ * Removing the last tag drops the key. Null when the list is already full
+ * or the item is cut.
  */
 export function toggleTagUnit(key, item, tag, now = Date.now()) {
+  if (isCut(item)) return null;
   const { u, tags: rawTags, ...rest } = item;
   // lists() normalizes, but never trust the shape of an item handed in.
   const tags = Array.isArray(rawTags) ? rawTags : [];

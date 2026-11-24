@@ -17,10 +17,10 @@
 'use strict';
 
 import { t } from './util.js';
-import { MAX_TEXT_CHARS } from './todocards.js';
+import { MAX_TEXT_CHARS, MAX_DETAILS_CHARS } from './todocards.js';
 
-/** Mirrors src/todorows.js MAX_DETAILS_CHARS and SIZES (main checks both again). */
-export const MAX_DETAILS_CHARS = 20000;
+export { MAX_DETAILS_CHARS };
+/** Mirrors src/todorows.js SIZES (main checks it again). */
 export const SIZES = ['S', 'M', 'L'];
 /** main's reason when the card is written but the memory stayed: the form must not offer a second save. */
 export const REMOVE_FAILED = 'remove-failed';

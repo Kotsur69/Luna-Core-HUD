@@ -251,3 +251,52 @@ test('tags survive HUD -> cloud rows -> PC peer and back unchanged', () => {
   const out = sync.merge([], empty(), [peer['git:github.com/kotsur69/x']], now);
   assert.deepEqual(out.list, [tagged]);
 });
+
+// ---- long cards: no stale build may cut them, and they round-trip whole -------
+
+const rowsLib = require('../src/cloudrows.js');
+const { normalizeTodo } = require('../src/todo.js');
+
+test('merge: a newer copy an older build cut at 4000 does not replace the full details', () => {
+  // The agy Live Map card (at=1795082538257): its details came back cut at
+  // exactly 4000 mid-word after a device on a pre-v0.29 build touched it.
+  const details = `### Slice 1\n${'map '.repeat(1100)}\n### Slice 2\n1. Rich ${'live '.repeat(1500)}\n### Slice 3\nend`;
+  const full = normalizeTodo({ text: 'agy Live Map', details, acceptance: ['a'.repeat(700)], at: 1795082538257 });
+  const local = [full];
+  const meta = sync.stamp(local, empty(), 100);
+  const stale = { ...full, done: true, details: details.slice(0, 4000), acceptance: ['a'.repeat(300)] };
+  const peer = { items: [{ ...stale, u: 150 }], gone: {} };
+  const out = sync.merge(local, meta, [peer], 200);
+  assert.equal(out.list[0].details, details, 'details kept whole');
+  assert.deepEqual(out.list[0].acceptance, full.acceptance, 'bullets kept whole');
+  assert.equal(out.list[0].done, true, "the peer's real change (the tick) still lands");
+  assert.ok(out.meta.u[full.at] > 150, 'the repaired card is stamped newer, so it goes back to the cloud');
+  assert.equal(out.changed, true);
+});
+
+test('merge: a newer, genuinely shorter edit still wins', () => {
+  const full = normalizeTodo({ text: 'T', details: 'd'.repeat(9000), at: 7 });
+  const meta = sync.stamp([full], empty(), 100);
+  const edited = { ...full, details: 'd'.repeat(2500) };
+  const out = sync.merge([full], meta, [{ items: [{ ...edited, u: 150 }], gone: {} }], 200);
+  assert.equal(out.list[0].details.length, 2500);
+  assert.equal(out.meta.u[7], 150);
+});
+
+test('a card with 15000-20000 char details round-trips unchanged through the cloud rows', () => {
+  const KEY = 'git:github.com/kotsur69/luna-core-hud';
+  for (const size of [15000, 20000]) {
+    const details = `# Plan\n${'x'.repeat(size - 12)}\nend.`;
+    assert.equal(details.length, size);
+    const card = normalizeTodo({ text: 'Long card', details, acceptance: ['a'.repeat(1000)], at: 1795082538257 });
+    const units = rowsLib.todoUnits({ [KEY]: { items: [{ ...card, u: 500 }], gone: {} } });
+    const pulled = rowsLib.applyRows(
+      { cursor: 0, mirror: {}, pushed: {} },
+      units.map((x, i) => ({ key: x.k, value: JSON.parse(JSON.stringify(x.v)), u: x.u, deleted_at: x.d, rev: i + 1 })),
+      1000,
+    );
+    const peers = sync.validPeerProjects(rowsLib.todoPeer(pulled.mirror), 1000);
+    assert.deepEqual(peers[KEY].items, [{ ...card, u: 500 }]);
+    assert.equal(peers[KEY].items[0].details.length, size);
+  }
+});

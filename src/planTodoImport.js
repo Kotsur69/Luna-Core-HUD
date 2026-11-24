@@ -22,7 +22,7 @@
 
 'use strict';
 
-const { cleanTags, MAX_ITEMS, MAX_TEXT_CHARS, MAX_DETAILS_CHARS } = require('./todorows');
+const { cleanTags, MAX_ITEMS, MAX_TEXT_CHARS, MAX_DETAILS_CHARS, MAX_ACCEPTANCE_CHARS } = require('./todorows');
 const { parsePlanTasks, acceptanceKind } = require('./planTasks');
 const { validateRunSlug, planPath } = require('./orchestraPlanRun');
 
@@ -140,7 +140,7 @@ function taskTodo(task, { runSlug, tag, at }) {
     at,
     details,
     ...(files.length ? { files } : {}),
-    ...(task.acceptance ? { acceptance: [cap(task.acceptance, MAX_ENTRY_CHARS)] } : {}),
+    ...(task.acceptance ? { acceptance: [cap(task.acceptance, MAX_ACCEPTANCE_CHARS)] } : {}),
     ...(verify ? { verify } : {}),
     tags: [tag],
     original: cap(task.text, MAX_TEXT_CHARS),

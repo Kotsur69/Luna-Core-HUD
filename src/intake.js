@@ -35,6 +35,15 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { normalizeTodo, normalizeTodos, MAX_ITEMS, MAX_TAGS } = require('./todo');
+const {
+  cardLimitError,
+  MAX_TEXT_CHARS,
+  MAX_DETAILS_CHARS,
+  MAX_LIST_ENTRIES,
+  MAX_ACCEPTANCE_CHARS,
+  MAX_ENTRY_CHARS,
+  MAX_FILES,
+} = require('./todorows');
 const { EFFORTS } = require('./efforts');
 const { MEMORY_TOOLS, callMemoryTool } = require('./memorytools');
 const { ASSET_TOOLS, callAssetTool } = require('./lunasworkAssetTools');
@@ -45,6 +54,8 @@ const MAX_BODY_BYTES = 256 * 1024;
 /** JSON-RPC messages one POST may carry; the CLI sends one, sometimes a handful. */
 const MAX_BATCH_MESSAGES = 50;
 const REQUEST_TIMEOUT_MS = 30 * 1000;
+/** The title's schema entry: one line, but a pasted prompt may be long. */
+const TEXT_PROPERTY = Object.freeze({ type: 'string', maxLength: MAX_TEXT_CHARS, description: `Short imperative title (one line, at most ${MAX_TEXT_CHARS} characters).` });
 /** Cards one luna_todo_add call may create - a plan, not a backlog import. */
 const MAX_TASKS_PER_CALL = 20;
 /** Protocol revisions this server speaks; the first is offered by default. */
@@ -56,22 +67,34 @@ const CARD_FIELDS = ['details', 'acceptance', 'files', 'verify', 'size', 'model'
 
 // --- tool definitions ---------------------------------------------------------
 
+// The limits are the store's (src/todorows.js). A field over its limit is
+// refused with an error naming it - never stored cut - so the schema states
+// every one of them.
 const CARD_PROPERTIES = {
   details: {
     type: 'string',
-    description: 'Self-contained instructions: a worker with NO other context must be able to do the task from this alone.',
+    maxLength: MAX_DETAILS_CHARS,
+    description:
+      'Self-contained instructions: a worker with NO other context must be able to do the task from this alone. ' +
+      `At most ${MAX_DETAILS_CHARS} characters; split bigger work into more cards.`,
   },
   acceptance: {
     type: 'array',
-    items: { type: 'string' },
-    description: 'Concrete, checkable definition-of-done bullets.',
+    maxItems: MAX_LIST_ENTRIES,
+    items: { type: 'string', maxLength: MAX_ACCEPTANCE_CHARS },
+    description: `Concrete, checkable definition-of-done bullets: at most ${MAX_LIST_ENTRIES} bullets of at most ${MAX_ACCEPTANCE_CHARS} characters each.`,
   },
   files: {
     type: 'array',
-    items: { type: 'string' },
-    description: 'Repo-relative paths the task will most likely touch.',
+    maxItems: MAX_FILES,
+    items: { type: 'string', maxLength: MAX_ENTRY_CHARS },
+    description: `Repo-relative paths the task will most likely touch (at most ${MAX_FILES}, ${MAX_ENTRY_CHARS} characters each).`,
   },
-  verify: { type: 'string', description: 'Command that proves it works, e.g. "npm test".' },
+  verify: {
+    type: 'string',
+    maxLength: MAX_ENTRY_CHARS,
+    description: `Command that proves it works, e.g. "npm test". At most ${MAX_ENTRY_CHARS} characters.`,
+  },
   size: { type: 'string', enum: ['S', 'M', 'L'], description: 'S < 30 min, M < 2 h, L larger.' },
   model: { type: 'string', enum: ['sonnet', 'opus'], description: 'Suggested worker model.' },
   effort: {
@@ -93,7 +116,8 @@ const TOOLS = [
     name: 'luna_todo_add',
     description:
       "Append task cards to the user's LunaCore To-do list for the project this terminal is in. " +
-      'Use when the user asks to plan, queue or note down work. Does not implement anything.',
+      'Use when the user asks to plan, queue or note down work. Does not implement anything. ' +
+      'A field over its limit is refused (nothing is saved) with an error naming the field, its length and the limit.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -104,7 +128,7 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              text: { type: 'string', description: 'Short imperative title (one line).' },
+              text: TEXT_PROPERTY,
               ...CARD_PROPERTIES,
               dependsOn: {
                 type: 'array',
@@ -135,7 +159,8 @@ const TOOLS = [
     name: 'luna_todo_update',
     description:
       'Refine one existing card, identified by its `at` id from luna_todo_list. ' +
-      'Only the fields given change; null removes a field. Cannot mark a card done (use luna_todo_done).',
+      'Only the fields given change; null removes a field. Cannot mark a card done (use luna_todo_done). ' +
+      'A field over its limit is refused (the card stays as it was) with an error naming the field, its length and the limit.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -143,11 +168,12 @@ const TOOLS = [
         patch: {
           type: 'object',
           properties: {
-            text: { type: 'string' },
+            text: TEXT_PROPERTY,
             ...CARD_PROPERTIES,
             dependsOn: { type: 'array', items: { type: 'number' }, description: '`at` ids of other cards.' },
             original: {
               type: 'string',
+              maxLength: MAX_TEXT_CHARS,
               description:
                 "The user's loose note this card was rewritten from. Set once; ignored if the card already has one.",
             },
@@ -231,6 +257,8 @@ function applyAdd(list, tasks, now) {
   for (let i = 0; i < tasks.length; i += 1) {
     const task = tasks[i];
     if (!task || typeof task !== 'object') return { ok: false, error: `tasks[${i}] must be an object` };
+    const tooLong = cardLimitError(task, `tasks[${i}]`);
+    if (tooLong) return { ok: false, error: tooLong };
     const deps = resolveBatchDeps(task.dependsOn, i, batchAts, existingAts);
     if (!deps.ok) return deps;
     const card = normalizeTodo({ ...task, done: false, at: batchAts[i], dependsOn: deps.deps });
@@ -249,6 +277,8 @@ function applyUpdate(list, at, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { ok: false, error: 'patch must be an object' };
   const index = list.findIndex((item) => item.at === at);
   if (index < 0) return { ok: false, error: `no card with at=${at}` };
+  const tooLong = cardLimitError(patch, 'patch');
+  if (tooLong) return { ok: false, error: tooLong };
 
   if (Array.isArray(patch.dependsOn)) {
     const others = new Set(list.filter((item) => item.at !== at).map((item) => item.at));
