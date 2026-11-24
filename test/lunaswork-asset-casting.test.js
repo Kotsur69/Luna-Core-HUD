@@ -150,6 +150,12 @@ test('the casting call is an argv array with no tools, and the prompt carries ev
   assert.ok(Array.isArray(args) && args.every((a) => typeof a === 'string'));
   assert.deepEqual(args.slice(0, 3), ['-p', '--output-format', 'json']);
   assert.equal(args[args.indexOf('--tools') + 1], '');
+  // Lean: no user settings, plugins, hooks or MCP servers. Without these a live call cost $1.35 and hit
+  // the $0.50 cap before answering; with them it cost $0.07 (live check, 2026-11-24).
+  assert.equal(args[args.indexOf('--setting-sources') + 1], '');
+  assert.ok(args.includes('--strict-mcp-config'));
+  assert.deepEqual(JSON.parse(args[args.indexOf('--mcp-config') + 1]), { mcpServers: {} });
+  assert.ok(args.indexOf('--max-budget-usd') > 0);
   assert.equal(args[args.indexOf('--model') + 1], 'sonnet');
   assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]), C.CASTING_SCHEMA);
   assert.match(prompt, /"Crate" \(model\): wooden crate/);

@@ -368,7 +368,13 @@ const CASTING_SCHEMA = {
   },
 };
 
-/** argv for the casting call - no tools, never a shell string; the prompt goes on stdin. */
+/**
+ * argv for the casting call - no tools, never a shell string; the prompt goes on stdin.
+ * Lean like the other read-only judges (lunasworkDesignMatch.js, lunasworkGraph.js): no
+ * user settings (so no plugins, hooks or skills) and no MCP servers. Without that the
+ * user's setup rides along in the context; a live call cost $1.35 and hit the budget cap
+ * before answering, against $0.07 lean.
+ */
 function buildCastingArgs({ model = FALLBACK_MODEL, budgetUsd = CASTING_BUDGET_USD } = {}) {
   return [
     '-p',
@@ -377,6 +383,9 @@ function buildCastingArgs({ model = FALLBACK_MODEL, budgetUsd = CASTING_BUDGET_U
     '--model', String(model),
     '--effort', CASTING_EFFORT,
     '--tools', CASTING_TOOLS,
+    '--setting-sources', '',
+    '--strict-mcp-config',
+    '--mcp-config', JSON.stringify({ mcpServers: {} }),
     '--max-budget-usd', String(budgetUsd),
     '--no-session-persistence',
   ];
