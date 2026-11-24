@@ -115,10 +115,13 @@ test('from = a Higgsfield PNG: the script loads it as the Base Color texture bef
   assert.equal(pyLine(code, 'FROM_TARGET'), 'Crate');
   // The Higgsfield result defaults to the toon pass.
   assert.match(code, /^STYLE_PASS = "blade-bullet-toon"$/m);
-  assert.match(code, /bpy\.data\.images\.load\(FROM_PATH, check_existing=True\)/);
+  assert.match(code, /img = bpy\.data\.images\.load\(FROM_PATH, check_existing=False\)\n\s+# [^\n]*\n\s+img\.pack\(\)/);
   assert.match(code, /links\.new\(tex\.outputs\['Color'\], bsdf\.inputs\['Base Color'\]\)/);
   assert.match(code, /nodes\.new\('ShaderNodeBsdfPrincipled'\)/);
-  assert.match(code, /bpy\.data\.materials\.new\('Luna_' \+ o\.name\)/);
+  assert.match(code, /slot\.material = bpy\.data\.materials\.new\('Luna_' \+ o\.name\)/);
+  // A shared material is copied; a scene of several unnamed meshes fails instead of texturing them all.
+  assert.match(code, /elif slot\.material\.users > 1:\n[^\n]*\n\s+slot\.material = slot\.material\.copy\(\)/);
+  assert.match(code, /if len\(objs\) == 1:\n\s+return objs\n\s+raise RuntimeError\('no mesh named %s/);
   const call = idx(code, '\nluna_from_texture()\n');
   assert.ok(idx(code, 'def luna_meshes') < call);
   assert.ok(call < idx(code, 'bpy.ops.wm.save_as_mainfile('));
@@ -144,6 +147,9 @@ test('from = a Higgsfield GLB: import, toon pass with decimate, then the same FB
   const code = blender.scripts[0];
   const call = idx(code, '\nluna_from_model()\n');
   assert.match(code, /bpy\.ops\.import_scene\.gltf\(filepath=FROM_PATH\)/);
+  // Checked again in Blender right before the import.
+  assert.ok(idx(code, 'def luna_from_model():\n    luna_glb_check()\n') < call);
+  assert.match(code, /if any\(not u\.startswith\('data:'\) for u in luna_glb_uris\(doc\)\):/);
   assert.ok(call < idx(code, 'bpy.ops.wm.save_as_mainfile('));
   assert.ok(call < idx(code, "luna_step('poly budget', luna_decimate, luna_objs)"));
   assert.ok(idx(code, "luna_step('root transform', luna_roots)") < idx(code, 'bpy.ops.export_scene.fbx('));
@@ -252,13 +258,15 @@ test('from with a wrong extension, wrong bytes or an external-file GLB is refuse
   put(dir, `${ART}/Props/fake.glb`, PNG);
   put(dir, `${ART}/Props/ext.glb`, glbOf({ asset: { version: '2.0' }, buffers: [{ uri: '../../../secret.bin', byteLength: 4 }] }));
   put(dir, `${ART}/Props/extimg.glb`, glbOf({ asset: { version: '2.0' }, images: [{ uri: 'C:/Users/x/secret.png' }] }));
+  put(dir, `${ART}/Props/extension.glb`, glbOf({ asset: { version: '2.0' }, extensions: { FOO_sources: { list: [{ uri: '../../outside.png' }] } } }));
   put(dir, `${ART}/Props/crate.txt`, 'x');
   await refused(dir, `${ART}/Props/crate.gltf`, /\.gltf is not accepted: it can reference other files/);
   await refused(dir, `${ART}/Props/crate.fbx`, /\.fbx is not accepted/);
   await refused(dir, `${ART}/Props/fake.png`, /not a PNG image/);
   await refused(dir, `${ART}/Props/fake.glb`, /not a binary glTF/);
-  await refused(dir, `${ART}/Props/ext.glb`, /references an external file \(a buffers uri\)/);
-  await refused(dir, `${ART}/Props/extimg.glb`, /references an external file \(a images uri\)/);
+  await refused(dir, `${ART}/Props/ext.glb`, /references an external file/);
+  await refused(dir, `${ART}/Props/extimg.glb`, /references an external file/);
+  await refused(dir, `${ART}/Props/extension.glb`, /references an external file/);
   await refused(dir, `${ART}/Props/crate.txt`, /must be a png/);
 });
 
@@ -290,6 +298,19 @@ test('from through a junction (outside the repo or back inside it) or a symlinke
   if (tryLink(path.join(outside, 'loot.png'), path.join(dir, 'art', 'higgsfield', 'file.png'), 'file')) {
     await refused(dir, 'art/higgsfield/file.png', /refused/);
   }
+});
+
+test('from as a hard link to another file is refused', async (t) => {
+  const dir = tempDir('lw-from-hard-');
+  const other = put(dir, 'design/elsewhere.png', PNG);
+  fs.mkdirSync(path.join(dir, 'art', 'higgsfield'), { recursive: true });
+  try {
+    fs.linkSync(other, path.join(dir, 'art', 'higgsfield', 'hard.png'));
+  } catch (err) {
+    t.skip(`hard links are not permitted here (${err && err.code})`);
+    return;
+  }
+  await refused(dir, 'art/higgsfield/hard.png', /hard link/);
 });
 
 test('cleanFrom: no from is fine; the image and model extensions', () => {

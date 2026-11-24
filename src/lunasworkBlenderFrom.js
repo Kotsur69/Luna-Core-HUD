@@ -11,12 +11,14 @@
 //          chunk names no external file: its buffers and images are inside
 //          it, so the importer never reads a file outside the repo. .gltf
 //          and .fbx are refused (both can point at other files, and
-//          luna_asset_higgsfield saves 3D results only as .glb).
+//          luna_asset_higgsfield saves 3D results only as .glb). The script
+//          checks the GLB again right before the import.
 //
 // `from` is a repo-relative path the worker names, so it is untrusted: a plain
 // relative path under art/higgsfield/ or the art root, no traversal, an
 // allowed extension, inside the repo (the pipeline's guard, junctions
-// resolved), not a link anywhere on the way (realpath compare), an existing
+// resolved), not a link anywhere on the way (realpath compare) and not a
+// hard link, an existing
 // file whose magic bytes match its extension. Its Higgsfield record
 // (art/higgsfield/<kind>/<stem>.json, the one listing this file as an output)
 // is looked up, so the asset log and the license ledger can name it.
@@ -41,6 +43,7 @@ const GLB_HEADER_BYTES = 12;
 const GLB_CHUNK_HEADER_BYTES = 8;
 const GLB_JSON_TYPE = 0x4e4f534a;
 const MAX_GLB_JSON_BYTES = 16 * 1024 * 1024;
+const MAX_JSON_DEPTH = 64;
 const SEGMENT_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -98,16 +101,23 @@ function glbJson(fsx, target) {
   }
 }
 
-/** Throws unless no buffer or image of the GLB names an external file (only embedded data and data: URIs). */
+/** Every string `uri` anywhere in a glTF JSON document (buffers, images, extensions). */
+function urisOf(value, depth = 0) {
+  if (depth > MAX_JSON_DEPTH) throw new Error('its JSON chunk is nested too deeply');
+  if (Array.isArray(value)) return value.flatMap((v) => urisOf(v, depth + 1));
+  if (!isObj(value)) return [];
+  return Object.entries(value).flatMap(([k, v]) => (k === 'uri' && typeof v === 'string' ? [v] : urisOf(v, depth + 1)));
+}
+
+/**
+ * Throws unless no `uri` of the GLB names an external file (only embedded
+ * data and data: URIs). The Blender script checks the same right before the
+ * import (src/lunasworkBlenderScript.js luna_glb_check).
+ */
 function checkSelfContainedGlb(fsx, target) {
   const json = glbJson(fsx, target);
   if (!isObj(json)) throw new Error('its JSON chunk is not an object');
-  for (const key of ['buffers', 'images']) {
-    const list = Array.isArray(json[key]) ? json[key] : [];
-    if (list.some((item) => isObj(item) && typeof item.uri === 'string' && !item.uri.startsWith('data:'))) {
-      throw new Error(`it references an external file (a ${key} uri); only a self-contained GLB is imported`);
-    }
-  }
+  if (urisOf(json).some((uri) => !uri.startsWith('data:'))) throw new Error('it references an external file (a uri); only a self-contained GLB is imported');
 }
 
 /** Throws unless the file's first bytes are what its extension says. */
@@ -167,13 +177,17 @@ function resolveFrom(from, deps) {
   try {
     const target = deps.files.guard(from.rel);
     const expected = path.join(realOf(fsx, deps.repoPath), ...from.rel.split('/'));
+    const real = realOf(fsx, target);
     // A junction or symlink anywhere on the way (even one pointing back into the repo) changes the real path.
-    if (!samePath(realOf(fsx, target), expected)) throw new Error('it goes through a junction or link');
-    const st = fsx.statSync(target);
+    if (!samePath(real, expected)) throw new Error('it goes through a junction or link');
+    const st = fsx.statSync(real);
     if (!st.isFile()) throw new Error('it is not a file');
+    // A hard link may share its bytes with a file outside the repo.
+    if (st.nlink > 1) throw new Error('it is a hard link');
     if (st.size > MAX_FROM_BYTES) throw new Error(`it is larger than ${MAX_FROM_BYTES} bytes`);
-    checkMagic(fsx, target, from);
-    return { ok: true, rel: from.rel, abs: target, type: from.type, record: findRecord(from.rel, deps) };
+    checkMagic(fsx, real, from);
+    // Blender gets the real path that was checked, never one a link swapped in later can redirect.
+    return { ok: true, rel: from.rel, abs: real, type: from.type, record: findRecord(from.rel, deps) };
   } catch (err) {
     const why = err && err.code === 'ENOENT' ? 'no such file' : errText(err);
     return fail(`refused: from ${from.rel}: ${why}`);

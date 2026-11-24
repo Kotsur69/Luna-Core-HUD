@@ -347,13 +347,14 @@ luna_step('outline', luna_outline, luna_objs)
 // the call fails rather than exporting a model without the Higgsfield result.
 const PY_FROM = String.raw`
 def luna_from_targets():
+    # Only the mesh named like the asset, or the only mesh: never every mesh of a busy scene.
     objs = luna_meshes()
     named = [o for o in objs if o.name == FROM_TARGET]
     if named:
         return named
-    if objs:
-        luna_warn('no mesh named %s: the texture went on all %d meshes' % (FROM_TARGET, len(objs)))
-    return objs
+    if len(objs) == 1:
+        return objs
+    raise RuntimeError('no mesh named %s and %d meshes in the scene: name the object like the asset' % (FROM_TARGET, len(objs)))
 
 def luna_base_color(mat, img):
     mat.use_nodes = True
@@ -373,27 +374,54 @@ def luna_base_color(mat, img):
     tex.image = img
     links.new(tex.outputs['Color'], bsdf.inputs['Base Color'])
 
+def luna_from_material(o):
+    slot = next((s for s in o.material_slots if s.material is not None and s.material.name != 'LunaOutline'), None)
+    if slot is None:
+        slot = next((s for s in o.material_slots if s.material is None), None)
+        if slot is None:
+            o.data.materials.append(None)
+            slot = o.material_slots[len(o.material_slots) - 1]
+        slot.material = bpy.data.materials.new('Luna_' + o.name)
+    elif slot.material.users > 1:
+        # A material shared with other meshes is copied: only the target gets the texture.
+        slot.material = slot.material.copy()
+    return slot.material
+
 def luna_from_texture():
     objs = luna_from_targets()
-    if not objs:
-        raise RuntimeError('no mesh in the scene to take the Higgsfield texture')
-    img = bpy.data.images.load(FROM_PATH, check_existing=True)
-    done = 0
+    img = bpy.data.images.load(FROM_PATH, check_existing=False)
+    # Packed: the saved .blend holds the texture, not an absolute path on this PC.
+    img.pack()
     for o in objs:
-        mat = next((s.material for s in o.material_slots if s.material is not None and s.material.name != 'LunaOutline'), None)
-        if mat is None:
-            mat = bpy.data.materials.new('Luna_' + o.name)
-            if len(o.data.materials) and o.data.materials[0] is None:
-                o.data.materials[0] = mat
-            else:
-                o.data.materials.append(mat)
-        luna_base_color(mat, img)
+        luna_base_color(luna_from_material(o), img)
         if not o.data.uv_layers:
             luna_warn('%s has no UV map: the Higgsfield texture will not show on it' % o.name)
-        done += 1
-    LUNA_REPORT['fromApplied'] = done
+    LUNA_REPORT['fromApplied'] = len(objs)
+
+def luna_glb_uris(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == 'uri' and isinstance(v, str):
+                yield v
+            else:
+                yield from luna_glb_uris(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from luna_glb_uris(v)
+
+def luna_glb_check():
+    # Checked again right before the import (LunaCore checked it too): no uri may name a file.
+    import struct
+    with open(FROM_PATH, 'rb') as f:
+        head = f.read(20)
+        if len(head) < 20 or head[:4] != b'glTF' or head[16:20] != b'JSON':
+            raise RuntimeError('the from file is not a binary glTF')
+        doc = json.loads(f.read(struct.unpack('<I', head[12:16])[0]).decode('utf-8'))
+    if any(not u.startswith('data:') for u in luna_glb_uris(doc)):
+        raise RuntimeError('the GLB references an external file')
 
 def luna_from_model():
+    luna_glb_check()
     before = set(bpy.data.objects)
     bpy.ops.import_scene.gltf(filepath=FROM_PATH)
     added = [o for o in bpy.data.objects if o not in before]
