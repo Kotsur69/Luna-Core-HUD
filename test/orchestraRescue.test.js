@@ -85,11 +85,60 @@ test('outKeys: a paused backend, a free wait, a non-Claude reading at 100% (Clau
   assert.deepEqual(r.outKeys({ ticked, pauses: { claude: {} } }), ['opus', 'sonnet']);
   assert.deepEqual(r.outKeys({ ticked, pauses: { agy: {} } }), ['agy-argon', 'agy-hydrogen']);
   assert.deepEqual(r.outKeys({ ticked, freeWaiting: true }), ['free']);
-  const readings = [{ key: 'agy-argon', percent: 100 }, { key: 'opus', percent: 100 }, { key: 'agy-hydrogen', percent: 99 }];
-  assert.deepEqual(r.outKeys({ ticked, readings }), ['agy-argon']);
+  const now = 5_000_000;
+  const readings = [
+    { key: 'agy-argon', percent: 100, rawPercent: 100, at: now },
+    { key: 'opus', percent: 100, rawPercent: 100, at: now },
+    { key: 'agy-hydrogen', percent: 99, rawPercent: 99, at: now },
+  ];
+  assert.deepEqual(r.outKeys({ ticked, readings, now }), ['agy-argon']);
   assert.equal(r.claudeHeadroom({ agy: {} }), true);
   assert.equal(r.claudeHeadroom({ claude: {} }), false);
   assert.equal(r.claudeHeadroom({ all: {} }), false);
+});
+
+test('outKeys: only a fresh, truly full reading is out - not a stale one, not a rounded-up 99.5%', () => {
+  const ticked = ['agy-argon', 'agy-neon', 'free'];
+  const now = 10_000_000;
+  const at = (key, rawPercent, readAt) => ({ key, percent: Math.round(rawPercent), rawPercent, at: readAt });
+  // A fresh real 100% still counts, also right at the age limit.
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [at('agy-argon', 100, now - 1000)] }), ['agy-argon']);
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [at('agy-argon', 100, now - r.MAX_READING_AGE_MS)] }), ['agy-argon']);
+  // 99.5% shows as 100% but is not out.
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [at('agy-argon', 99.5, now)] }), []);
+  // A stale 100% (older than the limit) is not out.
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [at('agy-argon', 100, now - r.MAX_READING_AGE_MS - 1)] }), []);
+  // No time, a reading from the future, no clock: never out.
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [at('agy-argon', 100, null)] }), []);
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [at('agy-argon', 100, now + 60_000)] }), []);
+  assert.deepEqual(r.outKeys({ ticked, readings: [at('agy-argon', 100, now)] }), []);
+  // A rounded percent alone (no rawPercent) is never out.
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [{ key: 'agy-argon', percent: 100, at: now }] }), []);
+  // A free profile's full fresh reading is out too.
+  assert.deepEqual(r.outKeys({ ticked, now, readings: [at('free', 100, now)] }), ['free']);
+  // A pause still makes a backend out whatever its reading says.
+  assert.deepEqual(r.outKeys({ ticked, now, pauses: { agy: {} }, readings: [at('agy-argon', 10, now)] }), ['agy-argon', 'agy-neon']);
+});
+
+test('MAX_READING_AGE_MS covers a healthy usage meter: the others interval plus the longest backoff', () => {
+  const usage = require('../src/usage');
+  const othersEveryMs = new usage.UsageWatcher(() => {}).othersEveryMs;
+  assert.ok(r.MAX_READING_AGE_MS >= othersEveryMs + usage.MAX_BACKOFF_MS, 'a healthy reading is never stale');
+  assert.ok(r.MAX_READING_AGE_MS <= 30 * 60 * 1000, 'a stale reading does not linger for half an hour');
+});
+
+test('resolveTarget: a ticked Opus with its own fixed effort still takes over at the Emergency Opus effort', () => {
+  const pool = [e('opus', 'low'), e('agy-argon')];
+  const pkg = { id: 'a', poolModel: 'agy-argon' };
+  // Fixed emergency setting: that level, not the pool entry's 'low' (medium).
+  assert.deepEqual(r.resolveTarget({ pkg, key: 'opus', pool, agyList: [], effort: 'medium', emergencySetting: 'xhigh' }), { model: 'opus', effort: 'xhigh' });
+  // Step: one up from the package's effort, again not the pool entry's level.
+  assert.deepEqual(r.resolveTarget({ pkg, key: 'opus', pool, agyList: [], effort: 'high', emergencySetting: 'step' }), { model: 'opus', effort: 'xhigh' });
+  const maxPool = [e('opus', 'max'), e('agy-argon')];
+  assert.deepEqual(r.resolveTarget({ pkg, key: 'opus', pool: maxPool, agyList: [], effort: 'medium', emergencySetting: 'medium' }), { model: 'opus', effort: 'medium' });
+  // A package planned for Opus keeps its own effort.
+  const planned = { id: 'b', poolModel: 'opus' };
+  assert.deepEqual(r.resolveTarget({ pkg: planned, key: 'opus', pool, agyList: [], effort: 'high', emergencySetting: 'xhigh' }), { model: 'opus', effort: 'high' });
 });
 
 test('availableKeys: ticked, not out, runnable, never free', () => {

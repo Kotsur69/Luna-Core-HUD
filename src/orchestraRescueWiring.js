@@ -24,7 +24,7 @@
 
 const rules = require('./orchestraRescue');
 const { concreteModel } = require('./orchestraPool');
-const { poolUsageReadings } = require('./orchestraPoolUsage');
+const { poolLimitReadings } = require('./orchestraPoolUsage');
 const { pausesOf } = require('./orchestraPauses');
 
 const noop = () => {};
@@ -60,18 +60,20 @@ function createRescueWiring(opts) {
     const pauses = pausesOf(plan);
     let readings = [];
     try {
-      readings = deps.usageReading ? poolUsageReadings(plan.modelPool, deps.usageReading()) : [];
+      // Unrounded and timed: a stale or rounded-up reading must not count as out.
+      readings = deps.usageReading ? poolLimitReadings(plan.modelPool, deps.usageReading()) : [];
     } catch (err) {
       log(`[orchestra] pool usage reading failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-    const out = rules.outKeys({ ticked, pauses, readings, freeWaiting: opts.freeWaiting() });
+    const out = rules.outKeys({ ticked, pauses, readings, freeWaiting: opts.freeWaiting(), now: now() });
     const runnable = (k) => concreteModel(k, null, list) !== null;
     return { plan, ticked, list, out, available: rules.availableKeys(ticked, out, runnable), headroom: rules.claudeHeadroom(pauses) };
   }
 
   /**
    * The model and --effort a package runs on at a target. Opus taking over a
-   * package not planned for it runs at the Emergency Opus effort; Sonnet at
+   * package not planned for it runs at the Emergency Opus effort (also a
+   * ticked Opus with a fixed pool effort); Sonnet at
    * its pool entry's level (else the package's own effort); an agy family on
    * its entry's variant, else the variant nearest the package's effort.
    */

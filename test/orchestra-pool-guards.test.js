@@ -431,7 +431,7 @@ test('two runs: the agy cap counts both runs, and limit moves read the shared li
   assert.deepEqual(launchedIds(runs.b), ['b2']);
   // The meter now reads Argon's weekly quota as used up: both runs' waiting
   // agy packages move to Opus on their next look - nothing counted per run.
-  meter.current = { others: [{ providerId: 'antigravity', status: 'ok', limits: [{ model: 'Argon', window: 'weekly', percentUsed: 100 }] }] };
+  meter.current = { others: [{ providerId: 'antigravity', status: 'ok', updatedAt: 1_000_000, limits: [{ model: 'Argon', window: 'weekly', percentUsed: 100 }] }] };
   runs.a.orch.tick();
   runs.b.orch.tick();
   await runs.a.flush();

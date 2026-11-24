@@ -343,6 +343,30 @@ test('usage readings: Claude from its tightest window, agy per family, a free pr
   assert.deepEqual(usageRules.poolUsageReadings([e('free:freellm-chain')], reporting), [{ key: 'free', percent: 5, window: 'daily' }]);
 });
 
+test('limit readings: unrounded percent and the read time of the entry for the rescue check; the planner keeps the rounded shape', () => {
+  const usage = {
+    ...USAGE,
+    updatedAt: 111,
+    others: [
+      { providerId: 'antigravity', status: 'ok', updatedAt: 222, limits: [{ window: 'weekly', percentUsed: 99.5, model: 'Argon' }] },
+      { providerId: 'zai', profileId: 'freellm-chain', status: 'ok', limits: [{ window: 'daily', percentUsed: 120 }] },
+    ],
+  };
+  const pool = [e('opus'), e('agy-argon'), e('free:freellm-chain')];
+  assert.deepEqual(usageRules.poolLimitReadings(pool, usage), [
+    { key: 'opus', percent: 72, rawPercent: 72.4, window: '5h', at: 111 },
+    { key: 'agy-argon', percent: 100, rawPercent: 99.5, window: 'weekly', at: 222 },
+    // No updatedAt on the entry: no time (never out); above 100 clamps to 100.
+    { key: 'free', percent: 100, rawPercent: 100, window: 'daily', at: null },
+  ]);
+  assert.deepEqual(usageRules.poolUsageReadings(pool, usage), [
+    { key: 'opus', percent: 72, window: '5h' },
+    { key: 'agy-argon', percent: 100, window: 'weekly' },
+    { key: 'free', percent: 100, window: 'daily' },
+  ]);
+  assert.deepEqual(usageRules.poolLimitReadings(pool, null), []);
+});
+
 test('usage line: normal, partial data, no data', () => {
   const full = usageRules.poolUsageLine([
     { key: 'opus', percent: 72, window: '5h' },

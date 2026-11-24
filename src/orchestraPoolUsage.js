@@ -17,7 +17,14 @@
 //                                    (a free profile that reports none) is
 //                                    left out
 //   poolUsageLine(readings, keys)    the prompt line, or null for no data
+//   poolLimitReadings(pool, usage)   the same readings for the mid-run limit
+//                                    check (src/orchestraRescue.js outKeys):
+//                                    plus rawPercent (unrounded, so 99.5% is
+//                                    not 100%) and at (the provider entry's
+//                                    updatedAt: when the reading was taken;
+//                                    null when the entry has none)
 //
+// The planner gets the rounded percent only; the rounding is for display.
 // Pure, no I/O. No reading at all = no line = the prompt as before.
 // ============================================================================
 
@@ -37,12 +44,20 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 /** A usable limit: a known window and a finite percentage. */
 const usableLimit = (l) => isObj(l) && Object.prototype.hasOwnProperty.call(WINDOW_TEXT, l.window) && Number.isFinite(l.percentUsed);
 
-/** The tightest window of some limits ({percent, window}), else null. */
-function tightest(limits) {
+/** When a provider entry was read (its updatedAt), else null. */
+const readAtOf = (entry) => (isObj(entry) && Number.isFinite(entry.updatedAt) && entry.updatedAt > 0 ? entry.updatedAt : null);
+
+/**
+ * The tightest window of some limits, else null: percent is rounded for
+ * display, rawPercent is the same value unrounded (both clamped to 0-100).
+ * @returns {{percent:number, rawPercent:number, window:string, at:number|null}|null}
+ */
+function tightest(limits, at) {
   const usable = (Array.isArray(limits) ? limits : []).filter(usableLimit);
   if (!usable.length) return null;
   const top = usable.reduce((best, l) => (l.percentUsed > best.percentUsed ? l : best));
-  return { percent: Math.round(Math.min(MAX_PERCENT, Math.max(0, top.percentUsed))), window: top.window };
+  const rawPercent = Math.min(MAX_PERCENT, Math.max(0, top.percentUsed));
+  return { percent: Math.round(rawPercent), rawPercent, window: top.window, at };
 }
 
 /** A provider entry that holds a reading (status 'ok'). */
@@ -54,26 +69,26 @@ function readingOf(model, usage) {
   const on = runsOnOf(key);
   const others = Array.isArray(usage.others) ? usage.others : [];
   // Claude: the meter's own reading (one login, so Opus and Sonnet share its windows).
-  if (on === 'claude') return okEntry(usage) && (usage.providerId === undefined || usage.providerId === 'claude') ? tightest(usage.limits) : null;
+  if (on === 'claude') return okEntry(usage) && (usage.providerId === undefined || usage.providerId === 'claude') ? tightest(usage.limits, readAtOf(usage)) : null;
   if (on === 'agy') {
     const family = agyFamilyByPoolKey(key);
     const agy = others.find((o) => okEntry(o) && o.providerId === AGY_PROVIDER_ID);
-    return family && agy ? tightest(agy.limits.filter((l) => isObj(l) && l.model === family.usageRow)) : null;
+    return family && agy ? tightest(agy.limits.filter((l) => isObj(l) && l.model === family.usageRow), readAtOf(agy)) : null;
   }
   // A free profile: only when its provider reports usage at all.
   const profileId = freeProfileIdOf(model);
   const entry = others.find((o) => okEntry(o) && o.profileId === profileId);
-  return entry ? tightest(entry.limits) : null;
+  return entry ? tightest(entry.limits, readAtOf(entry)) : null;
 }
 
 /**
- * Each ticked model's current usage, in pool order; models without a
- * reading are left out.
+ * Each ticked model's full reading, in pool order; models without a reading
+ * are left out. For the mid-run limit check (src/orchestraRescue.js outKeys).
  * @param {unknown} pool the run's pool ([{model, effort}])
  * @param {unknown} usage the usage meter's latest reading (main's latestUsage)
- * @returns {{key:string, percent:number, window:string}[]}
+ * @returns {{key:string, percent:number, rawPercent:number, window:string, at:number|null}[]}
  */
-function poolUsageReadings(pool, usage) {
+function poolLimitReadings(pool, usage) {
   if (!isObj(usage)) return [];
   return (normalizePool(pool) || [])
     .map((e) => {
@@ -81,6 +96,17 @@ function poolUsageReadings(pool, usage) {
       return reading ? { key: poolKeyOf(e.model), ...reading } : null;
     })
     .filter(Boolean);
+}
+
+/**
+ * Each ticked model's current usage for the planner prompt, in pool order;
+ * models without a reading are left out. The percent is rounded.
+ * @param {unknown} pool the run's pool ([{model, effort}])
+ * @param {unknown} usage the usage meter's latest reading (main's latestUsage)
+ * @returns {{key:string, percent:number, window:string}[]}
+ */
+function poolUsageReadings(pool, usage) {
+  return poolLimitReadings(pool, usage).map(({ key, percent, window }) => ({ key, percent, window }));
 }
 
 /**
@@ -105,4 +131,4 @@ function poolUsageLine(readings, keys = null) {
   return `- Current usage: ${parts.join(', ')} - prefer the less-used model of the same tier.`;
 }
 
-module.exports = { poolUsageReadings, poolUsageLine };
+module.exports = { poolUsageReadings, poolLimitReadings, poolUsageLine };
