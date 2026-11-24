@@ -268,8 +268,10 @@ test('the worker command carries the deny rules, the --mcp-config and the art fo
   // A control character (here a tab) in a path: the folder is not passed on.
   const tabbed = path.resolve(`a${String.fromCharCode(9)}b`);
   assert.ok(!withTaskBrief('claude', { briefPath: path.resolve('b.md'), addDirs: [tabbed] }).includes(tabbed));
-  // A rule that would break the single quotes is dropped.
-  assert.ok(!withTaskBrief('claude', { briefPath: path.resolve('b.md'), disallowedTools: ["Bash(x';rm)"] }).includes('rm'));
+  // A rule that would break the single quotes is dropped. Match the rule's own text, not a bare "rm":
+  // the brief path comes from the working folder, whose name may contain "rm" (e.g. a worktree "...-normalize-...").
+  const broken = withTaskBrief('claude', { briefPath: path.resolve('b.md'), disallowedTools: ["Bash(x';rm)"] });
+  assert.ok(!broken.includes("';rm") && !broken.includes('Bash(x'), broken);
 });
 
 test('writes only inside the repo and its art folders', () => {
