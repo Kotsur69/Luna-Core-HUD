@@ -121,6 +121,17 @@ test('loudnessPlan: plain gain when it fits, no note when the ceiling costs at m
   assert.match(blocked.note, /near -23\.5 LUFS/);
   // A negative gain (too loud) is a plain cut.
   assert.deepEqual(N.loudnessPlan({ i: -9, tp: -0.5 }), { gainDb: -5, note: null });
+  // The plain gain keeps PEAK_HEADROOM_DB under the ceiling for the resample and the encode.
+  assert.equal(N.PEAK_HEADROOM_DB, 0.5);
+  assert.deepEqual(N.loudnessPlan({ i: -20, tp: -7.8 }), { gainDb: null, note: null }, '-1.8 dBTP after the gain is too close to -1.5');
+});
+
+test('parseMeasurement reads the block holding "input_i" and rejects empty values', () => {
+  const trailing = `${measuredJson({ i: '-18.00', tp: '-9.00' })}[out#0/null @ 0x2] video:0kB audio:{unknown} muxing overhead\n`;
+  assert.deepEqual(N.parseMeasurement(trailing), { i: -18, tp: -9, lra: 0, thresh: -40 });
+  assert.equal(N.parseMeasurement(measuredJson({ i: '', tp: '-9.00' })), null);
+  assert.equal(N.parseMeasurement(measuredJson({ i: ' ', tp: '-9.00' })), null);
+  assert.equal(N.parseMeasurement('{"other": 1}'), null);
 });
 
 test('a silent or unmeasurable clip keeps the original and runs no writing pass', async () => {
@@ -170,6 +181,14 @@ test('locateFfmpeg: LUNACORE_FFMPEG_PATH first, else the first ffmpeg in an abso
   assert.deepEqual(found, { ok: true, path: onPath });
   assert.equal(path.isAbsolute(found.path), true);
 
+  // A PATH folder inside the project repo (which a worker can write to) is never trusted.
+  const repo = tempDir('repo');
+  const planted = path.join(repo, 'tools', EXE);
+  fs.mkdirSync(path.dirname(planted));
+  fs.writeFileSync(planted, '');
+  assert.deepEqual(N.locateFfmpeg({ env: { PATH: [path.dirname(planted), path.dirname(onPath)].join(sep) }, untrustedRoot: repo }), { ok: true, path: onPath });
+  assert.equal(N.locateFfmpeg({ env: { PATH: repo + sep + path.dirname(planted) }, untrustedRoot: repo }).ok, false);
+
   const missing = N.locateFfmpeg({ env: { PATH: empty } });
   assert.equal(missing.ok, false);
   assert.match(missing.why, /ffmpeg was not found on PATH \(install ffmpeg, or set LUNACORE_FFMPEG_PATH to the full path of ffmpeg/);
@@ -179,6 +198,10 @@ test('locateFfmpeg on Windows reads Path case-insensitively and looks for ffmpeg
   const bin = fakeBinary('ffmpeg.exe');
   assert.deepEqual(N.locateFfmpeg({ env: { Path: path.dirname(bin) }, platform: 'win32' }), { ok: true, path: bin });
   assert.deepEqual(N.locateFfmpeg({ env: { lunacore_ffmpeg_path: bin }, platform: 'win32' }), { ok: true, path: bin });
+  // "\folder" has no drive: it would resolve against whatever drive is current.
+  const driveless = bin.slice(2);
+  assert.equal(N.locateFfmpeg({ env: { LUNACORE_FFMPEG_PATH: driveless }, platform: 'win32' }).ok, false);
+  assert.equal(N.locateFfmpeg({ env: { Path: path.dirname(driveless) }, platform: 'win32' }).ok, false);
 });
 
 test('no ffmpeg anywhere: a clear note, the original audio kept, execFile never called with a bare name', async () => {
@@ -197,6 +220,39 @@ test('no ffmpeg anywhere: a clear note, the original audio kept, execFile never 
   const configured = N.createAudioNormalizer({ execFile: ffmpeg.fn, fs, guard, ffmpegPath: path.join(dir, 'missing.exe') });
   assert.match((await configured.normalize('hit.ogg', POST)).note, /the configured ffmpeg path is not the absolute path of an existing file/);
   assert.equal(ffmpeg.calls.length, 0);
+});
+
+test('a binary gone since the lookup is looked up again: the next call says it is not on PATH', async () => {
+  const dir = tempDir('gone');
+  fs.writeFileSync(path.join(dir, 'hit.ogg'), OGG);
+  const bin = fakeBinary();
+  const calls = [];
+  const execFile = (cmd, args, opts, cb) => {
+    calls.push(cmd);
+    setImmediate(() => cb(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }), '', ''));
+  };
+  const guard = (rel) => path.join(dir, ...rel.split('/'));
+  const normalizer = N.createAudioNormalizer({ execFile, fs, guard, env: { PATH: path.dirname(bin) } });
+  assert.match((await normalizer.normalize('hit.ogg', POST)).note, /ffmpeg was not found \(its resolved binary could not be started\)/);
+  assert.deepEqual(calls, [bin]);
+  fs.unlinkSync(bin);
+  assert.match((await normalizer.normalize('hit.ogg', POST)).note, /ffmpeg was not found on PATH/);
+  assert.equal(calls.length, 1, 'no second run of a vanished binary');
+});
+
+test('the repo guard runs again before the writing pass: a link planted during the measurement is refused', async () => {
+  const dir = tempDir('reguard');
+  fs.writeFileSync(path.join(dir, 'hit.ogg'), OGG);
+  let measured = false;
+  const ffmpeg = fakeFfmpeg({ stderr: measuredJson({ i: '-20.00', tp: '-8.00' }), onCall: (args) => { if (args.includes('null')) measured = true; } });
+  const guard = (rel) => {
+    if (measured) throw new Error(`refused: ${rel} is a link`);
+    return path.join(dir, ...rel.split('/'));
+  };
+  const res = await N.createAudioNormalizer({ execFile: ffmpeg.fn, fs, guard, ffmpegPath: fakeBinary() }).normalize('hit.ogg', POST);
+  assert.equal(res.ok, false);
+  assert.match(res.note, /refused: hit\.ogg is a link; the original audio was kept\.$/);
+  assert.equal(ffmpeg.calls.length, 1, 'no writing pass');
 });
 
 // ---- lock hold time --------------------------------------------------------------------
@@ -293,11 +349,15 @@ test('audioPost is in the luna_asset_comfy and luna_asset_import schemas with th
       assert.deepEqual([prop.properties[k].type, prop.properties[k].minimum, prop.properties[k].maximum], ['integer', N.MIN_BPM, N.MAX_BPM]);
       assert.match(prop.properties[k].description, /targetBpm and bpm go together/);
     }
-    assert.deepEqual(prop.dependentRequired, { targetBpm: ['bpm'], bpm: ['targetBpm'] });
+    assert.equal(prop.dependentRequired, undefined, 'the pairing rule lives in the descriptions (wide client support)');
     assert.match(prop.description, /targetBpm and bpm are a pair: give both \(each an integer from 40 to 300\) or neither/);
     assert.match(prop.description, /kind "audio" only/);
     assert.match(prop.properties.loudnorm.description, /-14 LUFS \(within 1 LU/);
   }
+  // The executor takes the same integers the schema advertises.
+  assert.equal(N.cleanAudioPost({ targetBpm: 128.5, bpm: 120 }).error, 'badAudioPost');
+  assert.match(N.cleanAudioPost({ targetBpm: 120, bpm: 39 }).detail, /integers from 40 to 300/);
+  assert.equal(N.cleanAudioPost({ targetBpm: 300, bpm: 40 }).ok, true);
   for (const name of [T.BLENDER_TOOL, T.HIGGSFIELD_TOOL, T.SEARCH_TOOL]) {
     assert.equal(T.ASSET_TOOLS.find((t) => t.name === name).inputSchema.properties.audioPost, undefined, name);
   }

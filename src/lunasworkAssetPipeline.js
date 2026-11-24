@@ -449,7 +449,7 @@ function createAssetPipeline(deps) {
   }
 
   // The optional ffmpeg audio post-process (src/lunasworkAudioNormalize.js), on the guarded paths.
-  const audioNormalizer = createAudioNormalizer({ execFile: d.execFile, fs: fsx, guard: guardPath, ffmpegPath: d.ffmpegPath });
+  const audioNormalizer = createAudioNormalizer({ execFile: d.execFile, fs: fsx, guard: guardPath, ffmpegPath: d.ffmpegPath, repoPath });
 
   // ---- Blender -------------------------------------------------------------------------
 

@@ -16,14 +16,16 @@
 //      one plain gain (volume). Single-pass loudnorm cannot measure a clip
 //      under 400 ms at all and guesses on clips under 3 s, which left short
 //      SFX off target. When a plain gain to TARGET_LUFS would push the true
-//      peak over TRUE_PEAK_DB, the second pass falls back to single-pass
+//      peak over TRUE_PEAK_DB (less PEAK_HEADROOM_DB, for the resample and
+//      the encode), the second pass falls back to single-pass
 //      loudnorm (which limits instead) and, when that can leave the clip more
 //      than LOUDNESS_TOLERANCE_LU under target, the answer says so and why.
 //
 // The ffmpeg binary is always an absolute path: the caller's fixed path, else
 // LUNACORE_FFMPEG_PATH when set (it must name an existing file), else the
-// first ffmpeg(.exe) file found in an absolute folder of PATH. A bare
-// "ffmpeg" is never handed to execFile, so the working folder cannot supply it.
+// first ffmpeg(.exe) file found in an absolute folder of PATH outside the
+// project repo. A bare "ffmpeg" is never handed to execFile, so the working
+// folder cannot supply it.
 //
 // ffmpeg runs through execFile with plain argument tokens: no shell, no
 // command line built from strings. The output goes to a random temp file
@@ -55,6 +57,10 @@ const LOUDNESS_RANGE = 11;
 // path is exact up to rounding (about 0.01 LU); only a clip whose true peak
 // blocks the gain can miss it, and then the answer carries a note.
 const LOUDNESS_TOLERANCE_LU = 1;
+// A plain gain has no limiter, and the 48 kHz resample and a lossy encode can
+// lift the true peak a little: the gain is used only when it keeps the
+// measured peak this far under TRUE_PEAK_DB.
+const PEAK_HEADROOM_DB = 0.5;
 // Clips shorter than this are padded with silence for the measurement only.
 const SHORT_CLIP_SECONDS = 1;
 // The ranges loudnorm reports its measurement in; anything else (e.g. "-inf"
@@ -84,7 +90,8 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const oneLine = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim().slice(0, max);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 const extOf = (rel) => path.posix.extname(rel).slice(1).toLowerCase();
-const isBpm = (v) => typeof v === 'number' && Number.isFinite(v) && v >= MIN_BPM && v <= MAX_BPM;
+// Whole BPM only, as the luna_asset_* schemas say (src/lunasworkAssetTools.js).
+const isBpm = (v) => Number.isInteger(v) && v >= MIN_BPM && v <= MAX_BPM;
 const unquote = (v) => v.trim().replace(/^"(.*)"$/, '$1');
 
 // The first bytes each audio format starts with; the output must keep its format.
@@ -97,7 +104,7 @@ const AUDIO_MAGIC = Object.freeze({
 /**
  * The validated audioPost option. Undefined -> no post-process. trim and
  * loudnorm default to true once audioPost is given; targetBpm and bpm go
- * together, each a finite number within MIN_BPM..MAX_BPM.
+ * together, each an integer within MIN_BPM..MAX_BPM.
  * @returns {{ok:true, post:null|{trim:boolean, loudnorm:boolean, targetBpm:number|null, bpm:number|null}}|{ok:false, error:string, detail:string}}
  */
 function cleanAudioPost(raw) {
@@ -112,7 +119,7 @@ function cleanAudioPost(raw) {
   const hasTarget = raw.targetBpm !== undefined;
   const hasSource = raw.bpm !== undefined;
   if (hasTarget !== hasSource) return bad('audioPost.targetBpm needs the source bpm (and bpm needs targetBpm)');
-  if (hasTarget && (!isBpm(raw.targetBpm) || !isBpm(raw.bpm))) return bad(`audioPost.targetBpm and bpm must be numbers from ${MIN_BPM} to ${MAX_BPM}`);
+  if (hasTarget && (!isBpm(raw.targetBpm) || !isBpm(raw.bpm))) return bad(`audioPost.targetBpm and bpm must be integers from ${MIN_BPM} to ${MAX_BPM}`);
   const post = {
     trim: raw.trim !== false,
     loudnorm: raw.loudnorm !== false,
@@ -194,16 +201,17 @@ function measureArgs(input, post) {
 }
 
 /**
- * loudnorm's measurement from the measuring pass's stderr (the last JSON
- * object in it), or null when it is missing or not usable (a silent clip
- * reports "-inf").
+ * loudnorm's measurement from the measuring pass's stderr (the JSON object
+ * holding the last "input_i"), or null when it is missing or not usable (a
+ * silent clip reports "-inf").
  * @returns {{i:number, tp:number, lra:number, thresh:number}|null}
  */
 function parseMeasurement(stderr) {
   const text = String(stderr || '');
-  const end = text.lastIndexOf('}');
-  const start = end < 0 ? -1 : text.lastIndexOf('{', end);
-  if (start < 0) return null;
+  const key = text.lastIndexOf('"input_i"');
+  const start = key < 0 ? -1 : text.lastIndexOf('{', key);
+  const end = start < 0 ? -1 : text.indexOf('}', key);
+  if (end < 0) return null;
   let raw;
   try {
     raw = JSON.parse(text.slice(start, end + 1));
@@ -214,7 +222,9 @@ function parseMeasurement(stderr) {
   if (!isObj(raw)) return null;
   const m = {};
   for (const [k, [lo, hi]] of Object.entries(MEASURE_RANGES)) {
-    const v = typeof raw[`input_${k}`] === 'string' || typeof raw[`input_${k}`] === 'number' ? Number(raw[`input_${k}`]) : NaN;
+    const given = raw[`input_${k}`];
+    // Number('') is 0: an empty value must not read as a measurement.
+    const v = (typeof given === 'string' && given.trim()) || typeof given === 'number' ? Number(given) : NaN;
     if (!Number.isFinite(v) || v < lo || v > hi) return null;
     m[k] = v;
   }
@@ -231,7 +241,7 @@ function parseMeasurement(stderr) {
  */
 function loudnessPlan(m) {
   const gainDb = TARGET_LUFS - m.i;
-  if (m.tp + gainDb <= TRUE_PEAK_DB) return { gainDb, note: null };
+  if (m.tp + gainDb <= TRUE_PEAK_DB - PEAK_HEADROOM_DB) return { gainDb, note: null };
   const reachable = m.i + (TRUE_PEAK_DB - m.tp);
   if (TARGET_LUFS - reachable <= LOUDNESS_TOLERANCE_LU) return { gainDb: null, note: null };
   const r1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
@@ -241,9 +251,13 @@ function loudnessPlan(m) {
   };
 }
 
-/** True when `p` is an absolute path to an existing regular file. */
+// On Windows "\foo" counts as absolute but resolves against the current drive: a drive or UNC root is required.
+const WIN_ROOTED_RE = /^(?:[a-zA-Z]:[\\/]|\\\\[^\\/])/;
+const isFullPath = (pathApi, p) => pathApi.isAbsolute(p) && (pathApi !== path.win32 || WIN_ROOTED_RE.test(p));
+
+/** True when `p` is a full path to an existing regular file. */
 function isFileAt(fsx, pathApi, p) {
-  if (typeof p !== 'string' || !p || !pathApi.isAbsolute(p)) return false;
+  if (typeof p !== 'string' || !p || !isFullPath(pathApi, p)) return false;
   try {
     return fsx.statSync(p).isFile();
   } catch {
@@ -263,8 +277,9 @@ function envValue(env, name, platform) {
 /**
  * The absolute ffmpeg binary: LUNACORE_FFMPEG_PATH when set, else the first
  * ffmpeg file in an absolute PATH folder. Relative PATH entries (".") are
- * skipped, so a file planted in the working folder is never run.
- * @param {{fs?:object, env?:object, platform?:string}} [opts]
+ * skipped, so a file planted in the working folder is never run, and so is a
+ * PATH folder inside `untrustedRoot` (the project repo a worker writes to).
+ * @param {{fs?:object, env?:object, platform?:string, untrustedRoot?:string}} [opts]
  * @returns {{ok:true, path:string}|{ok:false, why:string}}
  */
 function locateFfmpeg(opts = {}) {
@@ -280,9 +295,14 @@ function locateFfmpeg(opts = {}) {
     return { ok: false, why: `ffmpeg was not found: ${FFMPEG_PATH_ENV} is set but is not the absolute path of an existing file (fix it, or unset it to use ${exe} from PATH)` };
   }
   const dirs = String(envValue(env, 'PATH', platform) || '').split(platform === 'win32' ? ';' : ':');
+  const inUntrusted = (dir) => {
+    if (typeof opts.untrustedRoot !== 'string' || !opts.untrustedRoot) return false;
+    const rel = pathApi.relative(pathApi.resolve(opts.untrustedRoot), pathApi.resolve(dir));
+    return rel === '' || (!rel.startsWith('..') && !pathApi.isAbsolute(rel));
+  };
   for (const raw of dirs) {
     const dir = unquote(raw);
-    if (!dir || !pathApi.isAbsolute(dir)) continue;
+    if (!dir || !isFullPath(pathApi, dir) || inUntrusted(dir)) continue;
     const candidate = pathApi.join(dir, exe);
     if (isFileAt(fsx, pathApi, candidate)) return { ok: true, path: candidate };
   }
@@ -308,13 +328,14 @@ function appliedSteps(post) {
   return steps;
 }
 
-const runUnlocked = (fn) => fn();
+const runUnlocked = async (fn) => fn();
 
 /**
  * @param {{execFile?:Function, fs:object, guard:(rel:string)=>string, timeoutMs?:number,
- *   ffmpegPath?:string, env?:object, platform?:string}} deps
+ *   ffmpegPath?:string, env?:object, platform?:string, repoPath?:string}} deps
  *   guard = the repo path guard: rel -> absolute path, throws outside the repo;
- *   ffmpegPath = a fixed absolute ffmpeg binary (else LUNACORE_FFMPEG_PATH / PATH, looked up once)
+ *   ffmpegPath = a fixed absolute ffmpeg binary (else LUNACORE_FFMPEG_PATH / PATH, looked up once);
+ *   repoPath = the repo the worker writes to: an ffmpeg on PATH inside it is never used
  * @returns {{normalize:(rel:string, post:object, opts?:{commitLock?:(fn:Function)=>Promise<unknown>})=>Promise<{ok:boolean, rel:string, steps?:string[], note?:string}>}}
  */
 function createAudioNormalizer(deps) {
@@ -330,9 +351,16 @@ function createAudioNormalizer(deps) {
     if (deps.ffmpegPath !== undefined) {
       res = isFileAt(fsx, path, deps.ffmpegPath) ? { ok: true, path: deps.ffmpegPath } : { ok: false, why: 'ffmpeg was not found: the configured ffmpeg path is not the absolute path of an existing file' };
     } else {
-      res = locateFfmpeg({ fs: fsx, env: deps.env, platform: deps.platform });
+      res = locateFfmpeg({ fs: fsx, env: deps.env, platform: deps.platform, untrustedRoot: deps.repoPath });
     }
     if (res.ok) found = res;
+    return res;
+  }
+
+  /** execFile on the found binary; a binary gone since the lookup is looked up again next time. */
+  async function runFfmpeg(bin, args) {
+    const res = await run(bin, args);
+    if (!res.ok && res.err && res.err.code === 'ENOENT') found = null;
     return res;
   }
 
@@ -353,7 +381,9 @@ function createAudioNormalizer(deps) {
   function failReason(res, dir) {
     if (res.err && res.err.code === 'ENOENT') return 'ffmpeg was not found (its resolved binary could not be started)';
     const lastLine = res.stderr.trim().split(/\r?\n/).pop() || errText(res.err);
-    return `ffmpeg failed (${oneLine(lastLine.split(dir).join('.'), 120)})`;
+    // ffmpeg may print the folder with either slash.
+    const local = [dir, dir.replace(/\\/g, '/')].reduce((line, d) => line.split(d).join('.'), lastLine);
+    return `ffmpeg failed (${oneLine(local, 120)})`;
   }
 
   /** Removes our temp file; a failure to remove it becomes part of the note. */
@@ -411,7 +441,7 @@ function createAudioNormalizer(deps) {
   /** The measuring pass and the loudness plan; {plan} or {why} when the clip cannot be normalized. */
   async function measure(bin, target, post) {
     if (!post.loudnorm) return { plan: { gainDb: null, note: null } };
-    const res = await run(bin, measureArgs(target, post));
+    const res = await runFfmpeg(bin, measureArgs(target, post));
     if (!res.ok) return { why: failReason(res, path.dirname(target)) };
     const m = parseMeasurement(res.stderr);
     if (!m) return { why: 'its loudness could not be measured (a silent clip, or no loudnorm measurement in the ffmpeg output)' };
@@ -435,7 +465,14 @@ function createAudioNormalizer(deps) {
     const measured = await measure(bin.path, target, post);
     if (!measured.plan) return kept(rel, measured.why);
     const { plan } = measured;
-    const res = await run(bin.path, ffmpegArgs(target, tmp, post, plan.gainDb === null ? undefined : plan.gainDb));
+    try {
+      // Again before the writing pass: a link planted while the measuring pass ran is refused.
+      deps.guard(rel);
+      deps.guard(tmpRel);
+    } catch (err) {
+      return kept(rel, errText(err));
+    }
+    const res = await runFfmpeg(bin.path, ffmpegArgs(target, tmp, post, plan.gainDb === null ? undefined : plan.gainDb));
     if (!res.ok) return kept(rel, failReason(res, path.dirname(target)) + dropTmp(tmp, tmpRel));
     const out = outputHead(tmp);
     if (!out || out.size < MIN_OUTPUT_BYTES) return kept(rel, `ffmpeg produced an empty file (${out ? out.size : 0} bytes; all silence?)${dropTmp(tmp, tmpRel)}`);
@@ -479,6 +516,7 @@ module.exports = {
   TARGET_LUFS,
   TRUE_PEAK_DB,
   LOUDNESS_TOLERANCE_LU,
+  PEAK_HEADROOM_DB,
   SHORT_CLIP_SECONDS,
   FFMPEG_PATH_ENV,
   MIN_BPM,

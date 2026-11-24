@@ -144,7 +144,7 @@ const AUDIO_POST_PROP = {
     targetBpm: BPM_PROP('The tempo to time-stretch the clip to (needs bpm)'),
     bpm: BPM_PROP('The source tempo of the clip (needs targetBpm)'),
   },
-  dependentRequired: { targetBpm: ['bpm'], bpm: ['targetBpm'] },
+  // The pairing rule is in the descriptions, not in dependentRequired: not every client's schema subset accepts that keyword; cleanAudioPost enforces it.
 };
 
 const ASSET_TOOLS = Object.freeze([
