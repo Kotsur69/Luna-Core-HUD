@@ -229,7 +229,7 @@ const COMMIT_EARLY_RULE =
 // A turn that ends while `npm test` runs in the background reads as a
 // noMarker stall (no LUNA_DONE line), so the final run stays in the foreground.
 const FOREGROUND_TEST_RULE =
-  'Run the final `npm test` in the FOREGROUND with a long tool timeout (about 600000 ms); if it times out, read its log and run it again. Never end your turn while a test run is still going, and do not end it before the commit and the LUNA_DONE / LUNA_BLOCKED line are done.';
+  'Run the final `npm test` detached with its output in a log file (on Windows: `Start-Process cmd /c "npm test > <log> 2>&1 & echo done > <done-file>"`), then poll with waits of under 10 minutes each (about 570 s) for the done marker or a `# fail` line in the log. The full suite takes about 20 minutes, so start it only once. Never end your turn while the suite is still running, and do not end it before the commit and the LUNA_DONE / LUNA_BLOCKED line are done.';
 
 // A resumed worker secures what the previous session left before new work.
 const RESUME_COMMIT_RULE =
