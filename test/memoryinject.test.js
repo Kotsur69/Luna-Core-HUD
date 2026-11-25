@@ -216,12 +216,17 @@ const unit = (i, dim = 4) => Float32Array.from({ length: dim }, (_, j) => (j ===
 
 /**
  * A stand-in for createVectorStore: one vector per memory key, and the query's
- * vector after `delayMs` (null = LM Studio offline). Calls are counted.
+ * vector (null = LM Studio offline). Calls are counted. The query resolves at
+ * once, or with `held: true` only when the test calls store.release(): no
+ * real-time delay, so a loaded machine cannot change the outcome.
  */
-function fakeStore(byKey, { query = unit(0), delayMs = 0 } = {}) {
+function fakeStore(byKey, { query = unit(0), held = false } = {}) {
+  let release = () => {};
+  const answer = held ? new Promise((resolve) => { release = () => resolve(query); }) : Promise.resolve(query);
   const store = {
     prepared: 0,
     asked: 0,
+    release: () => release(),
     prepare(records) {
       store.prepared += 1;
       const keys = records.map(([k]) => k).filter((k) => byKey.has(k));
@@ -229,11 +234,14 @@ function fakeStore(byKey, { query = unit(0), delayMs = 0 } = {}) {
     },
     queryVector() {
       store.asked += 1;
-      return new Promise((resolve) => setTimeout(() => resolve(query), delayMs));
+      return answer;
     },
   };
   return store;
 }
+
+/** Lets every pending promise callback run (setImmediate fires after the microtask queue drains). */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 /** Vectors: BY_MEANING points where the query does, everything else elsewhere. */
 function meaningVectors() {
@@ -305,19 +313,20 @@ test('a memory found by meaning below the cosine bar is not injected', async (t)
 });
 
 test('a query that is not embedded in time falls back to keywords, and is ready for the next brief', async (t) => {
-  const store = fakeStore(meaningVectors(), { delayMs: 150 });
+  // The query is held until the test releases it, so warm can only return through its timeout.
+  const store = fakeStore(meaningVectors(), { held: true });
   const { inject } = injector(t, store, { queryTimeoutMs: 20 });
 
-  const started = Date.now();
   assert.equal(await inject.warm('/repo', PKG), false);
-  assert.ok(Date.now() - started < 140, 'warm gave up at its timeout');
   const first = inject.select('/repo', PKG);
   assert.equal(first.search, 'keywords');
   assert.equal(first.keys.includes(`${PROJECT}/${BY_MEANING.id}`), false);
   assert.equal(first.keys.length, MAX_INJECTED);
 
   // The late vector is kept: a resume brief of the same package ranks by meaning.
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  store.release();
+  await settle();
+  assert.equal(store.asked, 1, 'the brief shared the embedding warm started');
   assert.equal(inject.select('/repo', PKG).search, 'meaning');
 });
 
@@ -422,12 +431,16 @@ test('a worker that never got its brief leaves no brief memory on the package', 
 });
 
 test('one embedding per query at a time, and a cached query is dropped when the model changes', async (t) => {
-  const store = fakeStore(meaningVectors(), { delayMs: 30 });
+  const store = fakeStore(meaningVectors(), { held: true });
   let model = 'qwen3-embedding-4b';
   store.status = () => ({ model, count: 5 });
   const { inject } = injector(t, store);
 
-  const [a, b] = await Promise.all([inject.warm('/repo', PKG), inject.warm('/repo', PKG)]);
+  // Both warms are in flight before the query answers; the answer arrives in the
+  // microtask queue, which always drains before any timer can fire.
+  const both = Promise.all([inject.warm('/repo', PKG), inject.warm('/repo', PKG)]);
+  store.release();
+  const [a, b] = await both;
   assert.deepEqual([a, b], [true, true]);
   assert.equal(store.asked, 1);
   assert.equal(inject.select('/repo', PKG).search, 'meaning');
