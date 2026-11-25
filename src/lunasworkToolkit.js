@@ -69,7 +69,9 @@ const TOOL_IDS = Object.freeze(Object.keys(TOOLS));
 const PAID_TOOLS = Object.freeze(TOOL_IDS.filter((id) => TOOLS[id].paid === true));
 // A God Mode worker commits its work: git can never be taken away.
 const REQUIRED_TOOLS = Object.freeze(['git']);
-const UNITY_DEFAULT_TOOLS = TOOL_IDS;
+// Meshy is paid but has no metered spend path (unlike Higgsfield, booked through recordSpend),
+// so its cap never binds. It stays a known tool a project can opt into explicitly in its kit.
+const UNITY_DEFAULT_TOOLS = Object.freeze(TOOL_IDS.filter((id) => id !== 'meshy'));
 const APP_DEFAULT_TOOLS = Object.freeze(['context7', 'websearch', 'git']);
 
 const GAMEDEV_SKILLS = Object.freeze([

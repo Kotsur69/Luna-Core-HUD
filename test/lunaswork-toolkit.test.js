@@ -38,12 +38,22 @@ function tmpDir() {
 
 // ---- settings validation ------------------------------------------------------------
 
-test('a Unity project without a kit gets every game tool and the gamedev skills for builders and asset workers', () => {
+test('a Unity project without a kit gets every game tool but Meshy, and the gamedev skills, for builders and asset workers', () => {
   const kit = S.toolkitFor(bladeSettings(), 'blade-bullet');
   for (const role of K.KIT_ROLES) {
-    assert.deepEqual(kit[role].tools, K.TOOL_IDS);
+    assert.deepEqual(kit[role].tools, K.TOOL_IDS.filter((id) => id !== 'meshy'));
     assert.deepEqual(kit[role].skills, [...K.GAMEDEV_SKILLS]);
   }
+  // Meshy has no metered spend path, so it is opt-in; metered Higgsfield stays in the default.
+  const unityDefault = K.defaultToolkit('unity');
+  for (const role of K.KIT_ROLES) {
+    assert.ok(!unityDefault[role].tools.includes('meshy'), `${role} default has no meshy`);
+    assert.ok(unityDefault[role].tools.includes('higgsfield'), `${role} default keeps higgsfield`);
+  }
+  // An explicit kit listing meshy still validates and keeps it.
+  const optIn = K.validateToolkit({ builder: { tools: ['unity', 'meshy'] } });
+  assert.equal(optIn.reason, null);
+  assert.ok(optIn.toolkit.builder.tools.includes('meshy'));
   // A web project's default: docs, web search and git only.
   assert.deepEqual(S.toolkitFor({}, 'web-app').builder.tools, ['context7', 'websearch', 'git']);
 });
@@ -106,13 +116,25 @@ test('tool servers keep secrets out of the file: env and headers take only ${VAR
 
 // ---- the builder's kit for a blade&bullet-like Unity project ------------------------------
 
-test('a blade&bullet builder gets Unity, Blender, Higgsfield, ComfyUI and Meshy in its --mcp-config plus the gamedev skills', () => {
+test('a blade&bullet builder gets Unity, Blender, Higgsfield and ComfyUI (Meshy only on opt-in) in its --mcp-config plus the gamedev skills', () => {
   const dir = tmpDir();
   try {
     const toolsFor = createToolsFor({ readSettings: bladeSettings, dir: () => dir });
     const kit = toolsFor({ projectId: 'blade-bullet', repoPath: dir, role: 'builder' });
     const config = JSON.parse(fs.readFileSync(kit.mcpConfigPath, 'utf8'));
-    for (const server of GAME_SERVERS) {
+    assert.equal(config.mcpServers.meshy, undefined, 'meshy is not in the default kit');
+    assert.ok(!kit.allowedTools.includes('mcp__meshy'));
+    // Opting in through the project's own kit brings Meshy back.
+    const optInSettings = () => ({
+      toolServers: PC_SERVERS,
+      projects: { 'blade-bullet': { profile: { adapter: 'unity' }, toolkit: { builder: { tools: ['unity', 'meshy'] }, asset: { tools: ['unity', 'meshy'] } } } },
+    });
+    const optInKit = createToolsFor({ readSettings: optInSettings, dir: () => dir })({ projectId: 'blade-bullet', repoPath: dir, role: 'builder' });
+    const optInConfig = JSON.parse(fs.readFileSync(optInKit.mcpConfigPath, 'utf8'));
+    assert.ok(optInConfig.mcpServers.meshy, 'meshy in --mcp-config when opted in');
+    assert.equal(optInConfig.mcpServers.meshy.env.MESHY_API_KEY, '${MESHY_API_KEY}');
+    assert.equal(hasLiteralSecret(optInConfig), false);
+    for (const server of GAME_SERVERS.filter((s) => s !== 'meshy')) {
       assert.ok(config.mcpServers[server], `${server} in --mcp-config`);
       assert.ok(kit.allowedTools.includes(`mcp__${server}`), `${server} allowed`);
     }
@@ -124,11 +146,10 @@ test('a blade&bullet builder gets Unity, Blender, Higgsfield, ComfyUI and Meshy 
     assert.deepEqual(kit.skills, [...K.GAMEDEV_SKILLS]);
     for (const skill of K.GAMEDEV_SKILLS) assert.ok(kit.note.includes(skill));
     // The key stays a reference: the file holds no secret value.
-    assert.equal(config.mcpServers.meshy.env.MESHY_API_KEY, '${MESHY_API_KEY}');
     assert.equal(hasLiteralSecret(config), false);
     // The asset worker gets the same game tools.
     const asset = toolsFor({ projectId: 'blade-bullet', repoPath: dir, role: 'asset' });
-    for (const server of GAME_SERVERS) assert.ok(asset.allowedTools.includes(`mcp__${server}`));
+    for (const server of GAME_SERVERS.filter((s) => s !== 'meshy')) assert.ok(asset.allowedTools.includes(`mcp__${server}`));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -356,7 +377,9 @@ test('a finished run books no spend', () => {
 });
 
 test('the kit note names the paid tools budget and never cuts the package prompt', () => {
-  const launch = K.roleLaunch(K.defaultToolkit('unity'), 'builder', { spendCaps: { meshy: 4 } });
+  // Meshy is opt-in, so the budget line only names it when the kit lists it.
+  const kit = K.normalizeToolkit({ builder: { tools: ['unity', 'higgsfield', 'meshy'] } }, 'unity');
+  const launch = K.roleLaunch(kit, 'builder', { spendCaps: { meshy: 4 } });
   assert.ok(launch.note.includes('higgsfield $10.00, meshy $4.00'));
   const prompt = 'p'.repeat(7990);
   let planned = null;

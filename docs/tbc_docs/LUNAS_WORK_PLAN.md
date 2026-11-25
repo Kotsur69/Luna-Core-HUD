@@ -263,8 +263,9 @@ without one still gets its allow rule and comes from the Claude setup.
   (below) books every generation through `recordSpend` before it runs. A worker
   that calls the `higgsfield` CLI or `higgsfield-bridge` MCP directly is still
   not metered: its brief says to use them only to look up models. Meshy has no
-  metered path yet. The paid tools stay in the Unity default kit as the brief
-  asked - take them out of a project's kit to make them opt-in.
+  metered path yet, so Meshy is out of the Unity default kit until it has one
+  and is opt-in: list `meshy` in a project's kit in `lunaswork-settings.local.json`.
+  Higgsfield (metered) stays in the default kit.
 
 ### Asset pipeline (`src/lunasworkAssetPipeline.js`, tools `src/lunasworkAssetTools.js`)
 
