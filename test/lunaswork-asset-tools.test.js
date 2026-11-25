@@ -971,3 +971,45 @@ test('recordJudgeVerdict: validated, kept apart from the asset log, refused on a
   run = { ...run, phase: 'done' };
   assert.equal(g.recordJudgeVerdict({ kind: 'prop', name: 'Crate', winner: 'x', candidates: ['x', 'y'] }), false);
 });
+
+test('a re-judge whose winner now reads as paid or of unknown origin never withdraws the free pass', async () => {
+  const s = castSetup();
+  try {
+    const run = fakeRun('lw-c');
+    const tools = s.freshTools();
+    assert.equal((await s.judge(s.ctxOf(run, tools), 'Wooden Crate', ['a', 'b'], [8, 3])).pass, true);
+    // The worker plants a broken Higgsfield record in its own worktree: the same winner now has an unknown origin.
+    const fsx = require('fs');
+    const path = require('path');
+    fsx.mkdirSync(path.join(s.repo, 'art', 'higgsfield', 'prop'), { recursive: true });
+    fsx.writeFileSync(path.join(s.repo, 'art', 'higgsfield', 'prop', 'planted.json'), '{ not json');
+    const again = await s.judge(s.ctxOf(run, tools), 'Wooden Crate', ['a', 'c'], [8, 2]);
+    assert.equal(again.pass, true);
+    assert.equal(again.winner.origin, 'unknown');
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run, tools), 'Wooden Crate')), 'freeCandidatePassed', 'this process');
+    run.restart();
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run), 'Wooden Crate')), 'freeCandidatePassed', 'the run record');
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('a pass only this process holds is matched to its asset when the paid final asks, not when it was judged', async () => {
+  const s = castSetup({ cast: null });
+  try {
+    const fsx = require('fs');
+    const path = require('path');
+    // The run record keeps nothing (say the run just ended under the worker): only the memory store has the verdict.
+    const lost = { recordAsset: () => false, recordJudgeVerdict: () => false, judgeVerdicts: () => null };
+    const tools = s.freshTools();
+    assert.equal((await s.judge(s.ctxOf(lost, tools), 'Wooden Crate', ['a', 'b'], [8, 3])).pass, true);
+    // The asset list appears after the verdict: the renamed request still resolves to the judged asset.
+    fsx.mkdirSync(path.join(s.checkout, 'design'), { recursive: true });
+    fsx.writeFileSync(path.join(s.checkout, 'design', 'ASSETS.md'), [...ASSETS_HEADER, '| Wooden Crate | prop | a crate | auto |  | queued |  |  |', ''].join('\n'));
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(lost, tools), 'Wood Crate 2')), 'freeCandidatePassed');
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
+  }
+});

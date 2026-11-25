@@ -449,14 +449,16 @@ const G = require('../src/lunasworkJudgeGuard.js');
 
 const verdictOf = (over = {}) => ({ kind: 'prop', name: 'Wooden Crate', freePass: false, pass: false, winner: 'art/a.png', candidates: ['art/a.png', 'art/b.png'], ...over });
 
-test('a later verdict withdraws a free pass only when it judged its winner or all its candidates', () => {
+test('only a later failing verdict that judged the winner withdraws a free pass', () => {
   const pass = G.cleanJudgeVerdict(verdictOf({ freePass: true, pass: true }));
   const withdraws = (over) => G.withdraws(G.cleanJudgeVerdict(verdictOf(over)), pass);
   assert.equal(withdraws({ winner: 'art/c.png', candidates: ['art/c.png', 'art/d.png'] }), false, 'junk under the same name');
   assert.equal(withdraws({ winner: 'art/a.png', candidates: ['art/a.png', 'art/c.png'] }), true, 'the same winner, failed');
   assert.equal(withdraws({ winner: 'art/c.png', candidates: ['art/c.png', 'art/a.png'] }), true, 'the winner, in a verdict that passed none');
-  assert.equal(withdraws({ pass: true, winner: 'art/c.png', candidates: ['art/c.png', 'art/a.png'] }), false, 'a paid winner over it: the free one may still pass');
-  assert.equal(withdraws({ pass: true, winner: 'art/c.png', candidates: ['art/c.png', 'art/a.png', 'art/b.png'] }), true, 'all its candidates');
+  assert.equal(withdraws({ winner: 'art/c.png', candidates: ['art/c.png', 'art/a.png', 'art/b.png'] }), true, 'all its candidates, failed');
+  // A passing verdict never withdraws: its winner's "paid" or "unknown" origin may come from a record the worker wrote.
+  assert.equal(withdraws({ pass: true, winner: 'art/a.png', candidates: ['art/a.png', 'art/c.png'] }), false, 'the same winner, passing but not free');
+  assert.equal(withdraws({ pass: true, winner: 'art/c.png', candidates: ['art/c.png', 'art/a.png', 'art/b.png'] }), false, 'a paid winner over all its candidates');
   assert.equal(withdraws({ freePass: true, pass: true, winner: 'art/c.png', candidates: ['art/c.png', 'art/a.png'] }), false, 'another free pass');
 });
 
@@ -468,9 +470,12 @@ test('the verdict list is bounded per asset and overall, keeping standing free p
   assert.equal(flood[0].winner, 'art/p0.png');
   assert.equal(flood.length, 1 + G.MAX_OTHERS_PER_ASSET);
   assert.equal(flood[flood.length - 1].winner, 'art/j49.png');
-  // Standing passes per asset: the newest MAX_PASSES_PER_ASSET.
+  // Standing passes per asset: the first one and the newest, MAX_PASSES_PER_ASSET in all.
   const passes = G.cleanJudgeVerdicts(Array.from({ length: 10 }, (_, i) => pass(i)));
-  assert.deepEqual(passes.map((v) => v.winner), Array.from({ length: G.MAX_PASSES_PER_ASSET }, (_, i) => `art/p${i + 10 - G.MAX_PASSES_PER_ASSET}.png`));
+  assert.deepEqual(passes.map((v) => v.winner), ['art/p0.png', ...Array.from({ length: G.MAX_PASSES_PER_ASSET - 1 }, (_, i) => `art/p${i + 11 - G.MAX_PASSES_PER_ASSET}.png`)]);
+  // A flood of passes for one winner counts once: it never pushes out a pass of another winner.
+  const sameWinner = G.cleanJudgeVerdicts([pass(0), ...Array.from({ length: 20 }, () => pass(1))]);
+  assert.deepEqual(sameWinner.map((v) => v.winner), ['art/p0.png', 'art/p1.png']);
   // A withdrawn pass goes; the verdict that withdrew it stays.
   const withdrawn = G.cleanJudgeVerdicts([pass(0), verdictOf({ winner: 'art/p0.png', candidates: ['art/p0.png', 'art/z.png'] })]);
   assert.deepEqual(withdrawn.map((v) => [v.freePass, v.winner]), [[false, 'art/p0.png']]);
@@ -517,17 +522,25 @@ test('readCastIndex: no list, an empty one, a table, and one that cannot be read
   assert.equal(G.readCastIndex(dirList).ok, false);
 });
 
-test('the verdict store withdraws a free pass only for a verdict that judged its winner or candidates', () => {
+test('the verdict store withdraws a free pass only for a failing verdict that judged its winner', () => {
   const v = J.createVerdictStore();
-  v.record('/repo/a', 'asset', 'k', true, verdictOf({ freePass: true, pass: true }));
-  v.record('/repo/a', 'asset', 'k', false, verdictOf({ winner: 'art/c.png', candidates: ['art/c.png', 'art/d.png'] }));
-  assert.equal(v.freePassed('/repo/a', 'asset', 'k'), true, 'junk takes nothing back');
-  v.record('/repo/a', 'asset', 'k', false, verdictOf({ winner: 'art/a.png', candidates: ['art/a.png', 'art/d.png'] }));
-  assert.equal(v.freePassed('/repo/a', 'asset', 'k'), false, 'the same winner, failed');
-  // A run id keeps verdicts apart.
-  v.record('/repo/a', 'asset', 'k', true, verdictOf({ freePass: true, pass: true }), 'lw-a');
-  assert.equal(v.freePassed('/repo/a', 'asset', 'k', 'lw-a'), true);
-  assert.equal(v.freePassed('/repo/a', 'asset', 'k', 'lw-b'), false);
+  const slug = 'wooden-crate';
+  v.record('/repo/a', 'prop', slug, true, verdictOf({ freePass: true, pass: true }));
+  v.record('/repo/a', 'prop', slug, false, verdictOf({ winner: 'art/c.png', candidates: ['art/c.png', 'art/d.png'] }));
+  assert.equal(v.freePassed('/repo/a', 'prop', slug), true, 'junk takes nothing back');
+  // Without its details (or with details that do not validate) a verdict cannot withdraw a described pass.
+  v.record('/repo/a', 'prop', slug, false);
+  v.record('/repo/a', 'prop', slug, false, verdictOf({ winner: 'art/a.png', candidates: ['art/x.png', 'art/y.png'] }));
+  assert.equal(v.freePassed('/repo/a', 'prop', slug), true, 'no details: nothing taken back');
+  v.record('/repo/a', 'prop', slug, false, verdictOf({ pass: true, winner: 'art/a.png', candidates: ['art/a.png', 'art/d.png'] }));
+  assert.equal(v.freePassed('/repo/a', 'prop', slug), true, 'a passing verdict never withdraws');
+  v.record('/repo/a', 'prop', slug, false, verdictOf({ winner: 'art/a.png', candidates: ['art/a.png', 'art/d.png'] }));
+  assert.equal(v.freePassed('/repo/a', 'prop', slug), false, 'the same winner, failed');
+  // A run id keeps verdicts apart; verdicts() hands the live ones to the guard, oldest first.
+  v.record('/repo/a', 'prop', slug, true, verdictOf({ freePass: true, pass: true }), 'lw-a');
+  assert.equal(v.freePassed('/repo/a', 'prop', slug, 'lw-a'), true);
+  assert.equal(v.freePassed('/repo/a', 'prop', slug, 'lw-b'), false);
+  assert.deepEqual(v.verdicts('/repo/a', 'lw-a').map((x) => [x.name, x.freePass, x.winner]), [['Wooden Crate', true, 'art/a.png']]);
 });
 
 test('the judge hands the store its winner and every candidate, as keys', async () => {

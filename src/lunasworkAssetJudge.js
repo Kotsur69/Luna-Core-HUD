@@ -25,11 +25,11 @@
 // with 'free pass - ' when it passed with a free (library) or local (no
 // Higgsfield record lists it) winner, 'pass - ' for any other pass and
 // 'no pass - ' otherwise. higgsfieldFinal then refuses a paid final for the
-// same asset with 'freeCandidatePassed' (src/lunasworkAssetHiggsfield.js). A
-// later verdict that is not a free pass (a failed one, a paid winner or a
-// winner whose origin cannot be read) withdraws an earlier pass only when it
-// judged that pass's winner or all its candidates (src/lunasworkJudgeGuard.js
-// withdraws): junk re-judged under the same name takes nothing back. Only the
+// same asset with 'freeCandidatePassed' (src/lunasworkAssetHiggsfield.js). Only
+// a later verdict that passed nothing withdraws an earlier pass, and only when
+// it judged that pass's winner (src/lunasworkJudgeGuard.js withdraws): junk
+// re-judged under the same name takes nothing back, and so does a passing
+// verdict whose winner reads as paid or of unknown origin. Only the
 // winning library preview stays under art/candidates/; the others are removed
 // after the verdict.
 //
@@ -64,7 +64,7 @@ const { isWritablePath } = require('./lunasworkToolkit');
 const { KINDS, ART_DIRECTION_RULE, SOURCE_DIRS, slugOf, artRootOf } = require('./lunasworkAssetPipeline');
 const { SOURCE_IDS, redact } = require('./lunasworkFreeSources');
 const { RENDER_DIR } = require('./lunasworkAssetBlender');
-const { FREE_PASS_PREFIX, MAX_PASSES_PER_ASSET, candidateKey, cleanJudgeVerdict, withdraws, freePassFromRecord } = require('./lunasworkJudgeGuard');
+const { FREE_PASS_PREFIX, candidateKey, storeVerdict, compactVerdicts, freePassStands, freePassFromRecord } = require('./lunasworkJudgeGuard');
 
 const MIN_CANDIDATES = 2;
 const MAX_CANDIDATES = 8;
@@ -81,7 +81,8 @@ const MAX_NOTES_CHARS = 300;
 const MAX_SPEC_CHARS = 300;
 const JUDGE_TIMEOUT_MS = 6 * 60 * 1000;
 const VERDICT_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_VERDICTS = 500;
+// Run + worker repo lists kept at once (each one bounded by compactVerdicts): the oldest written go first.
+const MAX_VERDICT_LISTS = 100;
 const MAX_HIGGSFIELD_RECORDS = 500;
 const MAX_RECORD_BYTES = 256 * 1024;
 const LOCAL_AUDIO_LICENSE = 'own work (local file)';
@@ -109,51 +110,52 @@ const critic = () => ({
 // ---- verdict store ----------------------------------------------------------------------
 
 /**
- * The standing free passes per run, worker repo, asset kind and slug (the
- * cost guard passes its asset key as the slug). A later verdict that is not a
- * free pass withdraws the passes it judged (src/lunasworkJudgeGuard.js
- * withdraws); one recorded without its details (`verdict`) withdraws them all.
+ * This process's judge verdicts per run and worker repo, kept like the run
+ * record's list (src/lunasworkJudgeGuard.js storeVerdict, compactVerdicts): a
+ * later verdict withdraws only the passes it judged and failed. A verdict
+ * recorded without its details (`verdict`) can only withdraw another such one.
  * runId is optional; a verdict recorded under one run never answers for another.
+ * Entries expire after VERDICT_TTL_MS.
  * @param {{now?:()=>number, ttlMs?:number}} [opts]
  * @returns {{record:(repoPath:string, kind:string, slug:string, freePass:boolean, verdict?:object|null, runId?:string|null)=>void,
- *   freePassed:(repoPath:string, kind:string, slug:string, runId?:string|null)=>boolean}}
- *   verdict = {name, kind, freePass, pass, winner, candidates} (cleanJudgeVerdict)
+ *   freePassed:(repoPath:string, kind:string, slug:string, runId?:string|null)=>boolean,
+ *   verdicts:(repoPath:string, runId?:string|null)=>object[]}}
+ *   verdict = {name, kind, freePass, pass, winner, candidates} (cleanJudgeVerdict); verdicts() = the live
+ *   ones, oldest first, for the cost guard to resolve to their assets
  */
 function createVerdictStore(opts = {}) {
   const now = typeof opts.now === 'function' ? opts.now : Date.now;
   const ttlMs = Number.isFinite(opts.ttlMs) && opts.ttlMs > 0 ? opts.ttlMs : VERDICT_TTL_MS;
-  // key -> the standing free passes, oldest first: [{at, verdict|null}]
-  const passes = new Map();
-  const keyOf = (repoPath, kind, slug, runId) => {
+  // run + worker repo -> its verdicts, oldest first
+  const lists = new Map();
+  const listKey = (repoPath, runId) => {
     const repo = path.resolve(String(repoPath));
     const run = typeof runId === 'string' ? runId : '';
-    return `${run}\u0000${process.platform === 'win32' ? repo.toLowerCase() : repo}\u0000${kind}\u0000${slug}`;
+    return `${run}\u0000${process.platform === 'win32' ? repo.toLowerCase() : repo}`;
   };
-  const fresh = (at) => typeof at === 'number' && now() - at <= ttlMs;
+  const fresh = (v) => typeof v.at === 'number' && now() - v.at <= ttlMs;
 
   function record(repoPath, kind, slug, freePass, verdict, runId) {
-    for (const [k, list] of passes) {
-      const live = list.filter((p) => fresh(p.at));
-      if (!live.length) passes.delete(k);
-      else if (live.length < list.length) passes.set(k, live);
+    for (const [k, list] of lists) {
+      const live = list.filter(fresh);
+      if (!live.length) lists.delete(k);
+      else if (live.length < list.length) lists.set(k, live);
     }
-    const key = keyOf(repoPath, kind, slug, runId);
-    const before = passes.get(key) || [];
-    passes.delete(key);
-    const clean = cleanJudgeVerdict(verdict);
-    const info = clean ? { ...clean, freePass: freePass === true, pass: clean.pass || freePass === true } : null;
-    let list;
-    if (freePass === true) list = [...before, { at: now(), verdict: info }];
-    // A pass recorded without its details stays until one without details comes: it cannot be told apart.
-    else list = info ? before.filter((p) => !p.verdict || !withdraws(info, p.verdict)) : [];
-    if (list.length) passes.set(key, list.slice(-MAX_PASSES_PER_ASSET));
-    // Map order is insertion order: the oldest entries go first.
-    while (passes.size > MAX_VERDICTS) passes.delete(passes.keys().next().value);
+    const key = listKey(repoPath, runId);
+    const list = [...(lists.get(key) || []), { ...storeVerdict(kind, slug, freePass, verdict), at: now() }];
+    lists.delete(key);
+    lists.set(key, compactVerdicts(list));
+    // Map order is insertion order: the least recently written lists go first.
+    while (lists.size > MAX_VERDICT_LISTS) lists.delete(lists.keys().next().value);
   }
 
-  const freePassed = (repoPath, kind, slug, runId) => typeof slug === 'string' && (passes.get(keyOf(repoPath, kind, slug, runId)) || []).some((p) => fresh(p.at));
+  const verdicts = (repoPath, runId) => (lists.get(listKey(repoPath, runId)) || []).filter(fresh);
 
-  return { record, freePassed };
+  /** Whether a free pass stands under exactly this kind and slug (the guard resolves assets itself through verdicts()). */
+  const freePassed = (repoPath, kind, slug, runId) => typeof slug === 'string'
+    && freePassStands(verdicts(repoPath, runId), (v) => `${v.kind}\u0000${v.slug}`, `${kind}\u0000${slug}`) === true;
+
+  return { record, freePassed, verdicts };
 }
 
 /**
@@ -481,7 +483,7 @@ function createAssetJudge(deps) {
     const winner = ranking[0];
     const pass = winner.score >= verdict.passScore;
     const reason = `${winner.label} scored ${winner.score}/10 (pass mark ${verdict.passScore}): ${winner.notes}`;
-    // A fail, a paid winner or an unknown origin withdraws an earlier free pass only when it judged that pass's winner or candidates.
+    // Only a pass with a free or local winner blocks a paid final; a failed verdict withdraws the earlier passes whose winner it judged.
     const freePass = pass && (winner.origin === 'local' || winner.origin === 'library');
     d.verdicts.record(repoPath, req.kind, req.slug, freePass, {
       name: req.name, kind: req.kind, freePass, pass, winner: candidateKey(winner.candidate), candidates: ranking.map((r) => candidateKey(r.candidate)),

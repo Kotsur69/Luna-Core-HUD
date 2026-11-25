@@ -14,17 +14,23 @@
 //                  run's asset log, whose newest-500 cap is shared by every
 //                  asset tool: an early free pass never falls out of it.
 //                  compactVerdicts bounds it per asset (kind + slug of the
-//                  judged name): the newest MAX_PASSES_PER_ASSET standing free
-//                  passes and MAX_OTHERS_PER_ASSET other verdicts, then
-//                  MAX_JUDGE_VERDICTS overall, the oldest non-passes going
-//                  first. A run recorded before the list existed has it null:
-//                  its judge entries in the asset log are read instead
-//                  (legacyVerdicts) and carried over on its next verdict.
-//   withdrawal     a later verdict that is not a free pass takes back an
-//                  earlier free pass only when it judged that pass's winner
-//                  (it is the later winner, or the later verdict passed none
-//                  and listed it) or every candidate of that pass. Junk
-//                  re-judged under the same name withdraws nothing.
+//                  judged name): withdrawn passes go, standing free passes
+//                  are kept one per winner - the first one and the newest, up
+//                  to MAX_PASSES_PER_ASSET - plus MAX_OTHERS_PER_ASSET other
+//                  verdicts, then MAX_JUDGE_VERDICTS overall, the oldest
+//                  non-passes going first. A run recorded before the list
+//                  existed has it null: its judge entries in the asset log
+//                  are read instead (legacyVerdicts) and carried over on its
+//                  next verdict.
+//   withdrawal     only a later verdict that passed nothing takes back an
+//                  earlier free pass, and only when it judged that pass's
+//                  winner (its own winner, or among its candidates - so also
+//                  when it judged all the pass's candidates). Junk re-judged
+//                  under the same name withdraws nothing, and neither does a
+//                  passing verdict whose winner reads as paid or of unknown
+//                  origin: that reading comes from record files in the
+//                  worker's own worktree. The in-memory store keeps verdicts
+//                  the same way, so both sources answer alike.
 //   the asset      the name a worker types is free text, so the guard keys on
 //                  the asset row of design/ASSETS.md (the cast the asset
 //                  card was filed from, src/lunasworkAssets.js) that the name
@@ -64,8 +70,8 @@ const FUZZY_MIN_LEAD = 0.1;
 // Words that tell variants of one asset apart rather than name it.
 const NOISE_WORDS = Object.freeze(new Set(['a', 'an', 'the', 'of', 'v', 'new', 'final', 'alt', 'variant', 'version', 'copy', 'draft']));
 const NOISE_WORD_RE = /^(v?\d+|\d+(st|nd|rd|th))$/;
-// The key the in-memory store files every verdict under: the asset key goes in its slug slot.
-const STORE_KIND = 'asset';
+// The winner of a verdict the in-memory store got without its details: never a repo path or a library key.
+const UNKNOWN_WINNER = '?';
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 
@@ -102,14 +108,29 @@ function cleanJudgeVerdict(raw) {
 }
 
 /**
- * True when `later` takes back the free pass `pass` (see the header): it is
- * not a free pass itself, and it judged that pass's winner or all its candidates.
+ * True when `later` takes back the free pass `pass` (see the header): it passed
+ * nothing, and it judged that pass's winner - as its own winner or among its
+ * candidates, so also whenever it judged all the pass's candidates.
  */
 function withdraws(later, pass) {
-  if (later.freePass) return false;
-  if (later.winner === pass.winner) return true;
-  if (!later.pass && later.candidates.includes(pass.winner)) return true;
-  return pass.candidates.length > 0 && pass.candidates.every((c) => later.candidates.includes(c));
+  // A passing verdict never does, whatever its winner's origin: an "unknown" or "paid" origin can come
+  // from a record file the worker wrote in its own worktree (src/lunasworkAssetJudge.js originOf).
+  if (later.pass || !later.winner) return false;
+  return later.winner === pass.winner || later.candidates.includes(pass.winner);
+}
+
+/**
+ * A verdict as the in-memory store keeps it (src/lunasworkAssetJudge.js
+ * createVerdictStore), under the kind and slug it was recorded with: the
+ * judge's details when they are valid, else a bare one (UNKNOWN_WINNER) that
+ * can only withdraw another bare one - never a pass the judge described.
+ */
+function storeVerdict(kind, slug, freePass, verdict) {
+  const passed = freePass === true;
+  const clean = cleanJudgeVerdict(verdict);
+  const base = { kind: String(kind), slug: String(slug), freePass: passed };
+  if (clean) return { ...clean, ...base, pass: clean.pass || passed };
+  return { at: null, name: String(slug), pass: passed, winner: UNKNOWN_WINNER, candidates: [], ...base };
 }
 
 /** Indexes of the free passes in `list` (oldest first) that no later verdict of the same list withdraws. */
@@ -120,17 +141,33 @@ function standingPasses(list) {
 const groupKey = (v) => `${v.kind}/${slugOf(v.name)}`;
 
 /**
+ * The standing passes of one asset that are kept: one per winner (passes of one
+ * winner are withdrawn together), the oldest and the newest ones, so a flood of
+ * later passes never pushes the first one out.
+ */
+function keptPasses(standing, list) {
+  const newestByWinner = new Map();
+  for (const i of standing) newestByWinner.set(list[i].winner, i);
+  const distinct = [...newestByWinner.values()].sort((a, b) => a - b);
+  return distinct.length <= MAX_PASSES_PER_ASSET ? distinct : [distinct[0], ...distinct.slice(1 - MAX_PASSES_PER_ASSET)];
+}
+
+/**
  * The list bounded (see the header), oldest first. Only the verdicts that can
  * still matter are kept: a withdrawn pass goes, a standing one stays longest.
  */
 function compactVerdicts(list) {
   const groups = new Map();
-  list.forEach((v, i) => groups.set(groupKey(v), [...(groups.get(groupKey(v)) || []), i]));
+  list.forEach((v, i) => {
+    const key = groupKey(v);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
+  });
   const keep = new Set();
   for (const idx of groups.values()) {
     const standing = standingPasses(idx.map((i) => list[i])).map((j) => idx[j]);
     const others = idx.filter((i) => !list[i].freePass);
-    for (const i of [...standing.slice(-MAX_PASSES_PER_ASSET), ...others.slice(-MAX_OTHERS_PER_ASSET)]) keep.add(i);
+    for (const i of [...keptPasses(standing, list), ...others.slice(-MAX_OTHERS_PER_ASSET)]) keep.add(i);
   }
   const kept = list.filter((_, i) => keep.has(i));
   const excess = kept.length - MAX_JUDGE_VERDICTS;
@@ -311,9 +348,10 @@ function assetKeyOf(index, kind, name) {
 
 /**
  * @param {{ctx:{repoPath:string, castRepoPath?:string, judgeVerdicts?:Function, recordJudgeVerdict?:Function},
- *   runId:string|null, store:{record:Function, freePassed:Function}, log?:(line:string)=>void}} o
+ *   runId:string|null, store:{record:Function, verdicts:Function}, log?:(line:string)=>void}} o
  *   ctx = the tab's asset tool context (src/lunasworkAssetTools.js createAssetToolsFor);
- *   store = this process's verdict store (src/lunasworkAssetJudge.js createVerdictStore)
+ *   store = this process's verdict store (src/lunasworkAssetJudge.js createVerdictStore): its
+ *   verdicts are resolved to their asset at check time, like the run record's
  * @returns {{record:(repoPath:string, kind:string, slug:string, freePass:boolean, verdict?:object)=>void,
  *   check:(job:{name:string, kind:string, slug:string})=>boolean|{error:string, detail:string}}}
  */
@@ -331,9 +369,7 @@ function createFreePassGuard(o) {
 
   /** A judge verdict: into the run record (the guard's first source) and this process's store. */
   function record(repoPath, kind, slug, freePass, verdict) {
-    const cast = castList();
-    const key = (cast.ok && assetKeyOf(cast.index, kind, slug)) || `name:${kind}/${slug}`;
-    store.record(repoPath, STORE_KIND, key, freePass, verdict, runId);
+    store.record(repoPath, kind, slug, freePass, verdict, runId);
     if (typeof ctx.recordJudgeVerdict !== 'function') return;
     try {
       if (!ctx.recordJudgeVerdict(verdict)) log(`[lunaswork-assets] the run record did not keep the judge verdict for ${oneLine(slug, 80)}; this process's store still has it`);
@@ -352,21 +388,22 @@ function createFreePassGuard(o) {
     if (!cast.ok) return { error: 'assetListUnreadable', detail: `${cast.detail}: a paid final needs it to check the judge's verdicts for "${job.name}"` };
     const target = assetKeyOf(cast.index, job.kind, job.slug);
     if (!target) return { error: 'notCastAsset', detail: `"${job.name}" is not an asset of ${ASSET_LIST_REL}: use the asset name exactly as its card and its ${ASSET_LIST_REL} row give it` };
+    const keys = new Map();
+    const keyOf = (v) => {
+      const k = `${v.kind}/${slugOf(v.name)}`;
+      if (!keys.has(k)) keys.set(k, assetKeyOf(cast.index, v.kind, v.name));
+      return keys.get(k);
+    };
     let fromRun = null;
     if (typeof ctx.judgeVerdicts === 'function') {
-      const keys = new Map();
-      const keyOf = (v) => {
-        const k = `${v.kind}/${slugOf(v.name)}`;
-        if (!keys.has(k)) keys.set(k, assetKeyOf(cast.index, v.kind, v.name));
-        return keys.get(k);
-      };
       try {
         fromRun = freePassFromRecord(ctx.judgeVerdicts(), runId, target, keyOf);
       } catch (err) {
         log(`[lunaswork-assets] judge verdicts unreadable, using this process's verdicts: ${oneLine(errText(err), 200)}`);
       }
     }
-    return fromRun === true || store.freePassed(ctx.repoPath, STORE_KIND, target, runId) === true;
+    const kept = typeof store.verdicts === 'function' ? store.verdicts(ctx.repoPath, runId) : [];
+    return fromRun === true || freePassStands(Array.isArray(kept) ? kept : [], keyOf, target) === true;
   }
 
   return { record, check };
@@ -379,6 +416,7 @@ module.exports = {
   MAX_OTHERS_PER_ASSET,
   MAX_JUDGE_VERDICTS,
   candidateKey,
+  storeVerdict,
   cleanJudgeVerdict,
   cleanJudgeVerdicts,
   compactVerdicts,
