@@ -258,24 +258,66 @@ test('layer filters: a toggle hides its layer and is remembered', () => {
   assert.equal(filesAgain.getAttribute('aria-pressed'), 'false');
 });
 
-test('a burst of pushes costs one rebuild, not one per push', async () => {
+/** A manual clock and timer queue: time moves only when the test calls advance(). */
+function fakeTime(start = 1e6) {
+  let now = start;
+  let nextId = 1;
+  const timers = new Map();
+  return {
+    now: () => now,
+    setTimeout: (fn, ms) => {
+      const id = nextId++;
+      timers.set(id, { fn, due: now + Math.max(0, Number(ms) || 0) });
+      return id;
+    },
+    clearTimeout: (id) => {
+      timers.delete(id);
+    },
+    /** Moves the clock forward, firing every timer that falls due on the way, in due order. */
+    advance(ms) {
+      const end = now + ms;
+      for (;;) {
+        const due = [...timers.entries()].filter(([, t]) => t.due <= end).sort((a, b) => a[1].due - b[1].due);
+        if (!due.length) break;
+        const [id, t] = due[0];
+        timers.delete(id);
+        now = Math.max(now, t.due);
+        t.fn();
+      }
+      now = end;
+    },
+  };
+}
+
+test('a burst of pushes costs one rebuild, not one per push', () => {
   installDom();
   env.reduced = false;
   env.frames.clear();
   shareModel({ getState: () => modelWith([]) });
+  const time = fakeTime();
   let reads = 0;
-  const web = createLiveWeb({ getView: () => { reads += 1; return VIEW; } });
+  const web = createLiveWeb({
+    getView: () => { reads += 1; return VIEW; },
+    now: time.now,
+    setTimeout: time.setTimeout,
+    clearTimeout: time.clearTimeout,
+  });
   web.show();
   flushFrames();
   const afterShow = reads;
   assert.ok(afterShow > 0);
+  // The clock stands still: every push lands inside the throttle window of the last rebuild.
   for (let i = 0; i < 10; i += 1) {
     notifyModel(modelWith([]));
     flushFrames();
   }
   assert.equal(reads, afterShow, 'pushes right after a rebuild wait for the throttle');
-  // The owed rebuild comes on its own once the throttle window passed.
-  await new Promise((resolve) => setTimeout(resolve, 320));
+  // Just short of the window: still nothing.
+  time.advance(200);
+  flushFrames();
+  assert.equal(reads, afterShow, 'no rebuild before the throttle window ends');
+  // The owed rebuild comes on its own (the idle timer) once the window passed.
+  time.advance(100);
   flushFrames();
   assert.equal(reads, afterShow + 1);
   web.hide();
