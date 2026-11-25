@@ -29,7 +29,9 @@
 // entry that saved exactly this file, with exactly these bytes (sha256), from
 // exactly this record. Without one
 // the record is only "claimed" (src/lunasworkAssetBlender.js says so in the
-// answer and the ledger source).
+// answer), and the FBX's ledger row carries the from file's own row
+// (fromLedgerOrigin): its license, author and source, so a CC-BY credit
+// stays. A from file without a row is refused, never "Own work (generated)".
 // ============================================================================
 
 'use strict';
@@ -38,6 +40,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { imageKind } = require('./lunasworkComfy');
+const licenses = require('./lunasworkLicenses');
 
 const IMAGE_FROM_EXTS = Object.freeze(['png', 'jpg', 'jpeg', 'webp']);
 const MODEL_FROM_EXTS = Object.freeze(['glb']);
@@ -56,6 +59,8 @@ const MAX_GLB_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_JSON_DEPTH = 64;
 const SEGMENT_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
+// Added to the copied ledger source of an FBX made from another asset.
+const DERIVED_MARK = 'derived via Blender';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -239,6 +244,40 @@ function resolveFrom(from, deps) {
 }
 
 /**
+ * The ledger row of the FBX made from a `from` file whose Higgsfield record
+ * this run's asset log does not prove: the from file's own row (its own path,
+ * or a folder row above it) with its license, author and source, the source
+ * marked "derived via Blender". A CC-BY texture imported with
+ * luna_asset_import keeps its credit this way.
+ *
+ * Without such a row the call is refused, never ledgered as "Own work
+ * (generated)": the Critic's ledger check (lunasworkLicenses ledgerCards)
+ * only checks that a row covers the FBX, never what license it names, so no
+ * written license would be flagged there. A row whose license is not on the
+ * allowed list is refused too: the FBX would ship under it.
+ * @param {string} rel the checked from path
+ * @param {{stat:(rel:string)=>object|null, read:(rel:string, max:number)=>Buffer}} files guarded repo reads
+ * @returns {{ok:true, origin:{source:string, author:string, license:string}}|{ok:false, error:string, detail:string}}
+ */
+function fromLedgerOrigin(rel, files) {
+  let rows;
+  try {
+    rows = files.stat(licenses.LEDGER_FILE)
+      ? licenses.parseLedger(files.read(licenses.LEDGER_FILE, licenses.MAX_LEDGER_BYTES).toString('utf8')).rows
+      : [];
+  } catch (err) {
+    return fail(`refused: from ${rel}: ${licenses.LEDGER_FILE} could not be read (${errText(err)}), so the license of the FBX made from it is unknown`);
+  }
+  const row = licenses.ledgerRowFor(rows, rel);
+  if (!row) {
+    return fail(`refused: from ${rel} has no row in ${licenses.LEDGER_FILE} and no Higgsfield record this run's asset log backs, so the license of the FBX made from it is unknown. Make it with luna_asset_higgsfield in this run, import it with luna_asset_import (which writes its row), or add its row with its real source, author and license; then call again.`);
+  }
+  const lic = licenses.classifyLicense(row.license);
+  if (!lic.ok) return fail(`refused: from ${rel}: its row in ${licenses.LEDGER_FILE} names a license the game may not use (${lic.reason})`);
+  return { ok: true, origin: { source: `${row.source || rel} (${DERIVED_MARK} from ${rel})`, author: row.author, license: row.license } };
+}
+
+/**
  * Whether run `runId`'s asset log proves a `from` file is a genuine
  * luna_asset_higgsfield result: a saved (not unsaved) higgsfield entry whose
  * path is the file, whose sources include its record and whose sha256 is the
@@ -257,4 +296,4 @@ function runHiggsfieldMade(log, runId, claim) {
     && e.sha256 === claim.sha256 && Array.isArray(e.sources) && e.sources.includes(claim.record));
 }
 
-module.exports = { IMAGE_FROM_EXTS, MODEL_FROM_EXTS, REFUSED_MODEL_EXTS, SEGMENT_RE, cleanFrom, checkRepoFile, resolveFrom, runHiggsfieldMade };
+module.exports = { IMAGE_FROM_EXTS, MODEL_FROM_EXTS, REFUSED_MODEL_EXTS, SEGMENT_RE, DERIVED_MARK, cleanFrom, checkRepoFile, resolveFrom, fromLedgerOrigin, runHiggsfieldMade };

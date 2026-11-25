@@ -394,11 +394,17 @@ function createAssetPipeline(deps) {
     }
   }
 
-  /** The ledger rows of generated files. Never throws: a failure is a note for the worker. */
-  async function ledgerGenerated(tool, job, files, source) {
-    const author = `LunaCore asset worker (${tool})`;
+  /**
+   * The ledger rows of generated files. `origin` ({author, license}) replaces
+   * the generated author and license for a file made from another asset
+   * whose own row carries them (luna_asset_blender from=), so a CC-BY credit
+   * carries over. Never throws: a failure is a note for the worker.
+   */
+  async function ledgerGenerated(tool, job, files, source, origin = null) {
+    const author = origin ? origin.author : `LunaCore asset worker (${tool})`;
+    const license = origin ? origin.license : licenses.GENERATED_LICENSE;
     try {
-      await updateLedger(files.map((rel) => ({ name: job.name, source, author, license: licenses.GENERATED_LICENSE, path: rel })));
+      await updateLedger(files.map((rel) => ({ name: job.name, source, author, license, path: rel })));
       return null;
     } catch (err) {
       return `${licenses.LEDGER_FILE} was not updated (${oneLine(errText(err), 200)}): add the row(s) by hand.`;
