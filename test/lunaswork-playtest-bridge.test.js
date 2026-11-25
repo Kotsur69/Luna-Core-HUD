@@ -814,6 +814,54 @@ test('builtin input: steps without a built-in equivalent are refused before anyt
   assert.equal(ed.held.size, 0);
 });
 
+test('builtin input: a lost down answer still sends the up; when the up fails too, the first failure is reported', async () => {
+  const sent = [];
+  const call = async ([command, params]) => {
+    sent.push(`${params.key}:${params.action}`);
+    if (params.action === 'down') throw Object.assign(new Error('Unity did not answer within 30000 ms'), { code: 'UNITY_PIPELINE_TIMEOUT' });
+    if (params.action === 'up' && params.key === 'W') throw new Error('Unity editor is busy (domain reload)');
+    return { Command: command };
+  };
+  const actions = UN.playtestActions({ mode: 'builtin', call, sleep: async () => {} });
+  await assert.rejects(actions.input([{ type: 'key', key: 'A', holdMs: 300 }]), /^Error: Unity did not answer within 30000 ms$/);
+  assert.deepEqual(sent, ['A:down', 'A:up'], 'the key is released although the down may have run');
+  sent.length = 0;
+  await assert.rejects(actions.input([{ type: 'key', key: 'W', holdMs: 300 }]), (err) => {
+    assert.equal(err.message, 'Unity did not answer within 30000 ms (releasing W failed too: Unity editor is busy (domain reload))');
+    assert.equal(err.cause.code, 'UNITY_PIPELINE_TIMEOUT');
+    return true;
+  });
+  // Direct callers get the Playtester's limits too.
+  await assert.rejects(actions.input([{ type: 'wait', ms: 60 * 60 * 1000 }]), /step 1 ms must be a whole number from 0 to 15000/);
+  await assert.rejects(actions.input([{ type: 'key', key: 'A', holdMs: 12.5 }]), /step 1 holdMs must be a whole number/);
+});
+
+test('builtin game_state: a Player the editor reports without a usable path is listed with its error, the rest still comes back', async () => {
+  const deep = `/${'Level/'.repeat(60)}Player`;
+  const answers = {
+    'runtime status': { IsPlaying: true, LoadedLevelName: 'Arena', FrameCount: 'NaN?', TimeScale: 0.5 },
+    'scene list_open': [{ name: 'Arena', path: 'Assets/Arena.unity', isActive: true, isDirty: true }, 'junk'],
+    'gameobject find': [{ hierarchyPath: deep }, { hierarchyPath: 'Player' }, { hierarchyPath: '/Hero' }, { hierarchyPath: '/Extra' }],
+    'component get_properties': { properties: { m_LocalPosition: [1, 2, 'x'], m_LocalScale: [1, 1, 1] } },
+  };
+  const sent = [];
+  const call = async ([command, params]) => {
+    sent.push([command, params]);
+    return answers[command];
+  };
+  const state = await UN.playtestActions({ mode: 'builtin', call, sleep: async () => {} }).state();
+  assert.equal(state.scene, 'Arena');
+  assert.equal(state.frame, null, 'a non-number is dropped, not passed on');
+  assert.equal(state.timeScale, 0.5);
+  assert.deepEqual(state.openScenes, [{ name: 'Arena', path: 'Assets/Arena.unity', isActive: true, isDirty: true }]);
+  assert.equal(state.players.length, 3, 'at most three objects');
+  assert.match(state.players[0].error, /without a usable hierarchy path/);
+  assert.match(state.players[1].error, /without a usable hierarchy path/);
+  assert.deepEqual(state.players[2], { path: '/Hero', localPosition: null, localScale: [1, 1, 1] });
+  assert.deepEqual(sent.filter(([c]) => c === 'component get_properties').map(([, p]) => p.target), ['/Hero'], 'only a checked path goes back to the editor');
+  assert.equal(sent.filter(([c]) => c === 'gameobject find').length, 1, 'tagged objects found: no name search');
+});
+
 test('playtestModeOf: driver only when all three playtest commands are listed', () => {
   const listing = (names) => ({ commands: names.map((command) => ({ command })), count: names.length });
   assert.deepEqual(UN.playtestModeOf(listing([])), { mode: 'builtin', missing: [...UN.DRIVER_COMMANDS] });

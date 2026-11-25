@@ -29,6 +29,9 @@
 
 'use strict';
 
+// The Playtester's own limits (tools.js checks them first; re-checked here for direct callers).
+const { MAX_WAIT_MS, MAX_HOLD_MS } = require('./tools');
+
 const DRIVER_GROUP = 'playtest';
 const DRIVER_ACTIONS = Object.freeze(['state', 'input', 'screenshot']);
 const DRIVER_COMMANDS = Object.freeze(DRIVER_ACTIONS.map((action) => `${DRIVER_GROUP} ${action}`));
@@ -129,11 +132,14 @@ async function findPlayers(call) {
   return (Array.isArray(found) ? found : []).filter(isObj).slice(0, MAX_PLAYER_OBJECTS);
 }
 
-/** One Player object's Transform; a read that fails is reported in its place, not dropped. */
+/**
+ * One Player object's Transform. An unusable path or a failed read is
+ * reported in its place, so the rest of the state still comes back.
+ */
 async function playerTransform(call, found) {
-  const path = hierarchyPath(found.hierarchyPath);
+  const path = text(found.hierarchyPath);
   try {
-    const answer = await call(UNITY_PIPELINE_BUILTIN.transform(path));
+    const answer = await call(UNITY_PIPELINE_BUILTIN.transform(found.hierarchyPath));
     const props = isObj(answer) && isObj(answer.properties) ? answer.properties : {};
     return { path, localPosition: vector(props.m_LocalPosition), localScale: vector(props.m_LocalScale) };
   } catch (err) {
@@ -169,19 +175,42 @@ function builtinStep(step, index) {
   if (!BUILTIN_STEP_TYPES.includes(type)) {
     throw new Error(`step ${index + 1}: '${String(type)}' steps need the game's PlaytestDriver; without it only ${BUILTIN_STEP_TYPES.join(' and ')} steps run`);
   }
-  if (type === 'wait') return (call, sleep) => sleep(step.ms);
+  if (type === 'wait') {
+    const ms = wholeMs(step.ms, `step ${index + 1} ms`, MAX_WAIT_MS);
+    return (call, sleep) => sleep(ms);
+  }
   const key = inputKey(step.key);
-  const hold = Number.isInteger(step.holdMs) && step.holdMs > 0 ? step.holdMs : 0;
+  const hold = step.holdMs === undefined ? 0 : wholeMs(step.holdMs, `step ${index + 1} holdMs`, MAX_HOLD_MS);
   if (!hold) return (call) => call(UNITY_PIPELINE_BUILTIN.key(key, 'press'));
-  return async (call, sleep) => {
+  return (call, sleep) => holdKey(call, sleep, key, hold);
+}
+
+/** A whole number of ms from 0 to `max`; throws otherwise. */
+function wholeMs(value, field, max) {
+  if (!Number.isInteger(value) || value < 0 || value > max) throw new Error(`${field} must be a whole number from 0 to ${max}`);
+  return value;
+}
+
+/**
+ * Key down, hold, key up. The up is sent even when the down's answer was
+ * lost (it may have run) or the hold failed, so the game never keeps acting
+ * on a stuck key; the first failure is the one reported.
+ */
+async function holdKey(call, sleep, key, hold) {
+  let failure = null;
+  try {
     await call(UNITY_PIPELINE_BUILTIN.key(key, 'down'));
-    try {
-      await sleep(hold);
-    } finally {
-      // A held key is always let go again, or the game keeps acting on it.
-      await call(UNITY_PIPELINE_BUILTIN.key(key, 'up'));
-    }
-  };
+    await sleep(hold);
+  } catch (err) {
+    failure = err;
+  }
+  try {
+    await call(UNITY_PIPELINE_BUILTIN.key(key, 'up'));
+  } catch (err) {
+    if (!failure) throw err;
+    throw new Error(`${errText(failure)} (releasing ${key} failed too: ${errText(err)})`, { cause: failure });
+  }
+  if (failure) throw failure;
 }
 
 /** The built-in stand-in for `playtest input`: key presses / holds and waits, in order. */
