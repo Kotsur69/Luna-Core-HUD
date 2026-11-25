@@ -232,7 +232,9 @@ test('a genuine luna_asset_higgsfield GLB (forBlender, no Unity import) goes thr
   assert.deepEqual(res.from, { path: `${ART}/Props/crate.glb`, type: 'model', record: 'art/higgsfield/prop/crate.json', recordProven: true });
   assert.doesNotMatch(res.note || '', /claimed/);
   // Only the Blender FBX reaches Unity: the GLB never got its own prefab.
-  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', `${ART}/Props/crate.fbx`], ['prefab create', `${ART}/Props/crate.prefab`]]);
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu', 'script eval']);
+  assert.match(unity.calls[1].parameters.code, /LoadAssetAtPath<UnityEngine\.GameObject>\("Assets\/BladeBullet\/Art\/Props\/crate\.fbx"\)/);
+  assert.match(unity.calls[1].parameters.code, /SaveAsPrefabAsset\(instance, "Assets\/BladeBullet\/Art\/Props\/crate\.prefab"/);
   const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
   assert.match(ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \| LunaCore asset worker \(Higgsfield \+ Blender\) \| Own work \(generated\) \| Assets\/BladeBullet\/Art\/Props\/crate\.fbx \|/);
 });
@@ -255,7 +257,8 @@ test('from = a Higgsfield GLB: import, toon pass with decimate, then the same FB
   assert.match(code, /axis_forward='-Z', axis_up='Y'/);
   assert.ok(!code.includes('\nluna_from_texture()'));
   assert.deepEqual([res.from.type, res.from.record, res.files, res.prefab], ['model', saved.record, [`${ART}/Props/crate.fbx`], `${ART}/Props/crate.prefab`]);
-  assert.equal(unity.calls[0].parameters.path, `${ART}/Props/crate.fbx`);
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu', 'script eval']);
+  assert.match(unity.calls[1].parameters.code, /LoadAssetAtPath<UnityEngine\.GameObject>\("Assets\/BladeBullet\/Art\/Props\/crate\.fbx"\)/);
 });
 
 test('from: an explicit stylePass "none" is kept; no from keeps the old script order', async () => {

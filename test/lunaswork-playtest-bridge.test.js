@@ -622,6 +622,44 @@ test('the Pipeline table maps every Luna call to a fixed command', () => {
   assert.equal(UN.isPlaying({ isPlaying: true }), true, 'MCP for Unity still reads');
 });
 
+test('the Pipeline asset table uses only commands the live editor has, with fixed parameters', () => {
+  const AS = UN.UNITY_PIPELINE_ASSETS;
+  const dir = 'Assets/BladeBullet/Art/Props';
+  assert.deepEqual(AS.refresh(), ['editor invoke_menu', { path: 'Assets/Refresh' }]);
+  assert.deepEqual(AS.createMaterial(`${dir}/stone.mat`), ['asset create', { path: `${dir}/stone.mat`, type: 'UnityEngine.Material' }]);
+  assert.deepEqual(AS.setMaterialTexture(`${dir}/stone.mat`, `${dir}/stone.png`), [
+    'material set_properties',
+    { material: `${dir}/stone.mat`, properties: { _BaseMap: { path: `${dir}/stone.png` } } },
+  ]);
+  const [command, params] = AS.modelPrefab(`${dir}/Old Crate (1).fbx`, `${dir}/Old Crate (1).prefab`);
+  assert.equal(command, 'script eval');
+  assert.deepEqual(Object.keys(params), ['code']);
+  assert.match(params.code, /LoadAssetAtPath<UnityEngine\.GameObject>\("Assets\/BladeBullet\/Art\/Props\/Old Crate \(1\)\.fbx"\)/);
+  assert.match(params.code, /SaveAsPrefabAsset\(instance, "Assets\/BladeBullet\/Art\/Props\/Old Crate \(1\)\.prefab", out var ok\)/);
+  // The open scene is never used: the model goes into a preview scene that is always closed.
+  assert.match(params.code, /InstantiatePrefab\(model, stage\)/);
+  assert.match(params.code, /finally \{\s+UnityEditor\.SceneManagement\.EditorSceneManager\.ClosePreviewScene\(stage\);/);
+});
+
+test('the Pipeline asset table refuses any path that could leave its C# literal or the project', () => {
+  const AS = UN.UNITY_PIPELINE_ASSETS;
+  const ok = 'Assets/Art/a.fbx';
+  for (const bad of ['Assets/Art/a".fbx', 'Assets/Art/a\\b.fbx', 'Assets/../x.fbx', 'Assets/Art/a.fbx\n', 'Packages/x.fbx', '/Assets/a.fbx', 'Assets', '', null, 42, 'Assets/Art/a$b{c}.fbx']) {
+    assert.throws(() => AS.modelPrefab(bad, 'Assets/Art/a.prefab'), /not a project asset path/, JSON.stringify(bad));
+    assert.throws(() => AS.modelPrefab(ok, bad), /not a project asset path/, JSON.stringify(bad));
+    assert.throws(() => AS.createMaterial(bad), /not a project asset path/, JSON.stringify(bad));
+    assert.throws(() => AS.setMaterialTexture('Assets/Art/a.mat', bad), /not a project asset path/, JSON.stringify(bad));
+  }
+});
+
+test('checkTextureApplied passes only an answer that applied _BaseMap', () => {
+  const good = { shader: 'Universal Render Pipeline/Lit', applied: ['_BaseMap'], unknown: [] };
+  assert.equal(UN.checkTextureApplied(good), good);
+  for (const bad of [{ shader: 'Standard', applied: [], unknown: ['_BaseMap'] }, { ok: true }, 'done', null, { applied: '_BaseMap' }]) {
+    assert.throws(() => UN.checkTextureApplied(bad), /_BaseMap not applied/, JSON.stringify(bad));
+  }
+});
+
 test('pipelineCall parses a result the editor sent back as JSON text', async () => {
   const replies = [{ scene: 'Level1' }, JSON.stringify({ scene: 'Level1' }), 'plain text', '7'];
   const client = { exec: async () => replies.shift() };
