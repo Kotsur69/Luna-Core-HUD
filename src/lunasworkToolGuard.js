@@ -16,6 +16,10 @@
 //                                 entries of run.assets (validated, oldest
 //                                 first), so the Higgsfield cost guard survives
 //                                 a restart and spans the run's worktrees
+//   higgsfieldResults()           {runId, entries}: the run's saved
+//                                 luna_asset_higgsfield entries of run.assets,
+//                                 so luna_asset_blender can check that a
+//                                 `from` record is a genuine result
 //   toolDown(result, role)        a step result that says a kit tool is down
 //                                 pauses the run (the usage-limit wait path:
 //                                 armWait, waitReason 'toolDown') for
@@ -124,6 +128,19 @@ function createToolGuard(ctx) {
     return { runId: run.id, entries: cleanGuardFields(run).assets.filter((e) => e.tool === 'judge') };
   }
 
+  /**
+   * The run's saved Higgsfield results, read back from the run record (every
+   * entry through cleanAssetEntry again): the provenance of a luna_asset_blender
+   * `from` (src/lunasworkBlenderFrom.js runHiggsfieldMade).
+   * @returns {{runId:string, entries:object[]}|null} null without a run
+   */
+  function higgsfieldResults() {
+    const run = ctx.run();
+    if (!run || typeof run.id !== 'string' || !run.id) return null;
+    // The log keeps the newest MAX_ASSET_ENTRIES: an older result that fell out reads as "claimed" (fails safe).
+    return { runId: run.id, entries: cleanGuardFields(run).assets.filter((e) => e.tool === 'higgsfield' && !e.unsaved) };
+  }
+
   /** @returns {boolean} true when the result meant a tool is down and the run now waits */
   function toolDown(result, role) {
     const down = toolDownOf(result);
@@ -148,7 +165,7 @@ function createToolGuard(ctx) {
     return true;
   }
 
-  return { recordSpend, recordAsset, cappedTools, judgeVerdicts, toolDown, toolDownOf };
+  return { recordSpend, recordAsset, cappedTools, judgeVerdicts, higgsfieldResults, toolDown, toolDownOf };
 }
 
 module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, MAX_ASSET_ENTRIES, cleanGuardFields, createToolGuard };

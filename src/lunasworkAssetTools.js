@@ -32,9 +32,15 @@
 //               9876): one JSON command {type: 'execute_code', params: {code}},
 //               one JSON answer {status, result | message}. LunaCore sends only
 //               the fixed export script of the pipeline, never model text.
-//   Higgsfield  the `higgsfield` CLI: `generate cost` (credits) and `generate
-//               create --wait --json`. Every argument is a validated plain
-//               token; the prompt goes on stdin, never on a command line.
+//   Higgsfield  the `higgsfield` CLI: `generate cost` (credits), `generate
+//               create --wait --json` and `upload create <file> --json` (a
+//               reference image, before the estimate; its upload id goes to
+//               cost / create as a repeated --image). Every argument is a
+//               validated plain token; the prompt goes on stdin, never on a
+//               command line. A reference upload gets the checked bytes in a
+//               fresh private temp folder (its working folder), never a repo
+//               path; NoDefaultCurrentDirectoryInExePath keeps cmd.exe from
+//               running a `higgsfield` found in the working folder.
 //   download    a Higgsfield result: https on port 443 only, no credentials,
 //               no IP literal or local name; the host must resolve to public
 //               addresses only (checked before every request, redirects
@@ -58,6 +64,9 @@
 
 const net = require('net');
 const dns = require('dns');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const childProcess = require('child_process');
 const { createAssetPipeline, KINDS, MODEL_KINDS, COMFY_KINDS } = require('./lunasworkAssetPipeline');
 const { STYLE_PASSES, DEFAULT_STYLE_PASS, MIN_POLY_BUDGET, MAX_POLY_BUDGET, PROP_POLY_BUDGET, CHARACTER_POLY_BUDGET, cleanStyleOptions } = require('./lunasworkBlenderScript');
@@ -67,6 +76,8 @@ const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
 const { ALL_SOURCES } = require('./lunasworkAssetFanout');
 const { createFreeSources, SOURCE_IDS, TYPES: LIBRARY_TYPES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
 const { createAssetJudge, createVerdictStore, runFreePassed, MIN_CANDIDATES, MAX_CANDIDATES, CANDIDATES_DIR } = require('./lunasworkAssetJudge');
+const { runHiggsfieldMade } = require('./lunasworkBlenderFrom');
+const { MAX_REFERENCES, uploadIdOf } = require('./lunasworkHiggsfieldRefs');
 
 const BLENDER_TOOL = 'luna_asset_blender';
 const COMFY_TOOL = 'luna_asset_comfy';
@@ -79,6 +90,7 @@ const DEFAULT_BLENDER_PORT = 9876;
 const BLENDER_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_BLENDER_REPLY_BYTES = 1024 * 1024;
 const COST_TIMEOUT_MS = 60 * 1000;
+const UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
 const GENERATE_TIMEOUT_MS = 25 * 60 * 1000;
 // The CLI's own wait, kept under the process timeout above.
 const GENERATE_WAIT = '20m';
@@ -91,6 +103,12 @@ const MAX_REDIRECTS = 3;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 // A plain token never starts with '-', so a value cannot read as a CLI flag.
 const CLI_TOKEN_RE = /^[A-Za-z0-9][\w:.-]{0,63}$/;
+// The file name a reference upload gets in its private temp folder (src/lunasworkHiggsfieldRefs.js).
+const UPLOAD_NAME_RE = /^reference-[1-9]\.(png|jpg|webp)$/;
+const MAX_UPLOAD_BYTES = 30 * 1024 * 1024;
+const UPLOAD_TMP_PREFIX = 'luna-hf-ref-';
+// cmd.exe looks in the current folder before PATH unless this is set (as src/hostchat.js does).
+const NO_CWD_EXE_ENV = 'NoDefaultCurrentDirectoryInExePath';
 const LOCAL_NAME_RE = /(^|\.)(localhost|local|internal|lan|home|localdomain|home\.arpa)$/;
 // Addresses a result download must never reach: unspecified, loopback,
 // private, carrier-grade NAT, link-local, documentation, benchmark,
@@ -173,7 +191,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: HIGGSFIELD_TOOL,
-    description: "Luna's Work asset pipeline: a paid FINAL from Higgsfield (concept art, textures, VFX, key art, or a GLB model). The cost is estimated and booked against this run's Higgsfield budget BEFORE it generates; \"capReached\" means stop using Higgsfield for this run. Saves (a name already used gets -v2, never an overwrite), imports into Unity and logs prompt, seed and cost. When a paid result cannot be saved, the answer carries its job id and URLs." + DEFERRED_IMPORT_DESCRIPTION,
+    description: "Luna's Work asset pipeline: a paid FINAL from Higgsfield (concept art, textures, VFX, key art, or a GLB model). The cost is estimated and booked against this run's Higgsfield budget BEFORE it generates; \"capReached\" means stop using Higgsfield for this run. Saves (a name already used gets -v2, never an overwrite), imports into Unity and logs prompt, seed and cost. When a paid result cannot be saved, the answer carries its job id and URLs. For a 3D asset (character, prop, environment, model) set forBlender: true: the result is saved, recorded and ledgered but NOT imported into Unity (a GLB of a 3D kind skips the import even without it); pass the saved file to luna_asset_blender from=, which makes the FBX + prefab. A 3D mesh: model \"multi_image_to_3d\" with images = 1-4 repo reference views (front, side, back...) and params {\"should_texture\": \"true\"}; it returns a GLB." + DEFERRED_IMPORT_DESCRIPTION,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -183,7 +201,9 @@ const ASSET_TOOLS = Object.freeze([
         kind: { type: 'string', enum: Object.keys(KINDS).filter((k) => !NO_HIGGSFIELD_KINDS.includes(k)) },
         prompt: PROMPT_PROP,
         model: { type: 'string', description: 'A Higgsfield model id (job set type), e.g. "gpt_image_2_6".' },
-        params: { type: 'object', description: 'Optional plain model flags, e.g. {"aspect_ratio": "16:9", "resolution": "2k"}.' },
+        params: { type: 'object', description: 'Optional plain model flags, e.g. {"aspect_ratio": "16:9", "resolution": "2k"}. Reference images go in images, never here.' },
+        images: { type: 'array', minItems: 1, maxItems: MAX_REFERENCES, items: { type: 'string', maxLength: 300 }, description: `Optional: 1-${MAX_REFERENCES} reference images, repo-relative png / jpg / webp paths under art/ or the art root (e.g. "art/refs/crate-front.png"). Each is checked, uploaded through the Higgsfield CLI and passed as --image; for multi_image_to_3d they are the object views.` },
+        forBlender: { type: 'boolean', description: 'true: the result is a luna_asset_blender input (from=), so it is NOT imported into Unity (no prefab, no material). Left out: a GLB of a 3D model kind skips the import too. false: always import.' },
       },
     },
   },
@@ -358,6 +378,20 @@ function createBlenderClient(opts = {}) {
 
 // ---- Higgsfield CLI -------------------------------------------------------------------
 
+/**
+ * The CLI's environment: `base` with NoDefaultCurrentDirectoryInExePath set, so
+ * cmd.exe never runs a `higgsfield` found in the working folder. Windows env
+ * names ignore case: any other spelling of the key is dropped.
+ */
+function cliEnv(base) {
+  const out = {};
+  for (const [k, v] of Object.entries(isObj(base) ? base : {})) {
+    if (k.toLowerCase() !== NO_CWD_EXE_ENV.toLowerCase()) out[k] = v;
+  }
+  out[NO_CWD_EXE_ENV] = '1';
+  return out;
+}
+
 /** argv flags of a validated request; null when a token is not plain. */
 function cliFlags(params) {
   const out = [];
@@ -402,16 +436,21 @@ function jobResultOf(json) {
 }
 
 /**
- * @param {{execFile?:Function, platform?:string, env?:object, bin?:string}} [opts]
- * @returns {{estimate:Function, generate:Function}}
+ * @param {{execFile?:Function, platform?:string, env?:object, bin?:string, fsPromises?:object, tmpDir?:string,
+ *   log?:(line:string)=>void}} [opts] tmpDir = where a reference upload's private folder is made (tests)
+ * @returns {{estimate:Function, generate:Function, upload:(file:{name:string, data:Buffer})=>Promise<{id:string}>}}
  */
 function createHiggsfieldCli(opts = {}) {
   const execFile = opts.execFile || childProcess.execFile;
   const platform = opts.platform || process.platform;
   const bin = opts.bin || 'higgsfield';
+  const fsp = opts.fsPromises || fs.promises;
+  const tmpRoot = opts.tmpDir || os.tmpdir();
+  const log = opts.log || (() => {});
 
-  /** Runs the CLI; the prompt is written to stdin. Resolves the parsed JSON answer. */
-  function run(args, prompt, timeoutMs) {
+  /** Runs the CLI (in `cwd` when given); the prompt is written to stdin. Resolves the parsed JSON answer. */
+  function run(args, prompt, timeoutMs, cwd) {
+    const what = args[0] === 'upload' ? 'upload' : args[1];
     return new Promise((resolve, reject) => {
       // An npm-installed CLI is a .cmd shim on Windows, which needs a shell; every
       // argument is a validated plain token, the prompt never is an argument.
@@ -420,17 +459,18 @@ function createHiggsfieldCli(opts = {}) {
         maxBuffer: MAX_CLI_OUTPUT_BYTES,
         windowsHide: true,
         shell: platform === 'win32',
-        env: opts.env || process.env,
+        env: cliEnv(opts.env || process.env),
+        ...(cwd ? { cwd } : {}),
       }, (err, stdout, stderr) => {
         if (err) {
           const why = err.killed ? 'timed out' : oneLine(stderr || err.message, 300);
-          reject(new Error(`higgsfield ${args[1]} failed: ${why}`));
+          reject(new Error(`higgsfield ${what} failed: ${why}`));
           return;
         }
         try {
           resolve(JSON.parse(String(stdout)));
         } catch {
-          reject(new Error(`higgsfield ${args[1]} answered without JSON`));
+          reject(new Error(`higgsfield ${what} answered without JSON`));
         }
       });
       if (child && child.stdin) {
@@ -443,8 +483,10 @@ function createHiggsfieldCli(opts = {}) {
 
   function argsFor(sub, req, extra) {
     const flags = cliFlags(req.params);
+    const images = Array.isArray(req.images) ? req.images : [];
     if (!CLI_TOKEN_RE.test(req.model) || !flags) throw new Error('higgsfield: the model or a param is not a plain token');
-    return ['generate', sub, req.model, ...flags, ...extra, '--json'];
+    if (images.length > MAX_REFERENCES || !images.every((id) => typeof id === 'string' && CLI_TOKEN_RE.test(id))) throw new Error('higgsfield: a reference image id is not a plain token');
+    return ['generate', sub, req.model, ...flags, ...images.flatMap((id) => ['--image', id]), ...extra, '--json'];
   }
 
   async function estimate(req) {
@@ -457,7 +499,28 @@ function createHiggsfieldCli(opts = {}) {
     return result;
   }
 
-  return { estimate, generate };
+  /** Uploads one checked repo-relative image, run in the repo folder; resolves its upload id. */
+  async function upload(file) {
+    const f = isObj(file) ? file : {};
+    if (typeof f.name !== 'string' || !UPLOAD_NAME_RE.test(f.name)) throw new Error('higgsfield upload: the file name is not a plain reference name');
+    if (!Buffer.isBuffer(f.data) || !f.data.length || f.data.length > MAX_UPLOAD_BYTES) throw new Error('higgsfield upload: no image bytes, or too many');
+    // A fresh private folder: nothing in it but the checked bytes, never the worker's worktree.
+    const dir = await fsp.mkdtemp(path.join(tmpRoot, UPLOAD_TMP_PREFIX));
+    try {
+      await fsp.writeFile(path.join(dir, f.name), f.data, { flag: 'wx' });
+      const id = uploadIdOf(await run(['upload', 'create', f.name, '--json'], '', UPLOAD_TIMEOUT_MS, dir));
+      if (!id) throw new Error('higgsfield upload answered no upload id');
+      return { id };
+    } finally {
+      try {
+        await fsp.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch (err) {
+        log(`[lunaswork-assets] reference upload folder not removed: ${oneLine(errText(err), 200)}`);
+      }
+    }
+  }
+
+  return { estimate, generate, upload };
 }
 
 // ---- download -------------------------------------------------------------------------
@@ -581,9 +644,11 @@ function createDownloader(opts = {}) {
  *   runClaude?:Function, verdicts?:object}} deps  runClaude / verdicts = the judge's Critic runner and verdict store (tests)
  *   keys = the asset library keys (src/lunasworkAssetKeys.js); none -> the keyed libraries answer noKey
  *   ctx.runId / ctx.judgeVerdicts = the run this tab works for and a read of its judge entries
- *   ({runId, entries}, src/lunaswork.js): the Higgsfield cost guard decides from the run record first
+ *   ({runId, entries}, src/lunaswork.js): the Higgsfield cost guard decides from the run record first;
+ *   ctx.higgsfieldResults = a read of its saved luna_asset_higgsfield entries: luna_asset_blender's `from`
+ *   provenance check (a record without its entry is only "claimed")
  * @returns {(ctx:{repoPath:string, runId?:string|null, recordSpend:Function, recordAsset:Function, cappedTools:Function,
- *   judgeVerdicts?:()=>({runId:string, entries:object[]}|null)}|null)
+ *   judgeVerdicts?:()=>({runId:string, entries:object[]}|null), higgsfieldResults?:()=>({runId:string, entries:object[]}|null)}|null)
  *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function, librarySearch:Function, libraryImport:Function, assetJudge:Function}}
  */
 function createAssetToolsFor(deps) {
@@ -605,6 +670,16 @@ function createAssetToolsFor(deps) {
         log(`[lunaswork-assets] judge verdicts unreadable, using this process's verdicts: ${oneLine(errText(err), 200)}`);
       }
       return fromRun === true || verdicts.freePassed(ctx.repoPath, job.kind, job.slug, runId);
+    };
+    // The `from` record of luna_asset_blender is proven only by this run's asset log; an unreadable log proves nothing.
+    const higgsfieldMade = (claim) => {
+      if (typeof ctx.higgsfieldResults !== 'function') return false;
+      try {
+        return runHiggsfieldMade(ctx.higgsfieldResults(), runId, claim);
+      } catch (err) {
+        log(`[lunaswork-assets] Higgsfield results unreadable, the from record stays claimed: ${oneLine(errText(err), 200)}`);
+        return false;
+      }
     };
     // A library call that throws (not one that answers a failure) still never shows a stored key.
     const keyed = (fn) => Promise.resolve().then(fn).catch((err) => ({
@@ -632,12 +707,13 @@ function createAssetToolsFor(deps) {
         usdPerCredit: cfg.higgsfieldUsdPerCredit,
         comfy: createComfyClient({ port: cfg.comfyuiPort, fetch: deps.fetch }),
         blender: createBlenderClient({ port: cfg.blenderPort, net: deps.net }),
-        higgsfield: createHiggsfieldCli({ execFile: deps.execFile, platform: deps.platform, env: deps.env ? deps.env() : undefined }),
+        higgsfield: createHiggsfieldCli({ execFile: deps.execFile, platform: deps.platform, env: deps.env ? deps.env() : undefined, log }),
         download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
         unity: createPipelineClient({ projectDir: ctx.repoPath, fetch: deps.fetch }),
         recordSpend: ctx.recordSpend,
         cappedTools: ctx.cappedTools,
         freeCandidatePassed,
+        higgsfieldMade,
         logAsset: (entry) => {
           if (ctx.recordAsset(entry)) return;
           log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);

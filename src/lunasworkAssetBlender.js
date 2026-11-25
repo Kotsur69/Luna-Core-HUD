@@ -6,7 +6,9 @@
 // Critic's style check reads (design/asset-renders/<slug>.png) and exports the
 // model to Unity as FBX + prefab. With `from`, a saved Higgsfield result
 // (an image as the texture, or a GLB imported) goes through the same passes
-// first (src/lunasworkBlenderFrom.js). The Python comes from
+// first (src/lunasworkBlenderFrom.js). A Higgsfield record that this run's
+// asset log does not back (deps.higgsfieldMade) is named as "claimed" in the
+// answer and the ledger source, never as proven provenance. The Python comes from
 // src/lunasworkBlenderScript.js; the guarded repo files, Unity import, ledger
 // and asset log come from src/lunasworkAssetPipeline.js (createAssetPipeline),
 // so every path stays inside the project repo.
@@ -34,8 +36,10 @@ const fail = (error, detail) => ({ ok: false, error, ...(detail ? { detail: oneL
  *   files:{guard:(rel:string)=>string, mkdirFor:(rel:string)=>void, stat:(rel:string)=>object|null,
  *     head:(rel:string)=>Buffer, remove:(rel:string)=>void, read:(rel:string, max:number)=>Buffer},
  *   ledgerGenerated:Function, importToUnity:Function, importNote:Function, log:Function, ledgerFile:string,
- *   repoPath:string, artRoot:string, higgsfieldDir:string, kinds:object}} deps  files.read(rel, max) reads a
- *   guarded repo file (the Higgsfield record of a `from`)
+ *   repoPath:string, artRoot:string, higgsfieldDir:string, kinds:object,
+ *   higgsfieldMade?:(claim:{path:string, record:string})=>boolean}} deps  files.read(rel, max) reads a
+ *   guarded repo file (the Higgsfield record of a `from`); higgsfieldMade = whether this run's asset log
+ *   has the luna_asset_higgsfield entry that saved the file from the record (missing or throwing: not proven)
  * @returns {(raw:object)=>Promise<object>} blenderModel
  */
 function createBlenderModel(deps) {
@@ -91,6 +95,29 @@ function createBlenderModel(deps) {
     return { before, output };
   }
 
+  /** True only when this run's asset log backs the record a `from` names (deps.higgsfieldMade). */
+  function provenRecord(from) {
+    if (!from || !from.record || typeof deps.higgsfieldMade !== 'function') return false;
+    try {
+      return deps.higgsfieldMade({ path: from.rel, record: from.record, sha256: from.sha256 }) === true;
+    } catch {
+      // An unreadable run log proves nothing: the record stays "claimed".
+      return false;
+    }
+  }
+
+  /** The ledger source and the answer note of a `from`: the proven record, a claimed one, or the file itself. */
+  function fromProvenance(from) {
+    if (!from) return { source: null, note: null, proven: false };
+    if (!from.record) return { source: from.rel, note: `No Higgsfield record lists ${from.rel}: the ledger names the file itself as the source.`, proven: false };
+    if (provenRecord(from)) return { source: from.record, note: null, proven: true };
+    return {
+      source: `claimed Higgsfield record ${from.record}`,
+      note: `${from.record} is a claimed Higgsfield record: this run's asset log has no luna_asset_higgsfield result that saved ${from.rel} from it, so the ledger source says "claimed Higgsfield record". Check its origin before shipping.`,
+      proven: false,
+    };
+  }
+
   /** The checked `from` (null when the call names none) and the style options; a Higgsfield result defaults to the toon pass. */
   function cleanInputs(raw) {
     const r = raw && typeof raw === 'object' ? raw : {};
@@ -143,20 +170,20 @@ function createBlenderModel(deps) {
     const report = blenderScript.parseScriptReport(ran.output);
     // The Higgsfield record (else the file itself) is the source a `from` asset was made from.
     const higgsfield = from ? [...new Set([from.record, from.rel].filter(Boolean))] : [];
+    const provenance = fromProvenance(from);
     const ledgerNote = from
-      ? await deps.ledgerGenerated('Higgsfield + Blender', job, [fbxRel], higgsfield[0])
+      ? await deps.ledgerGenerated('Higgsfield + Blender', job, [fbxRel], provenance.source)
       : await deps.ledgerGenerated('Blender', job, [fbxRel], blendRel);
     const imp = await deps.importToUnity(fbxRel, job.kind);
     // cleanAssetEntry keeps 4 sources: .blend, the Higgsfield record and file, the render.
     deps.log({ tool: 'blender', kind: job.kind, name: job.name, prompt: job.prompt, seed: null, costUsd: 0, path: fbxRel, sources: [blendRel, ...higgsfield, ...render.renders], imported: imp.ok });
-    const fromNote = from && !from.record ? `No Higgsfield record lists ${from.rel}: the ledger names the file itself as the source.` : null;
-    const note = [deps.importNote(imp), ledgerNote, fromNote, ...blenderScript.reportNotes(report), ...render.notes].filter(Boolean).join(' ') || null;
+    const note = [deps.importNote(imp), ledgerNote, provenance.note, ...blenderScript.reportNotes(report), ...render.notes].filter(Boolean).join(' ') || null;
     const toon = style.stylePass === blenderScript.TOON_PASS;
     return {
       ok: true,
       files: [fbxRel],
       sources: [blendRel, ...higgsfield],
-      ...(from ? { from: { path: from.rel, type: from.type, record: from.record } } : {}),
+      ...(from ? { from: { path: from.rel, type: from.type, record: from.record, recordProven: provenance.proven } } : {}),
       renders: render.renders,
       style: { pass: style.stylePass, polyBudget: toon ? blenderScript.polyBudgetFor(job.kind, style.polyBudget) : null, report },
       prefab: imp.ok ? fbxRel.replace(/\.fbx$/, '.prefab') : null,
