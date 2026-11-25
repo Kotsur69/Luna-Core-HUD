@@ -108,7 +108,8 @@ function clampLine(v, max) {
   const text = oneLine(v, Infinity);
   if (text.length <= max) return text;
   const room = text.slice(0, max - ELLIPSIS.length);
-  const space = room.lastIndexOf(' ');
+  // The kept slice already ends on a whole word when the next character is a space.
+  const space = text[room.length] === ' ' ? room.length : room.lastIndexOf(' ');
   const cut = space >= max * MIN_WORD_CUT_SHARE ? room.slice(0, space) : room;
   // No dangling separator before the ellipsis ("crate, ..." reads as "crate...").
   return `${cut.replace(/[\s,;:.-]+$/, '')}${ELLIPSIS}`;

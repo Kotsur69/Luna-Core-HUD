@@ -542,6 +542,9 @@ test('a reason over the limit is cut at a word boundary and ends with an ellipsi
   assert.equal(long[body.length], ' ', 'the cut falls on a space');
   // Within the limit: unchanged, no ellipsis.
   assert.equal(cast('short and sweet'), 'short and sweet');
+  // A word that ends exactly where the cut falls is kept whole.
+  const exact = `${'w'.repeat(150)} ${'v'.repeat(48)} tail words here`;
+  assert.equal(cast(exact), `${'w'.repeat(150)} ${'v'.repeat(48)}…`);
   // One token longer than the limit: a hard cut, still with an ellipsis.
   const token = cast('x'.repeat(300));
   assert.equal(token, `${'x'.repeat(199)}…`);
