@@ -316,9 +316,10 @@ test('a skipped transcript does not use up the model-call budget of a tick', asy
 
 test('only a transcript under the transcripts folder is ever tracked or read', async (t) => {
   const s = setup(t);
-  const outside = path.join(os.tmpdir(), 'luna-capture-outside.jsonl');
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-capture-outside-'));
+  t.after(() => fs.promises.rm(outsideDir, { recursive: true, force: true, maxRetries: 5 }));
+  const outside = path.join(outsideDir, 'luna-capture-outside.jsonl');
   fs.writeFileSync(outside, session('somewhere else'));
-  t.after(() => fs.promises.rm(outside, { force: true }));
   s.capture.track({ file: outside, project: PROJECT });
   s.capture.track({ file: path.join(s.configDir, 'notes.txt'), project: PROJECT });
   assert.deepEqual(s.ledger().files, {});
