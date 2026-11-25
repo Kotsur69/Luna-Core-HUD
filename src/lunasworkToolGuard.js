@@ -137,6 +137,7 @@ function createToolGuard(ctx) {
   function higgsfieldResults() {
     const run = ctx.run();
     if (!run || typeof run.id !== 'string' || !run.id) return null;
+    // The log keeps the newest MAX_ASSET_ENTRIES: an older result that fell out reads as "claimed" (fails safe).
     return { runId: run.id, entries: cleanGuardFields(run).assets.filter((e) => e.tool === 'higgsfield' && !e.unsaved) };
   }
 

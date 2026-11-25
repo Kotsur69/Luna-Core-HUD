@@ -4,9 +4,11 @@
 // Some Higgsfield models take reference images: Meshy's multi_image_to_3d
 // turns 1-4 object views into a textured GLB mesh, the image models restyle
 // or keep a look. The worker names 1-4 repo images (`images`); each is
-// checked here, uploaded through `higgsfield upload create <file> --json`
-// (free, no generation) and passed to `generate cost` / `generate create` as
-// a repeated `--image <upload id>`.
+// checked here, read ONCE, and its checked bytes are uploaded through
+// `higgsfield upload create <file> --json` (free, no generation) from a
+// private temp folder (src/lunasworkAssetTools.js createHiggsfieldCli upload);
+// the upload ids go to `generate cost` / `generate create` as a repeated
+// `--image <upload id>`.
 //
 // The paths are untrusted (a worker names them):
 //   cleanReferences   no disk access: 1-4 distinct plain relative paths
@@ -15,25 +17,31 @@
 //   resolveReferences the disk check of luna_asset_blender's `from`
 //                     (src/lunasworkBlenderFrom.js checkRepoFile): guarded in
 //                     the repo, no junction or link on the way (realpath
-//                     compare), no hard link, size cap, magic bytes
-//   uploadReferences  one upload per image, in order; an upload id is a
-//                     plain token or the call fails before anything is booked
+//                     compare), no hard link, size cap, magic bytes; then the
+//                     bytes are read through one descriptor, the file is
+//                     checked to still be the one that was checked (same
+//                     realpath, same inode) and the bytes' own magic is
+//                     checked again
+//   uploadReferences  one upload per image, in order, of those bytes; an
+//                     upload id is a plain token or the call fails before
+//                     anything is booked
 //
-// The CLI gets the repo-relative path with the repo as its working folder,
-// never an absolute path: on Windows the npm shim runs through cmd.exe, and a
-// validated relative path has no character cmd.exe or the CLI could read as
-// anything but a file name. Not caught: a junction swapped in between the
-// realpath check and the CLI opening the file (the same window as every
-// other checked repo path; the worker that could do it can also run the CLI).
+// The CLI never opens a repo path: a link or junction swapped in after the
+// check cannot redirect the upload to another file, and the CLI never runs
+// in the worker's worktree (where a planted higgsfield.cmd would win the
+// cmd.exe lookup).
 // ============================================================================
 
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { SEGMENT_RE, checkRepoFile } = require('./lunasworkBlenderFrom');
+const { imageKind } = require('./lunasworkComfy');
 
 const MAX_REFERENCES = 4;
 const MAX_REFERENCE_CHARS = 300;
+const MAX_REFERENCE_BYTES = 30 * 1024 * 1024;
 const REFERENCE_EXTS = Object.freeze(['png', 'jpg', 'jpeg', 'webp']);
 const ART_DIR = 'art';
 // An upload id as the CLI prints it (a UUID); a plain token, never a flag.
@@ -74,22 +82,59 @@ function cleanReferences(raw, roots) {
   return { ok: true, rels };
 }
 
+const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
+const realOf = (fsx, p) => (fsx.realpathSync.native ? fsx.realpathSync.native(p) : fsx.realpathSync(p));
+
 /**
- * Every reference image checked on disk (checkRepoFile).
+ * The bytes of a checked file, read through one descriptor; throws unless
+ * the file read is still the checked one (realpath and inode) and its bytes
+ * are a `want` image under the size cap.
+ */
+function readChecked(fsx, real, want) {
+  const fd = fsx.openSync(real, 'r');
+  let data;
+  let opened;
+  try {
+    opened = fsx.fstatSync(fd);
+    if (!opened.isFile() || opened.nlink > 1) throw new Error('it is not a plain file');
+    if (opened.size > MAX_REFERENCE_BYTES) throw new Error(`it is larger than ${MAX_REFERENCE_BYTES} bytes`);
+    data = Buffer.alloc(opened.size);
+    let at = 0;
+    while (at < data.length) {
+      const n = fsx.readSync(fd, data, at, data.length - at, at);
+      if (n === 0) break;
+      at += n;
+    }
+    data = data.subarray(0, at);
+  } finally {
+    fsx.closeSync(fd);
+  }
+  // A link or junction swapped in after the check shows up as another path or another file.
+  if (realOf(fsx, real) !== real || !sameFile(fsx.statSync(real), opened)) throw new Error('it changed while it was read');
+  if (imageKind(data) !== want) throw new Error(`its bytes are not a ${want.toUpperCase()} image`);
+  return data;
+}
+
+/**
+ * Every reference image checked on disk (checkRepoFile), then read once.
  * @param {string[]} rels from cleanReferences
  * @param {{repoPath:string, fsImpl?:object, files:{guard:(rel:string)=>string}}} deps
- * @returns {{ok:true}|{ok:false, error:string, detail:string}}
+ * @returns {{ok:true, files:{rel:string, ext:string, data:Buffer}[]}|{ok:false, error:string, detail:string}}
  */
 function resolveReferences(rels, deps) {
+  const fsx = deps.fsImpl || fs;
+  const files = [];
   for (const rel of rels) {
-    const ext = path.posix.extname(rel).slice(1).toLowerCase();
+    const named = path.posix.extname(rel).slice(1).toLowerCase();
+    const ext = named === 'jpeg' ? 'jpg' : named;
     try {
-      checkRepoFile({ rel, ext, type: 'texture' }, deps);
+      const real = checkRepoFile({ rel, ext: named, type: 'texture' }, deps);
+      files.push({ rel, ext, data: readChecked(fsx, real, ext) });
     } catch (err) {
       return fail('badImages', `refused: ${rel}: ${err && err.code === 'ENOENT' ? 'no such file' : errText(err)}`);
     }
   }
-  return { ok: true };
+  return { ok: true, files };
 }
 
 /** The upload id in a `higgsfield upload create --json` answer, or null. */
@@ -108,20 +153,20 @@ function uploadIdOf(json, depth = 0) {
 }
 
 /**
- * Uploads every reference image, in order. Nothing is booked or generated
- * yet: a failed upload fails the call before any paid step.
- * @param {(rel:string)=>Promise<{id:unknown}>} upload the CLI adapter (src/lunasworkAssetTools.js)
- * @param {string[]} rels checked reference paths
+ * Uploads every reference image's checked bytes, in order. Nothing is booked
+ * or generated yet: a failed upload fails the call before any paid step.
+ * @param {(file:{name:string, data:Buffer})=>Promise<{id:unknown}>} upload the CLI adapter (src/lunasworkAssetTools.js)
+ * @param {{rel:string, ext:string, data:Buffer}[]} files from resolveReferences
  * @returns {Promise<{ok:true, ids:string[]}|{ok:false, error:string, detail:string}>}
  */
-async function uploadReferences(upload, rels) {
-  if (!rels.length) return { ok: true, ids: [] };
+async function uploadReferences(upload, files) {
+  if (!files.length) return { ok: true, ids: [] };
   if (typeof upload !== 'function') return fail('toolDown', 'the Higgsfield CLI adapter cannot upload reference images');
   const ids = [];
-  for (const rel of rels) {
+  for (const [i, { rel, ext, data }] of files.entries()) {
     let res;
     try {
-      res = await upload(rel);
+      res = await upload({ name: `reference-${i + 1}.${ext}`, data });
     } catch (err) {
       return fail('higgsfieldFailed', `reference upload of ${rel} failed (nothing was booked): ${errText(err)}`);
     }
@@ -132,4 +177,4 @@ async function uploadReferences(upload, rels) {
   return { ok: true, ids };
 }
 
-module.exports = { MAX_REFERENCES, REFERENCE_EXTS, UPLOAD_ID_RE, cleanReferences, resolveReferences, uploadIdOf, uploadReferences };
+module.exports = { MAX_REFERENCES, MAX_REFERENCE_BYTES, REFERENCE_EXTS, UPLOAD_ID_RE, cleanReferences, resolveReferences, uploadIdOf, uploadReferences };

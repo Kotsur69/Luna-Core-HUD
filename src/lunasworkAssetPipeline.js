@@ -150,6 +150,8 @@ const ASSET_TOOLS = Object.freeze(['blender', 'comfyui', 'higgsfield', 'library'
 const MAX_LEDGER_BYTES = 2 * 1024 * 1024;
 const NO_CREDITS_TEXT = 'Third-party assets\n\nNone yet.\n';
 const MAX_LOG_PATH_CHARS = 300;
+// The content hash a Higgsfield result is logged with (luna_asset_blender from= provenance).
+const SHA256_RE = /^[0-9a-f]{64}$/;
 
 /** One run-report entry, validated (it may come back from a stored run). Null when unusable. */
 function cleanAssetEntry(raw) {
@@ -171,6 +173,7 @@ function cleanAssetEntry(raw) {
     imported: raw.imported === true,
     // A paid generation whose result did not end up as files (path is then its record).
     unsaved: raw.unsaved === true,
+    ...(typeof raw.sha256 === 'string' && SHA256_RE.test(raw.sha256) ? { sha256: raw.sha256 } : {}),
   };
 }
 
@@ -503,6 +506,7 @@ function createAssetPipeline(deps) {
     importNote,
     log,
     ledgerFile: licenses.LEDGER_FILE,
+    fsImpl: fsx,
   });
 
   // The pieces src/lunasworkFreeAssets.js builds the library imports on.

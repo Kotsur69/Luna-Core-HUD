@@ -36,9 +36,11 @@
 //               create --wait --json` and `upload create <file> --json` (a
 //               reference image, before the estimate; its upload id goes to
 //               cost / create as a repeated --image). Every argument is a
-//               validated plain token or a checked repo-relative path run
-//               with the repo as the working folder; the prompt goes on
-//               stdin, never on a command line.
+//               validated plain token; the prompt goes on stdin, never on a
+//               command line. A reference upload gets the checked bytes in a
+//               fresh private temp folder (its working folder), never a repo
+//               path; NoDefaultCurrentDirectoryInExePath keeps cmd.exe from
+//               running a `higgsfield` found in the working folder.
 //   download    a Higgsfield result: https on port 443 only, no credentials,
 //               no IP literal or local name; the host must resolve to public
 //               addresses only (checked before every request, redirects
@@ -62,6 +64,9 @@
 
 const net = require('net');
 const dns = require('dns');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const childProcess = require('child_process');
 const { createAssetPipeline, KINDS, MODEL_KINDS, COMFY_KINDS } = require('./lunasworkAssetPipeline');
 const { STYLE_PASSES, DEFAULT_STYLE_PASS, MIN_POLY_BUDGET, MAX_POLY_BUDGET, PROP_POLY_BUDGET, CHARACTER_POLY_BUDGET, cleanStyleOptions } = require('./lunasworkBlenderScript');
@@ -98,10 +103,12 @@ const MAX_REDIRECTS = 3;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 // A plain token never starts with '-', so a value cannot read as a CLI flag.
 const CLI_TOKEN_RE = /^[A-Za-z0-9][\w:.-]{0,63}$/;
-// A reference image as the upload gets it: repo-relative, forward slashes, no
-// segment starting with '.' or '-', nothing cmd.exe or the CLI reads as syntax.
-const CLI_REPO_PATH_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/;
-const MAX_CLI_PATH_CHARS = 300;
+// The file name a reference upload gets in its private temp folder (src/lunasworkHiggsfieldRefs.js).
+const UPLOAD_NAME_RE = /^reference-[1-9]\.(png|jpg|webp)$/;
+const MAX_UPLOAD_BYTES = 30 * 1024 * 1024;
+const UPLOAD_TMP_PREFIX = 'luna-hf-ref-';
+// cmd.exe looks in the current folder before PATH unless this is set (as src/hostchat.js does).
+const NO_CWD_EXE_ENV = 'NoDefaultCurrentDirectoryInExePath';
 const LOCAL_NAME_RE = /(^|\.)(localhost|local|internal|lan|home|localdomain|home\.arpa)$/;
 // Addresses a result download must never reach: unspecified, loopback,
 // private, carrier-grade NAT, link-local, documentation, benchmark,
@@ -371,6 +378,20 @@ function createBlenderClient(opts = {}) {
 
 // ---- Higgsfield CLI -------------------------------------------------------------------
 
+/**
+ * The CLI's environment: `base` with NoDefaultCurrentDirectoryInExePath set, so
+ * cmd.exe never runs a `higgsfield` found in the working folder. Windows env
+ * names ignore case: any other spelling of the key is dropped.
+ */
+function cliEnv(base) {
+  const out = {};
+  for (const [k, v] of Object.entries(isObj(base) ? base : {})) {
+    if (k.toLowerCase() !== NO_CWD_EXE_ENV.toLowerCase()) out[k] = v;
+  }
+  out[NO_CWD_EXE_ENV] = '1';
+  return out;
+}
+
 /** argv flags of a validated request; null when a token is not plain. */
 function cliFlags(params) {
   const out = [];
@@ -415,14 +436,17 @@ function jobResultOf(json) {
 }
 
 /**
- * @param {{execFile?:Function, platform?:string, env?:object, bin?:string, cwd?:string}} [opts] cwd = the repo
- *   folder a reference image upload runs in (its path is repo-relative)
- * @returns {{estimate:Function, generate:Function, upload:Function}}
+ * @param {{execFile?:Function, platform?:string, env?:object, bin?:string, fsPromises?:object, tmpDir?:string,
+ *   log?:(line:string)=>void}} [opts] tmpDir = where a reference upload's private folder is made (tests)
+ * @returns {{estimate:Function, generate:Function, upload:(file:{name:string, data:Buffer})=>Promise<{id:string}>}}
  */
 function createHiggsfieldCli(opts = {}) {
   const execFile = opts.execFile || childProcess.execFile;
   const platform = opts.platform || process.platform;
   const bin = opts.bin || 'higgsfield';
+  const fsp = opts.fsPromises || fs.promises;
+  const tmpRoot = opts.tmpDir || os.tmpdir();
+  const log = opts.log || (() => {});
 
   /** Runs the CLI (in `cwd` when given); the prompt is written to stdin. Resolves the parsed JSON answer. */
   function run(args, prompt, timeoutMs, cwd) {
@@ -435,7 +459,7 @@ function createHiggsfieldCli(opts = {}) {
         maxBuffer: MAX_CLI_OUTPUT_BYTES,
         windowsHide: true,
         shell: platform === 'win32',
-        env: opts.env || process.env,
+        env: cliEnv(opts.env || process.env),
         ...(cwd ? { cwd } : {}),
       }, (err, stdout, stderr) => {
         if (err) {
@@ -476,12 +500,24 @@ function createHiggsfieldCli(opts = {}) {
   }
 
   /** Uploads one checked repo-relative image, run in the repo folder; resolves its upload id. */
-  async function upload(rel) {
-    if (typeof opts.cwd !== 'string' || !opts.cwd) throw new Error('higgsfield upload: no repo folder to upload from');
-    if (typeof rel !== 'string' || rel.length > MAX_CLI_PATH_CHARS || !CLI_REPO_PATH_RE.test(rel) || rel.split('/').includes('..')) throw new Error('higgsfield upload: the path is not a plain repo-relative path');
-    const id = uploadIdOf(await run(['upload', 'create', rel, '--json'], '', UPLOAD_TIMEOUT_MS, opts.cwd));
-    if (!id) throw new Error('higgsfield upload answered no upload id');
-    return { id };
+  async function upload(file) {
+    const f = isObj(file) ? file : {};
+    if (typeof f.name !== 'string' || !UPLOAD_NAME_RE.test(f.name)) throw new Error('higgsfield upload: the file name is not a plain reference name');
+    if (!Buffer.isBuffer(f.data) || !f.data.length || f.data.length > MAX_UPLOAD_BYTES) throw new Error('higgsfield upload: no image bytes, or too many');
+    // A fresh private folder: nothing in it but the checked bytes, never the worker's worktree.
+    const dir = await fsp.mkdtemp(path.join(tmpRoot, UPLOAD_TMP_PREFIX));
+    try {
+      await fsp.writeFile(path.join(dir, f.name), f.data, { flag: 'wx' });
+      const id = uploadIdOf(await run(['upload', 'create', f.name, '--json'], '', UPLOAD_TIMEOUT_MS, dir));
+      if (!id) throw new Error('higgsfield upload answered no upload id');
+      return { id };
+    } finally {
+      try {
+        await fsp.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch (err) {
+        log(`[lunaswork-assets] reference upload folder not removed: ${oneLine(errText(err), 200)}`);
+      }
+    }
   }
 
   return { estimate, generate, upload };
@@ -671,7 +707,7 @@ function createAssetToolsFor(deps) {
         usdPerCredit: cfg.higgsfieldUsdPerCredit,
         comfy: createComfyClient({ port: cfg.comfyuiPort, fetch: deps.fetch }),
         blender: createBlenderClient({ port: cfg.blenderPort, net: deps.net }),
-        higgsfield: createHiggsfieldCli({ execFile: deps.execFile, platform: deps.platform, env: deps.env ? deps.env() : undefined, cwd: ctx.repoPath }),
+        higgsfield: createHiggsfieldCli({ execFile: deps.execFile, platform: deps.platform, env: deps.env ? deps.env() : undefined, log }),
         download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
         unity: createPipelineClient({ projectDir: ctx.repoPath, fetch: deps.fetch }),
         recordSpend: ctx.recordSpend,

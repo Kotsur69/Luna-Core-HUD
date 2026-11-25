@@ -94,8 +94,10 @@ function pipeline(dir, blender = fakeBlender(), { runLog = [], extra = {} } = {}
   return { p, logged, blender, unity };
 }
 
-/** The asset log entry luna_asset_higgsfield leaves for a saved result. */
-const madeEntry = (saved) => ({ tool: 'higgsfield', kind: 'prop', name: 'Crate', path: saved.rel, sources: [saved.record], imported: false });
+const sha256 = (data) => require('crypto').createHash('sha256').update(data).digest('hex');
+
+/** The asset log entry luna_asset_higgsfield leaves for a saved result (with the sha256 of the bytes it saved). */
+const madeEntry = (saved, data = PNG) => ({ tool: 'higgsfield', kind: 'prop', name: 'Crate', path: saved.rel, sources: [saved.record], imported: false, sha256: sha256(data) });
 
 function idx(code, needle) {
   const at = code.indexOf(needle);
@@ -167,8 +169,12 @@ test('from with a forged record (no luna_asset_higgsfield entry in this run): th
 test('from: a log entry of another file, another record, another run or an unsaved result never proves a record', () => {
   const saved = { rel: `${ART}/Props/crate.png`, record: 'art/higgsfield/prop/crate.json' };
   const ok = madeEntry(saved);
-  const claim = { path: saved.rel, record: saved.record };
+  const claim = { path: saved.rel, record: saved.record, sha256: sha256(PNG) };
   assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'r', claim), true);
+  // The bytes count, not only the path: an overwritten result, or an entry without a hash, proves nothing.
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'r', { ...claim, sha256: sha256(JPG) }), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [{ ...ok, sha256: undefined }] }, 'r', claim), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'r', { ...claim, sha256: undefined }), false);
   assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'other', claim), false);
   assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [{ ...ok, path: `${ART}/Props/barrel.png` }] }, 'r', claim), false);
   assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [{ ...ok, sources: ['art/higgsfield/prop/barrel.json'] }] }, 'r', claim), false);
@@ -177,6 +183,19 @@ test('from: a log entry of another file, another record, another run or an unsav
   for (const junk of [null, 'x', { runId: 'r' }, { runId: 'r', entries: 'nope' }]) assert.equal(F.runHiggsfieldMade(junk, 'r', claim), false);
   assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'r', { path: saved.rel }), false);
   assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, null, claim), false);
+});
+
+test('from: a genuine result overwritten after it was logged reads as a claimed record', async () => {
+  const dir = tempDir('lw-from-swapped-');
+  const saved = savedHiggsfield(dir);
+  const entry = madeEntry(saved);
+  // The worker swaps in its own image under the logged path.
+  put(dir, saved.rel, Buffer.concat([PNG, Buffer.from('other bytes')]));
+  const { p } = pipeline(dir, fakeBlender(), { runLog: [entry] });
+  const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: saved.rel });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.from.recordProven, false);
+  assert.match(res.note, /claimed Higgsfield record/);
 });
 
 test('from: a provenance reader that throws, or none at all, leaves the record claimed', async () => {

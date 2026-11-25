@@ -767,7 +767,8 @@ test('luna_asset_blender from: the record is proven only by a higgsfield entry o
     assert.match(forged.ledger, /\| Crate \| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \|/);
 
     // Genuine: luna_asset_higgsfield logged it in this run; the run record survives a restart.
-    assert.equal(run.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Crate', prompt: 'toon crate', path: rel, sources: [record], costUsd: 0.2 }), true);
+    const sha256 = require('crypto').createHash('sha256').update(PNG_BYTES).digest('hex');
+    assert.equal(run.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Crate', prompt: 'toon crate', path: rel, sources: [record], costUsd: 0.2, sha256 }), true);
     run.restart();
     const genuine = await blenderFrom(run, 'lw-p');
     assert.equal(genuine.payload.from.recordProven, true);
@@ -777,7 +778,7 @@ test('luna_asset_blender from: the record is proven only by a higgsfield entry o
     // The same entry under another run id, an unsaved entry, or an unreadable record proves nothing.
     assert.equal((await blenderFrom(run, 'lw-other')).payload.from.recordProven, false);
     const unsaved = fakeRun('lw-u');
-    unsaved.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Crate', prompt: 'x', path: rel, sources: [record], unsaved: true });
+    unsaved.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Crate', prompt: 'x', path: rel, sources: [record], unsaved: true, sha256 });
     assert.deepEqual(unsaved.higgsfieldResults().entries, []);
     assert.equal((await blenderFrom(unsaved, 'lw-u')).payload.from.recordProven, false);
     const throwing = { ...run, higgsfieldResults: () => { throw new Error('run file gone'); } };

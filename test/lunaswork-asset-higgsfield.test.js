@@ -54,7 +54,7 @@ function fakeHiggsfield({ credits = 2, result = 'https://cdn.example.test/out.pn
   const queue = [...ids];
   return {
     calls,
-    upload: async (rel) => { calls.push(['upload', rel]); return { id: queue.shift() }; },
+    upload: async (file) => { calls.push(['upload', file.name, file.data]); return { id: queue.shift() }; },
     estimate: async (req) => { calls.push(['estimate', req]); return { credits }; },
     generate: async (req) => { calls.push(['generate', req]); return { jobId: 'job_3d', urls: [result], seed: 7 }; },
   };
@@ -168,7 +168,7 @@ test('reference images: checked, uploaded in order, then estimate (booked) and g
   const higgsfield = fakeHiggsfield({ result: 'https://cdn.example.test/crate.glb' });
   const order = [];
   const { p, spends, unity } = pipeline(dir, {
-    higgsfield: { ...higgsfield, estimate: async (r) => { order.push('estimate'); return higgsfield.estimate(r); }, upload: async (rel) => { order.push('upload'); return higgsfield.upload(rel); }, generate: async (r) => { order.push('generate'); return higgsfield.generate(r); } },
+    higgsfield: { ...higgsfield, estimate: async (r) => { order.push('estimate'); return higgsfield.estimate(r); }, upload: async (f) => { order.push('upload'); return higgsfield.upload(f); }, generate: async (r) => { order.push('generate'); return higgsfield.generate(r); } },
     recordSpend: (x) => { order.push('book'); spends.push(x); return { ok: true, reason: null }; },
     download: async () => GLB,
   });
@@ -176,7 +176,8 @@ test('reference images: checked, uploaded in order, then estimate (booked) and g
   const res = await p.higgsfieldFinal({ name: 'Crate', kind: 'prop', prompt: 'toon crate', model: 'multi_image_to_3d', images, params: { should_texture: 'true' } });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(order, ['upload', 'upload', 'estimate', 'book', 'generate']);
-  assert.deepEqual(higgsfield.calls.filter((c) => c[0] === 'upload').map((c) => c[1]), images);
+  // The CLI gets the checked bytes under a fixed name, never a repo path.
+  assert.deepEqual(higgsfield.calls.filter((c) => c[0] === 'upload').map((c) => [c[1], c[2]]), [['reference-1.png', PNG], ['reference-2.jpg', JPG]]);
   const want = { model: 'multi_image_to_3d', prompt: 'toon crate', params: { should_texture: 'true' }, images: [UPLOAD_A, UPLOAD_B] };
   assert.deepEqual(higgsfield.calls.find((c) => c[0] === 'estimate')[1], want);
   assert.deepEqual(higgsfield.calls.find((c) => c[0] === 'generate')[1], want);
@@ -268,6 +269,56 @@ test('a failed or id-less upload fails the call with nothing booked; an adapter 
   assert.equal((await c.p.higgsfieldFinal({ ...args, images: undefined, forBlender: true })).ok, true);
 });
 
+test('a second upload that fails after a first success books nothing; a cap or a judge pass stops before any upload', async () => {
+  const dir = tempRepo();
+  put(dir, 'art/refs/a.png', PNG);
+  put(dir, 'art/refs/b.png', PNG);
+  const args = { name: 'Crate', kind: 'prop', prompt: 'x', model: 'multi_image_to_3d', images: ['art/refs/a.png', 'art/refs/b.png'] };
+  const second = fakeHiggsfield();
+  let n = 0;
+  const first = second.upload;
+  second.upload = async (f) => { n += 1; if (n === 2) throw new Error('network down'); return first(f); };
+  const a = pipeline(dir, { higgsfield: second });
+  const res = await a.p.higgsfieldFinal(args);
+  assert.match(res.detail, /reference upload of art\/refs\/b\.png failed \(nothing was booked\)/);
+  assert.deepEqual([second.calls.map((c) => c[0]), a.spends], [['upload'], []]);
+
+  for (const extra of [{ cappedTools: () => ['higgsfield'] }, { freeCandidatePassed: () => true }]) {
+    const h = fakeHiggsfield();
+    const b = pipeline(dir, { higgsfield: h, ...extra });
+    const out = await b.p.higgsfieldFinal(args);
+    assert.ok(['capReached', 'freeCandidatePassed'].includes(out.error), JSON.stringify(out));
+    assert.deepEqual([h.calls, b.spends], [[], []]);
+  }
+});
+
+test('a refused booking stops later calls of the same pipeline before any upload or estimate', async () => {
+  const dir = tempRepo();
+  put(dir, 'art/refs/a.png', PNG);
+  const h = fakeHiggsfield();
+  const { p } = pipeline(dir, { higgsfield: h, recordSpend: () => ({ ok: false, reason: 'capReached' }) });
+  const args = { name: 'Crate', kind: 'prop', prompt: 'x', model: 'multi_image_to_3d', images: ['art/refs/a.png'] };
+  assert.equal((await p.higgsfieldFinal(args)).error, 'capReached');
+  const before = h.calls.length;
+  assert.equal((await p.higgsfieldFinal(args)).error, 'capReached');
+  assert.equal(h.calls.length, before, 'no upload, no estimate after the refusal');
+});
+
+test('a set of results: only the GLBs of a 3D kind go to Blender, the images are imported, the note names only the GLBs', async () => {
+  const urls = ['https://cdn.example.test/a.glb', 'https://cdn.example.test/b.png'];
+  const h = { estimate: async () => ({ credits: 1 }), generate: async () => ({ jobId: 'j', urls }) };
+  const { p, unity, logged } = pipeline(tempRepo(), { higgsfield: h, download: async (u) => (u.endsWith('.glb') ? GLB : PNG) });
+  const res = await p.higgsfieldFinal({ name: 'Crate', kind: 'prop', prompt: 'x', model: 'm' });
+  assert.deepEqual(res.files, [`${ART}/Props/crate-1.glb`, `${ART}/Props/crate-2.png`]);
+  assert.deepEqual(res.forBlender, [`${ART}/Props/crate-1.glb`]);
+  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', `${ART}/Props/crate-2.png`]]);
+  assert.match(res.note, /from: "Assets\/BladeBullet\/Art\/Props\/crate-1\.glb"/);
+  assert.doesNotMatch(res.note, /crate-2\.png"/);
+  assert.deepEqual(logged.map((e) => e.imported), [false, true]);
+  // Each logged result carries the sha256 of the bytes saved (luna_asset_blender's provenance check).
+  assert.ok(logged.every((e) => /^[0-9a-f]{64}$/.test(e.sha256)));
+});
+
 test('reference images never travel as params', () => {
   for (const key of ['image', 'images', 'image_references', 'start_image', 'end_image', 'video', 'audio']) {
     assert.equal(P.cleanParams({ [key]: 'abc' }), null, key);
@@ -306,36 +357,56 @@ function fakeExec(answers) {
   return { execFile, calls };
 }
 
-test('Higgsfield CLI: upload create <repo path> --json runs in the repo folder; cost and create get a repeated --image', async () => {
+test('Higgsfield CLI: the checked bytes are uploaded from a fresh private folder that is removed after; cost and create get a repeated --image', async () => {
+  const tmpDir = tempRepo();
+  const seen = [];
   const fake = fakeExec({ upload: { id: UPLOAD_A }, cost: { credits: 5 }, create: [{ id: 'job_3d', status: 'completed', results: [{ raw_url: 'https://cdn.example.test/m.glb' }] }] });
-  const repo = path.join(os.tmpdir(), 'a repo & more');
-  const cli = T.createHiggsfieldCli({ execFile: fake.execFile, platform: 'win32', cwd: repo });
-  assert.deepEqual(await cli.upload('art/refs/crate-front.png'), { id: UPLOAD_A });
-  assert.deepEqual(fake.calls[0].args, ['upload', 'create', 'art/refs/crate-front.png', '--json']);
-  assert.equal(fake.calls[0].opts.cwd, repo, 'the repo path is the working folder, never an argument');
-  assert.ok(!fake.calls[0].args.some((a) => a.includes(repo)));
+  const execFile = (bin, args, opts, cb) => {
+    // What the CLI would find in its working folder at the moment it runs.
+    if (args[0] === 'upload') seen.push({ cwd: opts.cwd, files: fs.readdirSync(opts.cwd), data: fs.readFileSync(path.join(opts.cwd, args[2])) });
+    return fake.execFile(bin, args, opts, cb);
+  };
+  const cli = T.createHiggsfieldCli({ execFile, platform: 'win32', tmpDir, env: { PATH: 'x', nodefaultcurrentdirectoryinexepath: '' } });
+  assert.deepEqual(await cli.upload({ name: 'reference-1.png', data: PNG }), { id: UPLOAD_A });
+  assert.deepEqual(fake.calls[0].args, ['upload', 'create', 'reference-1.png', '--json']);
+  assert.equal(path.dirname(seen[0].cwd), tmpDir);
+  assert.match(path.basename(seen[0].cwd), /^luna-hf-ref-/);
+  assert.deepEqual(seen[0].files, ['reference-1.png'], 'nothing in the folder but the checked image');
+  assert.deepEqual(seen[0].data, PNG);
+  assert.equal(fs.existsSync(seen[0].cwd), false, 'the private folder is removed after the upload');
+  // cmd.exe never runs a higgsfield found in the working folder; another spelling of the key cannot override it.
+  assert.equal(fake.calls[0].opts.env.NoDefaultCurrentDirectoryInExePath, '1');
+  assert.equal(fake.calls[0].opts.env.nodefaultcurrentdirectoryinexepath, undefined);
+  assert.equal(fake.calls[0].opts.env.PATH, 'x');
   const req = { model: 'multi_image_to_3d', prompt: 'toon crate', params: { should_texture: 'true' }, images: [UPLOAD_A, UPLOAD_B] };
   assert.deepEqual(await cli.estimate(req), { credits: 5 });
   await cli.generate(req);
   assert.deepEqual(fake.calls[1].args, ['generate', 'cost', 'multi_image_to_3d', '--should_texture', 'true', '--image', UPLOAD_A, '--image', UPLOAD_B, '--json']);
   assert.deepEqual(fake.calls[2].args, ['generate', 'create', 'multi_image_to_3d', '--should_texture', 'true', '--image', UPLOAD_A, '--image', UPLOAD_B, '--wait', '--wait-timeout', '20m', '--json']);
   assert.equal(fake.calls[1].opts.cwd, undefined);
+  assert.equal(fake.calls[1].opts.env.NoDefaultCurrentDirectoryInExePath, '1');
 });
 
-test('Higgsfield CLI: an unsafe upload path or image id never reaches the CLI', async () => {
+test('Higgsfield CLI: an unsafe upload name, missing bytes or an unsafe image id never reaches the CLI', async () => {
+  const tmpDir = tempRepo();
   const fake = fakeExec({ upload: { id: UPLOAD_A }, cost: { credits: 1 } });
-  const cli = T.createHiggsfieldCli({ execFile: fake.execFile, platform: 'win32', cwd: os.tmpdir() });
-  for (const bad of ['../x.png', 'art/../x.png', '-h', 'art/-x.png', 'art/a b.png', 'art/a&calc.png', 'C:/x.png', '/etc/x.png', 'art\\x.png', '', 'a'.repeat(301)]) {
-    await assert.rejects(cli.upload(bad), /not a plain repo-relative path/, bad);
+  const cli = T.createHiggsfieldCli({ execFile: fake.execFile, platform: 'win32', tmpDir });
+  for (const name of ['../x.png', 'art/x.png', '-h', 'reference-1.png & calc', 'reference-1.gif', 'x.png', 'reference-0.png', '', 42]) {
+    await assert.rejects(cli.upload({ name, data: PNG }), /not a plain reference name/, String(name));
   }
-  await assert.rejects(T.createHiggsfieldCli({ execFile: fake.execFile }).upload('art/x.png'), /no repo folder/);
+  for (const data of [undefined, 'text', Buffer.alloc(0), Buffer.alloc(30 * 1024 * 1024 + 1)]) {
+    await assert.rejects(cli.upload({ name: 'reference-1.png', data }), /no image bytes/);
+  }
+  assert.deepEqual(fs.readdirSync(tmpDir), [], 'no folder was made for a refused upload');
   const req = { model: 'm', prompt: 'p', params: {} };
   await assert.rejects(cli.estimate({ ...req, images: ['--output'] }), /reference image id is not a plain token/);
   await assert.rejects(cli.estimate({ ...req, images: ['a & calc'] }), /reference image id is not a plain token/);
   await assert.rejects(cli.estimate({ ...req, images: [UPLOAD_A, UPLOAD_A, UPLOAD_A, UPLOAD_A, UPLOAD_A] }), /reference image id/);
   assert.equal(fake.calls.length, 0);
-  const failing = T.createHiggsfieldCli({ execFile: fakeExec({ upload: new Error('No workspace selected.') }).execFile, cwd: os.tmpdir() });
-  await assert.rejects(failing.upload('art/x.png'), /higgsfield upload failed: No workspace selected\./);
-  const noId = T.createHiggsfieldCli({ execFile: fakeExec({ upload: { url: 'https://x' } }).execFile, cwd: os.tmpdir() });
-  await assert.rejects(noId.upload('art/x.png'), /answered no upload id/);
+  // A failed or id-less upload still removes its private folder.
+  const failing = T.createHiggsfieldCli({ execFile: fakeExec({ upload: new Error('No workspace selected.') }).execFile, tmpDir });
+  await assert.rejects(failing.upload({ name: 'reference-1.png', data: PNG }), /higgsfield upload failed: No workspace selected\./);
+  const noId = T.createHiggsfieldCli({ execFile: fakeExec({ upload: { url: 'https://x' } }).execFile, tmpDir });
+  await assert.rejects(noId.upload({ name: 'reference-1.png', data: PNG }), /answered no upload id/);
+  assert.deepEqual(fs.readdirSync(tmpDir), []);
 });

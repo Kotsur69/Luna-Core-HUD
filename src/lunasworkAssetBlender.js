@@ -99,7 +99,7 @@ function createBlenderModel(deps) {
   function provenRecord(from) {
     if (!from || !from.record || typeof deps.higgsfieldMade !== 'function') return false;
     try {
-      return deps.higgsfieldMade({ path: from.rel, record: from.record }) === true;
+      return deps.higgsfieldMade({ path: from.rel, record: from.record, sha256: from.sha256 }) === true;
     } catch {
       // An unreadable run log proves nothing: the record stays "claimed".
       return false;

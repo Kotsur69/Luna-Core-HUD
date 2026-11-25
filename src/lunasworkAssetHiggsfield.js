@@ -26,6 +26,7 @@
 'use strict';
 
 const path = require('path');
+const crypto = require('crypto');
 const comfyLib = require('./lunasworkComfy');
 const refs = require('./lunasworkHiggsfieldRefs');
 
@@ -59,6 +60,8 @@ const fail = (error, detail) => ({ ok: false, error, ...(detail ? { detail: oneL
 const resultStem = (stem, i, n) => (n > 1 ? `${stem}-${i + 1}` : stem);
 
 const recordText = (record) => `${JSON.stringify(record, null, 2)}\n`;
+
+const sha256Of = (data) => crypto.createHash('sha256').update(data).digest('hex');
 
 /** A result URL as a source record keeps it: origin + path, no query (a signed URL's token stays out of git). */
 function recordUrl(raw) {
@@ -96,8 +99,10 @@ function resultExt(buf) {
  * @param {{d:object, usdPerCredit:number, cleanJob:(raw:object)=>object, modelKinds:string[], artRoot:string, repoPath:string,
  *   recordOf:(kind:string, stem:string)=>string, fileOf:(kind:string, stem:string, ext:string)=>string,
  *   files:{write:(rel:string, data:Buffer|string)=>string, guard:(rel:string)=>string, freeStem:(base:string, relsFor:Function)=>string},
- *   ledgerGenerated:Function, importToUnity:Function, importNote:Function, log:(entry:object)=>boolean, ledgerFile:string}} deps
- *   d = the pipeline's deps (higgsfield {estimate, generate, upload?}, download, recordSpend, cappedTools, freeCandidatePassed)
+ *   ledgerGenerated:Function, importToUnity:Function, importNote:Function, log:(entry:object)=>boolean, ledgerFile:string,
+ *   fsImpl?:object}} deps
+ *   d = the pipeline's deps (higgsfield {estimate, generate, upload?}, download, recordSpend, cappedTools, freeCandidatePassed);
+ *   fsImpl = the pipeline's fs, for the reference image checks
  * @returns {(raw:object)=>Promise<object>} higgsfieldFinal
  */
 function createHiggsfieldFinal(deps) {
@@ -120,10 +125,10 @@ function createHiggsfieldFinal(deps) {
     if (typeof r.model !== 'string' || !MODEL_ID_RE.test(r.model)) return fail('badModel', 'model must be a Higgsfield model id such as gpt_image_2_6');
     const params = cleanParams(r.params);
     if (!params) return fail('badParams', `params: at most ${MAX_PARAMS} plain key/value flags, each value starting with a letter or digit (reference images go in images)`);
+    if (!job.prompt) return fail('badPrompt', 'a Higgsfield final needs a prompt');
     if (r.forBlender !== undefined && r.forBlender !== null && typeof r.forBlender !== 'boolean') return fail('badForBlender', 'forBlender must be true or false');
     const images = refs.cleanReferences(r.images, { artRoot: deps.artRoot });
     if (!images.ok) return images;
-    if (!job.prompt) return fail('badPrompt', 'a Higgsfield final needs a prompt');
     const forBlender = typeof r.forBlender === 'boolean' ? r.forBlender : null;
     return { ok: true, job, forBlender, references: images.rels, request: { model: r.model, prompt: job.prompt, params } };
   }
@@ -131,9 +136,9 @@ function createHiggsfieldFinal(deps) {
   /** The reference images checked on disk and uploaded; their upload ids go into the request. Nothing is booked yet. */
   async function withReferences(req) {
     if (!req.references.length) return req;
-    const checked = refs.resolveReferences(req.references, { repoPath: deps.repoPath, files });
+    const checked = refs.resolveReferences(req.references, { repoPath: deps.repoPath, fsImpl: deps.fsImpl, files });
     if (!checked.ok) return checked;
-    const up = await refs.uploadReferences(d.higgsfield.upload, req.references);
+    const up = await refs.uploadReferences(d.higgsfield.upload, checked.files);
     return up.ok ? { ...req, request: { ...req.request, images: up.ids } } : up;
   }
 
@@ -199,8 +204,12 @@ function createHiggsfieldFinal(deps) {
     return `Not imported into Unity (no prefab, no material): this result is a Blender input. Pass it on with ${calls} for the toon pass, decimation and the FBX + prefab export.`;
   }
 
-  /** Ledger -> Unity import (unless the file goes to Blender) -> asset log. */
-  async function finishSaved(req, paid, gen, record, saved, notes) {
+  /**
+   * Ledger -> Unity import (unless the file goes to Blender) -> asset log.
+   * Each entry carries the sha256 of the bytes saved, so luna_asset_blender's
+   * provenance check binds the record to the file's content, not only its path.
+   */
+  async function finishSaved(req, paid, gen, record, saved, hashes, notes) {
     const { job } = req;
     const ledgerNote = await deps.ledgerGenerated('Higgsfield', job, saved, record);
     if (ledgerNote) notes.push(ledgerNote);
@@ -214,7 +223,7 @@ function createHiggsfieldFinal(deps) {
     }
     // The cost is booked once; it is logged on the first file of the generation.
     for (const [i, rel] of saved.entries()) {
-      deps.log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: gen.seed, costUsd: i === 0 ? paid.costUsd : 0, credits: i === 0 ? paid.credits : 0, path: rel, sources: [record], imported: imported.get(rel) === true });
+      deps.log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: gen.seed, costUsd: i === 0 ? paid.costUsd : 0, credits: i === 0 ? paid.credits : 0, path: rel, sources: [record], imported: imported.get(rel) === true, sha256: hashes[i] });
     }
     const failed = imports.find((imp) => !imp.ok);
     if (failed) notes.push(deps.importNote(failed));
@@ -241,6 +250,7 @@ function createHiggsfieldFinal(deps) {
       credits: paid.credits, costUsd: paid.costUsd, urls: gen.urls.map(recordUrl).filter(Boolean), status: 'generated', outputs: [],
     };
     const saved = [];
+    const hashes = [];
     let record = null;
     try {
       const stem = files.freeStem(job.slug, (s) => [deps.recordOf(job.kind, s), ...gen.urls.flatMap((_, i) => RESULT_EXTS.map((ext) => fileOf(s, i, ext)))]);
@@ -248,7 +258,10 @@ function createHiggsfieldFinal(deps) {
       // Every result is fetched and checked before the first asset file is written.
       const results = [];
       for (const url of gen.urls) results.push(await fetchResult(url));
-      for (const [i, r] of results.entries()) saved.push(files.write(fileOf(stem, i, r.ext), r.data));
+      for (const [i, r] of results.entries()) {
+        saved.push(files.write(fileOf(stem, i, r.ext), r.data));
+        hashes.push(sha256Of(r.data));
+      }
     } catch (err) {
       const where = record ? ` and in ${record}` : '';
       const what = saved.length ? `only partially saved (${saved.length} of ${n} files)` : 'not saved';
@@ -260,7 +273,7 @@ function createHiggsfieldFinal(deps) {
     } catch (err) {
       notes.push(`the files are saved, but ${record} could not be updated: ${oneLine(errText(err), MAX_NOTE_CHARS)}`);
     }
-    return finishSaved(req, paid, gen, record, saved, notes);
+    return finishSaved(req, paid, gen, record, saved, hashes, notes);
   }
 
   /** Validate -> references -> estimate + book against the cap -> generate -> save (saveHiggsfield). */
@@ -292,4 +305,4 @@ function createHiggsfieldFinal(deps) {
   return higgsfieldFinal;
 }
 
-module.exports = { MAX_USD_PER_CREDIT, RESULT_EXTS, resultStem, recordText, cleanParams, resultExt, createHiggsfieldFinal };
+module.exports = { MAX_USD_PER_CREDIT, resultStem, recordText, cleanParams, createHiggsfieldFinal };
