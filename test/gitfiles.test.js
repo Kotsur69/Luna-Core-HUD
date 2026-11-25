@@ -12,7 +12,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const { parseChangedPaths, parseNumstat, readUntrackedLineCount, pathInsideCwd } = require('../src/gitfiles.js');
+const { parseChangedPaths, parseNumstat, readUntrackedLineCount, pathInsideCwd, realPathInsideCwd } = require('../src/gitfiles.js');
+const fs = require('node:fs');
+const os = require('node:os');
 
 const NUL = '\0';
 
@@ -134,4 +136,88 @@ test('pathInsideCwd rejects empty or missing arguments', () => {
   assert.equal(pathInsideCwd(CWD, ''), null);
   assert.equal(pathInsideCwd(CWD, undefined), null);
   assert.equal(pathInsideCwd(undefined, 'x'), null);
+});
+
+// ---- realPathInsideCwd (symlink-aware half of the files:diff guard) ----------
+// pathInsideCwd() is lexical, so a symlink inside the repo that points outside
+// passes it. These run against a real temp dir; a symlink that cannot be made
+// (Windows without developer mode: EPERM) skips its test instead of failing.
+
+/** A temp repo dir and a sibling "outside" dir holding secret.txt; removed after the test. */
+function makeSandbox(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lunacore-realpath-'));
+  const repo = path.join(root, 'repo');
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(repo, 'src', 'main.js'), 'x');
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret');
+  const links = [];
+  t.after(async () => {
+    // Links first: a recursive remove must never walk through one into its target.
+    for (const link of links) fs.rmSync(link, { force: true, recursive: false });
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  /** Makes a link, or returns false (and skips the test) when this system cannot. */
+  const link = (target, at, type) => {
+    try {
+      fs.symlinkSync(target, at, type);
+    } catch (err) {
+      if (err.code !== 'EPERM' && err.code !== 'EACCES') throw err;
+      t.skip(`cannot create a symlink here (${err.code})`);
+      return false;
+    }
+    links.push(at);
+    return true;
+  };
+  return { repo, outside, link };
+}
+
+test('realPathInsideCwd accepts a real file inside cwd', async (t) => {
+  const { repo } = makeSandbox(t);
+  assert.equal(await realPathInsideCwd(repo, 'src/main.js'), true);
+  assert.equal(await realPathInsideCwd(repo, path.join(repo, 'src', 'main.js')), true);
+});
+
+test('realPathInsideCwd still accepts a deleted file inside cwd (it diffs against HEAD)', async (t) => {
+  const { repo } = makeSandbox(t);
+  fs.rmSync(path.join(repo, 'src', 'main.js'));
+  assert.equal(await realPathInsideCwd(repo, 'src/main.js'), true);
+  assert.equal(await realPathInsideCwd(repo, 'gone/dir/file.js'), true, 'a deleted folder too');
+});
+
+test('realPathInsideCwd keeps refusing what the lexical check refuses', async (t) => {
+  const { repo } = makeSandbox(t);
+  assert.equal(await realPathInsideCwd(repo, '../outside/secret.txt'), false);
+  assert.equal(await realPathInsideCwd(repo, '.'), false);
+  assert.equal(await realPathInsideCwd(repo, ''), false);
+});
+
+test('realPathInsideCwd refuses a file symlink inside cwd that points outside', async (t) => {
+  const { repo, outside, link } = makeSandbox(t);
+  if (!link(path.join(outside, 'secret.txt'), path.join(repo, 'leak.txt'), 'file')) return;
+  assert.equal(pathInsideCwd(repo, 'leak.txt'), 'leak.txt', 'the lexical check alone lets it through');
+  assert.equal(await realPathInsideCwd(repo, 'leak.txt'), false);
+});
+
+test('realPathInsideCwd refuses a path through a linked folder that points outside, existing or not', async (t) => {
+  const { repo, outside, link } = makeSandbox(t);
+  // A junction needs no privilege on Windows; elsewhere the type is ignored.
+  if (!link(outside, path.join(repo, 'linked'), 'junction')) return;
+  assert.equal(await realPathInsideCwd(repo, 'linked/secret.txt'), false);
+  assert.equal(await realPathInsideCwd(repo, 'linked/missing.txt'), false, 'judged by its nearest existing folder');
+});
+
+test('realPathInsideCwd accepts a symlink that stays inside cwd', async (t) => {
+  const { repo, link } = makeSandbox(t);
+  if (!link(path.join(repo, 'src', 'main.js'), path.join(repo, 'alias.js'), 'file')) return;
+  assert.equal(await realPathInsideCwd(repo, 'alias.js'), true);
+});
+
+test('realPathInsideCwd refuses a path through a link whose target does not exist yet', async (t) => {
+  const { repo, outside, link } = makeSandbox(t);
+  // The target could be created between the check and git's read.
+  if (!link(path.join(outside, 'not-yet'), path.join(repo, 'dangling'), 'junction')) return;
+  assert.equal(await realPathInsideCwd(repo, 'dangling/file.txt'), false);
+  assert.equal(await realPathInsideCwd(repo, 'dangling'), false);
 });

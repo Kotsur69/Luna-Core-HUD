@@ -2013,6 +2013,9 @@ function createLunasWork(deps) {
     // Asset pipeline (src/lunasworkAssetPipeline.js): one made asset for the run report.
     recordAsset: (entry) => toolGuard.recordAsset(entry),
     cappedTools: () => toolGuard.cappedTools(),
+    // The judge's verdicts in the run record ({runId, entries}): the Higgsfield cost guard reads them.
+    judgeVerdicts: () => toolGuard.judgeVerdicts(),
+    runId: () => (run ? run.id : null),
     status,
     subscribe,
     godModeBlock,
