@@ -30,7 +30,7 @@
 
 'use strict';
 
-const { agyFamilyByPoolKey } = require('./agyFamilies');
+const { agyFamilyByPoolKey } = require('./agyFamilies.mjs');
 const { normalizePool, poolKeyOf, runsOnOf, freeProfileIdOf, isPoolKey } = require('./workerPool');
 
 /** The windows a reading may name, and how the prompt says them. */

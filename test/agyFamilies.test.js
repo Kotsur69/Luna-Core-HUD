@@ -1,11 +1,11 @@
-// The agy model family registry (src/agyFamilies.js): one entry per family,
+// The agy model family registry (src/agyFamilies.mjs): one entry per family,
 // read by the worker pool, the planner prompt and the usage tile.
 
 'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fam = require('../src/agyFamilies.js');
+const fam = require('../src/agyFamilies.mjs');
 const pool = require('../src/workerPool.js');
 
 test('families come strongest first, with unique families, pool keys and ranks', () => {

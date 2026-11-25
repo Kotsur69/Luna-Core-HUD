@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // The hybrid guard (src/orchestraHybridGuard.js) keeps risky work off free
 // models. The same rules guard the EASIEST agy tier (Hydrogen today; the tier
-// comes from src/agyFamilies.js, never a hardcoded id): a package planned on
+// comes from src/agyFamilies.mjs, never a hardcoded id): a package planned on
 // it moves when it
 //   - lists more than 2 files, or none;
 //   - touches a protected path (entry point, preload, IPC, auth / secrets,
@@ -19,7 +19,7 @@
 
 'use strict';
 
-const { agyPoolKeysOfTier } = require('./agyFamilies');
+const { agyPoolKeysOfTier } = require('./agyFamilies.mjs');
 const { poolKeys } = require('./workerPool');
 const { concreteModel } = require('./orchestraPool');
 const { guardReasons, normalizeGuardReasons } = require('./orchestraHybridGuard');

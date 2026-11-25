@@ -25,7 +25,7 @@
 
 'use strict';
 
-const { agyOwnUsageFamilies } = require('./agyFamilies');
+const { agyOwnUsageFamilies } = require('./agyFamilies.mjs');
 
 const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
@@ -307,7 +307,7 @@ function agyWindowLabel(window) {
 
 /**
  * Model families with a quota of their own, named apart from "Gemini" (their
- * ids also say gemini): the ownUsageRow families of src/agyFamilies.js (Neon,
+ * ids also say gemini): the ownUsageRow families of src/agyFamilies.mjs (Neon,
  * Argon). Each is matched as a whole word on agyWords(), so a family whose
  * bucket agy does not report yet gets its own row the day it does.
  */
