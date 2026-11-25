@@ -1454,11 +1454,14 @@ function lunasworkAssetsFor(sessionId, session) {
   if (!cwd || !isUnityProject(cwd)) return null;
   return lunasworkAssetTools({
     repoPath: cwd,
+    // The project's own checkout: its design/ASSETS.md (not the worker's editable copy) names the assets the cost guard keys on.
+    castRepoPath: build.repoPath,
     // The run this tab works for: verdicts of any other run never count.
     runId: lunaswork.runId(),
     recordSpend: (payload) => lunaswork.recordSpend(payload),
     recordAsset: (entry) => lunaswork.recordAsset(entry),
     judgeVerdicts: () => lunaswork.judgeVerdicts(),
+    recordJudgeVerdict: (verdict) => lunaswork.recordJudgeVerdict(verdict),
     higgsfieldResults: () => lunaswork.higgsfieldResults(),
     cappedTools: () => lunaswork.cappedTools(),
   });
