@@ -28,12 +28,18 @@
 //   input      {steps} (tools.js send_input) -> {done:n}
 //               Pipeline passes steps as a JSON string (--steps <json>).
 //   screenshot  -> {png:<base64>, width, height}   (Game view, play mode only)
+//
+// A game without the driver (Pipeline only): the adapter reads once per
+// session whether the `playtest` group exists (unityBuiltin.js, no trial
+// call of a missing command) and then runs the same three actions on the
+// editor's built-in commands. playtestActions() picks the set by mode.
 // ============================================================================
 
 'use strict';
 
 const unityAnimation = require('./unityAnimation');
 const combatFeelLog = require('./combatFeelLog');
+const unityBuiltin = require('./unityBuiltin');
 
 const UNITY_MCP_TOOLS = Object.freeze({
   editor: 'manage_editor',
@@ -42,7 +48,7 @@ const UNITY_MCP_TOOLS = Object.freeze({
   custom: 'execute_custom_tool',
 });
 const DRIVER_TOOL = 'playtest_driver';
-const DRIVER_GROUP = 'playtest';
+const { DRIVER_GROUP, PLAYTEST_MODE } = unityBuiltin;
 const CONSOLE_COUNT = 100;
 const PIPELINE_CONSOLE_LEVEL = 'warning';
 
@@ -242,6 +248,26 @@ const UNITY_TRANSPORTS = Object.freeze({
   mcp: Object.freeze({ calls: UNITY_MCP, invoke: unityCall }),
 });
 
+/**
+ * The PlaytestDriver's three actions (state, input(steps), screenshot) for one
+ * session: the game's own `playtest` commands, or in builtin mode the editor's
+ * built-in Pipeline commands (unityBuiltin.js; Pipeline transport only).
+ * @param {{mode?:string, transport?:'pipeline'|'mcp', call:Function, sleep:Function}} opts
+ */
+function playtestActions({ mode = PLAYTEST_MODE.driver, transport = 'pipeline', call, sleep }) {
+  if (mode === PLAYTEST_MODE.builtin) {
+    if (transport !== 'pipeline') throw new Error('the built-in playtest commands need the Unity Pipeline transport');
+    return unityBuiltin.builtinActions(call, sleep);
+  }
+  if (mode !== PLAYTEST_MODE.driver) throw new Error(`unknown playtest mode '${String(mode)}'`);
+  const { calls } = UNITY_TRANSPORTS[transport];
+  return {
+    state: () => call(calls.driver('state')),
+    input: (steps) => call(calls.driver('input', { steps })),
+    screenshot: () => call(calls.driver('screenshot')),
+  };
+}
+
 // ---- animation frame sync (unityAnimation.js) ---------------------------------------
 // AttackStep frame data vs. AnimationClip: Pipeline only, for scene / asset
 // workers, never the Playtester (baking writes assets).
@@ -264,6 +290,11 @@ module.exports = {
   UNITY_TRANSPORTS,
   DRIVER_TOOL,
   DRIVER_GROUP,
+  DRIVER_COMMANDS: unityBuiltin.DRIVER_COMMANDS,
+  PLAYTEST_MODE,
+  UNITY_PIPELINE_BUILTIN: unityBuiltin.UNITY_PIPELINE_BUILTIN,
+  playtestModeOf: unityBuiltin.playtestModeOf,
+  playtestActions,
   resultText,
   unwrap,
   isPlaying,
