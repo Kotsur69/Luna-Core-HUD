@@ -173,7 +173,8 @@ const GAME_TEMPLATES = Object.freeze({
 <!-- The asset list: the single source of truth for every game asset. One row
      per asset; the asset step (src/lunasworkAssets.js) never generates a
      name or a spec hash twice and files one builder card per planned row.
-     Type: sprite, texture, model, material, animation, audio, ui, vfx, other.
+     Type: sprite, texture, model, material, animation, audio, ui, vfx, other,
+     character, prop, environment (3D, like model), concept, keyart (images).
      Source: generated (a generation API), blender (Blender MCP), library, or
      auto (or empty): the Director picks the source and model per asset.
      Status: leave "planned" (or empty) for new rows; the run moves it through
