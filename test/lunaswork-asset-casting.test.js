@@ -229,13 +229,13 @@ test('validateCasting rejects an unknown Higgsfield model, and one that does not
   const unknown = C.validateCasting({ casts: [{ name: 'Logo', primary: { source: 'higgsfield', higgsfieldModel: 'dall-e-9' }, fallbacks: [], candidates: 1, reason: 'x' }] }, ctx);
   assert.equal(unknown.plans.size, 0);
   assert.match(unknown.rejected[0].why, /unknown Higgsfield model "dall-e-9"/);
-  const wrongKind = C.validateCasting({ casts: [{ name: 'Logo', primary: { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }, fallbacks: [], candidates: 1, reason: 'x' }] }, ctx);
+  const wrongKind = C.validateCasting({ casts: [{ name: 'Logo', primary: { source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }, fallbacks: [], candidates: 1, reason: 'x' }] }, ctx);
   assert.match(wrongKind.rejected[0].why, /does not make ui/);
 });
 
 test('higgsfield as the primary is rejected whenever a free or local option exists, whatever the reason says', () => {
   const rows = [{ name: 'Crate', type: 'model' }];
-  const cast = (reason) => ({ casts: [{ name: 'Crate', primary: { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }, fallbacks: [], candidates: 1, reason }] });
+  const cast = (reason) => ({ casts: [{ name: 'Crate', primary: { source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }, fallbacks: [], candidates: 1, reason }] });
   for (const reason of [
     '',
     'looks great',
@@ -257,7 +257,7 @@ test('higgsfield as the primary passes when no free or local option exists for t
   assert.equal(ui.plans.get('Logo').costClass, 'paid');
   // The same row with a ComfyUI workflow present: a local option exists, the paid primary is rejected.
   assert.equal(C.validateCasting(hf('Logo', 'gpt_image_2_6'), ctxFor([{ name: 'Logo', type: 'ui' }])).plans.size, 0);
-  const concept = C.validateCasting(hf('Art', 'soul'), ctxFor([{ name: 'Art', type: 'concept' }], { workflows: [] }));
+  const concept = C.validateCasting(hf('Art', 'text2image_soul_v2'), ctxFor([{ name: 'Art', type: 'concept' }], { workflows: [] }));
   assert.equal(concept.plans.get('Art').primary.source, 'higgsfield');
 });
 
@@ -271,8 +271,8 @@ test('an invalid primary promotes the cheapest valid fallback rung', () => {
       // keyed library (invalid), Blender, Higgsfield and polyhaven.
       {
         name: 'Crate',
-        primary: { source: 'higgsfield', higgsfieldModel: 'image-to-3d' },
-        fallbacks: [{ source: 'blender' }, { source: 'library', librarySources: ['smithsonian'] }, { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }, { source: 'library', librarySources: ['polyhaven'] }],
+        primary: { source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' },
+        fallbacks: [{ source: 'blender' }, { source: 'library', librarySources: ['smithsonian'] }, { source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }, { source: 'library', librarySources: ['polyhaven'] }],
         candidates: 2,
         reason: 'free library local blender comfy',
       },
@@ -285,16 +285,16 @@ test('an invalid primary promotes the cheapest valid fallback rung', () => {
   }, ctxFor(rows));
   const crate = plans.get('Crate');
   assert.deepEqual(crate.primary, { source: 'library', librarySources: ['polyhaven'] });
-  assert.deepEqual(crate.fallbacks, [{ source: 'blender' }, { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }]);
+  assert.deepEqual(crate.fallbacks, [{ source: 'blender' }, { source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }]);
   assert.equal(crate.costClass, 'library', 'priced by its (promoted) primary');
-  assert.equal(crate.paidFallback, 'image-to-3d', 'the paid fallback is recorded apart');
-  assert.match(crate.reason, /^promoted fallback \(the primary higgsfield image-to-3d was rejected: paid Higgsfield primary/);
+  assert.equal(crate.paidFallback, 'multi_image_to_3d', 'the paid fallback is recorded apart');
+  assert.match(crate.reason, /^promoted fallback \(the primary higgsfield multi_image_to_3d was rejected: paid Higgsfield primary/);
   assert.deepEqual(plans.get('Tile').primary, { source: 'comfyui', comfyWorkflow: 'draft.json' });
   assert.deepEqual(plans.get('Tile').fallbacks, []);
   assert.equal(plans.has('Icon'), false);
   assert.deepEqual(rejected.map((r) => r.name), ['Icon']);
   assert.match(rejected[0].why, /^primary: workflow "nope\.json" is not a file/);
-  assert.deepEqual(promoted.map((p) => [p.name, p.from]), [['Crate', 'higgsfield image-to-3d'], ['Tile', 'midjourney']]);
+  assert.deepEqual(promoted.map((p) => [p.name, p.from]), [['Crate', 'higgsfield multi_image_to_3d'], ['Tile', 'midjourney']]);
   assert.match(promoted[1].why, /unknown source "midjourney"/);
 });
 
@@ -302,14 +302,14 @@ test('a promoted primary is logged and carded; no valid rung still falls back to
   const dir = fakeRepo(t, ['| Crate | model | wooden crate | auto |  |  |  |  |', '| Barrel | model | oak barrel | auto |  |  |  |  |']);
   const store = memStore();
   const { runner } = stubRunner([
-    { name: 'Crate', primary: { source: 'library', librarySources: ['polypizza'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }, { source: 'blender' }], candidates: 1, reason: 'low-poly crates' },
+    { name: 'Crate', primary: { source: 'library', librarySources: ['polypizza'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }, { source: 'blender' }], candidates: 1, reason: 'low-poly crates' },
     { name: 'Barrel', primary: { source: 'midjourney' }, fallbacks: [{ source: 'library', librarySources: ['smithsonian'] }], candidates: 1, reason: 'x' },
   ]);
   const { step, events } = makeStep(store, runner);
   await step.beforeDirecting(baseRun(dir));
   const log = events.join('\n');
   assert.ok(events.some((e) => /cast "Crate": primary library polypizza rejected \(library polypizza needs a key that is not stored\) - promoted blender$/.test(e)), log);
-  assert.ok(events.some((e) => /cast "Crate": blender, fallbacks higgsfield image-to-3d/.test(e)), log);
+  assert.ok(events.some((e) => /cast "Crate": blender, fallbacks higgsfield multi_image_to_3d/.test(e)), log);
   assert.ok(events.some((e) => /cast "Barrel" rejected \(primary: unknown source "midjourney"\) - it uses generated/.test(e)), log);
   const crate = assetCards(store).find((c) => c.text === 'Asset: Crate (model)');
   assert.match(crate.details, /Primary: local Blender/);
@@ -327,7 +327,7 @@ test('validateCasting drops invalid fallback rungs, orders the ladder cheapest f
         name: 'Crate',
         primary: { source: 'blender' },
         fallbacks: [
-          { source: 'higgsfield', higgsfieldModel: 'image-to-3d' },
+          { source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' },
           { source: 'higgsfield', higgsfieldModel: 'nope' },
           { source: 'library', librarySources: ['smithsonian'] },
           { source: 'blender' },
@@ -342,7 +342,7 @@ test('validateCasting drops invalid fallback rungs, orders the ladder cheapest f
       { name: 'Stranger', primary: { source: 'blender' }, fallbacks: [], candidates: 1, reason: 'x' },
     ],
   }, ctxFor(rows));
-  assert.deepEqual(plans.get('Crate').fallbacks, [{ source: 'library', librarySources: ['polyhaven'] }, { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }]);
+  assert.deepEqual(plans.get('Crate').fallbacks, [{ source: 'library', librarySources: ['polyhaven'] }, { source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }]);
   assert.equal(plans.get('Crate').candidates, 4);
   assert.equal(plans.get('Barrel').candidates, 1);
   assert.equal(plans.get('Box').candidates, 3);
@@ -426,12 +426,12 @@ test('the spend estimate prices a cast row by its picked source and model', () =
   const est = Cost.assetManifestEstimate([
     { name: 'A', type: 'sprite', source: 'generated', spec: 'a', casting: plan({ source: 'comfyui', comfyWorkflow: 'draft.json' }) },
     { name: 'B', type: 'model', source: 'library', spec: 'b', casting: plan({ source: 'library', librarySources: ['polyhaven'] }) },
-    { name: 'C', type: 'model', source: 'generated', spec: 'c', casting: plan({ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }) },
+    { name: 'C', type: 'model', source: 'generated', spec: 'c', casting: plan({ source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }) },
   ]);
   assert.equal(est.library.count, 1);
   assert.equal(est.local.count, 1);
   assert.equal(est.paid.count, 1);
-  assert.equal(est.paid.rows[0].model, 'image-to-3d');
+  assert.equal(est.paid.rows[0].model, 'multi_image_to_3d');
   assert.equal(est.paid.credits, 30);
 });
 
@@ -444,11 +444,11 @@ test('renderCastingBrief gives nothing for no plan', () => {
 // ---- review fixes: paid fallbacks, the per-pass cap, the cache, concurrent edits ------------
 
 test('a free primary with a paid fallback is priced by its primary; the fallback is a distinct "may spend" line', () => {
-  const { plans } = C.validateCasting({ casts: [{ name: 'Crate', primary: { source: 'library', librarySources: ['polyhaven'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }], candidates: 1, reason: 'x' }] }, ctxFor([{ name: 'Crate', type: 'model' }]));
+  const { plans } = C.validateCasting({ casts: [{ name: 'Crate', primary: { source: 'library', librarySources: ['polyhaven'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }], candidates: 1, reason: 'x' }] }, ctxFor([{ name: 'Crate', type: 'model' }]));
   const plan = plans.get('Crate');
   assert.equal(plan.costClass, 'library');
   assert.equal(plan.paidModel, null);
-  assert.equal(plan.paidFallback, 'image-to-3d');
+  assert.equal(plan.paidFallback, 'multi_image_to_3d');
   const est = Cost.assetManifestEstimate([
     { name: 'Crate', type: 'model', source: 'library', spec: 'x', casting: plan },
     { name: 'Rock', type: 'model', source: 'blender', spec: 'y' },
@@ -458,7 +458,7 @@ test('a free primary with a paid fallback is priced by its primary; the fallback
   assert.equal(est.local.count, 1);
   assert.equal(est.maySpend.count, 1);
   assert.equal(est.maySpend.credits, 30);
-  assert.deepEqual(est.maySpend.rows.map((r) => [r.name, r.model]), [['Crate', 'image-to-3d']]);
+  assert.deepEqual(est.maySpend.rows.map((r) => [r.name, r.model]), [['Crate', 'multi_image_to_3d']]);
   assert.equal(est.total, 2);
   // The stored record and the report carry it as its own line.
   const rec = Cost.estimateRecord(est, { at: 1, iteration: 1, thresholdUsd: 10 });
@@ -472,7 +472,7 @@ test('a free primary with a paid fallback is priced by its primary; the fallback
 
 test('a paid primary is unchanged: priced and gated as paid, no paidFallback', () => {
   const rows = [{ name: 'Logo', type: 'ui' }];
-  const { plans } = C.validateCasting({ casts: [{ name: 'Logo', primary: { source: 'higgsfield', higgsfieldModel: 'gpt_image_2_6' }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'soul' }], candidates: 1, reason: 'x' }] }, ctxFor(rows, { workflows: [] }));
+  const { plans } = C.validateCasting({ casts: [{ name: 'Logo', primary: { source: 'higgsfield', higgsfieldModel: 'gpt_image_2_6' }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'text2image_soul_v2' }], candidates: 1, reason: 'x' }] }, ctxFor(rows, { workflows: [] }));
   const plan = plans.get('Logo');
   assert.equal(plan.costClass, 'paid');
   assert.equal(plan.paidModel, 'gpt_image_2_6');
@@ -489,7 +489,7 @@ test('a paid primary is unchanged: priced and gated as paid, no paidFallback', (
 
 test('spend gate: a "may spend" row is never held, but its fallback credits count against the cap', () => {
   const usdPerCredit = 0.1;
-  const fallbackRow = (name) => ({ name, type: 'model', source: 'library', spec: name, casting: { primary: { source: 'library', librarySources: ['polyhaven'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }], candidates: 1, reason: '', costClass: 'library', paidModel: null, paidFallback: 'image-to-3d' } });
+  const fallbackRow = (name) => ({ name, type: 'model', source: 'library', spec: name, casting: { primary: { source: 'library', librarySources: ['polyhaven'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'multi_image_to_3d' }], candidates: 1, reason: '', costClass: 'library', paidModel: null, paidFallback: 'multi_image_to_3d' } });
   const paidRow = { name: 'Logo', type: 'ui', source: 'generated', spec: 'logo model: gpt_image_2_6' };
   const run = (cap) => ({ spendCaps: { higgsfield: cap }, spend: {} });
   const fbUsd = Cost.assetManifestEstimate([fallbackRow('A')], { usdPerCredit }).maySpend.usd;
