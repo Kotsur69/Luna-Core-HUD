@@ -26,19 +26,19 @@
 // (src/agymodels.js); agyVariantFor() picks the variant for a package effort.
 //
 // Pure like src/workerModels.js: its only import is the import-free family
-// registry (src/agyFamilies.js). The renderer and the phone import it as an
+// registry (src/agyFamilies.mjs). The renderer and the phone import it as an
 // ES module, main and `node --test` require() it.
 // ============================================================================
 
 'use strict';
 
-import { agyFamilyList, agyPoolKeysOfTier } from './agyFamilies.js';
+import { agyFamilyList, agyPoolKeysOfTier } from './agyFamilies.mjs';
 
 /** The pool models other than free profiles, in the order the menus show them. */
 export const POOL_MODEL_LIST = Object.freeze([
   Object.freeze({ id: 'opus', name: 'Opus', runsOn: 'claude', tier: 'hard', family: null }),
   Object.freeze({ id: 'sonnet', name: 'Sonnet', runsOn: 'claude', tier: 'easy', family: null }),
-  // The agy families (src/agyFamilies.js), strongest first.
+  // The agy families (src/agyFamilies.mjs), strongest first.
   ...agyFamilyList().map((f) => Object.freeze({ id: f.poolKey, name: f.name, labelKey: f.labelKey, runsOn: 'agy', tier: f.tier, family: f.family })),
 ]);
 

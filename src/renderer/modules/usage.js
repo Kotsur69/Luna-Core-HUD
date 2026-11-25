@@ -48,7 +48,7 @@ import { t, loc } from './util.js';
 import { onLangChange, onUsageUpdate, onActiveProfile, onUsageVisibility } from './bus.js';
 import { defineWidget } from './registry.js';
 import { usageTabKind, googleUsageEntry, visibleUsageSources } from './usagevisibility.js';
-import { agyUsageRowOrder, agyAlwaysListedUsageRows } from '../../agyFamilies.js';
+import { agyUsageRowOrder, agyAlwaysListedUsageRows } from '../../agyFamilies.mjs';
 
 /** How often the "resets in ..." labels are recomputed (locally, no request). */
 const COUNTDOWN_MS = 30000;
@@ -592,7 +592,7 @@ function modelRowLabel(limit) {
 }
 
 /**
- * agy usage rows in name-column order (src/agyFamilies.js): Opus, Gemini,
+ * agy usage rows in name-column order (src/agyFamilies.mjs): Opus, Gemini,
  * Neon, Argon. Only the usageAlwaysListed rows (Argon) show without a
  * reading; any other family (Neon) shows only when agy reports it.
  */

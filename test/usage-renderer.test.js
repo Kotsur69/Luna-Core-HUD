@@ -325,3 +325,25 @@ test('usage visibility strings exist in pl and en, and the Settings selects exis
   const html = fs.readFileSync(path.join(ROOT, 'src/renderer/index.html'), 'utf8');
   for (const id of ['usage-visibility-section', 'usage-vis-claude', 'usage-vis-agy']) assert.ok(html.includes(`id="${id}"`), id);
 });
+
+// The renderer loads src/agyFamilies.mjs through a relative ES import; the
+// usage tile must still get the agy family list from it (row order and the
+// always-listed rows).
+test('usage tile reads the agy family list from src/agyFamilies.mjs', () => {
+  const { modelSources } = require('../src/renderer/modules/usage.js');
+  const fam = require('../src/agyFamilies.mjs');
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'modules', 'usage.js'), 'utf8');
+  const spec = src.match(/from '([^']*agyFamilies[^']*)'/);
+  assert.ok(spec, 'usage.js imports the agy family registry');
+  assert.ok(fs.existsSync(path.join(ROOT, 'src', 'renderer', 'modules', spec[1])), `${spec[1]} resolves to a file`);
+
+  const order = fam.agyUsageRowOrder();
+  const limits = [...order].reverse()
+    .filter((row) => !fam.agyAlwaysListedUsageRows().includes(row))
+    .map((model) => ({ model, window: 'weekly', label: 'Weekly limit', percentUsed: 10 }));
+  const rows = modelSources(limits).map((s) => [s.account.label, s.account.status]);
+  assert.deepEqual(rows.map(([label]) => label), order);
+  for (const row of fam.agyAlwaysListedUsageRows()) {
+    assert.deepEqual(rows.find(([label]) => label === row), [row, 'unreported']);
+  }
+});
