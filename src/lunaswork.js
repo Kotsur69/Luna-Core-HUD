@@ -2013,8 +2013,9 @@ function createLunasWork(deps) {
     // Asset pipeline (src/lunasworkAssetPipeline.js): one made asset for the run report.
     recordAsset: (entry) => toolGuard.recordAsset(entry),
     cappedTools: () => toolGuard.cappedTools(),
-    // The judge's verdicts in the run record ({runId, entries}): the Higgsfield cost guard reads them.
+    // The judge's verdicts in the run record ({runId, verdicts, entries}): the Higgsfield cost guard reads them.
     judgeVerdicts: () => toolGuard.judgeVerdicts(),
+    recordJudgeVerdict: (verdict) => toolGuard.recordJudgeVerdict(verdict),
     // The run's saved Higgsfield results ({runId, entries}): luna_asset_blender's `from` provenance check.
     higgsfieldResults: () => toolGuard.higgsfieldResults(),
     runId: () => (run ? run.id : null),

@@ -281,7 +281,10 @@ function createHiggsfieldFinal(deps) {
     const asked = higgsfieldRequest(raw);
     if (!asked.ok) return asked;
     // A passing free / local luna_asset_judge verdict for this asset makes a paid final unnecessary.
-    if (typeof d.freeCandidatePassed === 'function' && d.freeCandidatePassed(asked.job)) return fail('freeCandidatePassed', `luna_asset_judge already passed a free or local candidate for "${asked.job.name}" in this run: import that winner instead of paying for a Higgsfield final`);
+    // A guard that cannot tell the asset answers {error, detail} instead: refused too (fail closed).
+    const guard = typeof d.freeCandidatePassed === 'function' ? d.freeCandidatePassed(asked.job) : false;
+    if (isObj(guard) && typeof guard.error === 'string') return fail(guard.error, guard.detail);
+    if (guard) return fail('freeCandidatePassed', `luna_asset_judge already passed a free or local candidate for "${asked.job.name}" in this run: import that winner instead of paying for a Higgsfield final`);
     const req = await withReferences(asked);
     if (!req.ok) return req;
     const paid = await bookHiggsfield(req.request);

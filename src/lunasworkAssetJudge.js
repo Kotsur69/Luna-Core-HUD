@@ -25,19 +25,24 @@
 // with 'free pass - ' when it passed with a free (library) or local (no
 // Higgsfield record lists it) winner, 'pass - ' for any other pass and
 // 'no pass - ' otherwise. higgsfieldFinal then refuses a paid final for the
-// same asset with 'freeCandidatePassed' (src/lunasworkAssetPipeline.js). The
-// latest verdict counts: a failed one, a paid winner or a winner whose origin
-// cannot be read withdraws an earlier pass. Only the winning library preview
-// stays under art/candidates/; the others are removed after the verdict.
+// same asset with 'freeCandidatePassed' (src/lunasworkAssetHiggsfield.js). Only
+// a later verdict that passed nothing withdraws an earlier pass, and only when
+// it judged that pass's winner (src/lunasworkJudgeGuard.js withdraws): junk
+// re-judged under the same name takes nothing back, and so does a passing
+// verdict whose winner reads as paid or of unknown origin. Only the
+// winning library preview stays under art/candidates/; the others are removed
+// after the verdict.
 //
-// Where the guard looks (runFreePassed): first the run record - the judge
-// entries of the run's asset log, read back through the run (src/lunaswork.js
-// judgeVerdicts), keyed by run id, asset kind and slug - so it survives a
-// LunaCore restart and covers every package worktree of the run. The in-memory
-// verdict store is the fallback (no reader, an unreadable record, a verdict
-// the run log refused): one per LunaCore process, keyed by run id, the
-// worker's repo path, kind and slug, entries expiring after VERDICT_TTL_MS.
-// A free pass in either one blocks the paid final (createAssetToolsFor).
+// Where the guard looks (src/lunasworkJudgeGuard.js createFreePassGuard):
+// first the run record - run.judgeVerdicts, a list of its own beside the
+// asset log (whose newest-500 cap would push an early pass out), read back
+// through the run (src/lunaswork.js judgeVerdicts) - so it survives a LunaCore
+// restart and covers every package worktree of the run. The asset is the
+// design/ASSETS.md row the judged or requested name resolves to, not the
+// typed name. The in-memory verdict store is the fallback (no reader, an
+// unreadable record, a verdict the run record refused): one per LunaCore
+// process, keyed by run id, the worker's repo path and asset, entries expiring
+// after VERDICT_TTL_MS. A free pass in either one blocks the paid final.
 //
 // Boundaries: a candidate path must stay inside the repo with no `..`, must
 // not pass through a junction or symlink (realpath compared with the plain
@@ -59,6 +64,7 @@ const { isWritablePath } = require('./lunasworkToolkit');
 const { KINDS, ART_DIRECTION_RULE, SOURCE_DIRS, slugOf, artRootOf } = require('./lunasworkAssetPipeline');
 const { SOURCE_IDS, redact } = require('./lunasworkFreeSources');
 const { RENDER_DIR } = require('./lunasworkAssetBlender');
+const { FREE_PASS_PREFIX, candidateKey, storeVerdict, compactVerdicts, freePassStands, freePassFromRecord } = require('./lunasworkJudgeGuard');
 
 const MIN_CANDIDATES = 2;
 const MAX_CANDIDATES = 8;
@@ -75,12 +81,11 @@ const MAX_NOTES_CHARS = 300;
 const MAX_SPEC_CHARS = 300;
 const JUDGE_TIMEOUT_MS = 6 * 60 * 1000;
 const VERDICT_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_VERDICTS = 500;
+// Run + worker repo lists kept at once (each one bounded by compactVerdicts): the oldest written go first.
+const MAX_VERDICT_LISTS = 100;
 const MAX_HIGGSFIELD_RECORDS = 500;
 const MAX_RECORD_BYTES = 256 * 1024;
 const LOCAL_AUDIO_LICENSE = 'own work (local file)';
-const MAX_RUN_VERDICTS = 500;
-const FREE_PASS_PREFIX = 'free pass - ';
 const LIBRARY_ID_RE = /^[A-Za-z0-9][\w:.-]{0,99}$/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
@@ -105,56 +110,66 @@ const critic = () => ({
 // ---- verdict store ----------------------------------------------------------------------
 
 /**
- * The latest verdict per run, worker repo, asset kind and slug: only a passing
- * one with a free or local winner is kept; any other verdict withdraws it.
+ * This process's judge verdicts per run and worker repo, kept like the run
+ * record's list (src/lunasworkJudgeGuard.js storeVerdict, compactVerdicts): a
+ * later verdict withdraws only the passes it judged and failed. A verdict
+ * recorded without its details (`verdict`) can only withdraw another such one.
  * runId is optional; a verdict recorded under one run never answers for another.
+ * Entries expire after VERDICT_TTL_MS.
  * @param {{now?:()=>number, ttlMs?:number}} [opts]
- * @returns {{record:(repoPath:string, kind:string, slug:string, freePass:boolean, runId?:string|null)=>void,
- *   freePassed:(repoPath:string, kind:string, slug:string, runId?:string|null)=>boolean}}
+ * @returns {{record:(repoPath:string, kind:string, slug:string, freePass:boolean, verdict?:object|null, runId?:string|null)=>void,
+ *   freePassed:(repoPath:string, kind:string, slug:string, runId?:string|null)=>boolean,
+ *   verdicts:(repoPath:string, runId?:string|null)=>object[]}}
+ *   verdict = {name, kind, freePass, pass, winner, candidates} (cleanJudgeVerdict); verdicts() = the live
+ *   ones, oldest first, for the cost guard to resolve to their assets
  */
 function createVerdictStore(opts = {}) {
   const now = typeof opts.now === 'function' ? opts.now : Date.now;
   const ttlMs = Number.isFinite(opts.ttlMs) && opts.ttlMs > 0 ? opts.ttlMs : VERDICT_TTL_MS;
-  const passed = new Map();
-  const keyOf = (repoPath, kind, slug, runId) => {
+  // run + worker repo -> its verdicts, oldest first
+  const lists = new Map();
+  const listKey = (repoPath, runId) => {
     const repo = path.resolve(String(repoPath));
     const run = typeof runId === 'string' ? runId : '';
-    return `${run}\u0000${process.platform === 'win32' ? repo.toLowerCase() : repo}\u0000${kind}\u0000${slug}`;
+    return `${run}\u0000${process.platform === 'win32' ? repo.toLowerCase() : repo}`;
   };
-  const fresh = (at) => typeof at === 'number' && now() - at <= ttlMs;
+  const fresh = (v) => typeof v.at === 'number' && now() - v.at <= ttlMs;
 
-  function record(repoPath, kind, slug, freePass, runId) {
-    for (const [k, at] of passed) if (!fresh(at)) passed.delete(k);
-    const key = keyOf(repoPath, kind, slug, runId);
-    passed.delete(key);
-    if (freePass !== true) return;
-    passed.set(key, now());
-    // Map order is insertion order: the oldest entries go first.
-    while (passed.size > MAX_VERDICTS) passed.delete(passed.keys().next().value);
+  function record(repoPath, kind, slug, freePass, verdict, runId) {
+    for (const [k, list] of lists) {
+      const live = list.filter(fresh);
+      if (!live.length) lists.delete(k);
+      else if (live.length < list.length) lists.set(k, live);
+    }
+    const key = listKey(repoPath, runId);
+    const list = [...(lists.get(key) || []), { ...storeVerdict(kind, slug, freePass, verdict), at: now() }];
+    lists.delete(key);
+    lists.set(key, compactVerdicts(list));
+    // Map order is insertion order: the least recently written lists go first.
+    while (lists.size > MAX_VERDICT_LISTS) lists.delete(lists.keys().next().value);
   }
 
-  const freePassed = (repoPath, kind, slug, runId) => typeof slug === 'string' && fresh(passed.get(keyOf(repoPath, kind, slug, runId)));
+  const verdicts = (repoPath, runId) => (lists.get(listKey(repoPath, runId)) || []).filter(fresh);
 
-  return { record, freePassed };
+  /** Whether a free pass stands under exactly this kind and slug (the guard resolves assets itself through verdicts()). */
+  const freePassed = (repoPath, kind, slug, runId) => typeof slug === 'string'
+    && freePassStands(verdicts(repoPath, runId), (v) => `${v.kind}\u0000${v.slug}`, `${kind}\u0000${slug}`) === true;
+
+  return { record, freePassed, verdicts };
 }
 
 /**
- * The cost guard's answer from the run record: the latest judge entry of run
- * `runId` for this asset. The record is untrusted (it may come back from a
- * run file), so every field is checked here again.
- * @param {unknown} record {runId, entries} from the run (src/lunasworkToolGuard.js judgeVerdicts)
- * @returns {boolean|null} true = a free or local candidate passed; false = the
- *   latest verdict did not; null = the record has no say (no record, another run, no entry)
+ * The cost guard's answer from the run record, keyed by kind and the typed
+ * slug (the guard itself keys on the cast asset: src/lunasworkJudgeGuard.js).
+ * The record is untrusted (it may come back from a run file): every field is
+ * checked again.
+ * @param {unknown} record {runId, verdicts, entries} from the run (src/lunasworkToolGuard.js judgeVerdicts)
+ * @returns {boolean|null} true = a free or local candidate's pass stands; false = none
+ *   does; null = the record has no say (no record, another run, no entry)
  */
 function runFreePassed(record, runId, kind, slug) {
-  if (!isObj(record) || typeof runId !== 'string' || !runId || record.runId !== runId || !Array.isArray(record.entries)) return null;
   if (typeof slug !== 'string' || !slug) return null;
-  let latest = null;
-  for (const e of record.entries.slice(-MAX_RUN_VERDICTS)) {
-    if (!isObj(e) || e.tool !== 'judge' || e.kind !== kind || typeof e.name !== 'string' || typeof e.prompt !== 'string') continue;
-    if (slugOf(e.name) === slug) latest = e;
-  }
-  return latest ? latest.prompt.startsWith(FREE_PASS_PREFIX) : null;
+  return freePassFromRecord(record, runId, `${kind}/${slug}`, (v) => `${v.kind}/${slugOf(v.name)}`);
 }
 
 // ---- candidate paths --------------------------------------------------------------------
@@ -468,9 +483,11 @@ function createAssetJudge(deps) {
     const winner = ranking[0];
     const pass = winner.score >= verdict.passScore;
     const reason = `${winner.label} scored ${winner.score}/10 (pass mark ${verdict.passScore}): ${winner.notes}`;
-    // The latest verdict counts: a fail, a paid winner or an unknown origin withdraws an earlier free pass.
+    // Only a pass with a free or local winner blocks a paid final; a failed verdict withdraws the earlier passes whose winner it judged.
     const freePass = pass && (winner.origin === 'local' || winner.origin === 'library');
-    d.verdicts.record(repoPath, req.kind, req.slug, freePass);
+    d.verdicts.record(repoPath, req.kind, req.slug, freePass, {
+      name: req.name, kind: req.kind, freePass, pass, winner: candidateKey(winner.candidate), candidates: ranking.map((r) => candidateKey(r.candidate)),
+    });
     const where = winner.file || (isObj(winner.candidate) ? `${winner.candidate.source}:${winner.candidate.id}` : winner.candidate);
     const verdictText = freePass ? FREE_PASS_PREFIX : `${pass ? 'pass' : 'no pass'} - `;
     const logged = d.log({ tool: 'judge', kind: req.kind, name: req.name, prompt: `${verdictText}${reason}`, path: where, sources: ranking.slice(0, 4).map((r) => `${r.label} ${r.score}/10`), imported: false });

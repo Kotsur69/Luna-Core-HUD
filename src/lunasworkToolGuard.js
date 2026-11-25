@@ -12,7 +12,17 @@
 //   recordAsset(entry)            logs one made asset (tool, prompt, seed,
 //                                 cost, path) in run.assets for the run report
 //   cappedTools()                 run.spendCapped, for the next build
-//   judgeVerdicts()               {runId, entries}: the run's luna_asset_judge
+//   recordJudgeVerdict(verdict)   keeps one luna_asset_judge verdict in
+//                                 run.judgeVerdicts, apart from run.assets:
+//                                 the asset log keeps only the newest
+//                                 MAX_ASSET_ENTRIES of every tool, so an early
+//                                 free pass would fall out of it on a long run.
+//                                 Bounded per asset (src/lunasworkJudgeGuard.js
+//                                 compactVerdicts). A run from before the list
+//                                 (null) has its asset log's judge entries
+//                                 carried over first
+//   judgeVerdicts()               {runId, verdicts, entries}: run.judgeVerdicts
+//                                 (null for a run from before it) and the judge
 //                                 entries of run.assets (validated, oldest
 //                                 first), so the Higgsfield cost guard survives
 //                                 a restart and spans the run's worktrees
@@ -36,6 +46,7 @@
 
 const { checkSpend, spendCapCard, toolDownOf, normalizeSpend, normalizeSpendCaps, PAID_TOOLS } = require('./lunasworkToolkit');
 const { cleanAssetEntry } = require('./lunasworkAssetPipeline');
+const { cleanJudgeVerdict, cleanJudgeVerdicts, compactVerdicts, legacyVerdicts } = require('./lunasworkJudgeGuard');
 
 const TOOL_DOWN_WAIT_MS = 30 * 60 * 1000;
 // The run report's asset log (lunasworkAssetPipeline): the newest entries win.
@@ -48,7 +59,11 @@ const DONE_PHASE = 'done';
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
-/** What a stored run keeps of the guard: the caps pinned at start, the spend, the capped tools. */
+/**
+ * What a stored run keeps of the guard: the caps pinned at start, the spend,
+ * the capped tools, the asset log and the judge verdicts (null for a run
+ * recorded before that list: its verdicts are the asset log's judge entries).
+ */
 function cleanGuardFields(raw) {
   const r = isObj(raw) ? raw : {};
   return {
@@ -57,6 +72,7 @@ function cleanGuardFields(raw) {
     spendCapped: [...new Set((Array.isArray(r.spendCapped) ? r.spendCapped : []).filter((t) => PAID_TOOLS.includes(t)))],
     toolDownPauses: Number.isInteger(r.toolDownPauses) && r.toolDownPauses > 0 ? Math.min(r.toolDownPauses, MAX_TOOL_DOWN_PAUSES) : 0,
     assets: (Array.isArray(r.assets) ? r.assets : []).map(cleanAssetEntry).filter(Boolean).slice(-MAX_ASSET_ENTRIES),
+    judgeVerdicts: cleanJudgeVerdicts(r.judgeVerdicts),
   };
 }
 
@@ -118,14 +134,34 @@ function createToolGuard(ctx) {
   }
 
   /**
+   * Keeps one luna_asset_judge verdict for the Higgsfield cost guard (see the header).
+   * @param {unknown} verdict untrusted: validated by cleanJudgeVerdict
+   * @returns {boolean} whether it was kept
+   */
+  function recordJudgeVerdict(verdict) {
+    const run = ctx.run();
+    if (!run || run.phase === DONE_PHASE) return false;
+    const at = typeof ctx.now === 'function' ? ctx.now() : Date.now();
+    const clean = cleanJudgeVerdict({ ...(isObj(verdict) ? verdict : {}), at });
+    if (!clean) return false;
+    const fields = cleanGuardFields(run);
+    // A run from before the list: its verdicts so far are only in the asset log, carried over once.
+    const kept = fields.judgeVerdicts || legacyVerdicts(fields.assets);
+    ctx.update({ judgeVerdicts: compactVerdicts([...kept, clean]) });
+    return true;
+  }
+
+  /**
    * The run's judge verdicts, read back from the run record (it may have been
-   * restored from a run file: every entry goes through cleanAssetEntry again).
-   * @returns {{runId:string, entries:object[]}|null} null without a run
+   * restored from a run file: every entry is validated again).
+   * @returns {{runId:string, verdicts:object[]|null, entries:object[]}|null} null without a run;
+   *   verdicts null = a run from before run.judgeVerdicts (entries are its verdicts)
    */
   function judgeVerdicts() {
     const run = ctx.run();
     if (!run || typeof run.id !== 'string' || !run.id) return null;
-    return { runId: run.id, entries: cleanGuardFields(run).assets.filter((e) => e.tool === 'judge') };
+    const fields = cleanGuardFields(run);
+    return { runId: run.id, verdicts: fields.judgeVerdicts, entries: fields.assets.filter((e) => e.tool === 'judge') };
   }
 
   /**
@@ -165,7 +201,7 @@ function createToolGuard(ctx) {
     return true;
   }
 
-  return { recordSpend, recordAsset, cappedTools, judgeVerdicts, higgsfieldResults, toolDown, toolDownOf };
+  return { recordSpend, recordAsset, cappedTools, recordJudgeVerdict, judgeVerdicts, higgsfieldResults, toolDown, toolDownOf };
 }
 
 module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, MAX_ASSET_ENTRIES, cleanGuardFields, createToolGuard };

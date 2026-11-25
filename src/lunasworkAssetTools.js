@@ -75,7 +75,8 @@ const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-ht
 const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
 const { ALL_SOURCES } = require('./lunasworkAssetFanout');
 const { createFreeSources, SOURCE_IDS, TYPES: LIBRARY_TYPES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
-const { createAssetJudge, createVerdictStore, runFreePassed, MIN_CANDIDATES, MAX_CANDIDATES, CANDIDATES_DIR } = require('./lunasworkAssetJudge');
+const { createAssetJudge, createVerdictStore, MIN_CANDIDATES, MAX_CANDIDATES, CANDIDATES_DIR } = require('./lunasworkAssetJudge');
+const { createFreePassGuard } = require('./lunasworkJudgeGuard');
 const { runHiggsfieldMade } = require('./lunasworkBlenderFrom');
 const { MAX_REFERENCES, uploadIdOf } = require('./lunasworkHiggsfieldRefs');
 
@@ -643,12 +644,15 @@ function createDownloader(opts = {}) {
  *   net?:object, execFile?:Function, fetch?:Function, lookup?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void,
  *   runClaude?:Function, verdicts?:object}} deps  runClaude / verdicts = the judge's Critic runner and verdict store (tests)
  *   keys = the asset library keys (src/lunasworkAssetKeys.js); none -> the keyed libraries answer noKey
- *   ctx.runId / ctx.judgeVerdicts = the run this tab works for and a read of its judge entries
- *   ({runId, entries}, src/lunaswork.js): the Higgsfield cost guard decides from the run record first;
+ *   ctx.runId / ctx.judgeVerdicts / ctx.recordJudgeVerdict = the run this tab works for, a read of its judge
+ *   verdicts ({runId, verdicts, entries}, src/lunaswork.js) and their writer: the Higgsfield cost guard
+ *   (src/lunasworkJudgeGuard.js) decides from the run record first; ctx.castRepoPath = the run's own
+ *   checkout, whose design/ASSETS.md names the assets the guard keys on (else the tab's repoPath);
  *   ctx.higgsfieldResults = a read of its saved luna_asset_higgsfield entries: luna_asset_blender's `from`
  *   provenance check (a record without its entry is only "claimed")
- * @returns {(ctx:{repoPath:string, runId?:string|null, recordSpend:Function, recordAsset:Function, cappedTools:Function,
- *   judgeVerdicts?:()=>({runId:string, entries:object[]}|null), higgsfieldResults?:()=>({runId:string, entries:object[]}|null)}|null)
+ * @returns {(ctx:{repoPath:string, castRepoPath?:string, runId?:string|null, recordSpend:Function, recordAsset:Function, cappedTools:Function,
+ *   judgeVerdicts?:()=>({runId:string, verdicts:object[]|null, entries:object[]}|null), recordJudgeVerdict?:(verdict:object)=>boolean,
+ *   higgsfieldResults?:()=>({runId:string, entries:object[]}|null)}|null)
  *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function, librarySearch:Function, libraryImport:Function, assetJudge:Function}}
  */
 function createAssetToolsFor(deps) {
@@ -659,18 +663,9 @@ function createAssetToolsFor(deps) {
   return function assetsFor(ctx) {
     if (!isObj(ctx) || typeof ctx.repoPath !== 'string') return null;
     const runId = typeof ctx.runId === 'string' && ctx.runId ? ctx.runId : null;
-    // The run record survives a restart and spans the run's worktrees; this process's store
-    // also holds a verdict the run log refused. Either one's free pass blocks a paid final:
-    // when they disagree, the guard errs on the side of not spending.
-    const freeCandidatePassed = (job) => {
-      let fromRun = null;
-      try {
-        if (typeof ctx.judgeVerdicts === 'function') fromRun = runFreePassed(ctx.judgeVerdicts(), runId, job.kind, job.slug);
-      } catch (err) {
-        log(`[lunaswork-assets] judge verdicts unreadable, using this process's verdicts: ${oneLine(errText(err), 200)}`);
-      }
-      return fromRun === true || verdicts.freePassed(ctx.repoPath, job.kind, job.slug, runId);
-    };
+    // The Higgsfield cost guard: the run record (survives a restart, spans the run's worktrees)
+    // and this process's store, keyed on the design/ASSETS.md asset a name resolves to.
+    const freePass = createFreePassGuard({ ctx, runId, store: verdicts, log });
     // The `from` record of luna_asset_blender is proven only by this run's asset log; an unreadable log proves nothing.
     const higgsfieldMade = (claim) => {
       if (typeof ctx.higgsfieldResults !== 'function') return false;
@@ -712,7 +707,7 @@ function createAssetToolsFor(deps) {
         unity: createPipelineClient({ projectDir: ctx.repoPath, fetch: deps.fetch }),
         recordSpend: ctx.recordSpend,
         cappedTools: ctx.cappedTools,
-        freeCandidatePassed,
+        freeCandidatePassed: (job) => freePass.check(job),
         higgsfieldMade,
         logAsset: (entry) => {
           if (ctx.recordAsset(entry)) return;
@@ -738,7 +733,7 @@ function createAssetToolsFor(deps) {
           sources: createFreeSources({ fetch: deps.fetch, keys }),
           // The preview download: public https only, never a key or an auth header.
           download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
-          verdicts: { record: (repo, kind, slug, freePass) => verdicts.record(repo, kind, slug, freePass, runId) },
+          verdicts: { record: (repo, kind, slug, passed, verdict) => freePass.record(repo, kind, slug, passed, verdict) },
           runClaude: deps.runClaude,
           env: deps.env ? deps.env() : undefined,
           secrets: () => keys.secrets(),
