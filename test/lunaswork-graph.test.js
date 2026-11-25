@@ -241,6 +241,42 @@ test('failures never throw: a failed index and a failed updater are notes, nothi
   }
 });
 
+test('the codemaps index is built in a private scratch folder that is removed, also when git fails', async () => {
+  const r = setupRepo();
+  const base = path.join(r.dir, 'tmp-base');
+  fs.mkdirSync(base);
+  try {
+    const seen = [];
+    const spyExec = (file, args, opts, cb) => {
+      if (opts.env && opts.env.GIT_INDEX_FILE) seen.push(opts.env.GIT_INDEX_FILE);
+      return execFile(file, args, opts, cb);
+    };
+    const claude = fakeClaude({ write: writeMap('# Overview scratch\n') });
+    const ok = await G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null, execImpl: spyExec, tmpBase: base })
+      .refreshGraph({ repoPath: r.checkout, iteration: 1 });
+    assert.equal(ok.codemaps, 'committed', JSON.stringify(ok.notes));
+    assert.ok(seen.length > 0);
+    for (const index of seen) {
+      assert.equal(path.dirname(path.dirname(index)), base, 'the index sits in a subfolder of the base, never in its root');
+      assert.match(path.basename(path.dirname(index)), /^lw-codemaps-/);
+    }
+    assert.deepEqual(fs.readdirSync(base), [], 'the scratch folder is gone after a commit');
+
+    const failingExec = (file, args, opts, cb) => {
+      if (args[0] === 'read-tree') return cb(new Error('read-tree failed'), '', 'fatal: unable to write new index file');
+      return execFile(file, args, opts, cb);
+    };
+    const failing = fakeClaude({ write: writeMap('# Overview scratch v2\n') });
+    const failed = await G.createGraphRefresher({ runClaude: failing.runClaude, resolveCli: () => null, execImpl: failingExec, tmpBase: base })
+      .refreshGraph({ repoPath: r.checkout, iteration: 2 });
+    assert.equal(failed.codemaps, 'failed');
+    assert.match(failed.notes.join('\n'), /codemaps not staged: fatal: unable to write new index file/);
+    assert.deepEqual(fs.readdirSync(base), [], 'the scratch folder is gone after a failure too');
+  } finally {
+    await r.done();
+  }
+});
+
 test('parseStatus reads porcelain lines, renames by their new name', () => {
   assert.deepEqual(G.parseStatus(' M app.js\n?? docs/CODEMAPS/a.md\nR  old.js -> new.js\n'), [
     { code: ' M', file: 'app.js' },
