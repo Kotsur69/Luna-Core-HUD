@@ -7,7 +7,27 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.39.0 — Add asset source catalog.**
+> **Current release: v0.40.0 — AmbientCG/Smithsonian previews and library sound durations.**
+> - Higgsfield 3D path via Blender, reference images, from provenance
+> - Higgsfield cost guard reads judge verdicts from the run record
+> - judge accepts Blender turntable sheets in design/asset-renders/
+> - catalog kinds as ASSETS.md types, catalog credits for the estimate
+> - ambientCG/Smithsonian previews and library sound durations
+> - book agy worker tabs' real token counts for God Mode
+> - Fix: harden the Higgsfield reference upload and bind from= provenance to
+>   the bytes
+> - Fix: expose the judge reader on the controller; lean Critic call
+> - Fix: cache the catalog credits only after a read that found them
+> - Fix: run the casting call lean so it fits its budget
+> - Fix: structural paid-Higgsfield rule and fallback promotion
+> - Fix: build throwaway git indexes in a private temp folder
+> - Fix: refuse over-limit card fields and undo cuts made by stale builds
+> - Fix: safe model keys and kept totals for let-go subagents
+> - Fix: no double-counted agy tokens on catch-up; refuse dangling links in
+>   files:diff
+> - Fix: resolve symlinks before files:diff reads a path
+>
+> **v0.39.0 — Add asset source catalog.**
 > - luna_asset_blender from= runs a Higgsfield result through Blender
 > - luna_asset_judge ranks asset candidates; Higgsfield cost guard
 > - Director casting picks the source and model of auto asset rows
