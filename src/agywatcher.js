@@ -42,6 +42,17 @@
 // pick goes by time and claims alone. A database agy holds locked right now
 // is read again next tick instead.
 //
+// Tokens. Every reading carries `byModel` ({<model id>: {input, output,
+// cacheRead, cacheWrite}}, observer.js' shape): the real counts agy logs on
+// each planner step (src/agytokens.js), summed over the tab's conversation
+// and every subagent conversation it followed - a subagent's spend is the
+// tab's. A child let go keeps its totals here; taken up again, its new reader
+// books it from the start and counts no lower than them meanwhile. While the
+// tab's own conversation is still being read as history (a resumed one,
+// caught up over several ticks) no `byModel` is sent: a part-way total would
+// drop below an earlier tab's reading and be counted twice. The window stays
+// assumed, so the reading stays `estimated`; no cost is ever put on it.
+//
 // Nothing here writes to agy's files, and a symlinked transcript is ignored.
 // Every read is validated; whatever cannot be read is logged with its reason
 // and skipped, never thrown.
@@ -57,6 +68,7 @@ const {
   UUID_RE, AgyTranscriptState, agyContextMetrics, workspacesFromRows, workspaceMatch, AGY_TRANSCRIPT_FILES,
 } = require('./agytranscript');
 const { AgyTail } = require('./agytail');
+const { sumAgyByModel, maxAgyByModel } = require('./agytokens');
 
 /** agy CLI's app data folder (the IDE and Antigravity 2.0 use sibling folders). */
 const AGY_APP_DATA_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
@@ -84,6 +96,13 @@ const CHILD_SCAN_WINDOW_MS = 60 * 1000;
 const CHILD_IDLE_MS = 10 * 60 * 1000;
 /** Let-go children remembered with how far they were read, so a revived one is not replayed. */
 const MAX_RETIRED_CHILDREN = 256;
+/**
+ * Let-go children whose token totals one tab keeps. They outlive `retired`
+ * (MAX_RETIRED_CHILDREN): a child taken up again counts no lower than them.
+ * Past this many the oldest is folded into one sum, and that child, should
+ * it come back, is counted again from the start.
+ */
+const MAX_RETIRED_USAGE = 4096;
 /** Subagent conversations named anywhere, so no tab picks one as its own. */
 const MAX_KNOWN_SUBAGENTS = 1024;
 
@@ -108,6 +127,9 @@ function noteSubagent(id) {
     knownSubagentConversations.delete(knownSubagentConversations.keys().next().value);
   }
 }
+
+/** A followed child's token totals: what its reader booked, never below what was counted before. */
+const childUsage = (child) => maxAgyByModel(child.floor, child.tail.state.usageByModel());
 
 const defaultLog = (msg) => console.warn(`[agy-transcript] ${msg}`);
 const errText = (err) => (err && (err.code || err.message)) || String(err);
@@ -247,10 +269,16 @@ class AgyTranscriptWatcher {
     this.idleState = new AgyTranscriptState({ cwd: this.cwd });
     /** Whether a reading of the pinned file went out yet (an empty conversation still shows 0 %). */
     this.emitted = false;
-    /** child id -> {key, tail, movedAt} of the subagent conversations followed. */
+    /** child id -> {key, floor, tail, movedAt} of the subagent conversations followed. */
     this.children = new Map();
     /** child id -> bytes read, for children let go after going idle (oldest first). */
     this.retired = new Map();
+    /** child id -> its token totals per model when it was let go (outlives `retired`, see MAX_RETIRED_USAGE). */
+    this.retiredUsage = new Map();
+    /** Token totals of let-go children that fell out of `retiredUsage`. */
+    this.droppedUsage = {};
+    /** The last byModel sent, as JSON: a child's reading re-sends only when it changed. */
+    this.lastUsageKey = '';
     /** child id -> when it was first named, for children whose transcript is not there yet. */
     this.childrenWaiting = new Map();
     /** Until when the summaries database is asked for children (after an agent call). */
@@ -291,6 +319,8 @@ class AgyTranscriptWatcher {
     this.children.clear();
     this.childrenWaiting.clear();
     this.retired.clear();
+    this.retiredUsage.clear();
+    this.droppedUsage = {};
     this.pinned = null;
     this.main = null;
   }
@@ -415,15 +445,37 @@ class AgyTranscriptWatcher {
     if (this.main.state.unresolved > 0) {
       this.warnOnce('unresolved', `an agy tool call in ${file} got no result step (cancelled, or a transcript format LunaCore does not know)`);
     }
-    this.tickChildren(now);
-    if (!res || res.status !== 'read') return;
+    const childMoved = this.tickChildren(now);
     // A line still being written changes nothing: no repeat of the same reading.
-    if (this.emitted && !res.moved) return;
-    this.emitted = true;
+    const mainRead = Boolean(res) && res.status === 'read' && (!this.emitted || res.moved);
+    // A subagent alone never sends the first reading: the tab's own window is unread yet.
+    if (!mainRead && (!childMoved || !this.emitted)) return;
+    // Still inside the history it was pinned with: its totals are part-way.
+    const byModel = this.main.historyUntil > 0 ? null : this.usageByModel();
+    const usageKey = byModel ? JSON.stringify(byModel) : '';
+    // A subagent that moved without booking tokens changes nothing the tab shows.
+    if (!mainRead && (!byModel || usageKey === this.lastUsageKey)) return;
+    if (byModel) this.lastUsageKey = usageKey;
+    if (mainRead) this.emitted = true;
     const state = this.main.state;
-    this.onMetrics(agyContextMetrics(state.contextChars, {
+    const metrics = agyContextMetrics(state.contextChars, {
       file, elapsedMs: now - this.startedAt, model: state.model, usage: state.usage,
-    }));
+    });
+    this.onMetrics(byModel ? { ...metrics, byModel } : metrics);
+  }
+
+  /**
+   * The tab's real token totals per model: its own conversation plus every
+   * subagent conversation it followed, live or let go.
+   * @returns {Record<string, {input:number, output:number, cacheRead:number, cacheWrite:number}>}
+   */
+  usageByModel() {
+    return sumAgyByModel([
+      this.state.usageByModel(),
+      ...[...this.children.values()].map((child) => childUsage(child)),
+      ...this.retiredUsage.values(),
+      this.droppedUsage,
+    ]);
   }
 
   /**
@@ -530,8 +582,13 @@ class AgyTranscriptWatcher {
     if (historyUntil === null) return true;
     claimedAgyConversations.add(key);
     this.retired.delete(id);
+    // Its new reader starts at byte 0 and books every step again; until it
+    // has caught up, what was counted before is the floor.
+    const floor = this.retiredUsage.get(id) || {};
+    this.retiredUsage.delete(id);
     this.children.set(id, {
       key,
+      floor,
       tail: this.tailFor(found, { historyUntil, idPrefix: `agy:${id}:` }),
       movedAt: this.now(),
     });
@@ -563,12 +620,22 @@ class AgyTranscriptWatcher {
     claimedAgyConversations.delete(child.key);
     this.children.delete(id);
     this.retired.set(id, child.tail.offset);
+    this.retiredUsage.delete(id); // re-inserted: the map's order stays oldest-first
+    this.retiredUsage.set(id, childUsage(child));
     if (this.retired.size > MAX_RETIRED_CHILDREN) this.retired.delete(this.retired.keys().next().value);
+    if (this.retiredUsage.size > MAX_RETIRED_USAGE) this.foldOldestRetiredUsage();
     try {
       this.deliver({ ...ended, children: [] }, now);
     } catch (err) {
       this.warnOnce(`tick:${errText(err)}`, `tick failed: ${errText(err)}`);
     }
+  }
+
+  /** Folds the oldest let-go child's totals into droppedUsage: they still count. */
+  foldOldestRetiredUsage() {
+    const [id, usage] = this.retiredUsage.entries().next().value;
+    this.droppedUsage = sumAgyByModel([this.droppedUsage, usage]);
+    this.retiredUsage.delete(id);
   }
 
   /** Asks the summaries database for children of the conversations followed. */
@@ -589,15 +656,20 @@ class AgyTranscriptWatcher {
     return [...this.children.values()].some((child) => child.tail.hasOpenTask());
   }
 
+  /** @returns {boolean} whether any followed child read something new */
   tickChildren(now) {
     const scanDue = now - this.lastChildScan >= CHILD_SCAN_INTERVAL_MS;
     if (scanDue && (now < this.childScanUntil || this.hasOpenTask())) this.scanChildren(now);
     if (this.childrenWaiting.size > 0) this.adoptWaitingChildren(now);
+    let moved = false;
     for (const [id, child] of this.children) {
       const res = this.pollTail(child.tail, now);
-      if (res && res.moved) child.movedAt = now;
-      else if (now - child.movedAt > CHILD_IDLE_MS) this.retireChild(id, child, now);
+      if (res && res.moved) {
+        child.movedAt = now;
+        moved = true;
+      } else if (now - child.movedAt > CHILD_IDLE_MS) this.retireChild(id, child, now);
     }
+    return moved;
   }
 }
 

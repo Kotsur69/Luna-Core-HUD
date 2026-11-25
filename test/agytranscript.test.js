@@ -1519,3 +1519,185 @@ test('agyTranscriptConversation refuses anything that is not exactly a transcrip
   assert.equal(agyTranscriptConversation(null, AGY_ROOT), null);
   assert.equal(agyTranscriptConversation(42, AGY_ROOT), null);
 });
+
+// ---- real token counts per model, booked for God Mode (src/agytokens.js) ------------------
+
+const { usageFromTranscript } = require('../src/orchestraUsage');
+const { estimateSessionCost } = require('../src/observer');
+const { AgyUsageBook, sumAgyByModel } = require('../src/agytokens');
+
+// Summed by hand from the captured fixtures' PLANNER_RESPONSE steps.
+const ORCH_USAGE = {
+  'gemini-4-neon-xhigh': { input: 13681, output: 4878, cacheRead: 8533, cacheWrite: 0 },
+  'gemini-4-hydrogen-xhigh': { input: 25802, output: 1822, cacheRead: 35465, cacheWrite: 0 },
+};
+const SUB_USAGE = { 'gemini-4-hydrogen-xhigh': { input: 8308, output: 728, cacheRead: 3011, cacheWrite: 0 } };
+
+const plannerLine = (index, at, usage, model = 'gemini-4-argon-medium') => line({
+  step_index: index, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at, model,
+  input_tokens: usage[0], cache_read_tokens: usage[1], output_tokens: usage[2], content: 'ok',
+});
+
+test('usage: a captured transcript reports input/output/cacheRead totals per model', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  state.fold(parseSteps(CAPTURED_ORCH).steps);
+  assert.deepEqual(state.usageByModel(), ORCH_USAGE);
+});
+
+test('usage: a step logged again is counted once, with its newest counts', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const at = '2026-11-22T20:00:00Z';
+  // Streaming first (no counts yet), then DONE twice, the second time with final counts.
+  const streaming = line({ step_index: 1, type: 'PLANNER_RESPONSE', created_at: at, model: 'gemini-4-argon-medium', content: '' });
+  state.fold(parseSteps([streaming, plannerLine(1, at, [100, 10, 5]), plannerLine(1, at, [100, 10, 5])].join('\n')).steps);
+  assert.deepEqual(state.usageByModel(), { 'gemini-4-argon-medium': { input: 100, output: 5, cacheRead: 10, cacheWrite: 0 } });
+  state.fold(parseSteps(plannerLine(1, at, [120, 10, 7])).steps);
+  assert.deepEqual(state.usageByModel(), { 'gemini-4-argon-medium': { input: 120, output: 7, cacheRead: 10, cacheWrite: 0 } });
+  // The same index with another time is a NEW step, and counts on top.
+  state.fold(parseSteps(plannerLine(1, '2026-11-22T20:05:00Z', [1, 2, 3])).steps);
+  assert.deepEqual(state.usageByModel(), { 'gemini-4-argon-medium': { input: 121, output: 10, cacheRead: 12, cacheWrite: 0 } });
+  // A rewritten file read again from the start books nothing twice: the
+  // restarted state keeps what was booked, before and after the re-read.
+  const before = state.usageByModel();
+  const next = state.restarted();
+  assert.notEqual(next.usageBook, state.usageBook, 'a copy, not the same book');
+  assert.deepEqual(next.usageByModel(), before, 'kept across the restart');
+  next.fold(parseSteps(plannerLine(1, at, [120, 10, 7])).steps);
+  assert.deepEqual(next.usageByModel(), before);
+});
+
+test('usage: a planner step without a model of its own is booked under the model named before it', () => {
+  const state = new AgyTranscriptState({ cwd: CWD });
+  const bare = line({ step_index: 2, type: 'PLANNER_RESPONSE', created_at: '2026-11-22T20:00:02Z', input_tokens: 5, cache_read_tokens: 0, output_tokens: 1 });
+  state.fold(parseSteps([plannerLine(1, '2026-11-22T20:00:01Z', [10, 0, 2], 'gemini-4-neon-low'), bare].join('\n')).steps);
+  assert.deepEqual(state.usageByModel(), { 'gemini-4-neon-low': { input: 15, output: 3, cacheRead: 0, cacheWrite: 0 } });
+});
+
+test('usage: with no model known, or an unsafe one, a step is booked under "agy"', () => {
+  const book = new AgyUsageBook();
+  const step = (index, usage) => ({ index, type: 'PLANNER_RESPONSE', at: index, usage });
+  book.book(step(1, { input: 1, cacheRead: 0, output: 1 }), '');
+  book.book(step(2, { input: 2, cacheRead: 0, output: 2 }), '__proto__');
+  book.book(step(4, { input: 0, cacheRead: 0, output: 0 }), 'constructor');
+  book.book({ index: 3, type: 'USER_INPUT', at: 3, usage: { input: 9, cacheRead: 9, output: 9 } }, 'x');
+  assert.deepEqual(book.byModel(), { agy: { input: 3, output: 3, cacheRead: 0, cacheWrite: 0 } });
+  assert.deepEqual(sumAgyByModel([{ a: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } }, { a: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0 } }]),
+    { a: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0 } });
+  // An Object.prototype name is never looked up as an inherited member (that summed to NaN).
+  const proto = { constructor: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, toString: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };
+  assert.deepEqual(sumAgyByModel([proto, proto]), {});
+});
+
+test('usage: the watcher emits the tab\'s totals with its subagents\', and no price is invented for agy models', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: ORCH_ID, folder: tabDir }, { id: SUB_ID, folder: tabDir, parent: ORCH_ID }]);
+  const { watcher, out } = makeFullWatcher(root, tabDir);
+  writeTranscript(root, SUB_ID, CAPTURED_SUB, 'transcript_full.jsonl');
+  writeTranscript(root, ORCH_ID, CAPTURED_ORCH, 'transcript_full.jsonl');
+  drain(watcher, 5);
+  const last = out.metrics[out.metrics.length - 1];
+  assert.deepEqual(last.byModel, sumAgyByModel([ORCH_USAGE, SUB_USAGE]));
+  assert.deepEqual(last.byModel['gemini-4-hydrogen-xhigh'], { input: 34110, output: 2550, cacheRead: 38476, cacheWrite: 0 });
+  assert.equal(last.estimated, true);
+  assert.equal('cost' in last, false, 'no cost on an agy reading');
+  // What God Mode books from it: tokens, at no cost; the price table knows no agy model.
+  const booked = usageFromTranscript(last.byModel);
+  assert.equal(booked.costUsd, 0);
+  assert.equal(booked.inputTokens, 13681 + 34110);
+  assert.equal(booked.cacheReadTokens, 8533 + 38476);
+  assert.equal(estimateSessionCost(new Map(Object.entries(last.byModel))), null);
+  // Nothing new: no repeat of the same reading.
+  const count = out.metrics.length;
+  drain(watcher, 3);
+  assert.equal(out.metrics.length, count);
+  watcher.stop();
+});
+
+const PARENT_G = 'abababab-7777-4777-8777-abababababab';
+const CHILD_H = 'cdcdcdcd-8888-4888-8888-cdcdcdcdcdcd';
+
+test('usage: a subagent let go keeps its tokens, and taken up again is not counted twice', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: PARENT_G, folder: tabDir }]);
+  let clock = Date.parse('2026-11-22T20:00:00Z');
+  const { watcher, out } = makeFullWatcher(root, tabDir, { now: () => clock });
+  const named = (step) => [
+    line({ type: 'PLANNER_RESPONSE', step_index: step, tool_calls: [{ name: 'invoke_subagent', args: { Role: 'helper' } }] }),
+    line({ type: 'GENERIC', step_index: step + 1, status: 'DONE', content: `{"conversationId": "${CHILD_H}"}` }),
+  ].join('\n');
+  const childFile = writeTranscript(root, CHILD_H, `${plannerLine(1, '2026-11-22T20:00:01Z', [100, 0, 10])}\n`);
+  const parent = writeTranscript(root, PARENT_G, `${named(1)}\n`);
+  drain(watcher, 3);
+  const child = () => out.metrics[out.metrics.length - 1].byModel['gemini-4-argon-medium'];
+  assert.deepEqual(child(), { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 });
+  clock += 11 * 60 * 1000;
+  watcher.safeTick();
+  assert.equal(watcher.children.has(CHILD_H), false, 'let go');
+  assert.deepEqual(watcher.usageByModel()['gemini-4-argon-medium'], { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 });
+  fs.appendFileSync(childFile, `${plannerLine(2, '2026-11-22T20:12:00Z', [50, 5, 1])}\n`);
+  fs.appendFileSync(parent, `${named(3)}\n`);
+  drain(watcher, 3);
+  assert.ok(watcher.children.has(CHILD_H), 'taken up again');
+  assert.deepEqual(child(), { input: 150, output: 11, cacheRead: 5, cacheWrite: 0 });
+  watcher.stop();
+});
+
+/** Whether no model's input, output or cacheRead ever drops from one reading to the next. */
+function neverDrops(readings) {
+  for (let i = 1; i < readings.length; i++) {
+    for (const [model, before] of Object.entries(readings[i - 1])) {
+      const now = readings[i][model];
+      if (!now || ['input', 'output', 'cacheRead'].some((k) => now[k] < before[k])) return false;
+    }
+  }
+  return true;
+}
+
+const PARENT_I = 'efefefef-9999-4999-8999-efefefefefef';
+const CHILD_J = '12121212-aaaa-4aaa-8aaa-121212121212';
+const RESUMED_K = '34343434-bbbb-4bbb-8bbb-343434343434';
+
+test('usage: a subagent taken up again (even out of `retired`) and read back in small chunks is neither lowered nor counted twice', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  writeSummaryRows(root, [{ id: PARENT_I, folder: tabDir }]);
+  let clock = Date.parse('2026-11-22T20:00:00Z');
+  // One step line per read: the re-read takes several ticks.
+  const { watcher, out } = makeFullWatcher(root, tabDir, { now: () => clock, chunkBytes: 400 });
+  const named = (step) => [
+    line({ type: 'PLANNER_RESPONSE', step_index: step, tool_calls: [{ name: 'invoke_subagent', args: {} }] }),
+    line({ type: 'GENERIC', step_index: step + 1, status: 'DONE', content: `{"conversationId": "${CHILD_J}"}` }),
+  ].join('\n');
+  const steps = [1, 2, 3, 4].map((i) => plannerLine(i, `2026-11-22T20:00:0${i}Z`, [100, 10, 1]));
+  const childFile = writeTranscript(root, CHILD_J, `${steps.join('\n')}\n`);
+  const parent = writeTranscript(root, PARENT_I, `${named(1)}\n`);
+  drain(watcher, 10);
+  clock += 11 * 60 * 1000;
+  watcher.safeTick();
+  assert.equal(watcher.children.has(CHILD_J), false, 'let go');
+  // Pushed out of `retired` (past MAX_RETIRED_CHILDREN): its new reader starts at byte 0.
+  watcher.retired.delete(CHILD_J);
+  fs.appendFileSync(childFile, `${plannerLine(5, '2026-11-22T20:12:00Z', [7, 0, 0])}\n`);
+  fs.appendFileSync(parent, `${named(3)}\n`);
+  drain(watcher, 10);
+  const readings = out.metrics.filter((m) => m.byModel).map((m) => m.byModel);
+  assert.ok(neverDrops(readings), 'a part-way re-read must not read as a transcript that started over');
+  assert.deepEqual(readings[readings.length - 1]['gemini-4-argon-medium'], { input: 407, output: 4, cacheRead: 40, cacheWrite: 0 });
+  watcher.stop();
+});
+
+test('usage: a resumed conversation sends no byModel until its history is read', () => {
+  const tabDir = makeTabDir();
+  const root = makeAppData(null);
+  const steps = [1, 2, 3, 4].map((i) => plannerLine(i, `2026-11-22T20:00:0${i}Z`, [100, 0, 10]));
+  writeTranscript(root, RESUMED_K, `${steps.join('\n')}\n`);
+  const { watcher, out } = makeFullWatcher(root, tabDir, { conversationId: RESUMED_K, chunkBytes: 400 });
+  drain(watcher, 10);
+  assert.equal(watcher.pinned.id, RESUMED_K);
+  const withUsage = out.metrics.filter((m) => m.byModel);
+  assert.equal(withUsage.length, 1, 'one reading, once caught up');
+  assert.deepEqual(withUsage[0].byModel, { 'gemini-4-argon-medium': { input: 400, output: 40, cacheRead: 0, cacheWrite: 0 } });
+  watcher.stop();
+});

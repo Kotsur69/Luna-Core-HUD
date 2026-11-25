@@ -138,7 +138,7 @@ const { readAllRepos, fetchRepo, scanForRepos, readRepoStatus, fetchDir, commitA
 // Active-Files Heatmap's second signal: git-sourced changes, for files a
 // session touched via Bash/PowerShell rather than Read/Edit/Write (see
 // src/gitfiles.js's header for why the transcript path alone misses these).
-const { GitFileWatcher, git, pathInsideCwd } = require('./gitfiles');
+const { GitFileWatcher, git, pathInsideCwd, realPathInsideCwd } = require('./gitfiles');
 // Per-terminal attribution for those git rows: the watcher reads the whole
 // repo, this decides which changes belong to which terminal.
 const { SessionAttribution } = require('./gitattribution');
@@ -2227,15 +2227,17 @@ function spawnInto(session, profile, launch = null) {
   // watcher there would only adopt ANOTHER tab's newest .jsonl in the same cwd.
   // agy gets its own reader below.
   const transcriptKind = transcriptKindFor(command);
+  // God Mode books its own worker tabs' tokens (orchestraUsage.js); other tabs are ignored there.
+  // The context fill feeds a run's opt-in context guard (orchestraContextGuard.js).
+  // Claude and agy tabs alike; an agy tab's tokens are booked with no cost.
+  const bookAndSendMetrics = (metrics) => {
+    if (metrics && metrics.byModel) {
+      orchestraRuns.onSessionUsage(session.id, metrics.byModel, { tokens: metrics.tokens, limit: metrics.limit });
+    }
+    send('metrics:context', { sessionId: session.id, metrics });
+  };
   session.watcher = transcriptKind !== 'claude' ? null : new TranscriptWatcher(
-    (metrics) => {
-      // God Mode books its own worker tabs' tokens (orchestraUsage.js); other tabs are ignored there.
-      // The context fill feeds a run's opt-in context guard (orchestraContextGuard.js).
-      if (metrics && metrics.byModel) {
-        orchestraRuns.onSessionUsage(session.id, metrics.byModel, { tokens: metrics.tokens, limit: metrics.limit });
-      }
-      send('metrics:context', { sessionId: session.id, metrics });
-    },
+    bookAndSendMetrics,
     {
       cwd,
       sessionUuid: session.transcriptId,
@@ -2305,11 +2307,12 @@ function spawnInto(session, profile, launch = null) {
   // An agy tab: Active files, Skill Tracker, MCP calls and an estimated
   // context fill from agy's transcript and its subagents' (src/agywatcher.js).
   // Its tool events also make the tab count as active for the git attribution
-  // below, which needs them to claim anything. No token booking for God Mode
-  // yet: only planner steps log token counts, and the window is assumed.
+  // below, which needs them to claim anything. Its planner steps' real token
+  // counts (subagents' included) are booked for God Mode like a Claude tab's;
+  // the window stays assumed, so the reading stays `estimated`.
   if (session.agyWatcher) session.agyWatcher.stop();
   session.agyWatcher = transcriptKind !== 'agy' ? null : new AgyTranscriptWatcher(
-    (metrics) => send('metrics:context', { sessionId: session.id, metrics }),
+    bookAndSendMetrics,
     {
       cwd,
       conversationId: conversationIdFromCommand(command),
@@ -3494,6 +3497,8 @@ function registerIpc() {
 
     const rel = pathInsideCwd(session.cwd, file);
     if (!rel) return fail('outside');
+    // Lexical is not enough: an in-repo symlink may point outside it.
+    if (!(await realPathInsideCwd(session.cwd, rel))) return fail('outside');
 
     const cwd = session.cwd;
     // No repo / no commits yet (no HEAD) / git hung or missing -> its own
