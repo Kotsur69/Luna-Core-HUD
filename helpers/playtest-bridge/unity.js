@@ -83,19 +83,91 @@ const UNITY_PIPELINE = Object.freeze({
   driver: pipelineDriver,
 });
 
+// A project asset path LunaCore built: "Assets/" then segments of word
+// characters, spaces, dots, parentheses, plus and dashes (lunasworkZip's
+// SAFE_NAME_RE), each starting with a word character, so ".." never passes.
+// None of these characters needs escaping inside a C# string literal.
+const ASSET_PATH_RE = /^Assets(?:\/\w[\w .()+-]{0,119}){1,12}$/;
+const MATERIAL_TEXTURE_PROPERTY = '_BaseMap';
+const MATERIAL_TYPE = 'UnityEngine.Material';
+const REFRESH_MENU = 'Assets/Refresh';
+
+/** The path itself; throws unless it is a project asset path LunaCore could have built. */
+function assetPath(value) {
+  if (typeof value !== 'string' || !ASSET_PATH_RE.test(value)) throw new Error(`not a project asset path: ${String(value).slice(0, 200)}`);
+  return value;
+}
+
+/**
+ * C# for `script eval` that saves a model asset (FBX...) as a prefab: the
+ * model is instantiated into a throwaway preview scene, saved with
+ * PrefabUtility.SaveAsPrefabAsset (a prefab variant of the model) and the
+ * preview scene is closed again, so the open scene is never touched or dirtied.
+ * Both paths are checked by assetPath(), so they cannot break out of their literal.
+ */
+function modelPrefabCode(modelPath, prefabPath) {
+  const model = JSON.stringify(assetPath(modelPath));
+  const prefab = JSON.stringify(assetPath(prefabPath));
+  return [
+    `var model = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.GameObject>(${model});`,
+    `if (model == null) throw new System.Exception("no model asset at " + ${model} + " (not imported, or no importer for this format)");`,
+    'var stage = UnityEditor.SceneManagement.EditorSceneManager.NewPreviewScene();',
+    'try {',
+    '  var instance = (UnityEngine.GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(model, stage);',
+    `  var saved = UnityEditor.PrefabUtility.SaveAsPrefabAsset(instance, ${prefab}, out var ok);`,
+    `  if (!ok || saved == null) throw new System.Exception("could not save the prefab " + ${prefab});`,
+    '  return UnityEditor.AssetDatabase.GetAssetPath(saved);',
+    '} finally {',
+    '  UnityEditor.SceneManagement.EditorSceneManager.ClosePreviewScene(stage);',
+    '}',
+  ].join('\n');
+}
+
 /**
  * Unity Pipeline asset calls of the Luna's Work asset pipeline
- * (src/lunasworkAssetPipeline.js): import a file written under Assets/, make a
- * prefab from an imported model, a material from an imported texture. Paths
- * are project-relative ("Assets/..."), built by LunaCore, never by a model.
- * NOT verified against a live editor yet: if com.unity.pipeline names these
- * commands differently, fix them here.
+ * (src/lunasworkAssetPipeline.js). Paths are project-relative ("Assets/..."),
+ * built by LunaCore, never by a model; command names and parameter keys are fixed.
+ *
+ * Verified live 2026-11-25 against Unity 6000.6.4f1 + com.unity.pipeline 1.0.0
+ * (authoring root "Assets", URP 17.6), through pipeline-http.js:
+ *   refresh         LunaCore writes the file under Assets/ itself, and with the
+ *                   editor unfocused autoRefresh does NOT import it (asset find
+ *                   saw nothing). The Assets/Refresh menu item imports it without
+ *                   taking focus. `asset import --source --path` is not used: it
+ *                   copies an EXTERNAL file in, and the file is already at its path.
+ *   modelPrefab     `prefab create --source <model>` fails ("Can't save persistent
+ *                   Objects...") and `prefab instantiate` / `prefab create_variant`
+ *                   refuse a model ("is not a prefab asset"), for FBX and OBJ
+ *                   alike, each with a console ERROR. So the prefab is made by a
+ *                   fixed `script eval` template (modelPrefabCode); it needs the
+ *                   Pipeline's script eval capability to be enabled.
+ *   material        `asset create --type UnityEngine.Material` (URP/Lit under URP,
+ *                   else Standard), then `material set_properties` with
+ *                   properties as a JSON object; the answer lists applied[] /
+ *                   unknown[] property names (checkTextureApplied).
  */
 const UNITY_PIPELINE_ASSETS = Object.freeze({
-  importAsset: (assetPath) => ['assets import', { path: assetPath }],
-  createPrefab: (sourcePath, prefabPath) => ['prefab create', { source: sourcePath, path: prefabPath }],
-  createMaterial: (texturePath, materialPath) => ['material create', { path: materialPath, texture: texturePath }],
+  refresh: () => ['editor invoke_menu', { path: REFRESH_MENU }],
+  modelPrefab: (modelPath, prefabPath) => ['script eval', { code: modelPrefabCode(modelPath, prefabPath) }],
+  createMaterial: (materialPath) => ['asset create', { path: assetPath(materialPath), type: MATERIAL_TYPE }],
+  setMaterialTexture: (materialPath, texturePath) => [
+    'material set_properties',
+    { material: assetPath(materialPath), properties: { [MATERIAL_TEXTURE_PROPERTY]: { path: assetPath(texturePath) } } },
+  ],
 });
+
+/**
+ * Throws unless a `material set_properties` answer applied the texture: an
+ * unknown property is only listed in unknown[] (e.g. _BaseMap on a built-in
+ * pipeline shader), not raised, and would leave an untextured material behind.
+ */
+function checkTextureApplied(result) {
+  const applied = isObj(result) && Array.isArray(result.applied) ? result.applied : [];
+  if (!applied.includes(MATERIAL_TEXTURE_PROPERTY)) {
+    throw new Error(`the material did not take the texture (${MATERIAL_TEXTURE_PROPERTY} not applied; is the shader URP/Lit?)`);
+  }
+  return result;
+}
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
@@ -188,6 +260,7 @@ module.exports = {
   UNITY_MCP,
   UNITY_PIPELINE,
   UNITY_PIPELINE_ASSETS,
+  checkTextureApplied,
   UNITY_TRANSPORTS,
   DRIVER_TOOL,
   DRIVER_GROUP,

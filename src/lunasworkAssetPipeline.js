@@ -55,7 +55,7 @@ const { blenderExportScript } = require('./lunasworkBlenderScript');
 const { createBlenderModel } = require('./lunasworkAssetBlender');
 const { MAX_USD_PER_CREDIT, resultStem, recordText, cleanParams, createHiggsfieldFinal } = require('./lunasworkAssetHiggsfield');
 const { cleanAudioPost, createAudioNormalizer, normalizeAll } = require('./lunasworkAudioNormalize');
-const { UNITY_PIPELINE_ASSETS, pipelineCall } = require('../helpers/playtest-bridge/unity');
+const { UNITY_PIPELINE_ASSETS, checkTextureApplied, pipelineCall } = require('../helpers/playtest-bridge/unity');
 
 const DEFAULT_ART_ROOT = 'Assets/BladeBullet/Art';
 const ART_ROOT_RE = /^Assets(\/[A-Za-z0-9_-]{1,40}){1,4}$/;
@@ -290,9 +290,12 @@ function createAssetPipeline(deps) {
   }
 
   /**
-   * Imports one file into the open editor. What follows depends on the file,
-   * not only the asked kind: a model file (FBX / GLB) gets a prefab, an image
-   * of a material kind (texture) a material. Never throws.
+   * Imports one file into the open editor. The file is already written under
+   * Assets/, so the import is an AssetDatabase refresh (an unfocused editor
+   * does not auto-refresh; see UNITY_PIPELINE_ASSETS). What follows depends on
+   * the file, not only the asked kind: a model file (FBX / GLB) gets a prefab,
+   * an image of a material kind (texture) a URP material that uses it as its
+   * base map. Never throws.
    */
   async function importToUnity(rel, kind) {
     if (!d.unity || typeof d.unity.exec !== 'function') return { ok: false, calls: [], error: 'unity not connected' };
@@ -304,9 +307,14 @@ function createAssetPipeline(deps) {
     const ext = path.posix.extname(rel).slice(1).toLowerCase();
     const base = rel.slice(0, rel.length - ext.length - 1);
     try {
-      await call(UNITY_PIPELINE_ASSETS.importAsset(rel));
-      if (MODEL_EXTS.includes(ext)) await call(UNITY_PIPELINE_ASSETS.createPrefab(rel, `${base}.prefab`));
-      else if (KINDS[kind].material && IMAGE_EXTS.includes(ext)) await call(UNITY_PIPELINE_ASSETS.createMaterial(rel, `${base}.mat`));
+      await call(UNITY_PIPELINE_ASSETS.refresh());
+      if (MODEL_EXTS.includes(ext)) {
+        await call(UNITY_PIPELINE_ASSETS.modelPrefab(rel, `${base}.prefab`));
+      } else if (KINDS[kind].material && IMAGE_EXTS.includes(ext)) {
+        const material = `${base}.mat`;
+        await call(UNITY_PIPELINE_ASSETS.createMaterial(material));
+        checkTextureApplied(await call(UNITY_PIPELINE_ASSETS.setMaterialTexture(material, rel)));
+      }
       return { ok: true, calls };
     } catch (err) {
       return { ok: false, calls, error: oneLine(errText(err), 300) };

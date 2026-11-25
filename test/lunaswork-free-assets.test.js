@@ -67,7 +67,9 @@ function tempRepo() {
 
 /** The real executor over a temp repo, a fake Unity and the given fake fetch. */
 function library(dir, fetch, { keys = KEYS, execFile } = {}) {
-  const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return { ok: true }; } };
+  // set_properties answers like the live editor: the texture was applied.
+  const answer = (command) => (command === 'material set_properties' ? { applied: ['_BaseMap'], unknown: [] } : { ok: true });
+  const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return answer(command); } };
   const logged = [];
   const pipe = P.createAssetPipeline({ repoPath: dir, artRoot: ART, unity, recordSpend: () => ({ ok: true }), logAsset: (e) => logged.push(e), now: () => 1, execFile });
   const keyStore = { get: (s) => keys[s] || null, secrets: () => Object.values(keys) };
@@ -160,7 +162,7 @@ test('Poly Haven: search filters by the query, import writes the HDRI, its ledge
   assert.deepEqual(ledgerRows(dir), [{ name: 'Dusk Sky', source: 'https://polyhaven.com/a/dusk_sky', author: 'Greg Zaal', license: 'CC0', path: `${ART}/Textures/dusk-sky.hdr` }]);
   assert.match(read(dir, L.LEDGER_FILE), /^# Asset licenses/);
   assert.equal(res.credits, null, 'CC0 only: no credits file');
-  assert.deepEqual(unity.calls.map((c) => c.command), ['assets import']);
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu']);
   assert.equal(logged[0].tool, 'library');
 });
 
@@ -172,12 +174,10 @@ test('Poly Haven: a model comes with its textures into one folder; the folder is
   assert.deepEqual(res.files, [`${ART}/Props/old-crate/old_crate.fbx`, `${ART}/Props/old-crate/textures/old_crate_diff_2k.jpg`]);
   assert.equal(res.main, `${ART}/Props/old-crate/old_crate.fbx`);
   assert.equal(ledgerRows(dir)[0].path, `${ART}/Props/old-crate/`);
-  // The texture is imported before the model, then the model gets its prefab.
-  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [
-    ['assets import', `${ART}/Props/old-crate/textures/old_crate_diff_2k.jpg`],
-    ['assets import', `${ART}/Props/old-crate/old_crate.fbx`],
-    ['prefab create', `${ART}/Props/old-crate/old_crate.prefab`],
-  ]);
+  // The texture is imported before the model (one refresh per file), then the model gets its prefab.
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu', 'editor invoke_menu', 'script eval']);
+  assert.match(unity.calls[2].parameters.code, /LoadAssetAtPath<UnityEngine\.GameObject>\("Assets\/Game\/Art\/Props\/old-crate\/old_crate\.fbx"\)/);
+  assert.match(unity.calls[2].parameters.code, /SaveAsPrefabAsset\(instance, "Assets\/Game\/Art\/Props\/old-crate\/old_crate\.prefab"/);
   // Importing it again never overwrites: -v2.
   const again = await lib.importAsset({ source: 'polyhaven', id: 'old_crate', name: 'Old Crate', kind: 'prop' });
   assert.equal(again.main, `${ART}/Props/old-crate-v2/old_crate.fbx`);
@@ -325,8 +325,9 @@ test('ambientCG: a zipped texture set is unpacked (only maps, no DirectX normal)
   assert.deepEqual(res.files, [`${ART}/Textures/brick-wall/Bricks001_2K-JPG_Color.jpg`, `${ART}/Textures/brick-wall/Bricks001_2K-JPG_NormalGL.jpg`]);
   assert.deepEqual(ledgerRows(dir), [{ name: 'Brick Wall', source: 'https://ambientcg.com/view?id=Bricks001', author: 'ambientCG', license: 'CC0', path: `${ART}/Textures/brick-wall/` }]);
   // The color map is the main file: it gets the material.
-  assert.equal(unity.calls.at(-1).command, 'material create');
-  assert.equal(unity.calls.at(-1).parameters.texture, `${ART}/Textures/brick-wall/Bricks001_2K-JPG_Color.jpg`);
+  assert.equal(unity.calls.at(-1).command, 'material set_properties');
+  assert.deepEqual(unity.calls.at(-1).parameters.properties, { _BaseMap: { path: `${ART}/Textures/brick-wall/Bricks001_2K-JPG_Color.jpg` } });
+  assert.deepEqual(unity.calls.at(-2).parameters, { path: `${ART}/Textures/brick-wall/Bricks001_2K-JPG_Color.mat`, type: 'UnityEngine.Material' });
 });
 
 // ---- Freesound --------------------------------------------------------------------------
@@ -884,8 +885,8 @@ test('Sketchfab without a GLB: the glTF zip comes in with its folders, the .gltf
   assert.equal(res.main, `${root}/scene.gltf`);
   assert.equal(ledgerRows(dir)[0].path, `${root}/`);
   // A .gltf gets its prefab like any model.
-  assert.deepEqual(unity.calls.at(-1), { command: 'prefab create', parameters: unity.calls.at(-1).parameters });
-  assert.equal(unity.calls.at(-1).parameters.path, `${root}/scene.prefab`);
+  assert.equal(unity.calls.at(-1).command, 'script eval');
+  assert.ok(unity.calls.at(-1).parameters.code.includes(`SaveAsPrefabAsset(instance, "${root}/scene.prefab"`));
 });
 
 test('a credits file that cannot be written restores the ledger and takes the files and their folders out', async () => {
@@ -1181,7 +1182,7 @@ test('audioPost on an audio import: ffmpeg gets plain argument tokens, no shell,
   assert.match(res.note, /Audio post-process \(leading silence trimmed, tempo 100 -> 120 BPM, -14 LUFS\) applied/);
   // The ledger row and the Unity import still point at the final file.
   assert.equal(ledgerRows(dir)[0].path, rel);
-  assert.equal(unity.calls[0].parameters.path, rel);
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu']);
 });
 
 test('audioPost: no ffmpeg on PATH (ENOENT) keeps the original bytes and adds a note', async () => {
