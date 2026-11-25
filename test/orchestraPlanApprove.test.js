@@ -15,6 +15,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const { approveTarget, createPlanApprover, outsidePaths } = require('../src/orchestraPlanApprove.js');
+const { LOADED_GIT_TIMEOUT_MS } = require('../test-support/under-load');
 
 const SLUG = 'demo-plan-ab12cd';
 const BRANCH = 'luna-plan/synthesis-x1';
@@ -72,6 +73,7 @@ const view = (over = {}) => ({
 function approver() {
   const store = { list: [{ text: 'mine', done: false, at: 1 }], writes: 0, changed: 0 };
   const approve = createPlanApprover({
+    gitTimeoutMs: LOADED_GIT_TIMEOUT_MS,
     readTodos: () => store.list,
     writeTodos: (_id, list) => {
       store.list = list;
@@ -125,7 +127,7 @@ test('a plan branch that touches anything outside its folder is refused and noth
   const head = git(repo, 'rev-parse', 'HEAD');
   const { approve, store } = approver();
   const res = await approve({ projectId: 'p', repoPath: repo, view: view() });
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(res.error, 'outsidePlanFolder');
   assert.deepEqual(res.outside, ['src/app.js']);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), head, 'main did not move');
@@ -140,7 +142,7 @@ test('a merge conflict is aborted and refused; the checkout stays clean', async 
   const head = git(repo, 'rev-parse', 'HEAD');
   const { approve, store } = approver();
   const res = await approve({ projectId: 'p', repoPath: repo, view: view() });
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(res.error, 'mergeConflict');
   assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
   assert.equal(git(repo, 'status', '--porcelain'), '', 'merge aborted, nothing left behind');

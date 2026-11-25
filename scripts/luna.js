@@ -37,7 +37,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseArgs, promisify } = require('node:util');
+const { parseArgs } = require('node:util');
 const { execFile } = require('node:child_process');
 
 const { projectFromRepoKey, splitKey, GLOBAL } = require('../src/memoryrecord');
@@ -58,6 +58,7 @@ const { createLog, logPath, captureStats, usage, decisionEvent, memoryNotes, DAY
 const { cardSessions, cardSessionLines, auditReport } = require('../src/memoryuse');
 const { reviewList, verify, retire } = require('../src/memoryreview');
 const { changeQueries, readChanges } = require('../src/memorychanges');
+const { gitFailure } = require('../src/worktrees');
 const { machineName } = require('../src/missionledgersync');
 const { notWantedTitles, readPeers, setPeerSource } = require('../src/memorysignals');
 const { exportAll } = require('../src/memoryexport');
@@ -517,7 +518,18 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(
 // A command Mati runs by hand, not a poller: room for git on a busy machine
 // (15 s was cut short while LunaCore and test suites ran git in parallel).
 const GIT_TIMEOUT_MS = 60000;
-const execFileAsync = promisify(execFile);
+// Test-only override of GIT_TIMEOUT_MS: suites under heavy load pass a longer one.
+const GIT_TIMEOUT_ENV = 'LUNA_GIT_TIMEOUT_MS';
+const MAX_GIT_TIMEOUT_MS = 60 * 60 * 1000;
+
+/** The git timeout: GIT_TIMEOUT_MS, or a valid LUNA_GIT_TIMEOUT_MS (a positive whole number of ms, at most an hour). */
+function gitTimeoutMs(env = process.env) {
+  const raw = env[GIT_TIMEOUT_ENV];
+  if (raw === undefined || raw === '') return GIT_TIMEOUT_MS;
+  const ms = /^\d{1,7}$/.test(raw) ? Number(raw) : NaN;
+  if (!(ms > 0 && ms <= MAX_GIT_TIMEOUT_MS)) throw new UsageError(`${GIT_TIMEOUT_ENV}: give a whole number of milliseconds from 1 to ${MAX_GIT_TIMEOUT_MS}`);
+  return ms;
+}
 
 /**
  * The --since value: an ISO date (or date-time with a zone), a tag name, or
@@ -540,10 +552,22 @@ function parseSince(value) {
   throw new UsageError('--since takes a tag name (v0.28.0) or an ISO date (2026-11-01)');
 }
 
-/** One git query about the repository of the current folder, without a shell; its first output line. */
-async function gitLine(args) {
-  const { stdout } = await execFileAsync('git', ['-C', process.cwd(), ...args], { cwd: GIT_START_DIR, timeout: GIT_TIMEOUT_MS, windowsHide: true, encoding: 'utf8' });
-  return String(stdout).split(/\r?\n/)[0].trim();
+/**
+ * One git query about the repository of the current folder, without a shell;
+ * its first output line. A failure rejects with what went wrong: our timeout
+ * ('git timed out after Ns') or git's own error line.
+ * @param {string[]} args
+ * @param {{execImpl?:Function, timeoutMs?:number}} [opts] execImpl: child_process.execFile compatible
+ */
+function gitLine(args, opts = {}) {
+  const execImpl = typeof opts.execImpl === 'function' ? opts.execImpl : execFile;
+  const timeoutMs = Number.isInteger(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : gitTimeoutMs();
+  return new Promise((resolve, reject) => {
+    execImpl('git', ['-C', process.cwd(), ...args], { cwd: GIT_START_DIR, timeout: timeoutMs, windowsHide: true, encoding: 'utf8' }, (err, stdout, stderr) => {
+      if (err) reject(new Error(gitFailure(err, stderr, timeoutMs)));
+      else resolve(String(stdout).split(/\r?\n/)[0].trim());
+    });
+  });
 }
 
 /** The moment --since names: a date as given, or the date of a tag (its tagger date, else its commit's). */
@@ -660,4 +684,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, resolveConfigDir, installedConfigDir, parseSince, UsageError, CLONE_CONFIG_DIR };
+module.exports = { main, resolveConfigDir, installedConfigDir, parseSince, UsageError, CLONE_CONFIG_DIR, gitLine, gitTimeoutMs, GIT_TIMEOUT_MS };

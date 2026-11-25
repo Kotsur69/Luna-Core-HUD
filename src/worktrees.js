@@ -157,6 +157,21 @@ function gitBroke(err, timeoutMs = GIT_TIMEOUT_MS) {
   return '';
 }
 
+/**
+ * One line on why an execFile git call failed, never empty: our timeout or a
+ * spawn error first (git's stderr is usually empty then), else git's own
+ * fatal/error line, else the exec error's first line.
+ * @param {Error|null} err the execFile callback error
+ * @param {string} stderr
+ * @param {number} [timeoutMs] the timeout the call ran with
+ */
+function gitFailure(err, stderr, timeoutMs = GIT_TIMEOUT_MS) {
+  const broke = gitBroke(err, timeoutMs);
+  const said = gitError(stderr);
+  if (broke) return said ? `${broke}; ${said}` : broke;
+  return said || firstLine(err && err.message) || 'git failed without output';
+}
+
 /** A process killed by our timer (execFile sets killed / signal). */
 function isTimeout(err) {
   return !!(err && (err.killed || err.signal));
@@ -840,6 +855,8 @@ module.exports = {
   runGit,
   firstLine,
   gitError,
+  gitBroke,
+  gitFailure,
   createVerifySemaphore,
   sharedVerifySemaphore,
   DEFAULT_VERIFY_CONCURRENCY,

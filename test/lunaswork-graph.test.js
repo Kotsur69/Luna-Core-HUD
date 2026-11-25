@@ -15,7 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile, execFileSync } = require('child_process');
-const { removeDir } = require('../test-support/under-load');
+const { removeDir, LOADED_GIT_TIMEOUT_MS } = require('../test-support/under-load');
 
 const G = require('../src/lunasworkGraph');
 
@@ -81,7 +81,7 @@ test('re-index via claude without the CLI; the codemaps are committed and pushed
   const r = setupRepo();
   try {
     const claude = fakeClaude({ write: writeMap('# Overview v1\n') });
-    const { refreshGraph } = G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null });
+    const { refreshGraph } = G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => null });
     const res = await refreshGraph({ repoPath: r.checkout, runId: 'lwtest1', iteration: 3 });
 
     assert.equal(res.ok, true, JSON.stringify(res.notes));
@@ -97,7 +97,7 @@ test('re-index via claude without the CLI; the codemaps are committed and pushed
     // Same maps again: nothing to commit.
     const again = await refreshGraph({ repoPath: r.checkout, runId: 'lwtest1', iteration: 4 });
     assert.equal(again.codemaps, 'unchanged');
-    assert.equal(again.ok, true);
+    assert.equal(again.ok, true, JSON.stringify(again));
   } finally {
     await r.done();
   }
@@ -116,7 +116,7 @@ test('the codebase-memory CLI is used when it is on PATH; its error is a note', 
       return { stdin: null };
     };
     const claude = fakeClaude({ write: writeMap('# Overview\n') });
-    const { refreshGraph } = G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => cli, execImpl });
+    const { refreshGraph } = G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => cli, execImpl });
     const first = await refreshGraph({ repoPath: r.checkout, iteration: 1 });
     assert.equal(first.via, 'cli');
     assert.equal(first.indexed, true);
@@ -125,7 +125,7 @@ test('the codebase-memory CLI is used when it is on PATH; its error is a note', 
 
     const second = await refreshGraph({ repoPath: r.checkout, iteration: 2 });
     assert.equal(second.indexed, false);
-    assert.equal(second.ok, false);
+    assert.equal(second.ok, false, JSON.stringify(second));
     assert.deepEqual(second.notes, ['code graph not re-indexed (cli): repo not found']);
   } finally {
     await r.done();
@@ -142,7 +142,7 @@ test('a stray edit outside docs/CODEMAPS is restored, a new stray file reported,
         fs.writeFileSync(path.join(cwd, 'stray.txt'), 'x\n');
       },
     });
-    const { refreshGraph } = G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null });
+    const { refreshGraph } = G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => null });
     const res = await refreshGraph({ repoPath: r.checkout, iteration: 2 });
 
     assert.equal(res.codemaps, 'committed');
@@ -162,10 +162,10 @@ test('a codemaps commit that cannot be pushed moves nothing locally, so the chec
     const before = git(r.checkout, 'rev-parse', 'HEAD');
     git(r.checkout, 'remote', 'set-url', 'origin', path.join(r.dir, 'missing.git'));
     const claude = fakeClaude({ write: writeMap('# Overview\n') });
-    const { refreshGraph } = G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null });
+    const { refreshGraph } = G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => null });
     const res = await refreshGraph({ repoPath: r.checkout, iteration: 2 });
 
-    assert.equal(res.ok, false);
+    assert.equal(res.ok, false, JSON.stringify(res));
     assert.equal(res.codemaps, 'failed');
     assert.equal(res.committed, false);
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), before, 'the branch never moved');
@@ -183,7 +183,7 @@ test('a checkout with a commit origin lacks is never published with the maps', a
     git(r.checkout, 'commit', '-q', '-am', 'local work');
     const originBefore = git(r.origin, 'rev-parse', 'main');
     const claude = fakeClaude({ write: writeMap('# Overview\n') });
-    const { refreshGraph } = G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null });
+    const { refreshGraph } = G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => null });
     const res = await refreshGraph({ repoPath: r.checkout, iteration: 2 });
     assert.equal(res.codemaps, 'failed');
     assert.equal(git(r.origin, 'rev-parse', 'main'), originBefore, 'origin untouched');
@@ -199,7 +199,7 @@ test('the codemaps commit leaves what Mati staged alone', async () => {
     fs.writeFileSync(path.join(r.checkout, 'notes.md'), 'mine\n');
     git(r.checkout, 'add', 'notes.md');
     const claude = fakeClaude({ write: writeMap('# Overview\n') });
-    const { refreshGraph } = G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null });
+    const { refreshGraph } = G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => null });
     const res = await refreshGraph({ repoPath: r.checkout, iteration: 2 });
     assert.equal(res.codemaps, 'committed');
     assert.deepEqual(git(r.checkout, 'show', '--name-only', '--format=', 'HEAD').split('\n'), ['docs/CODEMAPS/overview.md']);
@@ -215,9 +215,9 @@ test('failures never throw: a failed index and a failed updater are notes, nothi
   try {
     const before = git(r.checkout, 'rev-parse', 'HEAD');
     const claude = fakeClaude({ index: { error: 'timeout' }, write: writeMap('# half\n'), maps: { error: 'budget', detail: 'over budget' } });
-    const { refreshGraph } = G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null });
+    const { refreshGraph } = G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => null });
     const res = await refreshGraph({ repoPath: r.checkout, iteration: 2 });
-    assert.equal(res.ok, false);
+    assert.equal(res.ok, false, JSON.stringify(res));
     assert.equal(res.indexed, false);
     assert.equal(res.codemaps, 'failed');
     assert.deepEqual(res.notes, ['code graph not re-indexed (claude): timeout', 'codemaps update failed: over budget - maps discarded']);
@@ -225,13 +225,14 @@ test('failures never throw: a failed index and a failed updater are notes, nothi
     assert.equal(git(r.checkout, 'status', '--porcelain'), '', 'the half-written maps are gone');
 
     const crashing = G.createGraphRefresher({
+      gitTimeoutMs: LOADED_GIT_TIMEOUT_MS,
       runClaude: async () => {
         throw new Error('boom');
       },
       resolveCli: () => null,
     });
     const crashed = await crashing.refreshGraph({ repoPath: r.checkout, iteration: 3 });
-    assert.equal(crashed.ok, false);
+    assert.equal(crashed.ok, false, JSON.stringify(crashed));
     assert.match(crashed.notes.join('\n'), /graph refresh crashed: boom/);
 
     const noRepo = await crashing.refreshGraph({ repoPath: 'relative/path', iteration: 1 });
@@ -252,7 +253,7 @@ test('the codemaps index is built in a private scratch folder that is removed, a
       return execFile(file, args, opts, cb);
     };
     const claude = fakeClaude({ write: writeMap('# Overview scratch\n') });
-    const ok = await G.createGraphRefresher({ runClaude: claude.runClaude, resolveCli: () => null, execImpl: spyExec, tmpBase: base })
+    const ok = await G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: claude.runClaude, resolveCli: () => null, execImpl: spyExec, tmpBase: base })
       .refreshGraph({ repoPath: r.checkout, iteration: 1 });
     assert.equal(ok.codemaps, 'committed', JSON.stringify(ok.notes));
     assert.ok(seen.length > 0);
@@ -267,7 +268,7 @@ test('the codemaps index is built in a private scratch folder that is removed, a
       return execFile(file, args, opts, cb);
     };
     const failing = fakeClaude({ write: writeMap('# Overview scratch v2\n') });
-    const failed = await G.createGraphRefresher({ runClaude: failing.runClaude, resolveCli: () => null, execImpl: failingExec, tmpBase: base })
+    const failed = await G.createGraphRefresher({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, runClaude: failing.runClaude, resolveCli: () => null, execImpl: failingExec, tmpBase: base })
       .refreshGraph({ repoPath: r.checkout, iteration: 2 });
     assert.equal(failed.codemaps, 'failed');
     assert.match(failed.notes.join('\n'), /codemaps not staged: fatal: unable to write new index file/);

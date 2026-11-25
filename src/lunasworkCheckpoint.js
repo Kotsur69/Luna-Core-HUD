@@ -41,7 +41,7 @@ const { execFile } = require('child_process');
 const pack = require('./lunasworkPack');
 const { applyCards, REPRO_ACCEPTANCE } = require('./lunasworkCritic');
 const { runTag, MAX_DETAILS_CHARS, MAX_TEXT_CHARS } = require('./todorows');
-const { unlinkDependencyLinks } = require('./worktrees');
+const { unlinkDependencyLinks, gitFailure } = require('./worktrees');
 
 const TAG_PREFIX = 'luna-work';
 // Subject prefix of the design-pack commits (src/lunasworkPackCommit.js).
@@ -108,14 +108,35 @@ function forbiddenGit(args) {
   return null;
 }
 
-/** Default runner: one git call via execFile. Resolves {ok, out, err}; never rejects. */
-function execGit(cwd, args) {
+const positiveMs = (v) => Number.isInteger(v) && v > 0;
+
+/**
+ * Default runner: one git call via execFile. Resolves {ok, out, err}; never
+ * rejects. A failure always has a non-empty err ('git timed out after Ns'
+ * when our timer killed it).
+ * @param {{timeoutMs?:number, execImpl?:Function}} [opts] timeoutMs: tests
+ *   under load pass a longer one; execImpl: child_process.execFile compatible
+ */
+function execGit(cwd, args, opts = {}) {
+  const timeoutMs = positiveMs(opts.timeoutMs) ? opts.timeoutMs : GIT_TIMEOUT_MS;
+  const execImpl = typeof opts.execImpl === 'function' ? opts.execImpl : execFile;
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
-      resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || '').trim().split('\n')[0] }),
-    );
+    try {
+      execImpl('git', args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
+        resolve({
+          ok: !err,
+          out: String(stdout || '').trim(),
+          err: err ? gitFailure(err, stderr, timeoutMs) : String(stderr || '').trim().split('\n')[0],
+        }),
+      );
+    } catch (err) {
+      resolve({ ok: false, out: '', err: errText(err) || 'git did not start' });
+    }
   });
 }
+
+/** The git subcommand of an args list, for a message. */
+const list0 = (args) => oneLine((Array.isArray(args) ? args : []).find((a) => !String(a).startsWith('-')) || '', 40);
 
 /** The runner behind the guard: a forbidden args list is refused, never run. */
 function guardedGit(run) {
@@ -124,7 +145,11 @@ function guardedGit(run) {
     if (bad) return { ok: false, out: '', err: `refused: ${bad}` };
     try {
       const res = await run(cwd, args);
-      return isObj(res) ? { ok: res.ok === true, out: String(res.out || ''), err: String(res.err || '') } : { ok: false, out: '', err: 'no result' };
+      if (!isObj(res)) return { ok: false, out: '', err: 'no result' };
+      const ok = res.ok === true;
+      // A failure always says something, even from a runner that left err empty.
+      const err = String(res.err || '') || (ok ? '' : `git ${list0(args)} failed without output`);
+      return { ok, out: String(res.out || ''), err };
     } catch (err) {
       return { ok: false, out: '', err: errText(err) };
     }
@@ -274,22 +299,25 @@ function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, revert
 
 /**
  * @param {{git?:(cwd:string, args:string[])=>Promise<{ok:boolean, out:string, err:string}>,
- *   tmpDir?:()=>string, log?:(line:string)=>void}} [deps]
+ *   tmpDir?:()=>string, log?:(line:string)=>void, gitTimeoutMs?:number, execImpl?:Function}} [deps]
+ *   gitTimeoutMs / execImpl: for the default runner (default GIT_TIMEOUT_MS / execFile)
  */
 function createCheckpoints(deps = {}) {
-  const git = guardedGit(deps.git || execGit);
+  const git = guardedGit(deps.git || ((cwd, args) => execGit(cwd, args, { timeoutMs: deps.gitTimeoutMs, execImpl: deps.execImpl })));
   const log = deps.log || (() => {});
   const tmpRoot = deps.tmpDir || (() => os.tmpdir());
 
   /** The checkout's branch (God Mode's base) and origin's head of it. */
   async function originHead(repoPath) {
     const head = await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
-    const branch = head.ok ? head.out : '';
+    if (!head.ok) return { error: 'notOnBranch', detail: head.err };
+    const branch = head.out;
     if (!BRANCH_RE.test(branch) || branch === 'HEAD' || branch.includes('..')) return { error: 'notOnBranch' };
     const fetched = await git(repoPath, ['fetch', 'origin', `refs/heads/${branch}`]);
     if (!fetched.ok) return { error: 'fetchFailed', detail: fetched.err };
     const sha = await git(repoPath, ['rev-parse', 'FETCH_HEAD^{commit}']);
-    if (!sha.ok || !SHA_RE.test(sha.out)) return { error: 'fetchFailed', detail: sha.err };
+    if (!sha.ok) return { error: 'fetchFailed', detail: sha.err };
+    if (!SHA_RE.test(sha.out)) return { error: 'fetchFailed', detail: `not a commit sha: ${oneLine(sha.out, 80) || '(empty)'}` };
     return { branch, sha: sha.out };
   }
 
@@ -496,4 +524,5 @@ module.exports = {
   reasonText,
   rollbackCard,
   createCheckpoints,
+  GIT_TIMEOUT_MS,
 };

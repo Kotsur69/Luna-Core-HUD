@@ -38,18 +38,22 @@ const packCommitMessage = (label) => `${PACK_COMMIT_PREFIX} ${String(label || 'd
 const isPackCommitSubject = (subject) => String(subject || '').startsWith(PACK_COMMIT_PREFIX);
 
 /**
- * @param {{repoPath:string, label?:string, git?:(cwd:string, args:string[])=>Promise<{ok:boolean,out:string,err:string}>}} o
+ * @param {{repoPath:string, label?:string, git?:(cwd:string, args:string[])=>Promise<{ok:boolean,out:string,err:string}>,
+ *   gitTimeoutMs?:number, execImpl?:Function}} o gitTimeoutMs / execImpl: for the default runner
+ *   (default: lunasworkCheckpoint's GIT_TIMEOUT_MS / execFile)
  * @returns {Promise<{ok:boolean, committed:boolean, pushed:boolean, files:string[], error?:string, detail?:string}>}
  */
 async function commitDesignPack(o) {
-  const git = guardedGit((o && o.git) || execGit);
+  const runnerOpts = { timeoutMs: o && o.gitTimeoutMs, execImpl: o && o.execImpl };
+  const git = guardedGit((o && o.git) || ((cwd, args) => execGit(cwd, args, runnerOpts)));
   const repoPath = o && o.repoPath;
   const out = { ok: true, committed: false, pushed: false, files: [] };
   const fail = (error, detail) => ({ ...out, ok: false, error, ...(detail ? { detail } : {}) });
   if (typeof repoPath !== 'string' || !repoPath) return fail('noRepo');
 
   const head = await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const branch = head.ok ? head.out : '';
+  if (!head.ok) return fail('notOnBranch', head.err);
+  const branch = head.out;
   if (!BRANCH_RE.test(branch) || branch === 'HEAD' || branch.includes('..')) return fail('notOnBranch');
 
   const status = await git(repoPath, ['status', '--porcelain', '--untracked-files=all', '--', ...PACK_COMMIT_FILES.map((f) => `${DESIGN_DIR}/${f}`)]);

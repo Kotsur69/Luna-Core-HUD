@@ -36,7 +36,7 @@
 //   buildIndexClaudeArgs({model?, budgetUsd?}) -> string[]
 //   buildCodemapsArgs({model?, budgetUsd?}) -> string[]
 //   buildCodemapsPrompt({iteration}) -> string
-//   createGraphRefresher({runClaude?, execImpl?, resolveCli?, env?, log?, timeoutMs?})
+//   createGraphRefresher({runClaude?, execImpl?, resolveCli?, env?, log?, timeoutMs?, gitTimeoutMs?})
 //       -> {refreshGraph({repoPath, runId?, iteration}) -> Promise<{ok, indexed, via, codemaps,
 //           committed, pushed, sha, notes}>}
 //     runClaude({args, prompt, cwd, env, timeoutMs}) -> Promise<{stdout}|{error, detail?}>
@@ -54,6 +54,7 @@ const { parsePlannerOutput } = require('./orchestraPlan');
 const { execClaude } = require('./lunasworkCritic');
 const { resolveOnPath } = require('./lunasworkSecondOpinion');
 const { withScratchIndex } = require('./gitScratchIndex');
+const { gitFailure } = require('./worktrees');
 
 const CODEMAPS_DIR = 'docs/CODEMAPS';
 const CLI_COMMAND = 'codebase-memory-mcp';
@@ -169,7 +170,8 @@ function parseStatus(out) {
 
 /**
  * @param {{runClaude?:Function, execImpl?:Function, resolveCli?:(command:string)=>string|null,
- *   env?:()=>object, log?:(line:string)=>void, timeoutMs?:number, tmpBase?:string}} [deps]
+ *   env?:()=>object, log?:(line:string)=>void, timeoutMs?:number, gitTimeoutMs?:number, tmpBase?:string}} [deps]
+ *   gitTimeoutMs: per git call (default GIT_TIMEOUT_MS; tests under load pass more)
  *   tmpBase: where the per-call scratch index folder is made (default os.tmpdir())
  */
 function createGraphRefresher(deps = {}) {
@@ -180,16 +182,21 @@ function createGraphRefresher(deps = {}) {
   const resolveCli = typeof deps.resolveCli === 'function' ? deps.resolveCli : (command) => resolveOnPath(command, { env: envOf() });
   const log = typeof deps.log === 'function' ? deps.log : noop;
   const timeoutMs = deps.timeoutMs || STEP_TIMEOUT_MS;
+  const gitTimeoutMs = Number.isInteger(deps.gitTimeoutMs) && deps.gitTimeoutMs > 0 ? deps.gitTimeoutMs : GIT_TIMEOUT_MS;
+
+  /** Why a call failed, never ''. git's own words go through gitFailure (names our timeout). */
+  const failureText = (file, err, stderr, timeout) =>
+    clip(file === 'git' ? gitFailure(err, stderr, timeout) : String(stderr || '').trim() || (err && err.message) || 'failed');
 
   /** One execFile call; resolves {ok, out, err}, never rejects. */
-  function run(file, args, cwd, timeout = GIT_TIMEOUT_MS, env = envOf()) {
+  function run(file, args, cwd, timeout = gitTimeoutMs, env = envOf()) {
     return new Promise((resolve) => {
       try {
         execImpl(file, args, { cwd, timeout, windowsHide: true, maxBuffer: 10 * 1024 * 1024, env }, (err, stdout, stderr) =>
           // Only the end is trimmed: a porcelain status line starts with a meaningful space.
-          resolve({ ok: !err, out: String(stdout || '').trimEnd(), err: clip(String(stderr || '').trim() || (err && err.message)) }));
+          resolve({ ok: !err, out: String(stdout || '').trimEnd(), err: err ? failureText(file, err, stderr, timeout) : clip(stderr) }));
       } catch (err) {
-        resolve({ ok: false, out: '', err: clip(err && err.message) });
+        resolve({ ok: false, out: '', err: clip(err && err.message) || 'did not start' });
       }
     });
   }
@@ -274,7 +281,7 @@ function createGraphRefresher(deps = {}) {
     // The index lives in a private folder, never in the temp root (see src/gitScratchIndex.js).
     return withScratchIndex('lw-codemaps-', async (tmpIndex) => {
       const env = { ...envOf(), GIT_INDEX_FILE: tmpIndex };
-      const step = (args) => run('git', args, repoPath, GIT_TIMEOUT_MS, env);
+      const step = (args) => run('git', args, repoPath, gitTimeoutMs, env);
       for (const args of [['read-tree', 'HEAD'], ['add', '-A', '--', CODEMAPS_DIR]]) {
         const res = await step(args);
         if (!res.ok) return { err: res.err };
@@ -315,7 +322,7 @@ function createGraphRefresher(deps = {}) {
     if (!fs.existsSync(path.join(repoPath, CODEMAPS_DIR))) return { codemaps: 'unchanged' };
     const built = await codemapsTree(repoPath);
     const headTree = await git(repoPath, ['rev-parse', 'HEAD^{tree}']);
-    if (!built.tree || !headTree.ok) return { codemaps: 'failed', why: `codemaps not staged: ${built.err || headTree.err}` };
+    if (!built.tree || !headTree.ok) return { codemaps: 'failed', why: `codemaps not staged: ${built.err || headTree.err || 'git write-tree gave no tree'}` };
     if (built.tree === headTree.out) return { codemaps: 'unchanged' };
     const message = `docs(codemaps): refresh after Luna's Work iteration ${iteration}`;
     const commit = await git(repoPath, ['commit-tree', built.tree, '-p', 'HEAD', '-m', message]);
@@ -389,4 +396,5 @@ module.exports = {
   buildCodemapsPrompt,
   parseStatus,
   createGraphRefresher,
+  GIT_TIMEOUT_MS,
 };
