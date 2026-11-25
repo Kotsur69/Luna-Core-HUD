@@ -8,8 +8,10 @@
 //   search(query, {type, limit}) -> item[]
 //   info(id)                     -> item          (the license is read here)
 //   files(item, {resolution})    -> {files:[{url, name, main}], archive}
-//   item = {source, id, name, author, sourceUrl, license, tags, type, preview?}
-//                                (preview: Poly Haven, Sketchfab, Poly Pizza, BlenderKit)
+//   item = {source, id, name, author, sourceUrl, license, tags, type, preview?, duration?}
+//                                (preview: Poly Haven, Sketchfab, Poly Pizza, BlenderKit,
+//                                ambientCG, Smithsonian; duration in seconds: Freesound,
+//                                Lots of Sounds)
 //
 //   polyhaven   api.polyhaven.com /assets, /info/<id>, /files/<id>. Every asset
 //               is CC0 (Poly Haven's license page). HDRIs (.hdr), texture maps
@@ -61,6 +63,10 @@ const MAX_TEXT = 200;
 const MAX_DESCRIPTION = 2000;
 const MAX_MAPS = 8;
 const MAX_INCLUDES = 24;
+// A sound longer than a day is not a real library sound: the length is dropped.
+const MAX_DURATION_S = 24 * 60 * 60;
+// ambientCG preview image size (px) the judge prefers: big enough to see, small to download.
+const AMBIENTCG_PREVIEW_PX = 512;
 const DEFAULT_RESOLUTION = '2k';
 const RESOLUTIONS = Object.freeze(['1k', '2k', '4k']);
 const TYPES = Object.freeze(['model', 'texture', 'hdri', 'audio']);
@@ -82,6 +88,8 @@ const tagList = (raw) => (Array.isArray(raw) ? raw : []).slice(0, MAX_TAGS).map(
 const clampLimit = (n) => (Number.isInteger(n) && n > 0 ? Math.min(n, MAX_RESULTS) : MAX_RESULTS);
 const resolutionOf = (r) => (RESOLUTIONS.includes(r) ? r : DEFAULT_RESOLUTION);
 const pick = (o, keys) => keys.map((k) => o[k]).find((v) => v !== undefined && v !== null);
+// A sound length in seconds (rounded to 0.01 s); null unless a finite, non-negative number.
+const durationOf = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_DURATION_S ? Math.round(v * 100) / 100 : null);
 
 /** `text` with every secret replaced: an error must never carry a key. */
 function redact(text, secrets) {
@@ -146,6 +154,8 @@ function makeItem(source, raw) {
     type: TYPES.includes(raw.type) ? raw.type : null,
     // The preview image the library API gives, for the asset judge (src/lunasworkAssetJudge.js).
     ...(isHttps(raw.preview) ? { preview: raw.preview } : {}),
+    // The sound length in seconds the library API gives, for the judge's audio metadata line.
+    ...(durationOf(raw.duration) !== null ? { duration: durationOf(raw.duration) } : {}),
   };
   return item.id && item.type && item.sourceUrl ? item : null;
 }
@@ -365,6 +375,23 @@ function ambientDownloads(raw) {
   return all;
 }
 
+/**
+ * The https preview image of an ambientCG record (include=imageData gives a
+ * previewImage map like {"256-PNG": url, "512-JPG-242424": url}): the one whose
+ * pixel size is closest to AMBIENTCG_PREVIEW_PX, PNG / JPG first. Null when none.
+ */
+function ambientPreviewOf(raw) {
+  const map = isObj(raw) && isObj(raw.previewImage) ? raw.previewImage : {};
+  let best = null;
+  for (const [key, url] of Object.entries(map)) {
+    const m = /^(\d{1,5})-([A-Z]+)/i.exec(key);
+    if (!m || !isHttps(url)) continue;
+    const rank = Math.abs(Number(m[1]) - AMBIENTCG_PREVIEW_PX) + (/^(PNG|JPG)$/i.test(m[2]) ? 0 : 100000);
+    if (!best || rank < best.rank) best = { url, rank };
+  }
+  return best ? best.url : null;
+}
+
 function createAmbientCg({ fetch: fetchFn }) {
   const label = 'ambientCG';
   const records = new Map();
@@ -379,6 +406,7 @@ function createAmbientCg({ fetch: fetchFn }) {
       license: 'CC0',
       tags: raw.tags,
       type: AMBIENTCG_TYPES[raw.dataType] || null,
+      preview: ambientPreviewOf(raw),
     });
   };
   const listOf = (json) => {
@@ -394,7 +422,7 @@ function createAmbientCg({ fetch: fetchFn }) {
 
   async function info(id) {
     if (!AMBIENTCG_ID_RE.test(id)) throw sourceError('badId', 'an ambientCG id is letters, digits, _ and -');
-    const raw = listOf(await getJson({ fetch: fetchFn, url: `${AMBIENTCG_API}?id=${id}&include=tagData,downloadData`, label })).find((a) => isObj(a) && a.assetId === id);
+    const raw = listOf(await getJson({ fetch: fetchFn, url: `${AMBIENTCG_API}?id=${id}&include=tagData,downloadData,imageData`, label })).find((a) => isObj(a) && a.assetId === id);
     const item = itemOf(raw);
     if (!item) throw sourceError(raw ? 'badReply' : 'notFound', raw ? `${label} answered an unusable asset record` : `${label} has no asset ${id}`);
     records.set(id, raw);
@@ -418,7 +446,7 @@ function createAmbientCg({ fetch: fetchFn }) {
 // ---- Freesound ------------------------------------------------------------------------
 
 const FREESOUND_API = 'https://freesound.org/apiv2';
-const FREESOUND_FIELDS = 'id,name,username,license,url,tags,previews';
+const FREESOUND_FIELDS = 'id,name,username,license,url,tags,previews,duration';
 // Freesound's own license filter, so NC / Sampling+ sounds do not even come back.
 const FREESOUND_FILTER = 'license:("Creative Commons 0" OR "Attribution")';
 const FREESOUND_PREVIEW = 'preview-hq-ogg';
@@ -434,7 +462,7 @@ function createFreesound({ fetch: fetchFn, key }) {
     if (!isObj(raw) || !Number.isSafeInteger(raw.id) || raw.id < 1) return null;
     const id = String(raw.id);
     const page = typeof raw.url === 'string' && raw.url.startsWith('https://freesound.org/') ? raw.url : `https://freesound.org/s/${id}/`;
-    const item = makeItem('freesound', { id, name: raw.name, author: raw.username, sourceUrl: page, license: raw.license, tags: raw.tags, type: 'audio' });
+    const item = makeItem('freesound', { id, name: raw.name, author: raw.username, sourceUrl: page, license: raw.license, tags: raw.tags, type: 'audio', duration: raw.duration });
     if (item && isObj(raw.previews)) previews.set(id, raw.previews[FREESOUND_PREVIEW]);
     return item;
   };
@@ -480,6 +508,13 @@ function smithsonianDownloadOf(dnr) {
   return null;
 }
 
+/** The first https media thumbnail of a Smithsonian record (online_media.media[].thumbnail); null when none. */
+function smithsonianPreviewOf(dnr) {
+  const media = isObj(dnr.online_media) && Array.isArray(dnr.online_media.media) ? dnr.online_media.media : [];
+  const hit = media.find((m) => isObj(m) && isHttps(m.thumbnail));
+  return hit ? hit.thumbnail : null;
+}
+
 function createSmithsonian({ fetch: fetchFn, key }) {
   const label = 'Smithsonian 3D';
   const downloads = new Map();
@@ -505,6 +540,7 @@ function createSmithsonian({ fetch: fetchFn, key }) {
       tags: [...(Array.isArray(indexed.object_type) ? indexed.object_type : []), ...(Array.isArray(indexed.topic) ? indexed.topic : [])],
       description: Array.isArray(freetext.notes) && isObj(freetext.notes[0]) ? freetext.notes[0].content : '',
       type: 'model',
+      preview: smithsonianPreviewOf(dnr),
     });
     if (item && dl) downloads.set(raw.id, dl);
     return item;
@@ -711,6 +747,7 @@ function createLotsOfSounds({ fetch: fetchFn, key }) {
       tags: raw.tags,
       description: raw.description,
       type: 'audio',
+      duration: pick(raw, ['duration', 'duration_seconds']),
     });
     if (item && isHttps(dl)) downloads.set(id, dl);
     return item;
