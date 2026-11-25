@@ -16,7 +16,11 @@
 'use strict';
 
 import { t } from './util.js';
-import { isCard, editTodo } from './todocards.js';
+import { isCard, editTodo, longAcceptanceLine, MAX_TEXT_CHARS, MAX_DETAILS_CHARS, MAX_ENTRY_CHARS } from './todocards.js';
+
+// Per-field caps of the form, mirroring main (src/todorows.js). Acceptance is
+// one bullet per line, so its cap is checked per line (longAcceptanceLine).
+const FIELD_MAX_LENGTH = Object.freeze({ text: MAX_TEXT_CHARS, details: MAX_DETAILS_CHARS, verify: MAX_ENTRY_CHARS });
 
 let editing = null;
 let hooks = { getItems: () => [], commit: () => {}, repaint: () => {} };
@@ -78,6 +82,12 @@ function closeEdit() {
 function saveEdit() {
   if (!editing) return;
   const { draft, base, card } = editing;
+  // main would cut an over-long bullet, so the form stays open and says why.
+  if (card && longAcceptanceLine(draft.acceptance)) {
+    const box = document.querySelector('.todo-edit__input[data-field="acceptance"]');
+    if (box) box.reportValidity();
+    return;
+  }
   const items = hooks.getItems();
   const current = items.find((item) => item.at === editing.at);
   if (!current) return;
@@ -142,10 +152,14 @@ function editField(key, labelKey, multiline) {
   input.dataset.field = key;
   if (multiline) input.rows = key === 'text' ? MIN_ROWS_TITLE : MIN_ROWS_BODY;
   input.value = editing.draft[key];
+  if (FIELD_MAX_LENGTH[key]) input.maxLength = FIELD_MAX_LENGTH[key];
+  const checkLines = () => input.setCustomValidity(key === 'acceptance' && longAcceptanceLine(input.value) ? t('todo.acceptanceTooLong') : '');
+  checkLines();
   // Guarded: a project switch drops `editing` while the old form is still
   // on screen until the new list loads.
   input.addEventListener('input', () => {
     if (multiline) autoGrow(input);
+    checkLines();
     if (!editing) return;
     editing = { ...editing, draft: { ...editing.draft, [key]: input.value } };
   });

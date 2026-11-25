@@ -28,6 +28,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const { normalizeTodo, MAX_ITEMS } = require('./todo');
+const { restoreLegacyCuts } = require('./todorows');
 const { validKey, MACHINE_RE } = require('./missionledgersync');
 
 const VERSION = 1;
@@ -74,6 +75,21 @@ function stamp(list, meta, now, base = now) {
 }
 
 /**
+ * The version that replaces `older` when a peer's copy has the newer stamp.
+ * A device on an older build (an installed LunaCore that has not updated, a
+ * phone holding a cached app) cuts long fields at its old caps whenever it
+ * touches a card; its real change still lands, but the cut fields are put
+ * back from the full copy (todorows.restoreLegacyCuts). The repaired card is
+ * stamped after the peer's copy, so it is published and replaces the cut
+ * copy on every machine instead of losing to it.
+ * @returns {{item: object, u: number}}
+ */
+function newerVersion(older, newer, u, now) {
+  const repaired = restoreLegacyCuts(older, newer);
+  return repaired === newer ? { item: newer, u } : { item: repaired, u: Math.max(now, u + 1) };
+}
+
+/**
  * Merges this PC's list with the peers' versions of the same project.
  * @param {object[]} local this PC's list (already stamped into `meta`)
  * @param {{snap, u, gone}} meta from stamp()
@@ -87,7 +103,8 @@ function merge(local, meta, peers, now) {
   for (const peer of peers) {
     for (const { u, ...item } of peer.items) {
       const cur = best.get(item.at);
-      if (!cur || u > cur.u) best.set(item.at, { item, u });
+      if (!cur) best.set(item.at, { item, u });
+      else if (u > cur.u) best.set(item.at, newerVersion(cur.item, item, u, now));
     }
     for (const [at, t] of Object.entries(peer.gone)) gone[at] = Math.max(gone[at] || 0, t);
   }

@@ -56,7 +56,7 @@ const { isUsageLimitText } = require('./orchestraPlanWait');
 const { checkCwd } = require('./projects');
 const { gatePassed, isStepBack, pickModel, MAX_TEXT_CHARS } = require('./lunasworkRules');
 const { applyAdd, applyUpdate, MAX_TASKS_PER_CALL } = require('./intake');
-const { normalizeTodos, runTag, cleanTags, MAX_DETAILS_CHARS, MAX_ITEMS, STEER_TAG, BUILT_STATE } = require('./todorows');
+const { normalizeTodos, runTag, cleanTags, MAX_DETAILS_CHARS, MAX_ACCEPTANCE_CHARS, MAX_ITEMS, STEER_TAG, BUILT_STATE } = require('./todorows');
 const pack = require('./lunasworkPack');
 const {
   GATE_PASS_SCORE, MAX_SPLIT_PIECES, SKILL_VERDICTS, SKILL_REVIEW_SCHEMA, buildCriticPrompt, buildSkillReviewPrompt,
@@ -306,7 +306,7 @@ function cleanCard(c, ctx, warnings) {
     severity: c.severity,
     text,
     details: clean(c.details, MAX_DETAILS_CHARS),
-    acceptance: strings(c.acceptance, MAX_LIST_ENTRIES, MAX_ENTRY_CHARS),
+    acceptance: strings(c.acceptance, MAX_LIST_ENTRIES, MAX_ACCEPTANCE_CHARS),
     files: strings(c.files, MAX_FILES, MAX_ENTRY_CHARS),
     updatesCardId,
     splitsCardId,

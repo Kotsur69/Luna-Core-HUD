@@ -784,3 +784,19 @@ test('notification: counts per kind in English and Polish, nothing when nothing 
   assert.equal(R.runToastBody({ pushed: 4, total: 4, failed: false, followups: {} }, 'en'), '4/4 pushed');
   assert.equal(R.runToastBody({ pushed: 1, total: 2, failed: true }, 'pl'), '1/2 pushed - integration needs you');
 });
+
+test('a follow-up card with over-limit details or bullets is refused, not cut', () => {
+  const { channel } = newChannel();
+  const store = memoryStore();
+  const details = addVia(channel, store, [{ text: 'Too long', kind: 'bug', details: 'd'.repeat(20000) }]);
+  assert.equal(details.isError, true);
+  assert.match(details.text, /tasks\[0\]\.details is 20000 characters; the limit is \d+/);
+  const bullet = addVia(channel, store, [{ text: 'Long bullet', kind: 'gap', acceptance: ['a'.repeat(1001)] }]);
+  assert.equal(bullet.isError, true);
+  assert.match(bullet.text, /tasks\[0\]\.acceptance\[0\] is 1001 characters; the limit is 1000/);
+  assert.deepEqual(store.list, []);
+  const fits = addVia(channel, store, [{ text: 'Fits', kind: 'idea', details: 'd'.repeat(15000), acceptance: ['a'.repeat(1000)] }]);
+  assert.equal(fits.isError, false);
+  assert.ok(store.list[0].details.startsWith('d'.repeat(15000)));
+  assert.equal(store.list[0].acceptance[0].length, 1000);
+});

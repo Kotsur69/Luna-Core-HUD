@@ -92,3 +92,33 @@ test('toggleTagUnit adds and removes steer, keeps other tags, and a PC peer acce
     assert.deepEqual(peer[KEY].items, [{ ...unit.v, u: unit.u }]);
   }
 });
+
+// ---- long cards --------------------------------------------------------------
+
+test('a 15000-20000 char details card round-trips through the phone model unchanged', () => {
+  for (const size of [15000, 20000]) {
+    const details = `# Plan\n${'p'.repeat(size - 12)}\nend.`;
+    const v = { text: 'Long card', done: false, at: 1795082538257, details, acceptance: ['a'.repeat(1000)] };
+    const mirror = mirrorOf([{ k: `${KEY}:${v.at}`, v, u: 10, d: null }]);
+    const [item] = lists(mirror)[0].items;
+    assert.equal(item.details, details);
+    assert.equal(item.cut, undefined);
+    const unit = toggleUnit(KEY, item, NOW);
+    assert.deepEqual(unit.v, { ...v, done: true });
+    const peer = validPeerProjects(rows.todoPeer(mirrorOf([unit])), NOW);
+    assert.deepEqual(peer[KEY].items, [{ ...v, done: true, u: unit.u }]);
+  }
+});
+
+test('the phone refuses to re-save a card longer than its own limits', () => {
+  // A card a newer build wrote past this build's caps: showing it cut is
+  // fine, saving a tick would publish the cut copy as the newest version.
+  const v = { text: 'From a newer PC', done: false, at: 77, details: 'd'.repeat(25000), acceptance: ['a'.repeat(1500)] };
+  const [item] = lists(mirrorOf([{ k: `${KEY}:77`, v, u: 10, d: null }]))[0].items;
+  assert.equal(item.cut, true);
+  assert.equal(toggleUnit(KEY, item, NOW), null);
+  assert.equal(toggleManualUnit(KEY, item, NOW), null);
+  assert.equal(toggleTagUnit(KEY, item, STEER_TAG, NOW), null);
+  // Deleting is still allowed: a tombstone carries no fields to cut.
+  assert.equal(deleteUnit(KEY, item, NOW).d, NOW);
+});

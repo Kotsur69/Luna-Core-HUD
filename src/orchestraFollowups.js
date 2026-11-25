@@ -35,6 +35,7 @@
 
 const { TOOLS: INTAKE_TOOLS, applyAdd, listView, toolText } = require('./intake');
 const { normalizeTodos, runTag, MAX_DETAILS_CHARS, MAX_ITEMS } = require('./todo');
+const { cardLimitError } = require('./todorows');
 
 const FOLLOWUP_KINDS = Object.freeze(['gap', 'bug', 'deps', 'idea']);
 const FOLLOWUP_TAG = 'gm-followup';
@@ -127,12 +128,28 @@ function knownDeps(raw, selfIndex, count, existingAts) {
   });
 }
 
+/** The line the server appends to a follow-up card's details. */
+const sourceLine = (scope) => `Filed by God Mode package ${scope.packageId}`;
+
+/**
+ * Why a session task would be stored cut, or null. The session's details
+ * share the card's cap with the source line, so their own limit is smaller.
+ */
+function followupLimitError(task, index, scope) {
+  const own = Object.fromEntries(SESSION_CARD_KEYS.filter((key) => task[key] !== undefined).map((key) => [key, task[key]]));
+  const tooLong = cardLimitError(own, `tasks[${index}]`);
+  if (tooLong) return tooLong;
+  const room = MAX_DETAILS_CHARS - sourceLine(scope).length - 2;
+  const length = typeof task.details === 'string' ? task.details.trim().length : 0;
+  return length > room ? `tasks[${index}].details is ${length} characters; the limit is ${room} - shorten it or split the work into more cards` : null;
+}
+
 /** One session task as the server files it: only SESSION_CARD_KEYS kept, the rest forced. */
 function forcedTask(task, index, count, existingAts, scope, runLabel) {
   const own = Object.fromEntries(SESSION_CARD_KEYS.filter((key) => task[key] !== undefined).map((key) => [key, task[key]]));
-  const source = `Filed by God Mode package ${scope.packageId}`;
-  // Cut first, so the card's own length cap never cuts the source line away.
-  const details = typeof task.details === 'string' ? task.details.trim().slice(0, MAX_DETAILS_CHARS - source.length - 2) : '';
+  const source = sourceLine(scope);
+  // followupLimitError() already refused details that leave no room for the source line.
+  const details = typeof task.details === 'string' ? task.details.trim() : '';
   return {
     ...own,
     details: details ? `${details}\n\n${source}` : source,
@@ -179,6 +196,8 @@ function prepareFollowups(list, tasks, scope, filed = {}) {
     if (!isObj(task)) return fail(`tasks[${i}] must be an object`);
     if (!FOLLOWUP_KINDS.includes(task.kind)) return fail(`tasks[${i}].kind must be one of ${FOLLOWUP_KINDS.join(', ')}`);
     if (typeof task.text !== 'string' || !task.text.trim()) return fail(`tasks[${i}].text must be a non-empty string`);
+    const tooLong = followupLimitError(task, i, scope);
+    if (tooLong) return fail(tooLong);
     const title = normalizeTitle(task.text);
     if (openTitles.has(title)) return fail(`tasks[${i}] is a duplicate of ${openTitles.get(title)}`);
     if (seen.has(title)) return fail(`tasks[${i}] is a duplicate of tasks[${seen.get(title)}]`);

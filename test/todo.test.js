@@ -574,3 +574,101 @@ test('sortedIndices orders the view without touching the list', () => {
   assert.deepEqual(sortedIndices(list, 'bogus'), [0, 1, 2, 3]);
   assert.deepEqual(sortedIndices(null, 'newest'), []);
 });
+
+// ---- card limits: acceptance cap, MCP limit errors, legacy-cut repair --------
+
+const rows = require('../src/todorows.js');
+
+test('acceptance bullets hold up to MAX_ACCEPTANCE_CHARS (1000); files and verify stay at 300', () => {
+  assert.equal(rows.MAX_ACCEPTANCE_CHARS, 1000);
+  assert.equal(rows.MAX_ENTRY_CHARS, 300);
+  assert.equal(rows.MAX_LIST_ENTRIES, 20);
+  const bullet = `Done when ${'a'.repeat(1000 - 14)} end`;
+  assert.equal(bullet.length, 1000);
+  const card = normalizeTodo({ text: 'T', acceptance: [bullet], files: ['f'.repeat(300)], verify: 'v'.repeat(300) });
+  assert.equal(card.acceptance[0], bullet);
+  assert.equal(card.files[0].length, 300);
+  assert.equal(card.verify.length, 300);
+  // Stored data from disk keeps the "broken input yields a safe value" contract.
+  assert.equal(normalizeTodo({ text: 'T', acceptance: ['a'.repeat(1001)] }).acceptance[0].length, 1000);
+  assert.equal(normalizeTodo({ text: 'T', files: ['f'.repeat(301)] }).files[0].length, 300);
+});
+
+test('cardLimitError: null for a card within every limit', () => {
+  const ok = {
+    text: 't'.repeat(20000),
+    details: 'd'.repeat(20000),
+    original: 'o'.repeat(20000),
+    acceptance: Array.from({ length: 20 }, () => 'a'.repeat(1000)),
+    files: ['f'.repeat(300)],
+    verify: 'v'.repeat(300),
+    tags: ['steer'],
+  };
+  assert.equal(rows.cardLimitError(ok, 'tasks[0]'), null);
+  assert.equal(rows.cardLimitError({ text: 'x' }), null);
+  // Surrounding whitespace is trimmed before storing, so it does not count.
+  assert.equal(rows.cardLimitError({ text: 'x', details: `  ${'d'.repeat(20000)}  ` }), null);
+});
+
+test('cardLimitError names the field, its length and the limit', () => {
+  const err = (raw) => rows.cardLimitError(raw, 'tasks[2]');
+  assert.match(err({ text: 'x', details: 'd'.repeat(20001) }), /tasks\[2\]\.details is 20001 characters; the limit is 20000/);
+  assert.match(err({ text: 't'.repeat(20001) }), /tasks\[2\]\.text is 20001 characters; the limit is 20000/);
+  assert.match(err({ text: 'x', original: 'o'.repeat(20001) }), /tasks\[2\]\.original is 20001 characters; the limit is 20000/);
+  assert.match(err({ text: 'x', verify: 'v'.repeat(301) }), /tasks\[2\]\.verify is 301 characters; the limit is 300/);
+  assert.match(err({ text: 'x', acceptance: ['ok', 'a'.repeat(1001)] }), /tasks\[2\]\.acceptance\[1\] is 1001 characters; the limit is 1000/);
+  assert.match(err({ text: 'x', files: ['f'.repeat(301)] }), /tasks\[2\]\.files\[0\] is 301 characters; the limit is 300/);
+  assert.match(err({ text: 'x', acceptance: Array.from({ length: 21 }, (_v, i) => `b${i}`) }), /tasks\[2\]\.acceptance has 21 entries; the limit is 20/);
+  assert.match(err({ text: 'x', tags: Array.from({ length: 11 }, (_v, i) => `t${i}`) }), /tasks\[2\]\.tags has 11 entries; the limit is 10/);
+  // Without a prefix the bare field name is used.
+  assert.match(rows.cardLimitError({ text: 'x', details: 'd'.repeat(20001) }), /^details is 20001 characters/);
+});
+
+test('restoreLegacyCuts puts back a field an older build cut at its old cap', () => {
+  const details = `### Slice 1\n${'one '.repeat(1200)}\n### Slice 2\n1. Rich ${'two '.repeat(1500)}`;
+  assert.ok(details.length > 4000);
+  const full = normalizeTodo({ text: 'agy Live Map', details, acceptance: ['b'.repeat(900)], at: 5 });
+  // What a pre-v0.29 build (details 4000, entries 300) made of it, then ticked.
+  const cut = { ...full, done: true, details: full.details.slice(0, 4000), acceptance: ['b'.repeat(300)] };
+  const repaired = rows.restoreLegacyCuts(full, cut);
+  assert.equal(repaired.details, full.details);
+  assert.ok(full.details.length > 4000);
+  assert.deepEqual(repaired.acceptance, full.acceptance);
+  assert.equal(repaired.done, true, 'the newer copy keeps its own real change');
+});
+
+test('restoreLegacyCuts leaves real edits alone', () => {
+  const full = normalizeTodo({ text: 'T', details: 'd'.repeat(5000), acceptance: ['a'.repeat(500)], at: 5 });
+  const same = { ...full, done: true };
+  assert.equal(rows.restoreLegacyCuts(full, same), same);
+  // Shortened, but not at an old cap: the user deleted the tail on purpose.
+  const trimmed = { ...full, details: 'd'.repeat(3999) };
+  assert.equal(rows.restoreLegacyCuts(full, trimmed), trimmed);
+  // At the old cap but different text: a rewrite, not a cut.
+  const rewrite = { ...full, details: 'x'.repeat(4000) };
+  assert.equal(rows.restoreLegacyCuts(full, rewrite), rewrite);
+  // One bullet changed, another cut: the list is an edit, so it is kept.
+  const twoBullets = normalizeTodo({ text: 'T', acceptance: ['a'.repeat(500), 'keep'], at: 6 });
+  const edited = { ...twoBullets, acceptance: ['a'.repeat(300), 'changed'] };
+  assert.equal(rows.restoreLegacyCuts(twoBullets, edited), edited);
+  assert.equal(rows.restoreLegacyCuts(null, same), same);
+});
+
+test('the renderer and phone mirror every card limit main enforces', async () => {
+  const cards = await import('../src/renderer/modules/todocards.js');
+  assert.equal(cards.MAX_DETAILS_CHARS, rows.MAX_DETAILS_CHARS);
+  assert.equal(cards.MAX_ACCEPTANCE_CHARS, rows.MAX_ACCEPTANCE_CHARS);
+  assert.equal(cards.MAX_ENTRY_CHARS, rows.MAX_ENTRY_CHARS);
+  const form = await import('../src/renderer/modules/memorytodoform.js');
+  assert.equal(form.MAX_DETAILS_CHARS, rows.MAX_DETAILS_CHARS);
+  const phone = await import('../mobile/src/todomodel.js');
+  assert.equal(phone.MAX_DETAILS_CHARS, rows.MAX_DETAILS_CHARS);
+  assert.equal(phone.MAX_ACCEPTANCE_CHARS, rows.MAX_ACCEPTANCE_CHARS);
+  // The edit form caps each field; an over-long bullet line is refused, not cut.
+  const edit = require('fs').readFileSync(require('path').join(__dirname, '../src/renderer/modules/todoedit.js'), 'utf8');
+  assert.match(edit, /MAX_DETAILS_CHARS/);
+  assert.match(edit, /MAX_ENTRY_CHARS/);
+  assert.equal(cards.longAcceptanceLine(`ok\n${'a'.repeat(1000)}`), false);
+  assert.equal(cards.longAcceptanceLine(`ok\n${'a'.repeat(1001)}`), true);
+  assert.equal(cards.longAcceptanceLine(['a'.repeat(1001)]), true);
+});
