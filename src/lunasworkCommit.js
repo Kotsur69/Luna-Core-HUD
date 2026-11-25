@@ -94,7 +94,7 @@ function createCommitter(deps = {}) {
     if (!built.tree || !head.ok) return { ok: false, committed: false, error: 'notStaged', detail: built.err || head.err || 'git write-tree gave no tree' };
     if (built.tree === head.out) return { ok: true, committed: false };
     const commit = await git(repoPath, ['commit-tree', built.tree, '-p', 'HEAD', '-m', message]);
-    if (!commit.ok || !SHA_RE.test(commit.out)) return { ok: false, committed: false, error: 'notCommitted', detail: commit.err };
+    if (!commit.ok || !SHA_RE.test(commit.out)) return { ok: false, committed: false, error: 'notCommitted', detail: commit.err || `not a commit sha: ${clip(commit.out) || '(empty)'}` };
     // Staged first: the fast-forward then finds these paths already matching its result.
     const staged = await git(repoPath, ['add', '-f', '--', ...paths]);
     const merged = staged.ok ? await git(repoPath, ['merge', '--ff-only', '-q', commit.out]) : staged;

@@ -166,6 +166,19 @@ test('commit: gitTimeoutMs reaches every git call', async (t) => {
   assert.ok(fake.timeouts.length > 1 && fake.timeouts.every((ms) => ms === 600000));
 });
 
+test('commit: commit-tree output that is not a sha is notCommitted with a detail', async (t) => {
+  const fake = fakeExec((args) => {
+    if (has(args, 'symbolic-ref')) return { out: 'refs/heads/main' };
+    if (has(args, 'write-tree')) return { out: 'b'.repeat(40) };
+    if (has(args, 'commit-tree')) return { out: 'garbage' };
+    return { out: 'c'.repeat(40) };
+  });
+  const res = await commit.createCommitter({ execImpl: fake.execImpl, tmpBase: tmpDir(t, 'lw-commit-base-') })
+    .commitPaths({ repoPath: commitRepo(t), paths: ['a.md'], message: 'm' });
+  assert.equal(res.error, 'notCommitted', JSON.stringify(res));
+  assert.match(res.detail, /not a commit sha: garbage/);
+});
+
 // ---- lunasworkGraph ----------------------------------------------------------------------
 
 const envelope = (raw) => ({ stdout: JSON.stringify({ structured_output: raw, total_cost_usd: 0 }) });
