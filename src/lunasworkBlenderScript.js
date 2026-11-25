@@ -267,7 +267,8 @@ def luna_turntable(objs):
     rs = scene.render
     sh = scene.display.shading
     saved = (rs.engine, rs.resolution_x, rs.resolution_y, rs.resolution_percentage, rs.filepath, rs.image_settings.file_format,
-             rs.film_transparent, scene.camera, scene.world, sh.light, sh.color_type, tuple(sh.single_color), sh.show_object_outline)
+             rs.film_transparent, scene.camera, scene.world, sh.light, sh.color_type, tuple(sh.single_color), sh.show_object_outline,
+             sh.show_backface_culling)
     world = bpy.data.worlds.new('LunaTurntableWorld')
     world.color = (0.5, 0.5, 0.5)
     cam_data = bpy.data.cameras.new('LunaTurntableCam')
@@ -298,6 +299,9 @@ def luna_turntable(objs):
             sh.color_type = 'SINGLE' if silhouette else 'MATERIAL'
             sh.single_color = (0.0, 0.0, 0.0)
             sh.show_object_outline = not silhouette
+            # Workbench honours a material's backface culling only with this on: without
+            # it the black inverted-hull outline draws over the whole mesh.
+            sh.show_backface_culling = True
             rs.filepath = PANEL_PATHS[i]
             bpy.ops.render.render(write_still=True)
         sheet = np.zeros((PANEL_PX, PANEL_PX * len(PANEL_PATHS), 4), dtype=np.float32)
@@ -322,7 +326,8 @@ def luna_turntable(objs):
         LUNA_REPORT['render'] = 'ok'
     finally:
         (rs.engine, rs.resolution_x, rs.resolution_y, rs.resolution_percentage, rs.filepath, rs.image_settings.file_format,
-         rs.film_transparent, scene.camera, scene.world, sh.light, sh.color_type, sh.single_color, sh.show_object_outline) = saved
+         rs.film_transparent, scene.camera, scene.world, sh.light, sh.color_type, sh.single_color, sh.show_object_outline,
+         sh.show_backface_culling) = saved
         bpy.data.objects.remove(cam)
         bpy.data.cameras.remove(cam_data)
         bpy.data.worlds.remove(world)
