@@ -549,6 +549,20 @@ test('blenderExportScript: the two-argument call keeps the plain save + export s
   assert.match(code, /axis_forward='-Z', axis_up='Y'/);
 });
 
+test('blenderExportScript: the turntable culls back faces so the outline hull does not cover the model', () => {
+  // Live check 2026-11-25 (Blender 5.2.2): Workbench ignores a material's
+  // use_backface_culling unless the shading turns culling on, so the black
+  // inverted hull drew over the whole mesh and every panel was a black blob.
+  const code = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'blade-bullet-toon', render: renderFor('a') });
+  const turntable = code.slice(code.indexOf('def luna_turntable('));
+  assert.match(turntable, /^ {12}sh\.show_backface_culling = True$/m);
+  // The user's own shading value is saved before and put back after the render.
+  const saved = turntable.slice(turntable.indexOf('saved = ('), turntable.indexOf('world = bpy.data.worlds.new'));
+  assert.match(saved, /sh\.show_backface_culling\)/);
+  const restored = turntable.slice(turntable.indexOf('    finally:\n        (rs.engine'));
+  assert.match(restored.slice(0, restored.indexOf('= saved')), /sh\.show_backface_culling\)/);
+});
+
 test('blenderExportScript: stylePass none vs. blade-bullet-toon', () => {
   const render = renderFor('a');
   const none = B.blenderExportScript('/r/a.blend', '/r/a.fbx', { kind: 'prop', stylePass: 'none', render });
