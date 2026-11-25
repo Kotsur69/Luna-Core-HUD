@@ -120,7 +120,9 @@ const STYLE_TIMEOUT_MS = 6 * 60 * 1000;
 const STYLE_TOOLS = 'Read';
 const FALLBACK_MODEL = 'opus';
 const MAX_STYLE_PER_CALL = 8;
-const MAX_REFERENCE_IMAGES = 12;
+// Art-direction images per style check; ASSETS.md "References limit: N" overrides, up to the max.
+const DEFAULT_REFERENCE_LIMIT = 12;
+const MAX_REFERENCE_LIMIT = 24;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_LOOK_CHARS = 3000;
 const MAX_NOTES_CHARS = 600;
@@ -232,19 +234,23 @@ function commentMask(lines) {
 }
 
 /**
- * The asset table of ASSETS.md, plus its batch limit ("Batch limit: N").
- * @returns {{rows:object[], limit:number|null, lines:string[], table:{start:number, end:number}|null}}
+ * The asset table of ASSETS.md, plus its batch limit ("Batch limit: N") and
+ * reference image limit ("References limit: N"; not a whole number of 1 or more is ignored).
+ * @returns {{rows:object[], limit:number|null, referencesLimit:number|null, lines:string[], table:{start:number, end:number}|null}}
  */
 function parseAssetList(md) {
   const lines = (typeof md === 'string' ? md : '').replace(/\r\n/g, '\n').split('\n');
   const hidden = commentMask(lines);
   let limit = null;
+  let referencesLimit = null;
   let table = null;
   let rows = [];
   for (let i = 0; i < lines.length; i += 1) {
     if (hidden[i]) continue;
     const lim = lines[i].match(/^\s*batch limit\s*:\s*(\d{1,3})\s*$/i);
     if (lim) limit = Math.min(MAX_BATCH_LIMIT, Math.max(1, Number(lim[1])));
+    const refs = lines[i].match(/^\s*references limit\s*:\s*(\d{1,3})\s*$/i);
+    if (refs && Number(refs[1]) >= 1) referencesLimit = Math.min(MAX_REFERENCE_LIMIT, Number(refs[1]));
     const map = !table && /^\s*\|/.test(lines[i]) && isSeparator(lines[i + 1] || '') ? headerMap(splitRow(lines[i])) : null;
     if (!map) continue;
     let end = i + 2;
@@ -253,7 +259,7 @@ function parseAssetList(md) {
     rows = lines.slice(i + 2, end).map((line) => cleanRow(line, map));
     i = end - 1;
   }
-  return { rows, limit, lines, table };
+  return { rows, limit, referencesLimit, lines, table };
 }
 
 const cell = (v) => String(v || '').replace(/\|/g, '\\|');
@@ -461,20 +467,34 @@ function dirEntries(dir) {
   }
 }
 
+/** The project's reference cap: "References limit: N" in ASSETS.md, else the default. */
+function referenceLimit(repoDir) {
+  const md = pack.readPackFile(repoDir, ASSETS_FILE);
+  if (md === null || md.length > MAX_LIST_CHARS) return DEFAULT_REFERENCE_LIMIT;
+  return parseAssetList(md).referencesLimit || DEFAULT_REFERENCE_LIMIT;
+}
+
 /**
  * The art-direction images: design/references/*.png|jpg and one folder down
  * (the research step's <slug>/ folders), as repo-relative paths. No links.
- * @returns {string[]}
+ * Images past the project's limit are returned in `skipped`, never dropped silently.
+ * @returns {{images:string[], skipped:string[], limit:number}}
  */
-function referenceImages(repoDir) {
-  const root = path.join(path.resolve(repoDir), pack.DESIGN_DIR, REFERENCES_DIR);
+function referenceImageSet(repoDir) {
+  const repo = path.resolve(repoDir);
+  const root = path.join(repo, pack.DESIGN_DIR, REFERENCES_DIR);
   const found = [];
   for (const e of dirEntries(root)) {
     if (e.isFile()) found.push(path.join(root, e.name));
     else if (e.isDirectory()) for (const f of dirEntries(path.join(root, e.name))) if (f.isFile()) found.push(path.join(root, e.name, f.name));
   }
-  return found.filter(isImageFile).slice(0, MAX_REFERENCE_IMAGES).map((abs) => posix(path.relative(path.resolve(repoDir), abs)));
+  const all = found.filter(isImageFile).map((abs) => posix(path.relative(repo, abs)));
+  const limit = referenceLimit(repoDir);
+  return { images: all.slice(0, limit), skipped: all.slice(limit), limit };
 }
+
+/** @returns {string[]} the reference images within the project's limit */
+const referenceImages = (repoDir) => referenceImageSet(repoDir).images;
 
 const isLinkPath = (p) => {
   try {
@@ -737,12 +757,27 @@ function createAssetStep(deps) {
     });
   }
 
+  // The skipped-reference list last logged per run, so an unchanged list is logged once.
+  const skippedLogged = new Map();
+
+  /** Names the reference images left out by the limit (once per run until the list changes). */
+  function warnSkippedReferences(run, skipped, limit) {
+    const key = skipped.join('\n');
+    if ((skippedLogged.get(run.id) || '') === key) return;
+    skippedLogged.set(run.id, key);
+    if (!skipped.length) return;
+    const names = skipped.slice(0, MAX_NAMES_IN_LOG).join(', ');
+    const more = skipped.length > MAX_NAMES_IN_LOG ? ` and ${skipped.length - MAX_NAMES_IN_LOG} more` : '';
+    logEvent(`${skipped.length} reference image(s) over the limit of ${limit} skipped: ${names}${more} - raise it with "References limit: N" in design/${ASSETS_FILE} (max ${MAX_REFERENCE_LIMIT})`);
+  }
+
   /** The Critic's style check over done rows with a render; low scores file feel cards. */
   async function styleCheck(run, rows, store, tag) {
     if (typeof deps.styleCheck !== 'function') return rows;
     const due = rows.filter((r) => isAsset(r) && r.status === DONE).map((r) => ({ row: r, render: renderOf(run.repoPath, r) })).filter((x) => x.render);
     if (!due.length) return rows;
-    const references = referenceImages(run.repoPath);
+    const { images: references, skipped, limit } = referenceImageSet(run.repoPath);
+    warnSkippedReferences(run, skipped, limit);
     if (!references.length) return rows;
     const batch = due.slice(0, MAX_STYLE_PER_CALL).map((x) => ({ ...x.row, render: x.render, turntable: isTurntableRender(run.repoPath, x.render) }));
     const pick = pickModel('critic', run.models) || { model: FALLBACK_MODEL, reason: 'default' };
@@ -824,6 +859,8 @@ module.exports = {
   CAPPED,
   ALL,
   DEFAULT_BATCH_LIMIT,
+  DEFAULT_REFERENCE_LIMIT,
+  MAX_REFERENCE_LIMIT,
   STYLE_PASS_SCORE,
   STYLE_SCHEMA,
   specHash,
@@ -837,6 +874,7 @@ module.exports = {
   assetManifestEstimate: cost.assetManifestEstimate,
   assetCard,
   referenceImages,
+  referenceImageSet,
   buildStyleArgs,
   buildStylePrompt,
   validateStyle,
