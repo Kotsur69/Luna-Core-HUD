@@ -208,6 +208,25 @@ function parseLedger(md) {
   return { rows: [], lines, eol, table: null };
 }
 
+/**
+ * The ledger row that describes `rel` itself: its own row, else the deepest
+ * folder row above it (a path that `rel` continues with "/", as isCovered
+ * reads it). A same-stem row is not taken: it describes a file made from
+ * `rel`, not where `rel` came from.
+ * @param {{path:string}[]} rows parseLedger(...).rows
+ * @param {string} rel repo-relative posix path
+ * @returns {object|null}
+ */
+function ledgerRowFor(rows, rel) {
+  const want = cleanPath(rel);
+  if (!want) return null;
+  const list = (Array.isArray(rows) ? rows : []).filter((r) => isObj(r) && typeof r.path === 'string' && r.path);
+  const own = list.find((r) => r.path === want);
+  if (own) return own;
+  const folders = list.filter((r) => want.startsWith(r.path.endsWith('/') ? r.path : `${r.path}/`));
+  return folders.reduce((best, r) => (!best || r.path.length > best.path.length ? r : best), null);
+}
+
 /** One row in the table's own column order; columns LunaCore does not know keep `base`'s cells. */
 function formatRow(r, map, width, base = []) {
   const cells = Array.from({ length: width }, (_, i) => cell(base[i]));
@@ -423,7 +442,10 @@ module.exports = {
   REFERENCE_GAMES,
   classifyLicense,
   ripReason,
+  MAX_CELL_CHARS,
+  MAX_LEDGER_BYTES,
   parseLedger,
+  ledgerRowFor,
   withLedgerRows,
   withLedgerLock,
   creditsText,

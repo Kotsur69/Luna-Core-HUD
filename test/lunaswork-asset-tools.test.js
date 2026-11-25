@@ -741,7 +741,9 @@ test('luna_asset_blender from: the record is proven only by a higgsfield entry o
   const record = 'art/higgsfield/prop/crate.json';
   const repoWith = () => {
     const repo = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-from-prov-'));
-    for (const [r, data] of [[rel, PNG_BYTES], [record, JSON.stringify({ outputs: [rel] })]]) {
+    // The png's own ledger row, as luna_asset_higgsfield writes it: an unproven record carries this row over.
+    const ledger = `| Name | Source URL | Author | License | Path |\n|---|---|---|---|---|\n| Crate | ${record} | LunaCore asset worker (Higgsfield) | Own work (generated) | ${rel} |\n`;
+    for (const [r, data] of [[rel, PNG_BYTES], [record, JSON.stringify({ outputs: [rel] })], ['design/ASSET_LICENSES.md', ledger]]) {
       fsx.mkdirSync(path.dirname(path.join(repo, r)), { recursive: true });
       fsx.writeFileSync(path.join(repo, r), data);
     }
@@ -766,7 +768,7 @@ test('luna_asset_blender from: the record is proven only by a higgsfield entry o
     const forged = await blenderFrom(run, 'lw-p');
     assert.equal(forged.payload.from.recordProven, false);
     assert.match(forged.payload.note, /claimed Higgsfield record/);
-    assert.match(forged.ledger, /\| Crate \| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \|/);
+    assert.match(forged.ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \(derived via Blender from Assets\/X\/Art\/Props\/crate\.png\) \| LunaCore asset worker \(Higgsfield\) \| Own work \(generated\) \| Assets\/X\/Art\/Props\/crate\.fbx \|/);
 
     // Genuine: luna_asset_higgsfield logged it in this run; the run record survives a restart.
     const sha256 = require('crypto').createHash('sha256').update(PNG_BYTES).digest('hex');
