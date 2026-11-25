@@ -728,3 +728,69 @@ test('estimate: Higgsfield credits come from the asset catalog; a model outside 
   const cast = A.assetManifestEstimate([{ name: 'Badge', type: 'ui', source: 'auto', spec: 'badge', casting: { costClass: 'paid', paidModel: 'gpt_image_2_6' } }]);
   assert.deepEqual(cast.paid.rows.map((r) => [r.credits, r.unknownModel]), [[gpt.credits, false]]);
 });
+
+// ---- reference image cap ------------------------------------------------------------
+
+/** A repo with `n` reference images (ref-01.png ...) and an optional ASSETS.md preamble line. */
+function refsRepo(n, extraLine = null) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-assets-refs-'));
+  assert.equal(Pack.scaffoldPack(dir, { game: true }).ok, true);
+  const lines = ['# Assets', '', ...(extraLine ? [extraLine, ''] : []), HEADER, ''];
+  fs.writeFileSync(path.join(dir, 'design', 'ASSETS.md'), lines.join('\n'));
+  const refs = path.join(dir, 'design', 'references');
+  fs.mkdirSync(refs, { recursive: true });
+  for (let i = 1; i <= n; i += 1) fs.writeFileSync(path.join(refs, `ref-${String(i).padStart(2, '0')}.png`), PNG);
+  return dir;
+}
+
+const refName = (i) => `design/references/ref-${String(i).padStart(2, '0')}.png`;
+
+test('reference images: the default cap is 12 and the rest are reported as skipped', () => {
+  const set = A.referenceImageSet(refsRepo(14));
+  assert.equal(A.DEFAULT_REFERENCE_LIMIT, 12);
+  assert.equal(set.limit, 12);
+  assert.deepEqual(set.images, Array.from({ length: 12 }, (_, i) => refName(i + 1)));
+  assert.deepEqual(set.skipped, [refName(13), refName(14)]);
+  assert.equal(A.referenceImages(refsRepo(14)).length, 12);
+});
+
+test('reference images: "References limit: N" in ASSETS.md raises the cap', () => {
+  const set = A.referenceImageSet(refsRepo(18, 'References limit: 16'));
+  assert.equal(set.limit, 16);
+  assert.equal(set.images.length, 16);
+  assert.deepEqual(set.skipped, [refName(17), refName(18)]);
+  assert.equal(A.parseAssetList('References limit: 16\n').referencesLimit, 16);
+});
+
+test('reference images: the override is clamped to the maximum', () => {
+  const set = A.referenceImageSet(refsRepo(30, 'References limit: 99'));
+  assert.equal(set.limit, A.MAX_REFERENCE_LIMIT);
+  assert.equal(A.MAX_REFERENCE_LIMIT, 24);
+  assert.equal(set.images.length, 24);
+  assert.equal(set.skipped.length, 6);
+});
+
+test('reference images: an invalid override is ignored and the default kept', () => {
+  for (const line of ['References limit: 0', 'References limit: lots', 'References limit: -5', 'References limit: 12.5', '<!-- References limit: 20 -->']) {
+    assert.equal(A.parseAssetList(`${line}\n`).referencesLimit, null, line);
+    assert.equal(A.referenceImageSet(refsRepo(13, line)).limit, 12, line);
+  }
+});
+
+test('reference images over the cap are logged by name in the style check, once per run', async () => {
+  const dir = styledRepo();
+  const refs = path.join(dir, 'design', 'references');
+  for (let i = 1; i <= 12; i += 1) fs.writeFileSync(path.join(refs, `ref-${String(i).padStart(2, '0')}.png`), PNG);
+  const critic = fakeCritic([{ name: 'Hero Ship', score: 9, reference: refName(1), notes: 'Fits.' }]);
+  const { step, events } = makeStep(memStore(), { styleCheck: (opts) => A.runStyleCheck({ ...opts, runClaude: critic.run }) });
+  await step.beforeDirecting(baseRun(dir));
+  const warn = events.filter((e) => /reference image\(s\) over the limit of 12/.test(e));
+  assert.equal(warn.length, 1);
+  // Entries sort by name: neon-drift/hud.png comes first, so ref-12.png is the one dropped.
+  assert.match(warn[0], /design\/references\/ref-12\.png/);
+  assert.match(warn[0], /References limit: N/);
+  assert.doesNotMatch(critic.calls[0].prompt, /ref-12\.png/);
+  assert.match(critic.calls[0].prompt, /neon-drift\/hud\.png/);
+  await step.beforeDirecting(baseRun(dir));
+  assert.equal(events.filter((e) => /over the limit of 12/.test(e)).length, 1);
+});

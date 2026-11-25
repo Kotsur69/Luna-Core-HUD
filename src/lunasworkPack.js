@@ -178,7 +178,9 @@ const GAME_TEMPLATES = Object.freeze({
      Source: generated (a generation API), blender (Blender MCP), library, or
      auto (or empty): the Director picks the source and model per asset.
      Status: leave "planned" (or empty) for new rows; the run moves it through
-     queued -> done -> approved / restyle. Hash is filled in by the run. -->
+     queued -> done -> approved / restyle. Hash is filled in by the run.
+     The style check reads up to 12 images from design/references/; add a
+     "References limit: N" line (max 24) to raise it. -->
 
 Batch limit: 5
 
