@@ -549,7 +549,11 @@ const STYLE_SCHEMA = {
   },
 };
 
-/** argv for the style check - read-only, never a shell string; the prompt goes on stdin. */
+/**
+ * argv for the style check and luna_asset_judge - read-only, never a shell string; the prompt
+ * goes on stdin. Lean like the casting call: no user settings, plugins or MCP servers (a live
+ * judge call with them stopped at the $1 cap before answering).
+ */
 function buildStyleArgs({ model = FALLBACK_MODEL, budgetUsd = STYLE_BUDGET_USD } = {}) {
   return [
     '-p',
@@ -558,6 +562,9 @@ function buildStyleArgs({ model = FALLBACK_MODEL, budgetUsd = STYLE_BUDGET_USD }
     '--model', model,
     '--effort', STYLE_EFFORT,
     '--tools', STYLE_TOOLS,
+    '--setting-sources', '',
+    '--strict-mcp-config',
+    '--mcp-config', JSON.stringify({ mcpServers: {} }),
     '--max-budget-usd', String(budgetUsd),
     '--no-session-persistence',
   ];

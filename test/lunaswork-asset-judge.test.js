@@ -175,6 +175,9 @@ test('traversal, outside-repo, non-art, non-image and fake images are refused wi
     [outside, 'outsideRepo'],
     ['/etc/x.png', 'outsideRepo'],
     ['design/references/ref.png', 'notArtPath'],
+    ['design/x.png', 'notArtPath'],
+    ['design/asset-renders/sub/x.png', 'notArtPath'],
+    ['design/asset-renders-2/x.png', 'notArtPath'],
     ['Assets/Other/x.png', 'notArtPath'],
     ['art/notes.txt', 'notImage'],
     ['art/fake.png', 'badImage'],
@@ -187,6 +190,40 @@ test('traversal, outside-repo, non-art, non-image and fake images are refused wi
     assert.match(res.detail, /candidate-2/);
   }
   assert.equal(s.calls.length, 0, 'no model call for a refused candidate');
+});
+
+test('a luna_asset_blender turntable sheet in design/asset-renders/ is a candidate, read where it lies', async () => {
+  const s = setup({ scores: { 'candidate-1': 6, 'candidate-2': 9 } });
+  const draft = put(s.repo, 'art/drafts/ship.png', PNG);
+  const sheet = put(s.repo, 'design/asset-renders/hero-ship.png', PNG);
+  const res = await s.judge({ name: 'Hero Ship', kind: 'prop', candidates: [draft, sheet] });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.winner.candidate, sheet);
+  assert.equal(res.winner.origin, 'local');
+  assert.equal(res.pass, true);
+  // Read in place: the sheet is neither copied nor removed.
+  assert.equal(fs.existsSync(path.join(s.repo, 'design', 'asset-renders', 'hero-ship.png')), true);
+  assert.equal(fs.existsSync(path.join(s.repo, 'art', 'candidates')), false);
+  assert.equal(J.checkCandidatePath(s.repo, ART_ROOT, 'design\\asset-renders\\hero-ship.png').ok, true);
+  // Every other check still applies inside the renders folder.
+  put(s.repo, 'design/asset-renders/fake.png', Buffer.from('not an image'));
+  put(s.repo, 'design/asset-renders/notes.txt', Buffer.from('text'));
+  for (const [bad, code] of [['design/asset-renders/fake.png', 'badImage'], ['design/asset-renders/notes.txt', 'notImage'], ['design/asset-renders/../references/ref.png', 'pathTraversal'], ['design/asset-renders/missing.png', 'notFound']]) {
+    assert.equal(J.checkCandidatePath(s.repo, ART_ROOT, bad).error, code, bad);
+  }
+});
+
+test('a design/asset-renders/ folder that is a junction is refused', async (t) => {
+  const s = setup({ scores: {} });
+  const target = tmpDir('lw-judge-renders-');
+  fs.writeFileSync(path.join(target, 'x.png'), PNG);
+  try {
+    await fs.promises.symlink(target, path.join(s.repo, 'design', 'asset-renders'), 'junction');
+  } catch (err) {
+    t.skip(`cannot create a junction here (${err.code})`);
+    return;
+  }
+  assert.equal(J.checkCandidatePath(s.repo, ART_ROOT, 'design/asset-renders/x.png').error, 'linkedPath');
 });
 
 test('a candidate reached through a junction or symlink is refused', async (t) => {
@@ -311,7 +348,8 @@ test('every verdict is logged in the asset log with tool "judge"', async () => {
   assert.equal(s.logged.length, 1);
   const e = s.logged[0];
   assert.deepEqual([e.tool, e.kind, e.name, e.path, e.costUsd, e.imported], ['judge', 'keyart', 'Key Art', b, 0, false]);
-  assert.match(e.prompt, /^pass - candidate-2 scored 8\/10/);
+  // A local winner passed: the run record marks it a free pass (the cost guard reads that back).
+  assert.match(e.prompt, /^free pass - candidate-2 scored 8\/10/);
   assert.deepEqual(e.sources, ['candidate-2 8/10', 'candidate-1 4/10']);
 });
 

@@ -12,6 +12,10 @@
 //   recordAsset(entry)            logs one made asset (tool, prompt, seed,
 //                                 cost, path) in run.assets for the run report
 //   cappedTools()                 run.spendCapped, for the next build
+//   judgeVerdicts()               {runId, entries}: the run's luna_asset_judge
+//                                 entries of run.assets (validated, oldest
+//                                 first), so the Higgsfield cost guard survives
+//                                 a restart and spans the run's worktrees
 //   toolDown(result, role)        a step result that says a kit tool is down
 //                                 pauses the run (the usage-limit wait path:
 //                                 armWait, waitReason 'toolDown') for
@@ -109,6 +113,17 @@ function createToolGuard(ctx) {
     return true;
   }
 
+  /**
+   * The run's judge verdicts, read back from the run record (it may have been
+   * restored from a run file: every entry goes through cleanAssetEntry again).
+   * @returns {{runId:string, entries:object[]}|null} null without a run
+   */
+  function judgeVerdicts() {
+    const run = ctx.run();
+    if (!run || typeof run.id !== 'string' || !run.id) return null;
+    return { runId: run.id, entries: cleanGuardFields(run).assets.filter((e) => e.tool === 'judge') };
+  }
+
   /** @returns {boolean} true when the result meant a tool is down and the run now waits */
   function toolDown(result, role) {
     const down = toolDownOf(result);
@@ -133,7 +148,7 @@ function createToolGuard(ctx) {
     return true;
   }
 
-  return { recordSpend, recordAsset, cappedTools, toolDown, toolDownOf };
+  return { recordSpend, recordAsset, cappedTools, judgeVerdicts, toolDown, toolDownOf };
 }
 
 module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, MAX_ASSET_ENTRIES, cleanGuardFields, createToolGuard };

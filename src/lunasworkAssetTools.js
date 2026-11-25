@@ -66,7 +66,7 @@ const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-ht
 const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
 const { ALL_SOURCES } = require('./lunasworkAssetFanout');
 const { createFreeSources, SOURCE_IDS, TYPES: LIBRARY_TYPES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
-const { createAssetJudge, createVerdictStore, MIN_CANDIDATES, MAX_CANDIDATES, CANDIDATES_DIR } = require('./lunasworkAssetJudge');
+const { createAssetJudge, createVerdictStore, runFreePassed, MIN_CANDIDATES, MAX_CANDIDATES, CANDIDATES_DIR } = require('./lunasworkAssetJudge');
 
 const BLENDER_TOOL = 'luna_asset_blender';
 const COMFY_TOOL = 'luna_asset_comfy';
@@ -220,7 +220,7 @@ const ASSET_TOOLS = Object.freeze([
   },
   {
     name: JUDGE_TOOL,
-    description: `Luna's Work asset judge: the Critic ranks ${MIN_CANDIDATES} to ${MAX_CANDIDATES} candidates for ONE asset against design/references/ and the art direction, BEFORE you import or pay for anything. A candidate is a repo image path under art/ or the art root (a ComfyUI draft, a Higgsfield result, a render) or a luna_asset_search result {source, id}, judged on its library preview (saved under ${CANDIDATES_DIR}/). Kind "audio" is judged on metadata only (name, tags, duration, license). Answers {ranking, winner, pass, reason}: import only the winner; pass false means move to the next rung of the fallback ladder. After a passing free or local winner, luna_asset_higgsfield refuses this asset (freeCandidatePassed). Logged in the run report.`,
+    description: `Luna's Work asset judge: the Critic ranks ${MIN_CANDIDATES} to ${MAX_CANDIDATES} candidates for ONE asset against design/references/ and the art direction, BEFORE you import or pay for anything. A candidate is a repo image path under art/ or the art root (a ComfyUI draft, a Higgsfield result), a luna_asset_blender turntable sheet at design/asset-renders/<slug>.png, or a luna_asset_search result {source, id}, judged on its library preview (saved under ${CANDIDATES_DIR}/). Kind "audio" is judged on metadata only (name, tags, duration, license). Answers {ranking, winner, pass, reason}: import only the winner; pass false means move to the next rung of the fallback ladder. After a passing free or local winner, luna_asset_higgsfield refuses this asset (freeCandidatePassed). Logged in the run report.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -580,7 +580,10 @@ function createDownloader(opts = {}) {
  *   net?:object, execFile?:Function, fetch?:Function, lookup?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void,
  *   runClaude?:Function, verdicts?:object}} deps  runClaude / verdicts = the judge's Critic runner and verdict store (tests)
  *   keys = the asset library keys (src/lunasworkAssetKeys.js); none -> the keyed libraries answer noKey
- * @returns {(ctx:{repoPath:string, recordSpend:Function, recordAsset:Function, cappedTools:Function}|null)
+ *   ctx.runId / ctx.judgeVerdicts = the run this tab works for and a read of its judge entries
+ *   ({runId, entries}, src/lunaswork.js): the Higgsfield cost guard decides from the run record first
+ * @returns {(ctx:{repoPath:string, runId?:string|null, recordSpend:Function, recordAsset:Function, cappedTools:Function,
+ *   judgeVerdicts?:()=>({runId:string, entries:object[]}|null)}|null)
  *   => null|{blenderModel:Function, comfyDraft:Function, higgsfieldFinal:Function, librarySearch:Function, libraryImport:Function, assetJudge:Function}}
  */
 function createAssetToolsFor(deps) {
@@ -590,6 +593,19 @@ function createAssetToolsFor(deps) {
   const verdicts = deps.verdicts || createVerdictStore();
   return function assetsFor(ctx) {
     if (!isObj(ctx) || typeof ctx.repoPath !== 'string') return null;
+    const runId = typeof ctx.runId === 'string' && ctx.runId ? ctx.runId : null;
+    // The run record survives a restart and spans the run's worktrees; this process's store
+    // also holds a verdict the run log refused. Either one's free pass blocks a paid final:
+    // when they disagree, the guard errs on the side of not spending.
+    const freeCandidatePassed = (job) => {
+      let fromRun = null;
+      try {
+        if (typeof ctx.judgeVerdicts === 'function') fromRun = runFreePassed(ctx.judgeVerdicts(), runId, job.kind, job.slug);
+      } catch (err) {
+        log(`[lunaswork-assets] judge verdicts unreadable, using this process's verdicts: ${oneLine(errText(err), 200)}`);
+      }
+      return fromRun === true || verdicts.freePassed(ctx.repoPath, job.kind, job.slug, runId);
+    };
     // A library call that throws (not one that answers a failure) still never shows a stored key.
     const keyed = (fn) => Promise.resolve().then(fn).catch((err) => ({
       ok: false,
@@ -621,9 +637,12 @@ function createAssetToolsFor(deps) {
         unity: createPipelineClient({ projectDir: ctx.repoPath, fetch: deps.fetch }),
         recordSpend: ctx.recordSpend,
         cappedTools: ctx.cappedTools,
-        freeCandidatePassed: (job) => verdicts.freePassed(ctx.repoPath, job.kind, job.slug),
+        freeCandidatePassed,
         logAsset: (entry) => {
-          if (!ctx.recordAsset(entry)) log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);
+          if (ctx.recordAsset(entry)) return;
+          log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);
+          // The pipeline's log() turns this into false, so the caller can say so in its answer.
+          throw new Error('the run report refused the entry');
         },
       });
     };
@@ -643,7 +662,7 @@ function createAssetToolsFor(deps) {
           sources: createFreeSources({ fetch: deps.fetch, keys }),
           // The preview download: public https only, never a key or an auth header.
           download: createDownloader({ fetch: deps.fetch, lookup: deps.lookup }),
-          verdicts,
+          verdicts: { record: (repo, kind, slug, freePass) => verdicts.record(repo, kind, slug, freePass, runId) },
           runClaude: deps.runClaude,
           env: deps.env ? deps.env() : undefined,
           secrets: () => keys.secrets(),

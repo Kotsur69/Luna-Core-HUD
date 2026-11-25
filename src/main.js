@@ -1454,8 +1454,11 @@ function lunasworkAssetsFor(sessionId, session) {
   if (!cwd || !isUnityProject(cwd)) return null;
   return lunasworkAssetTools({
     repoPath: cwd,
+    // The run this tab works for: verdicts of any other run never count.
+    runId: lunaswork.runId(),
     recordSpend: (payload) => lunaswork.recordSpend(payload),
     recordAsset: (entry) => lunaswork.recordAsset(entry),
+    judgeVerdicts: () => lunaswork.judgeVerdicts(),
     cappedTools: () => lunaswork.cappedTools(),
   });
 }
