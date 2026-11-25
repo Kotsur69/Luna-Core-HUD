@@ -136,6 +136,53 @@ test('a changed spec puts an asset that was already made back to planned', () =>
   assert.equal(row.ref, null);
 });
 
+// ---- catalog kinds as ASSETS.md types ---------------------------------------------------
+
+const NEW_KINDS = ['character', 'prop', 'environment', 'concept', 'keyart'];
+
+test('the catalog kinds round-trip through parseAssetList and formatAssetList', () => {
+  const md = [HEADER, ...NEW_KINDS.map((k) => `| ${k} one | ${k.toUpperCase()} | a ${k} |  |  |  |  |  |`)].join('\n');
+  const parsed = A.parseAssetList(md);
+  assert.deepEqual(parsed.rows.map((r) => r.type), NEW_KINDS);
+  assert.deepEqual(A.parseAssetList(A.formatAssetList(parsed, parsed.rows)).rows.map((r) => r.type), NEW_KINDS);
+  for (const k of NEW_KINDS) assert.ok(A.TYPES.includes(k), k);
+});
+
+test('model and other rows parse as before; an unknown type still reads as other', () => {
+  const { rows } = A.parseAssetList([HEADER,
+    '| Crate | model | wooden crate | generated |  |  |  |  |',
+    '| Thing | other | a thing | generated |  |  |  |  |',
+    '| Gizmo | widget | a gizmo | generated |  |  |  |  |',
+  ].join('\n'));
+  assert.deepEqual(rows.map((r) => r.type), ['model', 'other', 'other']);
+  assert.equal(rows[0].hash, A.specHash('model', 'wooden crate'));
+  assert.equal(rows[2].hash, A.specHash('other', 'a gizmo'));
+});
+
+test('a started row of a new kind that still has its old "other" hash is not planned again', () => {
+  const legacy = A.specHash('other', 'wooden barrel');
+  const [kept] = A.parseAssetList(`${HEADER}\n| Barrel | prop | wooden barrel | blender | a.fbx | done | ${legacy} | card 5 |`).rows;
+  assert.equal(kept.status, 'done');
+  assert.equal(kept.type, 'prop');
+  assert.equal(kept.hash, A.specHash('prop', 'wooden barrel'));
+  // A real spec change still sends it back to planned.
+  const changed = A.specHash('other', 'iron barrel');
+  const [replanned] = A.parseAssetList(`${HEADER}\n| Barrel | prop | wooden barrel | blender | a.fbx | done | ${changed} | card 5 |`).rows;
+  assert.equal(replanned.status, 'planned');
+  // The legacy hash is accepted only for the new kinds: a model row is unchanged.
+  const [model] = A.parseAssetList(`${HEADER}\n| Crate | model | wooden crate | blender | a.fbx | done | ${A.specHash('other', 'wooden crate')} | card 5 |`).rows;
+  assert.equal(model.status, 'planned');
+});
+
+test('3D kinds expect an .fbx raw file in their own art folder; concept and keyart a .png', () => {
+  const want = { character: 'Characters/hero.fbx', prop: 'Props/hero.fbx', environment: 'Environments/hero.fbx', model: 'Models/hero.fbx', concept: 'Concepts/hero.png', keyart: 'KeyArt/hero.png', other: 'Misc/hero.png' };
+  for (const [type, file] of Object.entries(want)) {
+    const [row] = A.parseAssetList(`${HEADER}\n| Hero | ${type} | the hero | blender |  |  |  |  |`).rows;
+    const card = A.assetCard(row, { unity: true, artRoot: 'Assets/Game/Art' });
+    assert.ok(card.files.includes(`Assets/Game/Art/${file}`), `${type}: ${card.files.join(', ')}`);
+  }
+});
+
 // ---- dedupe ---------------------------------------------------------------------------
 
 test('dedupe: a second row with the same name or the same spec is a duplicate', () => {
@@ -524,7 +571,7 @@ test('estimate: mixed rows split into library, local and paid with credits and U
   assert.equal(est.library.count, 1);
   assert.equal(est.local.count, 3);
   assert.equal(est.paid.count, 2);
-  const credits = Cost.HIGGSFIELD_MODEL_CREDITS.soul + Cost.DEFAULT_FINAL_CREDITS;
+  const credits = Cost.catalogModelCredits().soul + Cost.DEFAULT_FINAL_CREDITS;
   assert.equal(est.paid.credits, credits);
   assert.equal(est.paid.usd, Math.round(credits * 0.05 * 10000) / 10000);
   assert.deepEqual(est.paid.rows.map((r) => [r.name, r.model, r.unknownModel]), [['Hero', 'soul', false], ['Logo', null, false]]);
@@ -650,4 +697,34 @@ test('cleanAssetEstimate: untrusted fields are dropped, a gate without a decisio
     [e.library, e.local, e.paid, e.usd, e.credits, e.unknownModels, e.gated, e.thresholdUsd],
     [0, 0, 4, 0, 40, ['ok'], false, null],
   );
+});
+
+test('estimate: generated 3D kinds are local like model; concept and keyart are paid images', () => {
+  const est = A.assetManifestEstimate([
+    entry('Hero', 'character', 'generated'),
+    entry('Barrel', 'prop', 'generated'),
+    entry('Dock', 'environment', 'generated'),
+    entry('Mood', 'concept', 'generated'),
+    entry('Cover', 'keyart', 'generated'),
+  ]);
+  assert.equal(est.local.count, 3);
+  assert.deepEqual(est.paid.rows.map((r) => r.name), ['Mood', 'Cover']);
+});
+
+test('estimate: Higgsfield credits come from the asset catalog; a model outside it is still unknown', () => {
+  const { loadCatalog } = require('../src/lunasworkAssetCatalog.js');
+  const hf = loadCatalog(undefined, { warn: () => {} }).sources.find((s) => s.id === 'higgsfield');
+  const gpt = hf.models.find((m) => m.id === 'gpt_image_2_6');
+  assert.equal(typeof gpt.credits, 'number');
+  const est = A.assetManifestEstimate([
+    entry('Logo', 'ui', 'generated', 'clean logo model: gpt_image_2_6'),
+    entry('Odd', 'ui', 'generated', 'odd one model: made-up-model'),
+  ]);
+  assert.deepEqual(est.paid.rows.map((r) => [r.name, r.credits, r.unknownModel]), [['Logo', gpt.credits, false], ['Odd', Cost.DEFAULT_FINAL_CREDITS, true]]);
+  assert.deepEqual(est.paid.unknownModels, ['made-up-model']);
+  // Every catalog-priced model is in the estimate's table at the catalog's price.
+  for (const m of hf.models.filter((x) => typeof x.credits === 'number')) assert.equal(Cost.catalogModelCredits()[m.id.toLowerCase()], m.credits, m.id);
+  // A cast row on the catalog model is priced the same way.
+  const cast = A.assetManifestEstimate([{ name: 'Badge', type: 'ui', source: 'auto', spec: 'badge', casting: { costClass: 'paid', paidModel: 'gpt_image_2_6' } }]);
+  assert.deepEqual(cast.paid.rows.map((r) => [r.credits, r.unknownModel]), [[gpt.credits, false]]);
 });

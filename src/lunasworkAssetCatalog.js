@@ -208,6 +208,19 @@ function isKnownHiggsfieldModel(catalog, id) {
   return typeof id === 'string' && !!hf && Array.isArray(hf.models) && hf.models.some((m) => m.id === id);
 }
 
+/**
+ * Credits per final of the catalog's Higgsfield models, keyed by lower-case
+ * id: the spend estimate's price list (src/lunasworkAssetCost.js). A model
+ * without credits is left out, so the estimate flags it as unknown.
+ * @returns {Readonly<Record<string, number>>}
+ */
+function higgsfieldCredits(catalog) {
+  const hf = sourceById(catalog, 'higgsfield');
+  const models = hf && Array.isArray(hf.models) ? hf.models : [];
+  const priced = models.filter((m) => isObj(m) && typeof m.id === 'string' && typeof m.credits === 'number');
+  return Object.freeze(Object.fromEntries(priced.map((m) => [m.id.toLowerCase(), m.credits])));
+}
+
 /** The AMD-safe ComfyUI model families listed for `kind`. */
 function comfyModelsForKind(catalog, kind) {
   const comfy = sourceById(catalog, 'comfyui');
@@ -224,5 +237,6 @@ module.exports = {
   loadCatalog,
   sourcesForKind,
   isKnownHiggsfieldModel,
+  higgsfieldCredits,
   comfyModelsForKind,
 };

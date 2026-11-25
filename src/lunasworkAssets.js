@@ -81,7 +81,7 @@ const ASSET_TAG = 'asset';
 // The art folder of a non-Unity-adapter run's asset cards.
 const UNITY_ART_DIR = 'Assets/Art';
 // The raw file an asset card expects, by type (a hint; never a prefab, which would route it to the scene worker).
-const RAW_EXT_BY_TYPE = Object.freeze({ model: 'fbx', animation: 'fbx', audio: 'wav' });
+const RAW_EXT_BY_TYPE = Object.freeze({ character: 'fbx', prop: 'fbx', environment: 'fbx', model: 'fbx', animation: 'fbx', audio: 'wav' });
 const DEFAULT_RAW_EXT = 'png';
 // The pipeline brief's paragraph that has the worker import into Unity itself; an asset-prep card defers that.
 const UNITY_IMPORT_PARAGRAPH_RE = /^The luna_asset_\* tools import the result into Unity/;
@@ -89,7 +89,9 @@ const DEFERRED_IMPORT_TEXT = 'This card prepares the asset files only and runs i
 // Only a Unity run's card names the luna_asset_* tools.
 const DEFERRED_TOOL_TEXT = 'A luna_asset_* answer that says the Unity import is deferred is expected, not a failure.';
 
-const TYPES = ['sprite', 'texture', 'model', 'material', 'animation', 'audio', 'ui', 'vfx', 'other'];
+// The asset catalog's kinds (KINDS of src/lunasworkAssetPipeline.js): casting checks a pick against the row type.
+const CATALOG_ONLY_TYPES = Object.freeze(['character', 'prop', 'environment', 'concept', 'keyart']);
+const TYPES = ['sprite', 'texture', 'model', 'material', 'animation', 'audio', 'ui', 'vfx', 'other', ...CATALOG_ONLY_TYPES];
 // auto (or empty): the Director casts the source per asset (src/lunasworkAssetCasting.js).
 const SOURCES = ['generated', 'blender', 'library', 'auto'];
 const PLANNED = 'planned';
@@ -185,6 +187,14 @@ function headerMap(cells) {
   return map.name === undefined ? null : map;
 }
 
+/**
+ * True when a row of a type added with the catalog kinds carries the hash it got while
+ * that type still parsed as 'other': the same asset, so it is not planned (and paid) again.
+ */
+function isLegacyOtherHash(stored, type, spec, name) {
+  return CATALOG_ONLY_TYPES.includes(type) && stored === specHash('other', spec, name);
+}
+
 /** One table row as an asset; a row without a name is kept verbatim (raw). */
 function cleanRow(line, map) {
   const cells = splitRow(line);
@@ -207,7 +217,7 @@ function cleanRow(line, map) {
   };
   const stored = get('hash').toLowerCase();
   // A changed spec is a different asset: one already started is planned again.
-  if (stored && stored !== row.hash && STARTED.includes(row.status)) return { ...row, status: PLANNED, ref: null };
+  if (stored && stored !== row.hash && !isLegacyOtherHash(stored, typeText, spec, name) && STARTED.includes(row.status)) return { ...row, status: PLANNED, ref: null };
   return row;
 }
 
