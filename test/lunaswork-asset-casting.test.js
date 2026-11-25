@@ -286,7 +286,8 @@ test('an invalid primary promotes the cheapest valid fallback rung', () => {
   const crate = plans.get('Crate');
   assert.deepEqual(crate.primary, { source: 'library', librarySources: ['polyhaven'] });
   assert.deepEqual(crate.fallbacks, [{ source: 'blender' }, { source: 'higgsfield', higgsfieldModel: 'image-to-3d' }]);
-  assert.equal(crate.costClass, 'paid', 'the paid fallback is still priced');
+  assert.equal(crate.costClass, 'library', 'priced by its (promoted) primary');
+  assert.equal(crate.paidFallback, 'image-to-3d', 'the paid fallback is recorded apart');
   assert.match(crate.reason, /^promoted fallback \(the primary higgsfield image-to-3d was rejected: paid Higgsfield primary/);
   assert.deepEqual(plans.get('Tile').primary, { source: 'comfyui', comfyWorkflow: 'draft.json' });
   assert.deepEqual(plans.get('Tile').fallbacks, []);
@@ -442,17 +443,116 @@ test('renderCastingBrief gives nothing for no plan', () => {
 
 // ---- review fixes: paid fallbacks, the per-pass cap, the cache, concurrent edits ------------
 
-test('a paid fallback rung prices the plan as paid, with its model', () => {
+test('a free primary with a paid fallback is priced by its primary; the fallback is a distinct "may spend" line', () => {
   const { plans } = C.validateCasting({ casts: [{ name: 'Crate', primary: { source: 'library', librarySources: ['polyhaven'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }], candidates: 1, reason: 'x' }] }, ctxFor([{ name: 'Crate', type: 'model' }]));
   const plan = plans.get('Crate');
-  assert.equal(plan.costClass, 'paid');
-  assert.equal(plan.paidModel, 'image-to-3d');
-  const est = Cost.assetManifestEstimate([{ name: 'Crate', type: 'model', source: 'library', spec: 'x', casting: plan }]);
-  assert.equal(est.paid.count, 1);
-  assert.equal(est.paid.credits, 30);
+  assert.equal(plan.costClass, 'library');
+  assert.equal(plan.paidModel, null);
+  assert.equal(plan.paidFallback, 'image-to-3d');
+  const est = Cost.assetManifestEstimate([
+    { name: 'Crate', type: 'model', source: 'library', spec: 'x', casting: plan },
+    { name: 'Rock', type: 'model', source: 'blender', spec: 'y' },
+  ]);
+  assert.equal(est.paid.count, 0);
+  assert.equal(est.library.count, 0, 'not counted as a plain free row either');
+  assert.equal(est.local.count, 1);
+  assert.equal(est.maySpend.count, 1);
+  assert.equal(est.maySpend.credits, 30);
+  assert.deepEqual(est.maySpend.rows.map((r) => [r.name, r.model]), [['Crate', 'image-to-3d']]);
+  assert.equal(est.total, 2);
+  // The stored record and the report carry it as its own line.
+  const rec = Cost.estimateRecord(est, { at: 1, iteration: 1, thresholdUsd: 10 });
+  assert.deepEqual([rec.paid, rec.maySpend, rec.maySpendCredits, rec.maySpendUsd], [0, 1, 30, est.maySpend.usd]);
+  assert.ok(Cost.estimateLines(rec).some((l) => /^May spend: 1 free or local asset\(s\) with a paid Higgsfield fallback, up to 30 credits/.test(l)));
   const free = C.validateCasting({ casts: [{ name: 'Crate', primary: { source: 'blender' }, fallbacks: [{ source: 'library', librarySources: ['polyhaven'] }], candidates: 1, reason: 'x' }] }, ctxFor([{ name: 'Crate', type: 'model' }]));
   assert.equal(free.plans.get('Crate').costClass, 'local');
   assert.equal(free.plans.get('Crate').paidModel, null);
+  assert.equal(free.plans.get('Crate').paidFallback, null);
+});
+
+test('a paid primary is unchanged: priced and gated as paid, no paidFallback', () => {
+  const rows = [{ name: 'Logo', type: 'ui' }];
+  const { plans } = C.validateCasting({ casts: [{ name: 'Logo', primary: { source: 'higgsfield', higgsfieldModel: 'gpt_image_2_6' }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'soul' }], candidates: 1, reason: 'x' }] }, ctxFor(rows, { workflows: [] }));
+  const plan = plans.get('Logo');
+  assert.equal(plan.costClass, 'paid');
+  assert.equal(plan.paidModel, 'gpt_image_2_6');
+  assert.equal(plan.paidFallback, null);
+  const row = { name: 'Logo', type: 'ui', source: 'generated', spec: 'logo', casting: plan };
+  const est = Cost.assetManifestEstimate([row]);
+  assert.equal(est.paid.count, 1);
+  assert.equal(est.maySpend.count, 0);
+  // Over a tiny remaining budget the paid primary is held for a decision.
+  const gate = Cost.planSpendGate({ spendCaps: { higgsfield: 0.01 }, spend: {} }, [row]);
+  assert.deepEqual(gate.held, [row]);
+  assert.ok(gate.question);
+});
+
+test('spend gate: a "may spend" row is never held, but its fallback credits count against the cap', () => {
+  const usdPerCredit = 0.1;
+  const fallbackRow = (name) => ({ name, type: 'model', source: 'library', spec: name, casting: { primary: { source: 'library', librarySources: ['polyhaven'] }, fallbacks: [{ source: 'higgsfield', higgsfieldModel: 'image-to-3d' }], candidates: 1, reason: '', costClass: 'library', paidModel: null, paidFallback: 'image-to-3d' } });
+  const paidRow = { name: 'Logo', type: 'ui', source: 'generated', spec: 'logo model: gpt_image_2_6' };
+  const run = (cap) => ({ spendCaps: { higgsfield: cap }, spend: {} });
+  const fbUsd = Cost.assetManifestEstimate([fallbackRow('A')], { usdPerCredit }).maySpend.usd;
+  const paidUsd = Cost.assetManifestEstimate([paidRow], { usdPerCredit }).paid.usd;
+  assert.ok(fbUsd > 0 && paidUsd > 0);
+  // Only "may spend" rows, far over the cap: no per-row approval (the cap's booking is the hard stop).
+  const onlyFallbacks = Cost.planSpendGate(run(0.01), [fallbackRow('A'), fallbackRow('B')], { usdPerCredit });
+  assert.deepEqual(onlyFallbacks.held, []);
+  assert.equal(onlyFallbacks.question, null);
+  assert.equal(onlyFallbacks.reservedUsd, 2 * fbUsd);
+  // A paid final that fits the cap alone is held once the fallback reservation is counted first.
+  const cap = paidUsd + fbUsd / 2;
+  assert.deepEqual(Cost.planSpendGate(run(cap), [paidRow], { usdPerCredit }).held, []);
+  const withReserve = Cost.planSpendGate(run(cap), [paidRow, fallbackRow('A')], { usdPerCredit });
+  assert.deepEqual(withReserve.held, [paidRow], 'only the paid primary is held');
+  assert.match(withReserve.question.question, /reserved for 1 paid fallback/);
+  // Enough budget for both: nothing is held.
+  assert.deepEqual(Cost.planSpendGate(run(paidUsd + fbUsd), [paidRow, fallbackRow('A')], { usdPerCredit }).held, []);
+});
+
+test('an older cast plan without paidFallback still loads as no fallback; an old estimate record reads 0 may spend', () => {
+  const old = { primary: { source: 'blender' }, fallbacks: [], candidates: 1, reason: 'x', costClass: 'local', paidModel: null };
+  const est = Cost.assetManifestEstimate([{ name: 'Rock', type: 'model', source: 'blender', spec: 'r', casting: old }]);
+  assert.deepEqual([est.local.count, est.maySpend.count, est.paid.count], [1, 0, 0]);
+  const rec = Cost.cleanAssetEstimate({ library: 1, local: 2, paid: 0 });
+  assert.deepEqual([rec.maySpend, rec.maySpendCredits, rec.maySpendUsd], [0, 0, 0]);
+  assert.equal(Cost.estimateLines({ library: 1, local: 2, paid: 0 }).some((l) => /May spend/.test(l)), false);
+});
+
+// ---- the Director's reason --------------------------------------------------------------------
+
+test('the casting schema carries maxLength for reason and the prompt states it', () => {
+  const reason = C.CASTING_SCHEMA.properties.casts.items.properties.reason;
+  assert.equal(reason.maxLength, 200);
+  const prompt = C.buildCastingPrompt({ rows: [], catalog: CATALOG, keys: {}, references: [], workflows: [], remainingUsd: 1 });
+  assert.match(prompt, /reason: one line of at most 200 characters/);
+});
+
+test('a reason over the limit is cut at a word boundary and ends with an ellipsis', () => {
+  const words = 'a modular crate kit from polyhaven then a ComfyUI Hunyuan pass for the hero variant'.split(' ');
+  const long = Array.from({ length: 12 }, () => words).flat().join(' ');
+  assert.ok(long.length > 200);
+  const cast = (reason, primary = { source: 'blender' }) => C.validateCasting({ casts: [{ name: 'Crate', primary, fallbacks: [{ source: 'blender' }], candidates: 1, reason }] }, ctxFor([{ name: 'Crate', type: 'model' }])).plans.get('Crate').reason;
+  const cut = cast(long);
+  assert.ok(cut.length <= 200, String(cut.length));
+  assert.ok(cut.endsWith('…'));
+  const body = cut.slice(0, -1);
+  assert.ok(long.startsWith(body));
+  assert.ok(words.includes(body.split(' ').pop()), `ends on a whole word: ${body.slice(-30)}`);
+  assert.equal(long[body.length], ' ', 'the cut falls on a space');
+  // Within the limit: unchanged, no ellipsis.
+  assert.equal(cast('short and sweet'), 'short and sweet');
+  // A word that ends exactly where the cut falls is kept whole.
+  const exact = `${'w'.repeat(150)} ${'v'.repeat(48)} tail words here`;
+  assert.equal(cast(exact), `${'w'.repeat(150)} ${'v'.repeat(48)}…`);
+  // One token longer than the limit: a hard cut, still with an ellipsis.
+  const token = cast('x'.repeat(300));
+  assert.equal(token, `${'x'.repeat(199)}…`);
+  // The promoted-fallback reason (twice the limit) is cut the same way.
+  const promoted = cast(long + long, { source: 'midjourney' });
+  assert.match(promoted, /^promoted fallback/);
+  assert.ok(promoted.length <= 400 && promoted.endsWith('…'));
+  assert.ok(/\s\S+…$/.test(promoted) && words.includes(promoted.slice(0, -1).split(' ').pop()));
 });
 
 const autoRow = (i) => ({ name: `Tree ${i}`, type: 'model', spec: `tree ${i}`, source: 'auto', hash: `h${i}`, status: 'planned' });
