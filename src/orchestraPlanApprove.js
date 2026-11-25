@@ -27,7 +27,7 @@
 'use strict';
 
 const { execFile } = require('child_process');
-const { runGit, firstLine, gitError } = require('./worktrees');
+const { runGit, firstLine, gitError, gitDetail } = require('./worktrees');
 const { isBaseBranch } = require('./orchestraSupervisor');
 const { isSafePlanBranch } = require('./orchestraPlanRunLaunch');
 const { validateRunSlug, planPath, isInsidePlanFolder } = require('./orchestraPlanRun');
@@ -41,6 +41,8 @@ const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 const refuse = (error, extra = {}) => ({ ok: false, error, ...extra });
 const cap = (s) => String(s || '').slice(0, MAX_DETAIL_CHARS);
+// Why a runGit call failed, never '': the timeout or spawn error, git's error line, or the full account.
+const why = (res) => cap(res.broke || gitError(res.stderr) || gitDetail(res));
 
 /**
  * What an approve of this run would merge, or why it cannot.
@@ -75,17 +77,18 @@ function outsidePaths(nameZ, runSlug) {
 
 /**
  * Steps 2-5: checks and merges.
- * @param {{repoPath:string, target:{runSlug:string, branch:string, base:string}}} args
+ * @param {{repoPath:string, target:{runSlug:string, branch:string, base:string}, gitTimeoutMs?:number}} args
+ *   gitTimeoutMs: per git call (default runGit's GIT_TIMEOUT_MS; tests under load pass more)
  * @param {Function} [execImpl]
  * @returns {Promise<{ok:true, alreadyMerged:boolean, planText:string}
  *   | {ok:false, error:string, detail?:string, outside?:string[]}>}
  */
-async function mergePlanBranch({ repoPath, target }, execImpl = execFile) {
+async function mergePlanBranch({ repoPath, target, gitTimeoutMs }, execImpl = execFile) {
   const { runSlug, branch, base } = target;
-  const git = (args, opts) => runGit(repoPath, args, execImpl, opts);
+  const git = (args, opts) => runGit(repoPath, args, execImpl, { ...opts, timeoutMs: gitTimeoutMs });
 
   const head = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (!head.ok) return refuse('gitFailed', { detail: cap(head.broke || gitError(head.stderr)) });
+  if (!head.ok) return refuse('gitFailed', { detail: why(head) });
   const current = firstLine(head.stdout);
   if (current !== base) return refuse('notOnBase', { detail: cap(current) });
 
@@ -101,7 +104,7 @@ async function mergePlanBranch({ repoPath, target }, execImpl = execFile) {
 
   // Three dots: only what the branch changed since it left the base.
   const diff = await git(['diff', '--name-only', '-z', '--no-renames', `refs/heads/${base}...${sha}`, '--'], { maxBuffer: 4 * 1024 * 1024 });
-  if (!diff.ok) return refuse('gitFailed', { detail: cap(diff.broke || gitError(diff.stderr)) });
+  if (!diff.ok) return refuse('gitFailed', { detail: why(diff) });
   const outside = outsidePaths(diff.stdout, runSlug);
   if (outside.length) {
     const listed = outside.slice(0, MAX_OUTSIDE_LISTED);
@@ -110,7 +113,7 @@ async function mergePlanBranch({ repoPath, target }, execImpl = execFile) {
   const alreadyMerged = !diff.stdout.split('\0').some(Boolean);
 
   const show = await git(['show', `${sha}:${planPath(runSlug)}`], { maxBuffer: MAX_PLAN_BYTES });
-  if (!show.ok) return refuse('noPlanDoc', { detail: cap(gitError(show.stderr)) });
+  if (!show.ok) return refuse('noPlanDoc', { detail: why(show) });
 
   if (!alreadyMerged) {
     const merged = await git(['merge', '--no-ff', '--no-edit', '-m', `docs: approve plan ${runSlug}`, sha]);
@@ -120,7 +123,7 @@ async function mergePlanBranch({ repoPath, target }, execImpl = execFile) {
       // in the way) left nothing to abort.
       const started = await git(['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']);
       if (started.ok) await git(['merge', '--abort']);
-      return refuse('mergeConflict', { detail: cap(merged.broke || gitError(merged.stderr) || firstLine(merged.stdout)) });
+      return refuse('mergeConflict', { detail: cap(merged.broke || gitError(merged.stderr) || firstLine(merged.stdout) || gitDetail(merged)) });
     }
   }
   return { ok: true, alreadyMerged, planText: show.stdout };
@@ -129,7 +132,7 @@ async function mergePlanBranch({ repoPath, target }, execImpl = execFile) {
 /**
  * The approve service main wires (one approve at a time per run).
  * @param {{readTodos:(projectId:string|null)=>object[], writeTodos:(projectId:string|null, list:object[])=>boolean,
- *   onTodosChanged?:(projectId:string|null)=>void, now?:()=>number, execImpl?:Function}} deps
+ *   onTodosChanged?:(projectId:string|null)=>void, now?:()=>number, execImpl?:Function, gitTimeoutMs?:number}} deps
  * @returns {(args:{projectId:string|null, repoPath:string, view:object}) => Promise<object>}
  */
 function createPlanApprover(deps) {
@@ -143,7 +146,7 @@ function createPlanApprover(deps) {
     if (inFlight.has(key)) return refuse('busy');
     inFlight.add(key);
     try {
-      const merged = await mergePlanBranch({ repoPath, target }, deps.execImpl || execFile);
+      const merged = await mergePlanBranch({ repoPath, target, gitTimeoutMs: deps.gitTimeoutMs }, deps.execImpl || execFile);
       if (!merged.ok) return merged;
       const imported = importPlanTodos(deps.readTodos(projectId), merged.planText, { runSlug: target.runSlug, now: now() });
       if (!imported.ok) return refuse(imported.error);

@@ -18,6 +18,7 @@ const { parseSince, UsageError } = require('../scripts/luna.js');
 const { writeRecord } = require('../src/memorystore.js');
 const { memoryPaths } = require('../src/memorysync.js');
 const { logPath } = require('../src/memorylog.js');
+const { LOADED_GIT_TIMEOUT_MS } = require('../test-support/under-load');
 
 const CLI = path.join(__dirname, '..', 'scripts', 'luna.js');
 const PROJECT = 'github.com/acme/hud';
@@ -66,7 +67,7 @@ const snapshot = (dir) =>
       return `${f}:${stat.size}:${stat.mtimeMs}`;
     });
 
-const run = (args, cwd) => spawnSync(process.execPath, [CLI, 'memory', 'notes', ...args], { cwd, encoding: 'utf8', env: { ...process.env, LUNA_CONFIG_DIR: '' } });
+const run = (args, cwd) => spawnSync(process.execPath, [CLI, 'memory', 'notes', ...args], { cwd, encoding: 'utf8', env: { ...process.env, LUNA_CONFIG_DIR: '', LUNA_GIT_TIMEOUT_MS: String(LOADED_GIT_TIMEOUT_MS) } });
 
 test('notes since a date print the titles grouped by type, and write nothing', (t) => {
   const { configDir } = setup(t);
