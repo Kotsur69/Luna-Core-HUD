@@ -85,7 +85,7 @@ function labelButton(btn, key) {
   btn.setAttribute('aria-label', t(key));
 }
 
-const clock = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+const realClock = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
 
 function motionNow() {
   let reduced = false;
@@ -131,8 +131,11 @@ function replaceKeepingFocus(container, children) {
 /**
  * The Live Web component.
  * @param {{bridge?: object, getView?: () => (object|null), getRunLabel?: () => string,
- *   gotoWorker?: (sessionId: string) => void, showOnBoard?: (pkgId: string) => void}} deps
- *   bridge: window.lunacore (subscribeSessionProcs); getView: the run to show
+ *   gotoWorker?: (sessionId: string) => void, showOnBoard?: (pkgId: string) => void,
+ *   now?: () => number, setTimeout?: (fn: () => void, ms: number) => *, clearTimeout?: (id: *) => void}} deps
+ *   bridge: window.lunacore (subscribeSessionProcs); getView: the run to show;
+ *   now / setTimeout / clearTimeout: the monotonic ms clock and idle timers (real ones by default,
+ *   injectable so tests can cross the rebuild throttle without sleeping)
  * @returns {{root: HTMLElement, show: () => void, hide: () => void, refresh: () => void,
  *   resetRun: () => void, onKey: (e: KeyboardEvent) => boolean, onLang: () => void, destroy: () => void}}
  */
@@ -140,6 +143,9 @@ export function createLiveWeb(deps = {}) {
   const bridge = deps.bridge && typeof deps.bridge === 'object' ? deps.bridge : {};
   const getView = typeof deps.getView === 'function' ? deps.getView : () => null;
   const getRunLabel = typeof deps.getRunLabel === 'function' ? deps.getRunLabel : () => '';
+  const clock = typeof deps.now === 'function' ? deps.now : realClock;
+  const setTimer = typeof deps.setTimeout === 'function' ? deps.setTimeout : (fn, ms) => setTimeout(fn, ms);
+  const clearTimer = typeof deps.clearTimeout === 'function' ? deps.clearTimeout : (id) => clearTimeout(id);
   const actions = {
     gotoWorker: (sessionId) => (typeof deps.gotoWorker === 'function' ? deps.gotoWorker(sessionId) : undefined),
     showOnBoard: (pkgId) => (typeof deps.showOnBoard === 'function' ? deps.showOnBoard(pkgId) : undefined),
@@ -640,7 +646,7 @@ export function createLiveWeb(deps = {}) {
   // --- the loop ----------------------------------------------------------------
 
   function clearIdle() {
-    if (idleTimer) clearTimeout(idleTimer);
+    if (idleTimer) clearTimer(idleTimer);
     idleTimer = 0;
   }
 
@@ -657,7 +663,7 @@ export function createLiveWeb(deps = {}) {
     const breathing = motion && web && now - changedAt < PULSE_IDLE_MS && web.nodes.some((n) => n.overlap);
     const wait = Math.min(owed, breathing ? PULSE_TICK_MS : Infinity);
     if (!Number.isFinite(wait) || idleTimer) return;
-    idleTimer = setTimeout(() => {
+    idleTimer = setTimer(() => {
       idleTimer = 0;
       wake();
     }, wait);

@@ -225,7 +225,7 @@ test('cross-run: a real run reports its active agy workers (any run kind) for th
 // ---- weak-model guard (the easiest agy tier) -------------------------------------------
 
 const weakGuard = require('../src/orchestraWeakGuard');
-const { agyPoolKeysOfTier } = require('../src/agyFamilies');
+const { agyPoolKeysOfTier } = require('../src/agyFamilies.mjs');
 
 const risky = (id, extra = {}) => pkg(id, 'agy-hydrogen', { files: ['docs/a.md', 'docs/b.md', 'docs/c.md'], ...extra });
 

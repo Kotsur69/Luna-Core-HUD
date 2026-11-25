@@ -26,8 +26,14 @@
 // disappears, the port refuses, the editor answers busy. The wait for play
 // mode and for the driver retries those until readyTimeoutSec.
 //
-// The game needs the PlaytestDriver: PLAYTEST_DRIVER_CARD is the God Mode
-// card that builds it. Without it start() fails and names the card.
+// The PlaytestDriver: PLAYTEST_DRIVER_CARD is the God Mode card that builds
+// it. Pipeline: right after play mode starts, start() reads ONCE from the
+// command catalog whether the game has the `playtest` commands (never a trial
+// call of a missing one: that logs a console error). Without them the session
+// runs on the editor's built-in commands (helpers/playtest-bridge/unityBuiltin.js:
+// Game view capture, key input, the Player's Transform) and the bridge gets
+// --unity-driver builtin. Legacy MCP for Unity: without the driver start()
+// fails and names the card.
 //
 // No editor launch: the Unity MCP server lives inside the open editor (on
 // Mati's Unity PC it is already connected), so start() needs it running.
@@ -42,7 +48,8 @@ const { bridgeTools, noTools } = require('./lunasworkBridge');
 const { runTag } = require('./todorows');
 const { saveScreenshot } = require('../helpers/playtest-bridge/bridge');
 const {
-  UNITY_TRANSPORTS, DRIVER_GROUP, isPlaying, parseCombatFeelLog, withCombatFeelLog,
+  UNITY_TRANSPORTS, DRIVER_GROUP, PLAYTEST_MODE, UNITY_PIPELINE_BUILTIN, playtestModeOf, playtestActions,
+  isPlaying, parseCombatFeelLog, withCombatFeelLog,
 } = require('../helpers/playtest-bridge/unity');
 const { PIPELINE_ERROR, isTransientPipelineError, pipelineCommandDidNotRun } = require('../helpers/playtest-bridge/pipeline-http');
 
@@ -97,7 +104,7 @@ const PLAYTEST_DRIVER_CARD = Object.freeze({
     '- Outside play mode every command fails with cmd.Log.Error("playtest commands need play mode") and ExitCode.Failed.',
     '- No file access, no reflection calls by name: the driver only does what a step type says.',
     '',
-    `LunaCore calls exactly \`${DRIVER_GROUP} state\`, \`${DRIVER_GROUP} input\` {steps: "<JSON array>"} and \`${DRIVER_GROUP} screenshot\` (helpers/playtest-bridge/unity.js). Until they exist, Luna's Work start() fails with: ${NO_DRIVER_ERROR} (Unity command '${DRIVER_GROUP} state' failed: Command Not Found ...) - build the "${PLAYTEST_DRIVER_TEXT}" card first.`,
+    `LunaCore calls exactly \`${DRIVER_GROUP} state\`, \`${DRIVER_GROUP} input\` {steps: "<JSON array>"} and \`${DRIVER_GROUP} screenshot\` (helpers/playtest-bridge/unity.js), and uses them once \`pipeline list_commands --group ${DRIVER_GROUP}\` lists all three. Until then Luna's Work playtests on the editor's built-in commands only (Game view capture, key presses, the Player's Transform: no button, axis, click or ui steps, no game state). If the commands are listed but \`${DRIVER_GROUP} state\` fails, start() fails with: ${NO_DRIVER_ERROR} (Unity command '${DRIVER_GROUP} state' failed: ...) - build or fix the "${PLAYTEST_DRIVER_TEXT}" card first.`,
     '',
     'Unity Test Framework PlayMode tests (Assets/LunaPlaytest/Tests/PlayMode): steps parse and run (a ui step clicks a test Button, a button step is visible through PlaytestInput, unknown types fail), Snapshot() is valid JSON with the scene name and registered keys, Screenshot() returns PNG bytes.',
     '',
@@ -193,7 +200,8 @@ function writeEvidence(dir, file, value) {
 function createUnityAdapter(ctx) {
   const log = ctx.log || (() => {});
   let profile = null;
-  let target = null; // {calls, invoke, connect, bridgeArgs} of the profile's transport
+  let target = null; // {transport, calls, invoke, connect, bridgeArgs} of the profile's transport
+  let mode = PLAYTEST_MODE.driver; // detected once by start(): the game's driver or the editor's built-ins
   let playing = false; // play mode was entered by start()
   let started = false; // ... and the driver answered
   let stopping = null;
@@ -203,12 +211,15 @@ function createUnityAdapter(ctx) {
     const transport = unityTransport(valid);
     const { calls, invoke } = UNITY_TRANSPORTS[transport];
     if (transport === 'mcp') {
-      return { calls, invoke, connect: () => ctx.connectUnity(valid.unityMcpUrl), bridgeArgs: ['--unity-url', valid.unityMcpUrl] };
+      return { transport, calls, invoke, connect: () => ctx.connectUnity(valid.unityMcpUrl), bridgeArgs: ['--unity-url', valid.unityMcpUrl] };
     }
     const { dir, reason } = unityProjectDir(ctx.projectDir, valid);
     if (!dir) throw new Error(`invalid project profile: ${reason}`);
-    return { calls, invoke, connect: () => ctx.connectPipeline(dir), bridgeArgs: ['--unity-project', dir] };
+    return { transport, calls, invoke, connect: () => ctx.connectPipeline(dir), bridgeArgs: ['--unity-project', dir] };
   }
+
+  /** The session's playtest actions (state, input, screenshot) for the detected mode. */
+  const actions = (call) => playtestActions({ mode, transport: target.transport, call, sleep: ctx.sleep });
 
   /** One short connection to the editor around `fn`. */
   async function session(fn) {
@@ -271,7 +282,28 @@ function createUnityAdapter(ctx) {
     return deadline;
   }
 
+  /**
+   * Pipeline: whether the game has the PlaytestDriver's commands, read from
+   * the command catalog after play mode started (busy / domain reload answers
+   * are retried until `deadline`). Never a trial call of a missing command.
+   * Legacy MCP for Unity has no catalog: always the driver.
+   */
+  async function detectMode(call, deadline) {
+    if (target.transport !== 'pipeline') return PLAYTEST_MODE.driver;
+    let found = null;
+    const probe = async () => {
+      found = playtestModeOf(await call(UNITY_PIPELINE_BUILTIN.listDriverCommands()));
+      return true;
+    };
+    await pollUntil(deadline, probe, `Unity did not list its commands within ${profile.readyTimeoutSec}s`);
+    if (found.mode === PLAYTEST_MODE.builtin) {
+      log(`[lunaswork] Unity: no PlaytestDriver (${found.missing.join(', ')} not listed); playtesting on the editor's built-in commands`);
+    }
+    return found.mode;
+  }
+
   async function checkDriver(call, deadline) {
+    if (mode === PLAYTEST_MODE.builtin) return;
     const probe = async () => {
       await call(target.calls.driver('state'));
       return true;
@@ -291,7 +323,11 @@ function createUnityAdapter(ctx) {
     target = targetFor(valid);
     profile = valid;
     try {
-      await session(async (call) => checkDriver(call, await enterPlayMode(call)));
+      await session(async (call) => {
+        const deadline = await enterPlayMode(call);
+        mode = await detectMode(call, deadline);
+        await checkDriver(call, deadline);
+      });
     } catch (err) {
       await stop();
       throw err;
@@ -306,9 +342,9 @@ function createUnityAdapter(ctx) {
     const { calls } = target;
     const steps = [
       [CONSOLE_FILE, async () => writeEvidence(ctx.evidenceDir, CONSOLE_FILE, await call(calls.console()))],
-      [STATE_FILE, async () => writeEvidence(ctx.evidenceDir, STATE_FILE, withCombatFeelLog(await call(calls.driver('state'))))],
+      [STATE_FILE, async () => writeEvidence(ctx.evidenceDir, STATE_FILE, withCombatFeelLog(await actions(call).state()))],
       [FINAL_SHOT, async () => {
-        const shot = await call(calls.driver('screenshot'));
+        const shot = await actions(call).screenshot();
         saveScreenshot(ctx.evidenceDir, FINAL_SHOT, shot && shot.png);
       }],
     ];
@@ -358,18 +394,20 @@ function createUnityAdapter(ctx) {
   /** Fresh objects every call; nothing until play mode runs with the driver. */
   function tools() {
     if (!started) return noTools();
-    return bridgeTools('unity', { evidenceDir: ctx.evidenceDir, nodeBinary: ctx.nodeBinary, args: [...target.bridgeArgs] });
+    const modeArgs = mode === PLAYTEST_MODE.builtin ? ['--unity-driver', PLAYTEST_MODE.builtin] : [];
+    return bridgeTools('unity', { evidenceDir: ctx.evidenceDir, nodeBinary: ctx.nodeBinary, args: [...target.bridgeArgs, ...modeArgs] });
   }
 
   /**
    * The game's clean combatFeelLog, read once while play mode still runs (the
    * Playtester's pass is over, stop() has not run yet). Null when the game
-   * keeps no log or the adapter is not started; a failed read throws.
+   * keeps no log, has no PlaytestDriver (built-in mode) or the adapter is not
+   * started; a failed read throws.
    * @returns {Promise<object[]|null>}
    */
   async function combatFeelLog() {
-    if (!started) return null;
-    return session(async (call) => parseCombatFeelLog(await call(target.calls.driver('state'))));
+    if (!started || mode === PLAYTEST_MODE.builtin) return null;
+    return session(async (call) => parseCombatFeelLog(await actions(call).state()));
   }
 
   return { name: 'unity', evidenceDir: ctx.evidenceDir, start, stop, tools, combatFeelLog };

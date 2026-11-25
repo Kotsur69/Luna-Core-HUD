@@ -27,8 +27,23 @@
 // The cast is a pass-only field of the row (`casting`): ASSETS.md keeps
 // "auto" (uncast). The step caches valid casts per run and row hash, so a
 // held or re-planned row keeps its pick (and its approved price) without a
-// new call. A plan is priced at its costliest rung (a paid fallback counts as
-// paid spend). At most MAX_CAST_PER_PASS rows are cast per pass.
+// new call. At most MAX_CAST_PER_PASS rows are cast per pass.
+//
+// Pricing: a plan is priced by its PRIMARY (`costClass`, and `paidModel` for a
+// paid Higgsfield primary). A free or local primary whose ladder ends in a
+// Higgsfield rung records that rung's model apart, as `paidFallback`. It used
+// to be priced at its costliest rung, which turned nearly every cast into a
+// paid row and made the asset step's spend gate ask for an approval per row,
+// although the builder reaches the paid rung only when every cheaper one
+// failed. The Asset Manifest Estimate (src/lunasworkAssetCost.js) now shows
+// such a row as its own "may spend" line, without a per-row approval, and still
+// reserves the fallback's credits against the run's Higgsfield cap before
+// anything is spent, so the cap stays conservative. A paid primary is gated
+// as before. A plan without `paidFallback` (an older one) has no fallback.
+//
+// The Director's reason is one line of at most MAX_REASON_CHARS (the schema's
+// maxLength, stated in the prompt); a longer one is cut at a word boundary and
+// ends with an ellipsis.
 // ============================================================================
 
 'use strict';
@@ -82,6 +97,23 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const own = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
 // eslint-disable-next-line no-control-regex
 const oneLine = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+const ELLIPSIS = '…';
+// A cut that would keep less than this share of the limit ignores the word boundary (one very long token).
+const MIN_WORD_CUT_SHARE = 0.5;
+/**
+ * oneLine, but text over `max` is cut at the last word boundary that fits and
+ * ends with an ellipsis (the result, ellipsis included, is at most `max` chars).
+ */
+function clampLine(v, max) {
+  const text = oneLine(v, Infinity);
+  if (text.length <= max) return text;
+  const room = text.slice(0, max - ELLIPSIS.length);
+  // The kept slice already ends on a whole word when the next character is a space.
+  const space = text[room.length] === ' ' ? room.length : room.lastIndexOf(' ');
+  const cut = space >= max * MIN_WORD_CUT_SHARE ? room.slice(0, space) : room;
+  // No dangling separator before the ellipsis ("crate, ..." reads as "crate...").
+  return `${cut.replace(/[\s,;:.-]+$/, '')}${ELLIPSIS}`;
+}
 const errText = (err) => (err && err.message ? err.message : String(err));
 
 // ---- what the repo has --------------------------------------------------------------------
@@ -265,7 +297,7 @@ function rawRungText(raw) {
 function checkCast(c, kind, ctx) {
   const cheaper = cheaperRungExists(kind, ctx);
   const first = checkPrimary(c.primary, kind, ctx, cheaper);
-  let reason = oneLine(c.reason, MAX_REASON_CHARS);
+  let reason = clampLine(c.reason, MAX_REASON_CHARS);
   let primary = first.rung;
   let ladder = checkLadder(c.fallbacks, kind, ctx, primary);
   let promoted;
@@ -277,20 +309,21 @@ function checkCast(c, kind, ctx) {
     ladder = ladder.filter((r) => r !== primary);
     promoted = { from: rawRungText(c.primary), why: first.why };
     // The Director's reason was about the rejected pick: the card says so.
-    reason = oneLine(`promoted fallback (the primary ${promoted.from} was rejected: ${first.why}); the Director's note: ${reason || 'none'}`, 2 * MAX_REASON_CHARS);
+    reason = clampLine(`promoted fallback (the primary ${promoted.from} was rejected: ${first.why}); the Director's note: ${reason || 'none'}`, 2 * MAX_REASON_CHARS);
   }
   ladder = ladder.slice(0, MAX_FALLBACKS);
-  // Priced at the costliest rung: a paid fallback is spend the builder may make, so the spend gate counts it.
-  const costliest = [primary, ...ladder].reduce((a, b) => (COST_RANK[b.source] > COST_RANK[a.source] ? b : a));
-  const paid = [primary, ...ladder].find((r) => r.source === 'higgsfield');
+  // Priced by the primary; a paid fallback is recorded apart (see the header): reserved against the cap, not gated.
+  const paidPrimary = primary.source === 'higgsfield';
+  const paidRung = paidPrimary ? null : ladder.find((r) => r.source === 'higgsfield');
   return {
     plan: {
       primary,
       fallbacks: ladder,
       candidates: clampCandidates(c.candidates),
       reason,
-      costClass: COST_CLASS[costliest.source],
-      paidModel: paid ? paid.higgsfieldModel : null,
+      costClass: COST_CLASS[primary.source],
+      paidModel: paidPrimary ? primary.higgsfieldModel : null,
+      paidFallback: paidRung ? paidRung.higgsfieldModel : null,
     },
     ...(promoted ? { promoted } : {}),
   };
@@ -361,7 +394,7 @@ const CASTING_SCHEMA = {
           primary: RUNG_SCHEMA,
           fallbacks: { type: 'array', maxItems: MAX_FALLBACKS, items: RUNG_SCHEMA },
           candidates: { type: 'integer', minimum: MIN_CANDIDATES, maximum: MAX_CANDIDATES },
-          reason: { type: 'string' },
+          reason: { type: 'string', maxLength: MAX_REASON_CHARS },
         },
       },
     },
@@ -439,7 +472,7 @@ function buildCastingPrompt({ rows, catalog, keys, references, workflows, remain
     '- Higgsfield may be the primary only when no free library (keyless or with a stored key), ComfyUI workflow or Blender serves the asset kind here; otherwise a Higgsfield primary is rejected whatever the reason says, so put Higgsfield in the fallbacks.',
     '- fallbacks: the other usable rungs, cheapest first.',
     `- candidates: how many candidates to make, ${MIN_CANDIDATES} to ${MAX_CANDIDATES}.`,
-    '- reason: one line.',
+    `- reason: one line of at most ${MAX_REASON_CHARS} characters.`,
     'Answer with JSON. casts: one entry per asset - name (exactly as listed), primary, fallbacks, candidates, reason.',
   ].join('\n');
 }

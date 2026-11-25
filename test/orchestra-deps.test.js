@@ -240,12 +240,16 @@ test('the worker brief says dependencies are installed and forbids linking or re
   assert.match(text, /do not reinstall/);
 });
 
-test('the worker brief says to commit early and to run the final npm test in the foreground', () => {
+test('the worker brief says to commit early and to run the final npm test detached and poll it', () => {
   const text = briefText(pkg('a', [1]), 'luna/a-1');
   assert.match(text, /Commit early: as soon as the brief's must-haves pass their targeted tests, commit them/);
   assert.match(text, /commit again after each further slice/);
-  assert.match(text, /final `npm test` in the FOREGROUND with a long tool timeout \(about 600000 ms\)/);
-  assert.match(text, /Never end your turn while a test run is still going/);
+  assert.match(text, /final `npm test` detached with its output in a log file/);
+  assert.match(text, /poll with waits of under 10 minutes each \(about 570 s\)/);
+  assert.match(text, /done marker or a `# fail` line in the log/);
+  assert.doesNotMatch(text, /FOREGROUND/);
+  assert.doesNotMatch(text, /run it again/i);
+  assert.match(text, /Never end your turn while the suite is still running/);
   assert.match(text, /do not end it before the commit and the LUNA_DONE/);
   assert.doesNotMatch(text, /RESUMING/);
   assert.doesNotMatch(text, /run the test files the earlier session touched/, 'a first start has no resume rule');

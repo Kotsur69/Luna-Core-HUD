@@ -24,6 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { withScratchIndex } = require('./gitScratchIndex');
+const { gitFailure } = require('./worktrees');
 
 const GIT_TIMEOUT_MS = 30 * 1000;
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -43,21 +44,28 @@ function safeRelPath(p) {
 }
 
 /**
- * @param {{execImpl?:Function, env?:()=>object, tmpBase?:string}} [deps] execImpl: child_process.execFile
- *   compatible; tmpBase: where the per-call scratch index folder is made (default os.tmpdir())
+ * @param {{execImpl?:Function, env?:()=>object, tmpBase?:string, gitTimeoutMs?:number}} [deps] execImpl:
+ *   child_process.execFile compatible; tmpBase: where the per-call scratch index folder is made
+ *   (default os.tmpdir()); gitTimeoutMs: per git call (default GIT_TIMEOUT_MS; tests under load pass more)
  */
 function createCommitter(deps = {}) {
   const execImpl = typeof deps.execImpl === 'function' ? deps.execImpl : execFile;
   const tmpBase = typeof deps.tmpBase === 'string' && deps.tmpBase ? deps.tmpBase : undefined;
   const envOf = () => (typeof deps.env === 'function' ? deps.env() : process.env);
+  const timeoutMs = Number.isInteger(deps.gitTimeoutMs) && deps.gitTimeoutMs > 0 ? deps.gitTimeoutMs : GIT_TIMEOUT_MS;
 
   function git(cwd, args, extraEnv = {}) {
     return new Promise((resolve) => {
       try {
-        execImpl('git', args, { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024, env: { ...envOf(), ...extraEnv } },
-          (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || '').trim(), err: clip(String(stderr || '').trim() || (err && err.message)) }));
+        execImpl('git', args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024, env: { ...envOf(), ...extraEnv } },
+          (err, stdout, stderr) => resolve({
+            ok: !err,
+            out: String(stdout || '').trim(),
+            // A failure names the timeout or git's error line, never ''.
+            err: err ? clip(gitFailure(err, stderr, timeoutMs)) : clip(stderr),
+          }));
       } catch (err) {
-        resolve({ ok: false, out: '', err: clip(err && err.message) });
+        resolve({ ok: false, out: '', err: clip(err && err.message) || 'git did not start' });
       }
     });
   }
@@ -79,13 +87,14 @@ function createCommitter(deps = {}) {
 
   async function commitUnsafe(repoPath, paths, message) {
     const ref = await git(repoPath, ['symbolic-ref', '-q', 'HEAD']);
-    if (!ref.ok || !BRANCH_REF_RE.test(ref.out) || ref.out.includes('..')) return { ok: false, committed: false, error: 'notOnBranch' };
+    if (!ref.ok) return { ok: false, committed: false, error: 'notOnBranch', detail: ref.err };
+    if (!BRANCH_REF_RE.test(ref.out) || ref.out.includes('..')) return { ok: false, committed: false, error: 'notOnBranch' };
     const built = await treeWith(repoPath, paths);
     const head = await git(repoPath, ['rev-parse', 'HEAD^{tree}']);
-    if (!built.tree || !head.ok) return { ok: false, committed: false, error: 'notStaged', detail: built.err || head.err };
+    if (!built.tree || !head.ok) return { ok: false, committed: false, error: 'notStaged', detail: built.err || head.err || 'git write-tree gave no tree' };
     if (built.tree === head.out) return { ok: true, committed: false };
     const commit = await git(repoPath, ['commit-tree', built.tree, '-p', 'HEAD', '-m', message]);
-    if (!commit.ok || !SHA_RE.test(commit.out)) return { ok: false, committed: false, error: 'notCommitted', detail: commit.err };
+    if (!commit.ok || !SHA_RE.test(commit.out)) return { ok: false, committed: false, error: 'notCommitted', detail: commit.err || `not a commit sha: ${clip(commit.out) || '(empty)'}` };
     // Staged first: the fast-forward then finds these paths already matching its result.
     const staged = await git(repoPath, ['add', '-f', '--', ...paths]);
     const merged = staged.ok ? await git(repoPath, ['merge', '--ff-only', '-q', commit.out]) : staged;
@@ -116,4 +125,4 @@ function createCommitter(deps = {}) {
   return { commitPaths };
 }
 
-module.exports = { createCommitter, safeRelPath };
+module.exports = { createCommitter, safeRelPath, GIT_TIMEOUT_MS };

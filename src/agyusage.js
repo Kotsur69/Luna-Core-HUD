@@ -34,7 +34,7 @@ const { execFile } = require('child_process');
 const path = require('path');
 const parse = require('./providerusageparse');
 const { parseAgyUsageTable, createAgyUsageReader } = require('./agyusagecli');
-const { agyPerModelUsageRows, isWeeklyOnlyUsageRow } = require('./agyFamilies');
+const { agyPerModelUsageRows, isWeeklyOnlyUsageRow } = require('./agyFamilies.mjs');
 
 /** The app's one `agy -p /usage` reader (it holds the back-off). */
 const sharedAgyUsageReader = createAgyUsageReader();
@@ -59,7 +59,7 @@ const AGY_QUOTA_PATH = '/v1internal:retrieveUserQuotaSummary';
 // (shared by every gemini-* model) is only here. Verified live 2026-11-18.
 const AGY_MODEL_QUOTA_PATH = '/v1internal:retrieveUserQuota';
 /** Model families the summary does not cover, taken from the per-model quota. */
-// The per-model usage rows of src/agyFamilies.js (Gemini, Neon, Argon); an
+// The per-model usage rows of src/agyFamilies.mjs (Gemini, Neon, Argon); an
 // own-quota family (Neon) counts apart from Gemini once its bucket shows up.
 const AGY_MODEL_FAMILIES = new Set(agyPerModelUsageRows());
 const HOUR_MS = 60 * 60 * 1000;

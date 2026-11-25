@@ -175,16 +175,20 @@ const linearEntry = (extra = {}) => ({
   ...extra,
 });
 
-test('runResearch: NOTES.md with sources and screenshots, DESIGN.md summary appended, staging removed', async () => {
+test('runResearch: NOTES.md with sources and screenshots, DESIGN.md summary appended, staging removed', async (t) => {
   const repo = tempRepo({ 'BRIEF.md': '# Brief\n\nA tracker.', 'DESIGN.md': '# Design\n\nBoard like Linear, with dates like Cron.\n' });
+  // A private staging root: the staging dir is created inside it, so "../outside.png" lands in this folder only.
+  const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-research-root-'));
+  t.after(() => fs.promises.rm(stagingRoot, { recursive: true, force: true, maxRetries: 5 }));
   // A real image right outside the staging dir: "../outside.png" must not reach the repo.
-  fs.writeFileSync(path.join(os.tmpdir(), 'outside.png'), PNG);
+  fs.writeFileSync(path.join(stagingRoot, 'outside.png'), PNG);
   const before = readDesign(repo);
   const calls = [];
   const res = await R.runResearch({
     repoDir: repo,
     references: R.pendingReferences(repo),
     model: 'sonnet',
+    stagingRoot,
     now: () => START,
     runClaude: fakeClaude({
       references: [

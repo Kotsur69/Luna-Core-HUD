@@ -137,7 +137,7 @@ async function runPlan(ctx, session, target, { picked, effort, planner, workers,
     // and agy planners have their own model.
     ...(!free && !agy && plannerModel !== PLANNER_MODEL ? { plannerModel } : {}),
     // The agy planner's model: an agy family of the pool menu (a poolKey of
-    // src/agyFamilies.js), resolved against the live list in makePlan; none = agy's default.
+    // src/agyFamilies.mjs), resolved against the live list in makePlan; none = agy's default.
     ...(agy && runsOnOf(model) === 'agy' ? { plannerAgyModel: model } : {}),
     // F6 "Workers": "Plan with free models in mind" changes planning and
     // "Antigravity (agy)" is kept on the plan; a Claude-only request passes no

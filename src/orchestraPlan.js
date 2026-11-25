@@ -35,7 +35,7 @@ const { runAgyPrint, agyJsonPrompt, parseAgyJson } = require('./orchestraAgy');
 const { isPoolKey, strongestKey, tierOf, POOL_FREE_KEY, STRENGTH_ORDER } = require('./workerPool');
 // A pool run's current usage per ticked model (one optional prompt line).
 const { poolUsageLine } = require('./orchestraPoolUsage');
-const { agyFamilyList } = require('./agyFamilies');
+const { agyFamilyList } = require('./agyFamilies.mjs');
 
 const PLANNER_MODEL = 'opus';
 // The Claude CLI model aliases Mati may pick for the planner in the to-do
@@ -199,7 +199,7 @@ const HYBRID_MODEL_RULES = [
 const POOL_KEY_TEXT = Object.freeze({
   opus: 'Claude Opus',
   sonnet: 'Claude Sonnet',
-  // The agy families (src/agyFamilies.js plannerText).
+  // The agy families (src/agyFamilies.mjs plannerText).
   ...Object.fromEntries(agyFamilyList().map((f) => [f.poolKey, f.plannerText])),
   [POOL_FREE_KEY]: 'a free model, much weaker than the others',
 });

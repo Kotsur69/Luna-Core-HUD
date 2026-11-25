@@ -622,6 +622,44 @@ test('the Pipeline table maps every Luna call to a fixed command', () => {
   assert.equal(UN.isPlaying({ isPlaying: true }), true, 'MCP for Unity still reads');
 });
 
+test('the Pipeline asset table uses only commands the live editor has, with fixed parameters', () => {
+  const AS = UN.UNITY_PIPELINE_ASSETS;
+  const dir = 'Assets/BladeBullet/Art/Props';
+  assert.deepEqual(AS.refresh(), ['editor invoke_menu', { path: 'Assets/Refresh' }]);
+  assert.deepEqual(AS.createMaterial(`${dir}/stone.mat`), ['asset create', { path: `${dir}/stone.mat`, type: 'UnityEngine.Material' }]);
+  assert.deepEqual(AS.setMaterialTexture(`${dir}/stone.mat`, `${dir}/stone.png`), [
+    'material set_properties',
+    { material: `${dir}/stone.mat`, properties: { _BaseMap: { path: `${dir}/stone.png` } } },
+  ]);
+  const [command, params] = AS.modelPrefab(`${dir}/Old Crate (1).fbx`, `${dir}/Old Crate (1).prefab`);
+  assert.equal(command, 'script eval');
+  assert.deepEqual(Object.keys(params), ['code']);
+  assert.match(params.code, /LoadAssetAtPath<UnityEngine\.GameObject>\("Assets\/BladeBullet\/Art\/Props\/Old Crate \(1\)\.fbx"\)/);
+  assert.match(params.code, /SaveAsPrefabAsset\(instance, "Assets\/BladeBullet\/Art\/Props\/Old Crate \(1\)\.prefab", out var ok\)/);
+  // The open scene is never used: the model goes into a preview scene that is always closed.
+  assert.match(params.code, /InstantiatePrefab\(model, stage\)/);
+  assert.match(params.code, /finally \{\s+UnityEditor\.SceneManagement\.EditorSceneManager\.ClosePreviewScene\(stage\);/);
+});
+
+test('the Pipeline asset table refuses any path that could leave its C# literal or the project', () => {
+  const AS = UN.UNITY_PIPELINE_ASSETS;
+  const ok = 'Assets/Art/a.fbx';
+  for (const bad of ['Assets/Art/a".fbx', 'Assets/Art/a\\b.fbx', 'Assets/../x.fbx', 'Assets/Art/a.fbx\n', 'Packages/x.fbx', '/Assets/a.fbx', 'Assets', '', null, 42, 'Assets/Art/a$b{c}.fbx']) {
+    assert.throws(() => AS.modelPrefab(bad, 'Assets/Art/a.prefab'), /not a project asset path/, JSON.stringify(bad));
+    assert.throws(() => AS.modelPrefab(ok, bad), /not a project asset path/, JSON.stringify(bad));
+    assert.throws(() => AS.createMaterial(bad), /not a project asset path/, JSON.stringify(bad));
+    assert.throws(() => AS.setMaterialTexture('Assets/Art/a.mat', bad), /not a project asset path/, JSON.stringify(bad));
+  }
+});
+
+test('checkTextureApplied passes only an answer that applied _BaseMap', () => {
+  const good = { shader: 'Universal Render Pipeline/Lit', applied: ['_BaseMap'], unknown: [] };
+  assert.equal(UN.checkTextureApplied(good), good);
+  for (const bad of [{ shader: 'Standard', applied: [], unknown: ['_BaseMap'] }, { ok: true }, 'done', null, { applied: '_BaseMap' }]) {
+    assert.throws(() => UN.checkTextureApplied(bad), /_BaseMap not applied/, JSON.stringify(bad));
+  }
+});
+
 test('pipelineCall parses a result the editor sent back as JSON text', async () => {
   const replies = [{ scene: 'Level1' }, JSON.stringify({ scene: 'Level1' }), 'plain text', '7'];
   const client = { exec: async () => replies.shift() };
@@ -671,6 +709,183 @@ test('the bridge with --unity-project: every Playtester tool is one mapped Pipel
   const down = await missing.callTool('game_state', {});
   assert.equal(down.isError, true);
   assert.match(down.content[0].text, /Unity editor not open on/);
+});
+
+/** The editor's built-in commands as com.unity.pipeline 1.0.0 answered them live; anything else is Command Not Found. */
+function builtinEditor() {
+  const ed = { playerX: -0.27, held: new Set(), notFound: [] };
+  const shot = PNG.toString('base64');
+  const answers = {
+    'capture game_view': () => okReply({ width: 1280, height: 720, encoding: 'png', base64: shot, bytes: PNG.length, source: 'screen', savedPath: null }),
+    'runtime status': () => okReply({ IsPlaying: true, LoadedLevelName: 'Dev_Sandbox', FrameCount: 300, TimeScale: 1, RealTimeSinceStartup: 40.5 }),
+    'scene list_open': () => okReply([{ name: 'Dev_Sandbox', path: 'Assets/BladeBullet/Dev_Sandbox.unity', isLoaded: true, isDirty: false, isActive: true, rootCount: 13 }]),
+    'gameobject find': (p) => okReply(p.name === 'Player' ? [{ hierarchyPath: '/Player', type: 'GameObject', instanceId: 7 }] : null),
+    'component get_properties': (p) => okReply({ component: { hierarchyPath: p.target, type: p.type }, properties: { m_LocalRotation: '<unsupported:Quaternion>', m_LocalPosition: [ed.playerX, 2, 0], m_LocalScale: [0.8, 1.6, 1] } }),
+    'runtime simulate_key': (p) => {
+      if (p.action === 'down') ed.held.add(p.key);
+      if (p.action === 'up') ed.held.delete(p.key);
+      return okReply({ Command: 'simulate_key', Detail: `${p.key} ${p.action}` });
+    },
+  };
+  const { client, requests } = fakePipeline({
+    reply: (body) => {
+      if (answers[body.command]) return answers[body.command](body.parameters);
+      ed.notFound.push(body.command);
+      return jsonReply(400, { success: false, error: 'Command Not Found', errorDetails: `No command '${body.command}'` });
+    },
+  });
+  return { ed, client, requests, shot };
+}
+
+test('the bridge without a PlaytestDriver (--unity-driver builtin): Game view capture, scripted keys, the Player transform', async () => {
+  const { ed, client, requests, shot } = builtinEditor();
+  const evidenceDir = tmpDir('lw-bridge-builtin-');
+  const slept = [];
+  const invoke = B.unityBackend({
+    transport: 'pipeline',
+    mode: UN.PLAYTEST_MODE.builtin,
+    connect: () => ({ exec: client.exec, close: async () => {} }),
+    // Holding D moves the player, as it did live (x -0.27 -> 9.88 in 1 s).
+    sleep: async (ms) => {
+      slept.push(ms);
+      if (ed.held.has('D')) ed.playerX += ms / 100;
+    },
+  });
+  const bridge = B.createBridge({ backend: 'unity', evidenceDir, invoke });
+
+  const res = await bridge.callTool('screenshot', { name: 'f1-start' });
+  assert.equal(res.isError, undefined, JSON.stringify(res));
+  assert.deepEqual(res.content[1], { type: 'image', data: shot, mimeType: 'image/png' });
+  assert.match(res.content[0].text, /\(1280x720\)/);
+  assert.deepEqual(fs.readdirSync(evidenceDir), ['f1-start.png']);
+  assert.deepEqual(requests.at(-1).body, { command: 'capture game_view', parameters: {} }, 'inline image: no file in the project');
+
+  const before = JSON.parse((await bridge.callTool('game_state', {})).content[0].text);
+  assert.equal(before.source, 'unity-builtin');
+  assert.equal(before.scene, 'Dev_Sandbox');
+  assert.equal(before.playing, true);
+  assert.deepEqual(before.openScenes, [{ name: 'Dev_Sandbox', path: 'Assets/BladeBullet/Dev_Sandbox.unity', isActive: true, isDirty: false }]);
+  assert.deepEqual(before.players, [{ path: '/Player', localPosition: [-0.27, 2, 0], localScale: [0.8, 1.6, 1] }]);
+
+  requests.length = 0;
+  const steps = [{ type: 'key', key: 'd', holdMs: 1000 }, { type: 'wait', ms: 200 }, { type: 'key', key: 'Space' }];
+  const input = await bridge.callTool('send_input', { steps });
+  assert.deepEqual(JSON.parse(input.content[0].text), { done: 3 });
+  assert.deepEqual(requests.map((r) => [r.body.command, r.body.parameters]), [
+    ['runtime simulate_key', { key: 'D', action: 'down' }],
+    ['runtime simulate_key', { key: 'D', action: 'up' }],
+    ['runtime simulate_key', { key: 'Space', action: 'press' }],
+  ]);
+  assert.deepEqual(slept, [1000, 200]);
+
+  const after = JSON.parse((await bridge.callTool('game_state', {})).content[0].text);
+  assert.ok(after.players[0].localPosition[0] > 9, `the player moved: ${after.players[0].localPosition}`);
+  assert.deepEqual(requests.slice(-5).map((r) => r.body.command), [
+    'runtime status', 'scene list_open', 'gameobject find', 'gameobject find', 'component get_properties',
+  ]);
+  assert.deepEqual(requests.slice(-3, -1).map((r) => r.body.parameters), [
+    { tag: 'Player', 'include-inactive': false },
+    { name: 'Player', 'include-inactive': false },
+  ]);
+  assert.deepEqual(requests.at(-1).body.parameters, { target: '/Player', type: 'Transform' });
+  assert.ok(requests.every((r) => !r.body.command.startsWith('playtest ')), 'never a PlaytestDriver command');
+  assert.deepEqual(ed.notFound, []);
+});
+
+test('builtin input: steps without a built-in equivalent are refused before anything runs; a held key is always released', async () => {
+  const { ed, client, requests } = builtinEditor();
+  const invoke = B.unityBackend({ transport: 'pipeline', mode: 'builtin', connect: () => ({ exec: client.exec, close: async () => {} }), sleep: async () => {} });
+  const bridge = B.createBridge({ backend: 'unity', evidenceDir: tmpDir('lw-bridge-builtin-'), invoke });
+
+  for (const step of [{ type: 'ui', name: 'PlayButton' }, { type: 'click', x: 0.5, y: 0.5 }, { type: 'button', name: 'Jump' }, { type: 'axis', name: 'Horizontal', value: 1 }]) {
+    const res = await bridge.callTool('send_input', { steps: [{ type: 'key', key: 'D' }, step] });
+    assert.equal(res.isError, true, step.type);
+    assert.match(res.content[0].text, new RegExp(`step 2: '${step.type}' steps need the game's PlaytestDriver`));
+  }
+  const badKey = await bridge.callTool('send_input', { steps: [{ type: 'key', key: 'Left Shift' }] });
+  assert.equal(badKey.isError, true);
+  assert.match(badKey.content[0].text, /not an Input System key name/);
+  assert.equal(requests.length, 0, 'a refused step list never reaches Unity');
+
+  // The sleep of a hold fails: the key still goes up.
+  const failing = B.unityBackend({ transport: 'pipeline', mode: 'builtin', connect: () => ({ exec: client.exec, close: async () => {} }), sleep: async () => { throw new Error('interrupted'); } });
+  await assert.rejects(failing('send_input', { steps: [{ type: 'key', key: 'A', holdMs: 500 }] }), /interrupted/);
+  assert.deepEqual(requests.map((r) => r.body.parameters.action), ['down', 'up']);
+  assert.equal(ed.held.size, 0);
+});
+
+test('builtin input: a lost down answer still sends the up; when the up fails too, the first failure is reported', async () => {
+  const sent = [];
+  const call = async ([command, params]) => {
+    sent.push(`${params.key}:${params.action}`);
+    if (params.action === 'down') throw Object.assign(new Error('Unity did not answer within 30000 ms'), { code: 'UNITY_PIPELINE_TIMEOUT' });
+    if (params.action === 'up' && params.key === 'W') throw new Error('Unity editor is busy (domain reload)');
+    return { Command: command };
+  };
+  const actions = UN.playtestActions({ mode: 'builtin', call, sleep: async () => {} });
+  await assert.rejects(actions.input([{ type: 'key', key: 'A', holdMs: 300 }]), /^Error: Unity did not answer within 30000 ms$/);
+  assert.deepEqual(sent, ['A:down', 'A:up'], 'the key is released although the down may have run');
+  sent.length = 0;
+  await assert.rejects(actions.input([{ type: 'key', key: 'W', holdMs: 300 }]), (err) => {
+    assert.equal(err.message, 'Unity did not answer within 30000 ms (releasing W failed too: Unity editor is busy (domain reload))');
+    assert.equal(err.cause.code, 'UNITY_PIPELINE_TIMEOUT');
+    return true;
+  });
+  // Direct callers get the Playtester's limits too.
+  await assert.rejects(actions.input([{ type: 'wait', ms: 60 * 60 * 1000 }]), /step 1 ms must be a whole number from 0 to 15000/);
+  await assert.rejects(actions.input([{ type: 'key', key: 'A', holdMs: 12.5 }]), /step 1 holdMs must be a whole number/);
+});
+
+test('builtin game_state: a Player the editor reports without a usable path is listed with its error, the rest still comes back', async () => {
+  const deep = `/${'Level/'.repeat(60)}Player`;
+  const answers = {
+    'runtime status': { IsPlaying: true, LoadedLevelName: 'Arena', FrameCount: 'NaN?', TimeScale: 0.5 },
+    'scene list_open': [{ name: 'Arena', path: 'Assets/Arena.unity', isActive: true, isDirty: true }, 'junk'],
+    'gameobject find': [{ hierarchyPath: deep }, { hierarchyPath: 'Player' }, { hierarchyPath: '/Hero' }, { hierarchyPath: '/Extra' }],
+    'component get_properties': { properties: { m_LocalPosition: [1, 2, 'x'], m_LocalScale: [1, 1, 1] } },
+  };
+  const sent = [];
+  const call = async ([command, params]) => {
+    sent.push([command, params]);
+    return answers[command];
+  };
+  const state = await UN.playtestActions({ mode: 'builtin', call, sleep: async () => {} }).state();
+  assert.equal(state.scene, 'Arena');
+  assert.equal(state.frame, null, 'a non-number is dropped, not passed on');
+  assert.equal(state.timeScale, 0.5);
+  assert.deepEqual(state.openScenes, [{ name: 'Arena', path: 'Assets/Arena.unity', isActive: true, isDirty: true }]);
+  assert.equal(state.players.length, 3, 'at most three objects');
+  assert.match(state.players[0].error, /without a usable hierarchy path/);
+  assert.match(state.players[1].error, /without a usable hierarchy path/);
+  assert.deepEqual(state.players[2], { path: '/Hero', localPosition: null, localScale: [1, 1, 1] });
+  assert.deepEqual(sent.filter(([c]) => c === 'component get_properties').map(([, p]) => p.target), ['/Hero'], 'only a checked path goes back to the editor');
+  assert.equal(sent.filter(([c]) => c === 'gameobject find').length, 1, 'tagged objects found: no name search');
+});
+
+test('playtestModeOf: driver only when all three playtest commands are listed', () => {
+  const listing = (names) => ({ commands: names.map((command) => ({ command })), count: names.length });
+  assert.deepEqual(UN.playtestModeOf(listing([])), { mode: 'builtin', missing: [...UN.DRIVER_COMMANDS] });
+  assert.deepEqual(UN.playtestModeOf(listing(['playtest state', 'playtest input', 'playtest screenshot'])), { mode: 'driver', missing: [] });
+  assert.deepEqual(UN.playtestModeOf(listing(['playtest state'])), { mode: 'builtin', missing: ['playtest input', 'playtest screenshot'] });
+  assert.throws(() => UN.playtestModeOf(null), /without a commands list/);
+  assert.throws(() => UN.playtestModeOf({ commands: 'playtest state' }), /without a commands list/);
+  assert.deepEqual(UN.UNITY_PIPELINE_BUILTIN.listDriverCommands(), ['pipeline list_commands', { group: 'playtest', detail: 'compact' }]);
+  assert.throws(() => UN.UNITY_PIPELINE_BUILTIN.transform('Player'), /hierarchy path/);
+  assert.throws(() => UN.UNITY_PIPELINE_BUILTIN.key('D', 'mash'), /unknown key action/);
+  for (const [raw, key] of [['d', 'D'], ['7', 'Digit7'], ['Left', 'LeftArrow'], ['Esc', 'Escape'], ['Return', 'Enter'], ['LeftShift', 'LeftShift'], ['F5', 'F5']]) {
+    assert.equal(UN.UNITY_PIPELINE_BUILTIN.key(raw, 'press')[1].key, key, raw);
+  }
+  assert.throws(() => UN.playtestActions({ mode: 'builtin', transport: 'mcp', call: () => {}, sleep: () => {} }), /need the Unity Pipeline transport/);
+  assert.throws(() => UN.playtestActions({ mode: 'guess', call: () => {}, sleep: () => {} }), /unknown playtest mode/);
+});
+
+test('bridge flag --unity-driver: builtin or driver, Pipeline only for builtin', () => {
+  assert.equal(typeof B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR, 'unity-driver': 'builtin' }), 'function');
+  assert.equal(typeof B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR, 'unity-driver': 'driver' }), 'function');
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR, 'unity-driver': 'eval' }), /--unity-driver must be driver or builtin/);
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR, 'unity-driver': '' }), /--unity-driver must be/);
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-url': 'http://127.0.0.1:8080/mcp', 'unity-driver': 'builtin' }), /need the Unity Pipeline transport/);
+  assert.deepEqual(B.parseArgv(['--unity-project', PIPE_DIR, '--unity-driver', 'builtin']), { 'unity-project': PIPE_DIR, 'unity-driver': 'builtin' });
 });
 
 test('bridge flags: --unity-project must be absolute, --unity-url stays for legacy, never both', () => {

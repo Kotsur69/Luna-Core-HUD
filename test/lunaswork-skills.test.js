@@ -21,6 +21,7 @@ const Pack = require('../src/lunasworkPack.js');
 const { createLoopHooks } = require('../src/lunasworkLoopHooks.js');
 const { withBuilderBrief } = require('../src/lunasworkDirector.js');
 const { createCommitter } = require('../src/lunasworkCommit.js');
+const { LOADED_GIT_TIMEOUT_MS } = require('../test-support/under-load');
 
 const tmp = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
@@ -56,7 +57,7 @@ const noCommit = async () => ({ ok: true, committed: false });
 test('resolveSkillFile accepts a SKILL.md under <repo>/.claude/skills', () => {
   const repo = fakeRepo();
   const res = S.resolveSkillFile(repo, '.claude/skills/run-tests/SKILL.md', { home: tmp('lw-home-') });
-  assert.equal(res.ok, true);
+  assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.path, path.join(fs.realpathSync(repo), '.claude', 'skills', 'run-tests', 'SKILL.md'));
 });
 
@@ -89,7 +90,7 @@ test('resolveSkillFile refuses absolute paths, ~, .. and anything outside .claud
 test('resolveSkillFile refuses the global ~/.claude even when the repo IS the home folder', () => {
   const home = fakeRepo();
   const res = S.resolveSkillFile(home, '.claude/skills/run-tests/SKILL.md', { home });
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(res.error, 'globalClaude');
   assert.equal(S.writeSkill(home, proposal(), { home }).ok, false);
   assert.equal(fs.existsSync(skillFile(home, 'run-tests')), false);
@@ -102,7 +103,7 @@ test('resolveSkillFile refuses a symlinked or junctioned .claude/skills that esc
   // A junction needs no admin rights on Windows; elsewhere it is a dir symlink.
   fs.symlinkSync(outside, path.join(repo, '.claude', 'skills'), 'junction');
   const res = S.resolveSkillFile(repo, '.claude/skills/run-tests/SKILL.md', { home: tmp('lw-home-') });
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(res.error, 'symlink');
   assert.equal(S.writeSkill(repo, proposal(), { home: tmp('lw-home-') }).ok, false);
   assert.deepEqual(fs.readdirSync(outside), [], 'nothing was written through the link');
@@ -122,7 +123,7 @@ test('writeSkill never overwrites a skill a human wrote', () => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '---\nname: run-tests\ndescription: mine\n---\n\nhand written\n');
   const res = S.writeSkill(repo, proposal(), { home: tmp('lw-home-') });
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(res.error, 'humanSkill');
   assert.match(fs.readFileSync(file, 'utf8'), /hand written/);
 });
@@ -220,7 +221,7 @@ test('runGateSkills: a rejection prevents the write, an accept writes, an edit w
       ] };
     },
   });
-  assert.equal(res.ok, true);
+  assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(seen, [['run-tests', 'deploy-steps', 'lint-rules']]);
   assert.deepEqual(res.written, ['.claude/skills/run-tests/SKILL.md', '.claude/skills/deploy-steps/SKILL.md']);
   assert.equal(fs.existsSync(skillFile(repo, 'lint-rules')), false);
@@ -237,7 +238,7 @@ test('runGateSkills writes nothing when the Critic review fails', async () => {
     isGate: true, repoDir: repo, home: tmp('lw-home-'), runClaude: proposer([proposal()]).run, commit: noCommit,
     review: async () => ({ ok: false, reviews: [], error: 'timeout' }),
   });
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.deepEqual(res.written, []);
   assert.match(res.notes[0], /review failed \(timeout\) - nothing written/);
   assert.equal(fs.existsSync(skillFile(repo, 'run-tests')), false);
@@ -330,9 +331,9 @@ test('the written skills are one local commit on the checkout; other changes sta
   const res = await S.runGateSkills({
     isGate: true, repoDir: repo, milestone: 'Skeleton', home: tmp('lw-home-'), runClaude: proposer([proposal()]).run,
     review: async () => ({ ok: true, reviews: [{ slug: 'run-tests', verdict: 'accept', reason: 'ok' }] }),
-    commit: (o) => createCommitter().commitPaths(o),
+    commit: (o) => createCommitter({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS }).commitPaths(o),
   });
-  assert.equal(res.committed, true);
+  assert.equal(res.committed, true, JSON.stringify(res));
   assert.equal(git(repo, 'rev-parse', 'HEAD~1'), before);
   assert.equal(git(repo, 'log', '-1', '--format=%s'), 'chore(skills): project skills from the Skeleton gate');
   assert.equal(git(repo, 'show', '--name-only', '--format=', 'HEAD'), '.claude/skills/run-tests/SKILL.md');
@@ -342,7 +343,7 @@ test('the written skills are one local commit on the checkout; other changes sta
 
 test('commitPaths refuses unsafe paths and commits nothing new twice', async () => {
   const repo = gitRepo();
-  const committer = createCommitter();
+  const committer = createCommitter({ gitTimeoutMs: LOADED_GIT_TIMEOUT_MS });
   assert.equal((await committer.commitPaths({ repoPath: repo, paths: ['../x'], message: 'm' })).error, 'badPaths');
   assert.equal((await committer.commitPaths({ repoPath: repo, paths: ['/etc/x'], message: 'm' })).error, 'badPaths');
   assert.equal((await committer.commitPaths({ repoPath: repo, paths: ['app.js'], message: '' })).error, 'noMessage');

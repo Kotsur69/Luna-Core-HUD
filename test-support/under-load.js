@@ -58,6 +58,11 @@ async function waitFor(condition, { timeoutMs = WAIT_TIMEOUT_MS, intervalMs = WA
 // as a failure. Tests about git's output get a cap that load does not reach.
 const PATIENT_GIT_MS = 120000;
 
+// For modules with a gitTimeoutMs seam: several full suites in parallel have
+// made one real git call take minutes, so tests pass a cap load cannot reach.
+// The production defaults stay as they are.
+const LOADED_GIT_TIMEOUT_MS = 10 * 60 * 1000;
+
 /**
  * A git runner with the `run(cwd, args)` shape of src/lunasworkHandback.js
  * (resolves {ok, out, err}, never rejects), with a patient cap. Pass it through
@@ -99,4 +104,4 @@ function patientGitExecFile(childProcess) {
   };
 }
 
-module.exports = { removeDir, waitFor, patientGit, patientGitExecFile, PATIENT_GIT_MS };
+module.exports = { removeDir, waitFor, patientGit, patientGitExecFile, PATIENT_GIT_MS, LOADED_GIT_TIMEOUT_MS };

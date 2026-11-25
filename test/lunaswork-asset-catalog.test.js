@@ -162,7 +162,7 @@ test('sourcesForKind: audio is served by freesound and comfyui, not polyhaven', 
 test('isKnownHiggsfieldModel', () => {
   const cat = C.loadCatalog(C.DEFAULT_CATALOG_FILE, { warn: () => {} });
   assert.equal(C.isKnownHiggsfieldModel(cat, 'gpt_image_2_6'), true);
-  assert.equal(C.isKnownHiggsfieldModel(cat, 'image-to-3d'), true);
+  assert.equal(C.isKnownHiggsfieldModel(cat, 'multi_image_to_3d'), true);
   assert.equal(C.isKnownHiggsfieldModel(cat, 'SDXL'), false, 'a ComfyUI family is not a Higgsfield model');
   assert.equal(C.isKnownHiggsfieldModel(cat, 'made-up-model'), false);
   assert.equal(C.isKnownHiggsfieldModel(cat, 42), false);

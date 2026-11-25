@@ -63,7 +63,9 @@ function fakeHiggsfield({ credits = 2, result = 'https://cdn.example.test/out.pn
 function pipeline(dir, extra = {}) {
   const logged = [];
   const spends = [];
-  const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return { ok: true }; } };
+  // set_properties answers like the live editor: the texture was applied.
+  const answer = (command) => (command === 'material set_properties' ? { applied: ['_BaseMap'], unknown: [] } : { ok: true });
+  const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return answer(command); } };
   const p = P.createAssetPipeline({
     repoPath: dir, unity, now: () => 42,
     recordSpend: (x) => { spends.push(x); return { ok: true, reason: null }; },
@@ -105,7 +107,7 @@ test('a GLB of a 3D model kind skips the Unity import without forBlender; forBle
   const forced = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(), download: async () => GLB });
   const imp = await forced.p.higgsfieldFinal({ name: 'Crate', kind: 'prop', prompt: 'toon crate', model: 'multi_image_to_3d', forBlender: false });
   assert.equal(imp.forBlender, undefined);
-  assert.deepEqual(forced.unity.calls.map((c) => c.command), ['assets import', 'prefab create']);
+  assert.deepEqual(forced.unity.calls.map((c) => c.command), ['editor invoke_menu', 'script eval']);
   assert.equal(forced.logged[0].imported, true);
 });
 
@@ -113,13 +115,14 @@ test('other results keep the normal import: a texture gets its material, a model
   const tex = pipeline(tempRepo(), { higgsfield: fakeHiggsfield() });
   const t = await tex.p.higgsfieldFinal({ name: 'Stone', kind: 'texture', prompt: 'x', model: 'm' });
   assert.equal(t.forBlender, undefined);
-  assert.deepEqual(tex.unity.calls.map((c) => c.command), ['assets import', 'material create']);
+  assert.deepEqual(tex.unity.calls.map((c) => c.command), ['editor invoke_menu', 'asset create', 'material set_properties']);
+  assert.equal(tex.logged[0].imported, true);
   const img = pipeline(tempRepo(), { higgsfield: fakeHiggsfield() });
   await img.p.higgsfieldFinal({ name: 'Ronin', kind: 'character', prompt: 'x', model: 'm' });
-  assert.deepEqual(img.unity.calls.map((c) => c.command), ['assets import']);
+  assert.deepEqual(img.unity.calls.map((c) => c.command), ['editor invoke_menu']);
   const concept = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(), download: async () => GLB });
   await concept.p.higgsfieldFinal({ name: 'Ronin', kind: 'concept', prompt: 'x', model: 'm' });
-  assert.deepEqual(concept.unity.calls.map((c) => c.command), ['assets import', 'prefab create']);
+  assert.deepEqual(concept.unity.calls.map((c) => c.command), ['editor invoke_menu', 'script eval']);
 });
 
 test('forBlender on a texture kind names a placeholder 3D kind; a non-boolean forBlender is refused before any call', async () => {
@@ -311,7 +314,8 @@ test('a set of results: only the GLBs of a 3D kind go to Blender, the images are
   const res = await p.higgsfieldFinal({ name: 'Crate', kind: 'prop', prompt: 'x', model: 'm' });
   assert.deepEqual(res.files, [`${ART}/Props/crate-1.glb`, `${ART}/Props/crate-2.png`]);
   assert.deepEqual(res.forBlender, [`${ART}/Props/crate-1.glb`]);
-  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', `${ART}/Props/crate-2.png`]]);
+  // The PNG is imported (one refresh); the GLB that goes to Blender gets no prefab.
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu']);
   assert.match(res.note, /from: "Assets\/BladeBullet\/Art\/Props\/crate-1\.glb"/);
   assert.doesNotMatch(res.note, /crate-2\.png"/);
   assert.deepEqual(logged.map((e) => e.imported), [false, true]);

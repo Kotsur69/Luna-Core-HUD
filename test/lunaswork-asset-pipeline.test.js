@@ -38,11 +38,18 @@ function tempRepo() {
 
 const exists = (dir, rel) => fs.existsSync(path.join(dir, ...rel.split('/')));
 
-/** Fake Unity Pipeline client: records every command. */
+/** Fake Unity Pipeline client: records every command; set_properties answers like the live editor. */
 function fakeUnity() {
   const calls = [];
-  return { calls, exec: async (command, parameters) => { calls.push({ command, parameters }); return { ok: true }; } };
+  const answer = (command) => (command === 'material set_properties' ? { shader: 'Universal Render Pipeline/Lit', applied: ['_BaseMap'], unknown: [] } : { ok: true });
+  return { calls, exec: async (command, parameters) => { calls.push({ command, parameters }); return answer(command); } };
 }
+
+const REFRESH = 'editor invoke_menu';
+const MODEL_PREFAB = 'script eval';
+const MAKE_MATERIAL = ['asset create', 'material set_properties'];
+/** The [model, prefab] paths a modelPrefab `script eval` call names. */
+const prefabPaths = (call) => [...call.parameters.code.matchAll(/(?:LoadAssetAtPath<UnityEngine\.GameObject>\(|SaveAsPrefabAsset\(instance, )"([^"]+)"/g)].map((m) => m[1]);
 
 /** Fake Blender MCP add-on: runs the export script by writing the two files it names. */
 function fakeBlender() {
@@ -102,8 +109,9 @@ test('a Blender asset card -> .blend + FBX in the repo, then Unity import and pr
   // The export is set up for Unity: -Z forward, Y up, scale applied.
   assert.match(blender.scripts[0], /axis_forward='-Z', axis_up='Y'/);
   assert.match(blender.scripts[0], /apply_scale_options='FBX_SCALE_ALL'/);
-  assert.deepEqual(unity.calls.map((c) => c.command), ['assets import', 'prefab create']);
-  assert.deepEqual(unity.calls[1].parameters, { source: `${ART}/Characters/ronin-hero.fbx`, path: `${ART}/Characters/ronin-hero.prefab` });
+  assert.deepEqual(unity.calls.map((c) => c.command), [REFRESH, MODEL_PREFAB]);
+  assert.deepEqual(unity.calls[0].parameters, { path: 'Assets/Refresh' });
+  assert.deepEqual(prefabPaths(unity.calls[1]), [`${ART}/Characters/ronin-hero.fbx`, `${ART}/Characters/ronin-hero.prefab`]);
   assert.equal(res.prefab, `${ART}/Characters/ronin-hero.prefab`);
   assert.equal(logged.length, 1);
   assert.deepEqual([logged[0].tool, logged[0].path, logged[0].costUsd, logged[0].seed, logged[0].imported], ['blender', `${ART}/Characters/ronin-hero.fbx`, 0, null, true]);
@@ -162,7 +170,7 @@ test('a ComfyUI workflow run -> the output is imported, the workflow and seed ar
   const record = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'comfyui', 'runs', 'blade-slash-draft-777.json'), 'utf8'));
   assert.deepEqual([record.seed, record.workflow, record.promptId, record.prompt], [777, 'art/comfyui/concept.json', 'abc-123', 'red arc']);
   assert.equal(record.api['3'].inputs.seed, 777);
-  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', out]]);
+  assert.deepEqual(unity.calls.map((c) => c.command), [REFRESH]);
   assert.deepEqual([logged[0].tool, logged[0].seed, logged[0].costUsd, logged[0].path], ['comfyui', 777, 0, out]);
 });
 
@@ -172,8 +180,10 @@ test('a ComfyUI draft without a seed gets a fresh one; a texture also gets a mat
   const { p, unity } = pipeline(dir, { comfy, randomSeed: () => 5 });
   const res = await p.comfyDraft({ name: 'Floor', kind: 'texture', prompt: 'stone', workflow: 'art/comfyui/concept.json' });
   assert.equal(res.seed, 5);
-  assert.deepEqual(unity.calls.map((c) => c.command), ['assets import', 'material create']);
-  assert.equal(unity.calls[1].parameters.path, `${ART}/Textures/floor-draft-5.mat`);
+  assert.deepEqual(unity.calls.map((c) => c.command), [REFRESH, ...MAKE_MATERIAL]);
+  const mat = `${ART}/Textures/floor-draft-5.mat`;
+  assert.deepEqual(unity.calls[1].parameters, { path: mat, type: 'UnityEngine.Material' });
+  assert.deepEqual(unity.calls[2].parameters, { material: mat, properties: { _BaseMap: { path: `${ART}/Textures/floor-draft-5.png` } } });
 });
 
 test('ComfyUI local audio (WAV) and 3D (GLB) outputs: audio imports to Audio/, GLB gets a Unity prefab', async () => {
@@ -189,11 +199,8 @@ test('ComfyUI local audio (WAV) and 3D (GLB) outputs: audio imports to Audio/, G
   const mesh = await p.comfyDraft({ name: 'Gear Prop', kind: 'prop', prompt: 'brass clock gear', workflow: 'concept.json', seed: 12 });
   assert.equal(mesh.ok, true, JSON.stringify(mesh));
   assert.deepEqual(mesh.files, [`${ART}/Props/gear-prop-draft-12.glb`]);
-  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [
-    ['assets import', `${ART}/Audio/tokine-bark-draft-11.wav`],
-    ['assets import', `${ART}/Props/gear-prop-draft-12.glb`],
-    ['prefab create', `${ART}/Props/gear-prop-draft-12.prefab`],
-  ]);
+  assert.deepEqual(unity.calls.map((c) => c.command), [REFRESH, REFRESH, MODEL_PREFAB]);
+  assert.deepEqual(prefabPaths(unity.calls[2]), [`${ART}/Props/gear-prop-draft-12.glb`, `${ART}/Props/gear-prop-draft-12.prefab`]);
 });
 
 test('a ComfyUI workflow the seed or prompt cannot reach is run with warnings; the same seed again gets -v2', async () => {
@@ -261,7 +268,7 @@ test('a Higgsfield generation is booked, saved, imported and logged with its cos
   assert.deepEqual([record.credits, record.costUsd, record.jobId, record.seed, record.status], [4, 1, 'job_1', 99, 'saved']);
   assert.deepEqual(record.outputs, [`${ART}/KeyArt/key-art.png`]);
   assert.deepEqual(res.sources, ['art/higgsfield/keyart/key-art.json']);
-  assert.deepEqual(unity.calls.map((c) => c.command), ['assets import']);
+  assert.deepEqual(unity.calls.map((c) => c.command), [REFRESH]);
   assert.deepEqual([logged[0].tool, logged[0].costUsd, logged[0].credits, logged[0].seed, logged[0].prompt], ['higgsfield', 1, 4, 99, 'hero duel at dusk']);
   assert.match(P.assetReportLines(logged)[0], /^higgsfield keyart "Key Art": Assets\/BladeBullet\/Art\/KeyArt\/key-art\.png - prompt "hero duel at dusk", seed 99, cost \$1\.00 \(4 credits\)$/);
 });
@@ -385,15 +392,37 @@ test('the Unity import follows the file: a GLB gets a prefab, an image of a mode
   const glb = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(1), download: async () => GLB });
   const model = await glb.p.higgsfieldFinal({ name: 'Ronin', kind: 'concept', prompt: 'x', model: 'm' });
   assert.deepEqual(model.files, [`${ART}/Concepts/ronin.glb`]);
-  assert.deepEqual(glb.unity.calls.map((c) => c.command), ['assets import', 'prefab create']);
+  assert.deepEqual(glb.unity.calls.map((c) => c.command), [REFRESH, MODEL_PREFAB]);
   // character is a model kind (it would get a prefab by kind alone), but a PNG is no model.
   assert.equal(P.KINDS.character.model, true);
   const png = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(1), download: async () => PNG });
   await png.p.higgsfieldFinal({ name: 'Ronin', kind: 'character', prompt: 'x', model: 'm' });
-  assert.deepEqual(png.unity.calls.map((c) => c.command), ['assets import']);
+  assert.deepEqual(png.unity.calls.map((c) => c.command), [REFRESH]);
   const tex = pipeline(tempRepo(), { higgsfield: fakeHiggsfield(1), download: async () => PNG });
   await tex.p.higgsfieldFinal({ name: 'Stone', kind: 'texture', prompt: 'x', model: 'm' });
-  assert.deepEqual(tex.unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', `${ART}/Textures/stone.png`], ['material create', `${ART}/Textures/stone.mat`]]);
+  assert.deepEqual(tex.unity.calls.map((c) => [c.command, c.parameters.path || c.parameters.material]), [
+    [REFRESH, 'Assets/Refresh'],
+    ['asset create', `${ART}/Textures/stone.mat`],
+    ['material set_properties', `${ART}/Textures/stone.mat`],
+  ]);
+});
+
+test('a material that does not take the texture fails the import instead of leaving it untextured', async () => {
+  // A built-in pipeline project: the Standard shader has no _BaseMap, so set_properties lists it as unknown.
+  const calls = [];
+  const unity = {
+    exec: async (command, parameters) => {
+      calls.push(command);
+      return command === 'material set_properties' ? { shader: 'Standard', applied: [], unknown: ['_BaseMap'] } : { ok: true };
+    },
+  };
+  const logged = [];
+  const p = P.createAssetPipeline({ repoPath: tempRepo(), unity, higgsfield: fakeHiggsfield(1), download: async () => PNG, recordSpend: () => ({ ok: true }), logAsset: (e) => logged.push(e) });
+  const res = await p.higgsfieldFinal({ name: 'Stone', kind: 'texture', prompt: 'x', model: 'm' });
+  assert.equal(res.ok, true, 'the texture itself is made and kept');
+  assert.deepEqual(calls, [REFRESH, ...MAKE_MATERIAL]);
+  assert.match(res.note, /_BaseMap not applied/);
+  assert.equal(logged[0].imported, false);
 });
 
 // ---- boundaries ---------------------------------------------------------------------------
@@ -767,7 +796,7 @@ test('ComfyUI audio draft with audioPost: ffmpeg argument array, no shell, norma
   assert.deepEqual(fs.readFileSync(target), NORMALIZED_WAV);
   assert.deepEqual(fs.readdirSync(draftDir(dir)).filter((n) => n.includes('.tmp')), []);
   assert.match(res.note, /Audio post-process .* applied to/);
-  assert.equal(unity.calls[0].parameters.path, rel);
+  assert.deepEqual(unity.calls.map((c) => c.command), [REFRESH]);
 });
 
 test('ComfyUI audio draft with audioPost: ENOENT and a failed run keep the draft bytes and add a note', async () => {

@@ -18,6 +18,7 @@ const path = require('path');
 const P = require('../src/lunasworkAssetPipeline.js');
 const B = require('../src/lunasworkBlenderScript.js');
 const F = require('../src/lunasworkBlenderFrom.js');
+const L = require('../src/lunasworkLicenses.js');
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 1)]);
 const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16, 2)]);
@@ -58,12 +59,26 @@ function put(dir, rel, data) {
   return file;
 }
 
-/** A saved Higgsfield result as luna_asset_higgsfield leaves it: the file under the art root + its record. */
-function savedHiggsfield(dir, { kind = 'prop', dirName = 'Props', stem = 'crate', ext = 'png', data = PNG } = {}) {
+/** Adds ledger rows to the temp repo's design/ASSET_LICENSES.md, as the asset tools write them. */
+function addLedgerRows(dir, rows) {
+  const file = path.join(dir, ...L.LEDGER_FILE.split('/'));
+  const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  put(dir, L.LEDGER_FILE, L.withLedgerRows(current, rows));
+}
+
+const readLedger = (dir) => fs.readFileSync(path.join(dir, ...L.LEDGER_FILE.split('/')), 'utf8');
+const readCredits = (dir) => fs.readFileSync(path.join(dir, ...L.CREDITS_FILE.split('/')), 'utf8');
+
+/**
+ * A saved Higgsfield result as luna_asset_higgsfield leaves it: the file under
+ * the art root, its record and (ledgered) its generated ledger row.
+ */
+function savedHiggsfield(dir, { kind = 'prop', dirName = 'Props', stem = 'crate', ext = 'png', data = PNG, ledgered = true } = {}) {
   const rel = `${ART}/${dirName}/${stem}.${ext}`;
   put(dir, rel, data);
   const record = `art/higgsfield/${kind}/${stem}.json`;
   put(dir, record, JSON.stringify({ name: 'Crate', kind, model: 'gpt_image_2_6', prompt: 'toon crate', status: 'saved', outputs: [rel] }));
+  if (ledgered) addLedgerRows(dir, [{ name: 'Crate', source: record, author: 'LunaCore asset worker (Higgsfield)', license: L.GENERATED_LICENSE, path: rel }]);
   return { rel, record };
 }
 
@@ -150,20 +165,34 @@ test('from = a Higgsfield PNG: the script loads it as the Base Color texture bef
 
 // ---- provenance: a record alone proves nothing ------------------------------------------
 
-test('from with a forged record (no luna_asset_higgsfield entry in this run): the answer and the ledger say "claimed"', async () => {
+test('from with a claimed record (no luna_asset_higgsfield entry in this run): the answer says "claimed", the FBX row carries the file\'s own row', async () => {
   const dir = tempDir('lw-from-forged-');
-  // Both files are worker-writable: a record naming a file it never generated.
+  // Both files are worker-writable: a record naming a file this run never generated.
   const saved = savedHiggsfield(dir);
   const { p, logged } = pipeline(dir);
   const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: saved.rel });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(res.from, { path: saved.rel, type: 'texture', record: saved.record, recordProven: false });
   assert.match(res.note, /art\/higgsfield\/prop\/crate\.json is a claimed Higgsfield record: this run's asset log has no luna_asset_higgsfield result/);
-  const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
-  assert.match(ledger, /\| Crate \| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \| LunaCore asset worker \(Higgsfield \+ Blender\) \|/);
-  assert.doesNotMatch(ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \|/);
+  assert.match(res.note, /the FBX's ledger row carries Assets\/BladeBullet\/Art\/Props\/crate\.png's own row \(license Own work \(generated\)\)/);
+  const ledger = readLedger(dir);
+  // The png's own row (an earlier luna_asset_higgsfield) is copied, never a new "Higgsfield + Blender" claim.
+  assert.match(ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \(derived via Blender from Assets\/BladeBullet\/Art\/Props\/crate\.png\) \| LunaCore asset worker \(Higgsfield\) \| Own work \(generated\) \| Assets\/BladeBullet\/Art\/Props\/crate\.fbx \|/);
+  assert.doesNotMatch(ledger, /Higgsfield \+ Blender/);
   // The run report still lists what the worker named, so a reviewer can follow it.
   assert.deepEqual(logged[0].sources, ['art/blender/crate.blend', saved.record, saved.rel]);
+});
+
+test('from with a claimed record and no ledger row of its own is refused before Blender: never "Own work (generated)"', async () => {
+  const dir = tempDir('lw-from-forged-norow-');
+  const saved = savedHiggsfield(dir, { ledgered: false });
+  const { p, blender, logged, unity } = pipeline(dir);
+  const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: saved.rel });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'badFrom');
+  assert.match(res.detail, /refused: from Assets\/BladeBullet\/Art\/Props\/crate\.png has no row in design\/ASSET_LICENSES\.md and no Higgsfield record this run's asset log backs/);
+  assert.deepEqual([blender.scripts.length, logged.length, unity.calls.length], [0, 0, 0]);
+  assert.equal(fs.existsSync(path.join(dir, ...L.LEDGER_FILE.split('/'))), false);
 });
 
 test('from: a log entry of another file, another record, another run or an unsaved result never proves a record', () => {
@@ -206,7 +235,7 @@ test('from: a provenance reader that throws, or none at all, leaves the record c
     const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: saved.rel });
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.from.recordProven, false);
-    assert.match(fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8'), /\| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \|/);
+    assert.match(readLedger(dir), /\| art\/higgsfield\/prop\/crate\.json \(derived via Blender from Assets\/BladeBullet\/Art\/Props\/crate\.png\) \| LunaCore asset worker \(Higgsfield\) \| Own work \(generated\) \| Assets\/BladeBullet\/Art\/Props\/crate\.fbx \|/);
   }
 });
 
@@ -232,7 +261,9 @@ test('a genuine luna_asset_higgsfield GLB (forBlender, no Unity import) goes thr
   assert.deepEqual(res.from, { path: `${ART}/Props/crate.glb`, type: 'model', record: 'art/higgsfield/prop/crate.json', recordProven: true });
   assert.doesNotMatch(res.note || '', /claimed/);
   // Only the Blender FBX reaches Unity: the GLB never got its own prefab.
-  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', `${ART}/Props/crate.fbx`], ['prefab create', `${ART}/Props/crate.prefab`]]);
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu', 'script eval']);
+  assert.match(unity.calls[1].parameters.code, /LoadAssetAtPath<UnityEngine\.GameObject>\("Assets\/BladeBullet\/Art\/Props\/crate\.fbx"\)/);
+  assert.match(unity.calls[1].parameters.code, /SaveAsPrefabAsset\(instance, "Assets\/BladeBullet\/Art\/Props\/crate\.prefab"/);
   const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
   assert.match(ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \| LunaCore asset worker \(Higgsfield \+ Blender\) \| Own work \(generated\) \| Assets\/BladeBullet\/Art\/Props\/crate\.fbx \|/);
 });
@@ -255,7 +286,8 @@ test('from = a Higgsfield GLB: import, toon pass with decimate, then the same FB
   assert.match(code, /axis_forward='-Z', axis_up='Y'/);
   assert.ok(!code.includes('\nluna_from_texture()'));
   assert.deepEqual([res.from.type, res.from.record, res.files, res.prefab], ['model', saved.record, [`${ART}/Props/crate.fbx`], `${ART}/Props/crate.prefab`]);
-  assert.equal(unity.calls[0].parameters.path, `${ART}/Props/crate.fbx`);
+  assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu', 'script eval']);
+  assert.match(unity.calls[1].parameters.code, /LoadAssetAtPath<UnityEngine\.GameObject>\("Assets\/BladeBullet\/Art\/Props\/crate\.fbx"\)/);
 });
 
 test('from: an explicit stylePass "none" is kept; no from keeps the old script order', async () => {
@@ -271,31 +303,121 @@ test('from: an explicit stylePass "none" is kept; no from keeps the old script o
   assert.doesNotMatch(plain, /FROM_PATH|luna_from_/);
 });
 
-test('from without a Higgsfield record: the file itself is the named source, with a note', async () => {
+test('from without a Higgsfield record or a ledger row is refused before Blender: never "Own work (generated)"', async () => {
   const dir = tempDir('lw-from-norecord-');
   const rel = 'art/higgsfield/prop/crate-texture.webp';
   put(dir, rel, Buffer.concat([Buffer.from('RIFF\0\0\0\0WEBP', 'latin1'), Buffer.alloc(8)]));
+  // An unrelated row, and a same-stem row of a file made from it, are not its row.
+  addLedgerRows(dir, [
+    { name: 'Barrel', source: 'https://example.test/barrel', author: 'Someone', license: 'CC0', path: `${ART}/Props/barrel.png` },
+    { name: 'Crate', source: 'x', author: 'LunaCore asset worker (Blender)', license: L.GENERATED_LICENSE, path: 'art/higgsfield/prop/crate-texture.fbx' },
+  ]);
+  const before = readLedger(dir);
+  const { p, blender, logged } = pipeline(dir);
+  const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: rel });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(res.error, 'badFrom');
+  assert.match(res.detail, /refused: from art\/higgsfield\/prop\/crate-texture\.webp has no row in design\/ASSET_LICENSES\.md/);
+  assert.match(res.detail, /luna_asset_import/);
+  assert.deepEqual([blender.scripts.length, logged.length], [0, 0]);
+  assert.equal(readLedger(dir), before);
+});
+
+test('from = a CC-BY texture imported with luna_asset_import: the FBX row carries its license and author, the credit stays in CREDITS', async () => {
+  const dir = tempDir('lw-from-ccby-');
+  const rel = `${ART}/Textures/rust-metal.png`;
+  put(dir, rel, PNG);
+  addLedgerRows(dir, [{ name: 'Rust Metal', source: 'https://library.example.test/rust-metal', author: 'Jane Doe', license: 'CC-BY 4.0', path: rel }]);
   const { p, logged } = pipeline(dir);
   const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: rel });
   assert.equal(res.ok, true, JSON.stringify(res));
-  assert.equal(res.from.record, null);
+  assert.deepEqual(res.from, { path: rel, type: 'texture', record: null, recordProven: false });
+  assert.match(res.note, /No Higgsfield record lists Assets\/BladeBullet\/Art\/Textures\/rust-metal\.png: the FBX's ledger row carries [^ ]+ own row \(license CC-BY 4\.0\)/);
   assert.deepEqual(logged[0].sources, ['art/blender/crate.blend', rel]);
-  assert.match(res.note, /No Higgsfield record lists art\/higgsfield\/prop\/crate-texture\.webp/);
-  const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
-  assert.match(ledger, /\| Crate \| art\/higgsfield\/prop\/crate-texture\.webp \| LunaCore asset worker \(Higgsfield \+ Blender\) \|/);
+  const fbxRow = L.parseLedger(readLedger(dir)).rows.find((r) => r.path === `${ART}/Props/crate.fbx`);
+  assert.deepEqual(fbxRow, {
+    name: 'Crate',
+    source: `https://library.example.test/rust-metal (derived via Blender from ${rel})`,
+    author: 'Jane Doe',
+    license: 'CC-BY 4.0',
+    path: `${ART}/Props/crate.fbx`,
+  });
+  assert.doesNotMatch(readLedger(dir), /Own work \(generated\)/);
+  const credits = readCredits(dir);
+  assert.match(credits, /^"Rust Metal" by Jane Doe - CC-BY 4\.0 - https:\/\/library\.example\.test\/rust-metal$/m);
+  assert.match(credits, /^"Crate" by Jane Doe - CC-BY 4\.0 - https:\/\/library\.example\.test\/rust-metal \(derived via Blender from Assets\/BladeBullet\/Art\/Textures\/rust-metal\.png\)$/m);
+});
+
+test('from inside a pack ledgered by one folder row carries that row; a row with a license the game may not use is refused', async () => {
+  const dir = tempDir('lw-from-pack-');
+  const rel = `${ART}/ThirdParty/Pack/wood.jpg`;
+  put(dir, rel, JPG);
+  addLedgerRows(dir, [
+    { name: 'Everything', source: 'https://a.example.test', author: 'Wide', license: 'CC0', path: `${ART}/` },
+    { name: 'Wood Pack', source: 'https://b.example.test/pack', author: 'Pack Author', license: 'CC-BY 3.0', path: `${ART}/ThirdParty/Pack/` },
+  ]);
+  const res = await pipeline(dir).p.blenderModel({ name: 'Crate', kind: 'prop', from: rel });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  // The deepest folder row is the pack's own.
+  assert.match(readLedger(dir), /\| Crate \| https:\/\/b\.example\.test\/pack \(derived via Blender from [^|]+\) \| Pack Author \| CC-BY 3\.0 \| Assets\/BladeBullet\/Art\/Props\/crate\.fbx \|/);
+
+  const nc = tempDir('lw-from-nc-');
+  put(nc, rel, JPG);
+  addLedgerRows(nc, [{ name: 'Wood', source: 'https://c.example.test', author: 'NC Author', license: 'CC BY-NC 4.0', path: rel }]);
+  const refused = await pipeline(nc).p.blenderModel({ name: 'Crate', kind: 'prop', from: rel });
+  assert.equal(refused.ok, false);
+  assert.match(refused.detail, /names a license the game may not use \(refused: non-commercial/);
+  assert.doesNotMatch(readLedger(nc), /crate\.fbx/);
+});
+
+test('ledgerRowFor: own row first, else the deepest folder row; same-stem and unrelated rows are not taken', () => {
+  const rows = [
+    { path: 'Assets/A/Art/' },
+    { path: 'Assets/A/Art/Props/' },
+    { path: 'Assets/A/Art/Props/crate.fbx' },
+    { path: 'Assets/A/Art/Props/crate.png', license: 'CC0' },
+  ];
+  assert.equal(L.ledgerRowFor(rows, 'Assets/A/Art/Props/crate.png').license, 'CC0');
+  assert.equal(L.ledgerRowFor(rows, './Assets/A/Art/Props/barrel.png').path, 'Assets/A/Art/Props/');
+  assert.equal(L.ledgerRowFor(rows, 'Assets/A/Art/Sfx/hit.wav').path, 'Assets/A/Art/');
+  assert.equal(L.ledgerRowFor([{ path: 'Assets/A/Art/Props/crate.fbx' }], 'Assets/A/Art/Props/crate.png'), null);
+  assert.equal(L.ledgerRowFor(rows, 'Assets/B/x.png'), null);
+  for (const junk of [null, 'x', [null, 1, { path: 3 }]]) assert.equal(L.ledgerRowFor(junk, 'Assets/A/Art/x.png'), null);
+  assert.equal(L.ledgerRowFor(rows, ''), null);
+  // A folder row without its trailing slash covers its files, as the Critic's isCovered reads it.
+  assert.equal(L.ledgerRowFor([{ path: 'Assets/A/Art' }], 'Assets/A/Art/x.png').path, 'Assets/A/Art');
+  assert.equal(L.ledgerRowFor([{ path: 'Assets/A/Ar' }], 'Assets/A/Art/x.png'), null);
+});
+
+test('from: a long source is cut to fit the ledger cell, never the "derived via Blender" mark', () => {
+  const rel = `${ART}/Textures/rust-metal.png`;
+  const md = L.withLedgerRows(null, [{ name: 'Rust', source: `https://example.test/${'a'.repeat(290)}`, author: 'Jane Doe', license: 'CC-BY 4.0', path: rel }]);
+  const files = { stat: () => ({}), read: () => Buffer.from(md) };
+  const res = F.fromLedgerOrigin(rel, files);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.ok(res.origin.source.length <= L.MAX_CELL_CHARS);
+  assert.ok(res.origin.source.endsWith(` (derived via Blender from ${rel})`));
+  assert.deepEqual([res.origin.author, res.origin.license], ['Jane Doe', 'CC-BY 4.0']);
+  // An unreadable ledger proves no license.
+  const broken = F.fromLedgerOrigin(rel, { stat: () => ({}), read: () => { throw new Error('locked'); } });
+  assert.equal(broken.ok, false);
+  assert.match(broken.detail, /design\/ASSET_LICENSES\.md could not be read \(locked\)/);
 });
 
 test('from: a numbered result of a set finds its record; a record that does not list the file is not taken', async () => {
   const dir = tempDir('lw-from-set-');
   const rel = `${ART}/Props/crate-2.png`;
+  const row = { name: 'Crate', source: 'art/higgsfield/prop/crate.json', author: 'LunaCore asset worker (Higgsfield)', license: L.GENERATED_LICENSE, path: rel };
   put(dir, rel, PNG);
   put(dir, 'art/higgsfield/prop/crate.json', JSON.stringify({ outputs: [`${ART}/Props/crate-1.png`, rel] }));
+  addLedgerRows(dir, [row]);
   const { p } = pipeline(dir);
   assert.equal((await p.blenderModel({ name: 'Crate', kind: 'prop', from: rel })).from.record, 'art/higgsfield/prop/crate.json');
 
   const other = tempDir('lw-from-set2-');
   put(other, rel, PNG);
   put(other, 'art/higgsfield/prop/crate.json', JSON.stringify({ outputs: [`${ART}/Props/crate-1.png`] }));
+  addLedgerRows(other, [row]);
   assert.equal((await pipeline(other).p.blenderModel({ name: 'Crate', kind: 'prop', from: rel })).from.record, null);
 });
 

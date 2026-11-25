@@ -542,10 +542,12 @@ function fakeRun(id) {
   let live = guard();
   return {
     recordAsset: (e) => live.recordAsset(e),
+    recordJudgeVerdict: (v) => live.recordJudgeVerdict(v),
     judgeVerdicts: () => live.judgeVerdicts(),
     higgsfieldResults: () => live.higgsfieldResults(),
     restart: () => { run = JSON.parse(JSON.stringify(run)); live = guard(); },
     edit: (fn) => { run = fn(run); },
+    raw: () => run,
   };
 }
 
@@ -739,7 +741,9 @@ test('luna_asset_blender from: the record is proven only by a higgsfield entry o
   const record = 'art/higgsfield/prop/crate.json';
   const repoWith = () => {
     const repo = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-from-prov-'));
-    for (const [r, data] of [[rel, PNG_BYTES], [record, JSON.stringify({ outputs: [rel] })]]) {
+    // The png's own ledger row, as luna_asset_higgsfield writes it: an unproven record carries this row over.
+    const ledger = `| Name | Source URL | Author | License | Path |\n|---|---|---|---|---|\n| Crate | ${record} | LunaCore asset worker (Higgsfield) | Own work (generated) | ${rel} |\n`;
+    for (const [r, data] of [[rel, PNG_BYTES], [record, JSON.stringify({ outputs: [rel] })], ['design/ASSET_LICENSES.md', ledger]]) {
       fsx.mkdirSync(path.dirname(path.join(repo, r)), { recursive: true });
       fsx.writeFileSync(path.join(repo, r), data);
     }
@@ -764,7 +768,7 @@ test('luna_asset_blender from: the record is proven only by a higgsfield entry o
     const forged = await blenderFrom(run, 'lw-p');
     assert.equal(forged.payload.from.recordProven, false);
     assert.match(forged.payload.note, /claimed Higgsfield record/);
-    assert.match(forged.ledger, /\| Crate \| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \|/);
+    assert.match(forged.ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \(derived via Blender from Assets\/X\/Art\/Props\/crate\.png\) \| LunaCore asset worker \(Higgsfield\) \| Own work \(generated\) \| Assets\/X\/Art\/Props\/crate\.fbx \|/);
 
     // Genuine: luna_asset_higgsfield logged it in this run; the run record survives a restart.
     const sha256 = require('crypto').createHash('sha256').update(PNG_BYTES).digest('hex');
@@ -785,5 +789,229 @@ test('luna_asset_blender from: the record is proven only by a higgsfield entry o
     assert.equal((await blenderFrom(throwing, 'lw-p')).payload.from.recordProven, false);
   } finally {
     for (const repo of runs) await fsx.promises.rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+// ---- the cost guard: verdicts past the asset log cap, keyed on the cast asset -------------
+
+const { cleanGuardFields } = require('../src/lunasworkToolGuard.js');
+
+const ASSETS_HEADER = ['| Name | Type | Spec | Source | File | Status | Hash | Ref |', '|---|---|---|---|---|---|---|---|'];
+
+/**
+ * A worker repo with four local drafts (and optionally its own design/ASSETS.md),
+ * the run's checkout holding the cast list, and tools whose Critic answers the
+ * queued score pairs. Every ctxOf() builds fresh tools: an empty memory store,
+ * as after a LunaCore restart, unless a tool set is passed in.
+ */
+function castSetup({ cast = ['Wooden Crate', 'Iron Barrel'], workerRows = null } = {}) {
+  const fsx = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const writeList = (dir, names) => {
+    fsx.mkdirSync(path.join(dir, 'design'), { recursive: true });
+    const rows = names.map((n) => `| ${n} | prop | ${n.toLowerCase()} for the dock | auto |  | queued |  |  |`);
+    fsx.writeFileSync(path.join(dir, 'design', 'ASSETS.md'), ['# Assets', '', ...ASSETS_HEADER, ...rows, ''].join('\n'));
+  };
+  const repo = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-guard-worker-'));
+  const checkout = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-guard-run-'));
+  fsx.mkdirSync(path.join(repo, 'art', 'drafts'), { recursive: true });
+  for (const f of ['a', 'b', 'c', 'd']) fsx.writeFileSync(path.join(repo, 'art', 'drafts', `${f}.png`), PNG_BYTES);
+  if (cast) writeList(checkout, cast);
+  if (workerRows) writeList(repo, workerRows);
+  const execCalls = [];
+  const queued = [];
+  const score = (name, n) => ({ name, score: n, reference: '', notes: 'n', silhouette: n, palette: n });
+  const freshTools = () => T.createAssetToolsFor({
+    assetTools: () => ({ comfyuiPort: 8188, blenderPort: 9876, higgsfieldUsdPerCredit: 0.1, artRoot: 'Assets/X/Art' }),
+    execFile: (...args) => { execCalls.push(args); throw new Error('higgsfield stub: not installed'); },
+    runClaude: async () => {
+      const [first, second] = queued.shift();
+      return { stdout: JSON.stringify({ structured_output: { scores: [score('candidate-1', first), score('candidate-2', second)] } }) };
+    },
+  });
+  const ctxOf = (run, tools = freshTools()) => tools({
+    repoPath: repo,
+    castRepoPath: checkout,
+    runId: 'lw-c',
+    recordSpend: () => ({ ok: true }),
+    cappedTools: () => [],
+    recordAsset: (e) => run.recordAsset(e),
+    judgeVerdicts: () => run.judgeVerdicts(),
+    recordJudgeVerdict: (v) => run.recordJudgeVerdict(v),
+  });
+  /** One judge call over art/drafts/<file>.png; `pair` = the scores of the first and the second candidate. */
+  const judge = async (ctx, name, files, pair) => {
+    queued.push(pair);
+    const res = await T.callAssetTool(T.JUDGE_TOOL, { name, kind: 'prop', candidates: files.map((f) => `art/drafts/${f}.png`) }, ctx);
+    assert.equal(res.ok, true, JSON.stringify(res));
+    return res.payload;
+  };
+  const paid = (ctx, name, kind = 'prop') => T.callAssetTool(T.HIGGSFIELD_TOOL, { name, kind, prompt: 'crate', model: 'gpt_image_2_6' }, ctx);
+  const refusedCode = (res) => (res && res.error && res.error.error) || null;
+  const cleanup = async () => {
+    for (const dir of [repo, checkout]) await fsx.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  };
+  return { repo, checkout, execCalls, freshTools, ctxOf, judge, paid, refusedCode, cleanup };
+}
+
+test('a free pass survives 500+ later asset entries and a restart: the paid final is still refused', async () => {
+  const s = castSetup({ cast: null });
+  try {
+    const run = fakeRun('lw-c');
+    assert.equal((await s.judge(s.ctxOf(run), 'Wood Crate', ['a', 'b'], [8, 3])).pass, true);
+    for (let i = 0; i < 600; i += 1) {
+      assert.equal(run.recordAsset({ tool: 'comfyui', kind: 'sprite', name: `Filler ${i}`, prompt: 'x', path: `art/comfyui/filler-${i}.png` }), true);
+    }
+    // LunaCore restarts: the run comes back from its file, the tools and their memory store are new.
+    run.restart();
+    const record = run.judgeVerdicts();
+    assert.deepEqual(record.entries, [], 'the judge entry fell out of the 500-entry asset log');
+    assert.deepEqual(record.verdicts.map((v) => [v.name, v.freePass, v.winner, v.candidates]), [['Wood Crate', true, 'art/drafts/a.png', ['art/drafts/a.png', 'art/drafts/b.png']]]);
+    const res = await s.paid(s.ctxOf(run), 'Wood Crate');
+    assert.equal(s.refusedCode(res), 'freeCandidatePassed', JSON.stringify(res));
+    assert.deepEqual(s.execCalls, [], 'no Higgsfield CLI call, not even the estimate');
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('a run recorded before the verdict list still counts its asset-log verdicts and carries them over', async () => {
+  const s = castSetup({ cast: null });
+  try {
+    const run = fakeRun('lw-c');
+    assert.equal(run.recordAsset({ tool: 'judge', kind: 'prop', name: 'Wood Crate', prompt: 'free pass - candidate-1 scored 9/10', path: 'art/drafts/a.png' }), true);
+    run.restart();
+    assert.equal(run.judgeVerdicts().verdicts, null, 'no list yet: an old run record');
+    assert.equal(cleanGuardFields({}).judgeVerdicts, null);
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run), 'Wood Crate')), 'freeCandidatePassed');
+    // The next verdict (junk on other drafts) starts the list: the old pass is carried over first and still stands.
+    assert.equal((await s.judge(s.ctxOf(run), 'Wood Crate', ['c', 'd'], [3, 1])).pass, false);
+    run.restart();
+    assert.deepEqual(run.raw().judgeVerdicts.map((v) => [v.freePass, v.winner]), [[true, 'art/drafts/a.png'], [false, 'art/drafts/c.png']]);
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run), 'Wood Crate')), 'freeCandidatePassed');
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('the guard keys on the cast asset: a renamed request is still refused after a free pass, a name off the list too', async () => {
+  // The worker's own copy of the list gained a row for the renamed request: only the run's checkout counts.
+  const s = castSetup({ workerRows: ['Wooden Crate', 'Iron Barrel', 'Wood Crate 2'] });
+  try {
+    const run = fakeRun('lw-c');
+    assert.equal((await s.judge(s.ctxOf(run), 'Wooden Crate', ['a', 'b'], [8, 3])).pass, true);
+    run.restart();
+    for (const [name, kind] of [['Wooden Crate', 'prop'], ['Wood Crate 2', 'prop'], ['wooden crates', 'prop'], ['Wooden Crate final', 'prop'], ['Wooden Crate', 'texture']]) {
+      const res = await s.paid(s.ctxOf(run), name, kind);
+      assert.equal(s.refusedCode(res), 'freeCandidatePassed', `${name} (${kind}): ${JSON.stringify(res)}`);
+    }
+    const off = await s.paid(s.ctxOf(run), 'Spaceship');
+    assert.equal(s.refusedCode(off), 'notCastAsset', JSON.stringify(off));
+    assert.match(JSON.stringify(off), /design\/ASSETS\.md/);
+    assert.deepEqual(s.execCalls, [], 'no Higgsfield CLI call, not even the estimate');
+    // Another cast asset has no pass: its paid final goes ahead (the CLI stub is reached).
+    const other = await s.paid(s.ctxOf(run), 'Iron Barrel');
+    assert.ok(!['freeCandidatePassed', 'notCastAsset'].includes(s.refusedCode(other)), JSON.stringify(other));
+    assert.ok(s.execCalls.length > 0);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('a failing re-judge with unrelated candidates keeps the free pass; one of the same winner withdraws it', async () => {
+  const s = castSetup();
+  try {
+    const run = fakeRun('lw-c');
+    const tools = s.freshTools();
+    assert.equal((await s.judge(s.ctxOf(run, tools), 'Wooden Crate', ['a', 'b'], [8, 3])).pass, true);
+    // Junk re-judged under the same name, and under a variant of it: nothing is taken back.
+    assert.equal((await s.judge(s.ctxOf(run, tools), 'Wooden Crate', ['c', 'd'], [3, 1])).pass, false);
+    assert.equal((await s.judge(s.ctxOf(run, tools), 'Wood Crate 2', ['d', 'c'], [2, 1])).pass, false);
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run, tools), 'Wooden Crate')), 'freeCandidatePassed', 'this process');
+    run.restart();
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run), 'Wooden Crate')), 'freeCandidatePassed', 'the run record after a restart');
+    assert.deepEqual(s.execCalls, []);
+    // The passing winner judged again and now below the pass mark: the pass is withdrawn.
+    const again = await s.judge(s.ctxOf(run, tools), 'Wooden Crate', ['a', 'c'], [4, 2]);
+    assert.equal(again.pass, false);
+    assert.equal(again.winner.candidate, 'art/drafts/a.png');
+    const here = await s.paid(s.ctxOf(run, tools), 'Wooden Crate');
+    assert.notEqual(s.refusedCode(here), 'freeCandidatePassed', JSON.stringify(here));
+    run.restart();
+    const res = await s.paid(s.ctxOf(run), 'Wooden Crate');
+    assert.notEqual(s.refusedCode(res), 'freeCandidatePassed', JSON.stringify(res));
+    assert.ok(s.execCalls.length > 0, 'the paid path ran (the CLI stub was reached)');
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('a cast list that cannot be read refuses the paid final (fail closed)', async () => {
+  const s = castSetup({ cast: null });
+  try {
+    require('fs').mkdirSync(require('path').join(s.checkout, 'design', 'ASSETS.md'), { recursive: true });
+    const res = await s.paid(s.ctxOf(fakeRun('lw-c')), 'Wooden Crate');
+    assert.equal(s.refusedCode(res), 'assetListUnreadable', JSON.stringify(res));
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('recordJudgeVerdict: validated, kept apart from the asset log, refused on a finished run', () => {
+  let run = { id: 'lw-g', phase: 'build', assets: [] };
+  const g = createToolGuard({ run: () => run, update: (f) => { run = { ...run, ...f }; }, logEvent: () => {}, armWait: () => {}, fileCards: () => [], now: () => 7 });
+  assert.equal(g.recordJudgeVerdict(null), false);
+  assert.equal(g.recordJudgeVerdict({ kind: 'prop', name: 'Crate', winner: 'w', candidates: ['x', 'y'] }), false, 'a winner that is not a candidate');
+  assert.equal(g.recordJudgeVerdict({ kind: 'nope', name: 'Crate', winner: 'x', candidates: ['x', 'y'] }), false);
+  assert.equal(g.recordJudgeVerdict({ kind: 'prop', name: 'Crate', freePass: true, pass: true, winner: 'x', candidates: ['x', 'y'], extra: 'dropped' }), true);
+  assert.deepEqual(run.judgeVerdicts, [{ at: 7, kind: 'prop', name: 'Crate', freePass: true, pass: true, winner: 'x', candidates: ['x', 'y'] }]);
+  assert.deepEqual(run.assets, [], 'the asset log is not touched');
+  assert.deepEqual(g.judgeVerdicts().verdicts, run.judgeVerdicts);
+  run = { ...run, phase: 'done' };
+  assert.equal(g.recordJudgeVerdict({ kind: 'prop', name: 'Crate', winner: 'x', candidates: ['x', 'y'] }), false);
+});
+
+test('a re-judge whose winner now reads as paid or of unknown origin never withdraws the free pass', async () => {
+  const s = castSetup();
+  try {
+    const run = fakeRun('lw-c');
+    const tools = s.freshTools();
+    assert.equal((await s.judge(s.ctxOf(run, tools), 'Wooden Crate', ['a', 'b'], [8, 3])).pass, true);
+    // The worker plants a broken Higgsfield record in its own worktree: the same winner now has an unknown origin.
+    const fsx = require('fs');
+    const path = require('path');
+    fsx.mkdirSync(path.join(s.repo, 'art', 'higgsfield', 'prop'), { recursive: true });
+    fsx.writeFileSync(path.join(s.repo, 'art', 'higgsfield', 'prop', 'planted.json'), '{ not json');
+    const again = await s.judge(s.ctxOf(run, tools), 'Wooden Crate', ['a', 'c'], [8, 2]);
+    assert.equal(again.pass, true);
+    assert.equal(again.winner.origin, 'unknown');
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run, tools), 'Wooden Crate')), 'freeCandidatePassed', 'this process');
+    run.restart();
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(run), 'Wooden Crate')), 'freeCandidatePassed', 'the run record');
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('a pass only this process holds is matched to its asset when the paid final asks, not when it was judged', async () => {
+  const s = castSetup({ cast: null });
+  try {
+    const fsx = require('fs');
+    const path = require('path');
+    // The run record keeps nothing (say the run just ended under the worker): only the memory store has the verdict.
+    const lost = { recordAsset: () => false, recordJudgeVerdict: () => false, judgeVerdicts: () => null };
+    const tools = s.freshTools();
+    assert.equal((await s.judge(s.ctxOf(lost, tools), 'Wooden Crate', ['a', 'b'], [8, 3])).pass, true);
+    // The asset list appears after the verdict: the renamed request still resolves to the judged asset.
+    fsx.mkdirSync(path.join(s.checkout, 'design'), { recursive: true });
+    fsx.writeFileSync(path.join(s.checkout, 'design', 'ASSETS.md'), [...ASSETS_HEADER, '| Wooden Crate | prop | a crate | auto |  | queued |  |  |', ''].join('\n'));
+    assert.equal(s.refusedCode(await s.paid(s.ctxOf(lost, tools), 'Wood Crate 2')), 'freeCandidatePassed');
+    assert.deepEqual(s.execCalls, []);
+  } finally {
+    await s.cleanup();
   }
 });

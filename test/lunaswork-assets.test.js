@@ -565,16 +565,16 @@ test('estimate: mixed rows split into library, local and paid with credits and U
     entry('Ship', 'model', 'blender'),
     entry('Tree', 'model', 'generated'),
     entry('Theme', 'audio', 'generated'),
-    entry('Hero', 'sprite', 'generated', 'hero portrait model: soul'),
+    entry('Hero', 'sprite', 'generated', 'hero portrait model: text2image_soul_v2'),
     entry('Logo', 'ui', 'generated'),
   ], { usdPerCredit: 0.05 });
   assert.equal(est.library.count, 1);
   assert.equal(est.local.count, 3);
   assert.equal(est.paid.count, 2);
-  const credits = Cost.catalogModelCredits().soul + Cost.DEFAULT_FINAL_CREDITS;
+  const credits = Cost.catalogModelCredits().text2image_soul_v2 + Cost.DEFAULT_FINAL_CREDITS;
   assert.equal(est.paid.credits, credits);
   assert.equal(est.paid.usd, Math.round(credits * 0.05 * 10000) / 10000);
-  assert.deepEqual(est.paid.rows.map((r) => [r.name, r.model, r.unknownModel]), [['Hero', 'soul', false], ['Logo', null, false]]);
+  assert.deepEqual(est.paid.rows.map((r) => [r.name, r.model, r.unknownModel]), [['Hero', 'text2image_soul_v2', false], ['Logo', null, false]]);
   assert.deepEqual(est.paid.unknownModels, []);
   assert.equal(est.total, 6);
 });

@@ -18,6 +18,7 @@ const { execFileSync } = require('child_process');
 
 const { commitDesignPack, isPackCommitSubject } = require('../src/lunasworkPackCommit');
 const { createCheckpoints } = require('../src/lunasworkCheckpoint');
+const { LOADED_GIT_TIMEOUT_MS } = require('../test-support/under-load');
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const write = (repo, rel, text) => {
@@ -51,7 +52,7 @@ test('commits and pushes the design files the Critic wrote', async (t) => {
   const { origin, repo } = makeRepo(t);
   write(repo, 'design/PLAYTEST_LOG.md', '# Log\n## Iteration 1\nall good\n');
   write(repo, 'design/ARCHITECTURE.md', '# Arch v1\n');
-  const res = await commitDesignPack({ repoPath: repo, label: 'iteration 1 design pack' });
+  const res = await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'iteration 1 design pack' });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.committed, true);
   assert.equal(res.pushed, true);
@@ -70,7 +71,7 @@ test('stages only design pack files, even with other dirty, staged and untracked
   write(repo, 'notes.txt', 'untracked\n');
   write(repo, 'staged.txt', 'staged by someone\n');
   git(repo, 'add', 'staged.txt');
-  const res = await commitDesignPack({ repoPath: repo, label: 'iteration 2 design pack' });
+  const res = await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'iteration 2 design pack' });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(res.files, ['design/DECISIONS.md']);
   assert.deepEqual(git(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n'), ['design/DECISIONS.md']);
@@ -83,8 +84,8 @@ test('no commit when design/ is unchanged', async (t) => {
   const { repo } = makeRepo(t);
   write(repo, 'app.txt', 'dirty but not design\n');
   const before = git(repo, 'rev-parse', 'HEAD');
-  const res = await commitDesignPack({ repoPath: repo, label: 'x' });
-  assert.equal(res.ok, true);
+  const res = await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'x' });
+  assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.committed, false);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), before);
 });
@@ -93,13 +94,13 @@ test('a failed push is reported, not thrown, and retried on the next call', asyn
   const { origin, repo } = makeRepo(t);
   git(repo, 'remote', 'set-url', 'origin', path.join(path.dirname(origin), 'missing.git'));
   write(repo, 'design/PLAYTEST_LOG.md', '# Log\nentry\n');
-  const res = await commitDesignPack({ repoPath: repo, label: 'iteration 3 design pack' });
-  assert.equal(res.ok, false);
+  const res = await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'iteration 3 design pack' });
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(res.error, 'pushFailed');
   assert.equal(res.committed, true);
   git(repo, 'remote', 'set-url', 'origin', origin);
-  const retry = await commitDesignPack({ repoPath: repo, label: 'iteration 3 design pack' });
-  assert.equal(retry.ok, true);
+  const retry = await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'iteration 3 design pack' });
+  assert.equal(retry.ok, true, JSON.stringify(retry));
   assert.equal(retry.pushed, true);
   assert.match(originFile(origin, 'design/PLAYTEST_LOG.md'), /entry/);
 });
@@ -112,18 +113,18 @@ test('a failed commit comes back as an error, never a throw', async () => {
     return { ok: true, out: '', err: '' };
   };
   const res = await commitDesignPack({ repoPath: 'x', git: fake });
-  assert.equal(res.ok, false);
+  assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(res.error, 'commitFailed');
 });
 
 test('the checkpoint tag holds the pack commit and a rollback keeps pack commits', async (t) => {
   const { root, origin, repo } = makeRepo(t);
-  const cp = createCheckpoints({ tmpDir: () => root });
+  const cp = createCheckpoints({ tmpDir: () => root, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS });
   // Iteration 1: code + design pack, then the tag.
   write(repo, 'app.txt', 'v2\n');
   git(repo, 'commit', '-am', 'feat: one');
   write(repo, 'design/PLAYTEST_LOG.md', '# Log\niteration 1\n');
-  await commitDesignPack({ repoPath: repo, label: 'iteration 1 design pack' });
+  await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'iteration 1 design pack' });
   const tagged = await cp.tagIteration({ repoPath: repo, runId: 'lwrun1', iteration: 1 });
   assert.equal(tagged.ok, true, JSON.stringify(tagged));
   assert.equal(git(origin, 'rev-parse', 'refs/tags/luna-work/lwrun1/iter-1^{commit}'), git(origin, 'rev-parse', 'main'));
@@ -132,7 +133,7 @@ test('the checkpoint tag holds the pack commit and a rollback keeps pack commits
   write(repo, 'app.txt', 'broken\n');
   git(repo, 'commit', '-am', 'feat: broken');
   write(repo, 'design/PLAYTEST_LOG.md', '# Log\niteration 1\niteration 2 found the break\n');
-  await commitDesignPack({ repoPath: repo, label: 'iteration 2 design pack' });
+  await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'iteration 2 design pack' });
   const res = await cp.rollback({ repoPath: repo, runId: 'lwrun1', iteration: 2, toIteration: 1, reason: 'coreJourneyBroken' });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.reverted.length, 1, 'only the code commit is reverted');
@@ -142,7 +143,7 @@ test('the checkpoint tag holds the pack commit and a rollback keeps pack commits
 
 test('a commit only named like a pack commit, but touching code, is still reverted', async (t) => {
   const { root, origin, repo } = makeRepo(t);
-  const cp = createCheckpoints({ tmpDir: () => root });
+  const cp = createCheckpoints({ tmpDir: () => root, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS });
   write(repo, 'app.txt', 'v2\n');
   git(repo, 'commit', '-am', 'feat: one');
   git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
