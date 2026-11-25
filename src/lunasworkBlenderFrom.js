@@ -274,7 +274,10 @@ function fromLedgerOrigin(rel, files) {
   }
   const lic = licenses.classifyLicense(row.license);
   if (!lic.ok) return fail(`refused: from ${rel}: its row in ${licenses.LEDGER_FILE} names a license the game may not use (${lic.reason})`);
-  return { ok: true, origin: { source: `${row.source || rel} (${DERIVED_MARK} from ${rel})`, author: row.author, license: row.license } };
+  // The ledger caps a cell: the original source is cut, never the derived mark.
+  const mark = ` (${DERIVED_MARK} from ${rel})`;
+  const source = `${(row.source || rel).slice(0, Math.max(0, licenses.MAX_CELL_CHARS - mark.length)).trim()}${mark}`;
+  return { ok: true, origin: { source, author: row.author, license: row.license } };
 }
 
 /**

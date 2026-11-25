@@ -210,8 +210,9 @@ function parseLedger(md) {
 
 /**
  * The ledger row that describes `rel` itself: its own row, else the deepest
- * folder row (a path ending in "/") above it. A same-stem row is not taken:
- * it describes a file made from `rel`, not where `rel` came from.
+ * folder row above it (a path that `rel` continues with "/", as isCovered
+ * reads it). A same-stem row is not taken: it describes a file made from
+ * `rel`, not where `rel` came from.
  * @param {{path:string}[]} rows parseLedger(...).rows
  * @param {string} rel repo-relative posix path
  * @returns {object|null}
@@ -222,7 +223,7 @@ function ledgerRowFor(rows, rel) {
   const list = (Array.isArray(rows) ? rows : []).filter((r) => isObj(r) && typeof r.path === 'string' && r.path);
   const own = list.find((r) => r.path === want);
   if (own) return own;
-  const folders = list.filter((r) => r.path.endsWith('/') && want.startsWith(r.path));
+  const folders = list.filter((r) => want.startsWith(r.path.endsWith('/') ? r.path : `${r.path}/`));
   return folders.reduce((best, r) => (!best || r.path.length > best.path.length ? r : best), null);
 }
 
@@ -441,6 +442,7 @@ module.exports = {
   REFERENCE_GAMES,
   classifyLicense,
   ripReason,
+  MAX_CELL_CHARS,
   MAX_LEDGER_BYTES,
   parseLedger,
   ledgerRowFor,

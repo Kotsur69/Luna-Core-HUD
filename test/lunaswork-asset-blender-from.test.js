@@ -384,6 +384,24 @@ test('ledgerRowFor: own row first, else the deepest folder row; same-stem and un
   assert.equal(L.ledgerRowFor(rows, 'Assets/B/x.png'), null);
   for (const junk of [null, 'x', [null, 1, { path: 3 }]]) assert.equal(L.ledgerRowFor(junk, 'Assets/A/Art/x.png'), null);
   assert.equal(L.ledgerRowFor(rows, ''), null);
+  // A folder row without its trailing slash covers its files, as the Critic's isCovered reads it.
+  assert.equal(L.ledgerRowFor([{ path: 'Assets/A/Art' }], 'Assets/A/Art/x.png').path, 'Assets/A/Art');
+  assert.equal(L.ledgerRowFor([{ path: 'Assets/A/Ar' }], 'Assets/A/Art/x.png'), null);
+});
+
+test('from: a long source is cut to fit the ledger cell, never the "derived via Blender" mark', () => {
+  const rel = `${ART}/Textures/rust-metal.png`;
+  const md = L.withLedgerRows(null, [{ name: 'Rust', source: `https://example.test/${'a'.repeat(290)}`, author: 'Jane Doe', license: 'CC-BY 4.0', path: rel }]);
+  const files = { stat: () => ({}), read: () => Buffer.from(md) };
+  const res = F.fromLedgerOrigin(rel, files);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.ok(res.origin.source.length <= L.MAX_CELL_CHARS);
+  assert.ok(res.origin.source.endsWith(` (derived via Blender from ${rel})`));
+  assert.deepEqual([res.origin.author, res.origin.license], ['Jane Doe', 'CC-BY 4.0']);
+  // An unreadable ledger proves no license.
+  const broken = F.fromLedgerOrigin(rel, { stat: () => ({}), read: () => { throw new Error('locked'); } });
+  assert.equal(broken.ok, false);
+  assert.match(broken.detail, /design\/ASSET_LICENSES\.md could not be read \(locked\)/);
 });
 
 test('from: a numbered result of a set finds its record; a record that does not list the file is not taken', async () => {
