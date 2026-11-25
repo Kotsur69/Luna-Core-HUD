@@ -861,9 +861,12 @@ const PIPE_TOKEN = Buffer.from(`lunacore-adapter-${'z'.repeat(20)}`).toString('b
 function fakePipelineEditor({
   reloadReads = 1, busyReplies = 1, driver = true, reloadForever = false, statusFails = false,
   busyBeforePlay = 0, lostPlayAnswer = false, playFails = false, driverAuthFails = false,
-  busyBeforeStop = 0, stopFails = 0,
+  busyBeforeStop = 0, stopFails = 0, driverListed = driver, busyList = 0,
 } = {}) {
-  const ed = { log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay, busyBeforeStop, stopFails };
+  const ed = {
+    log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay, busyBeforeStop, stopFails,
+    busyList, notFound: [], keys: [], playerX: -0.27,
+  };
   const readFile = async (file) => {
     ed.reads.push(file);
     if ((reloadForever && ed.playMode === 'playing') || ed.missing > 0) {
@@ -875,8 +878,26 @@ function fakePipelineEditor({
   };
   const reply = (status, json) => ({ ok: status < 300, status, text: async () => JSON.stringify(json) });
   const ok = (result) => reply(200, { success: true, result });
-  const notFound = (command) => reply(400, { success: false, error: 'Command Not Found', errorDetails: `No command '${command}'` });
+  const notFound = (command) => {
+    ed.notFound.push(command);
+    return reply(400, { success: false, error: 'Command Not Found', errorDetails: `No command '${command}'` });
+  };
   const answers = {
+    // The command catalog: the playtest group is listed only when the game has the driver.
+    'pipeline list_commands': (p) => {
+      const commands = driverListed && p.group === 'playtest' ? UN.DRIVER_COMMANDS.map((command) => ({ command, group: 'playtest' })) : [];
+      return ok({ commands, count: commands.length, total: commands.length, offset: 0, limit: null });
+    },
+    // The editor's built-in commands (answer shapes as com.unity.pipeline 1.0.0 gave them live).
+    'capture game_view': () => ok({ width: 1280, height: 720, encoding: 'png', base64: PNG, bytes: 18, source: 'screen', savedPath: null }),
+    'runtime status': () => ok({ IsPlaying: ed.playMode === 'playing', LoadedLevelName: 'Level1', FrameCount: 120, TimeScale: 1, RealTimeSinceStartup: 12.5 }),
+    'scene list_open': () => ok([{ name: 'Level1', path: 'Assets/Scenes/Level1.unity', isLoaded: true, isDirty: false, isActive: true, rootCount: 5 }]),
+    'gameobject find': (p) => ok(p.name === 'Player' ? [{ hierarchyPath: '/Player', type: 'GameObject' }] : null),
+    'component get_properties': () => ok({ component: { hierarchyPath: '/Player', type: 'Transform' }, properties: { m_LocalPosition: [ed.playerX, 2, 0], m_LocalScale: [0.8, 1.6, 1] } }),
+    'runtime simulate_key': (p) => {
+      ed.keys.push(`${p.key}:${p.action}`);
+      return ok({ Command: 'simulate_key', Detail: `${p.key} ${p.action}` });
+    },
     'scene open': (p) => ok({ path: p.path }),
     'editor.playmode start': () => {
       if (playFails) return reply(400, { success: false, error: 'Play mode is disabled in this project' });
@@ -912,6 +933,11 @@ function fakePipelineEditor({
     ed.requests.push({ url, command, parameters, auth: init.headers.authorization });
     const playing = command === 'editor.playmode start';
     const stopping = command === 'editor.playmode stop';
+    if (command === 'pipeline list_commands' && ed.busyList > 0) {
+      ed.busyList -= 1;
+      ed.log.push(`${command} (busy)`);
+      return reply(503, { success: false, status: 'busy', busyReason: 'domain reload', retryable: true });
+    }
     if (ed.busy > 0 || (playing && ed.busyBeforePlay > 0) || (stopping && ed.busyBeforeStop > 0)) {
       if (playing && ed.busyBeforePlay > 0) ed.busyBeforePlay -= 1;
       else if (stopping && ed.busyBeforeStop > 0) ed.busyBeforeStop -= 1;
@@ -958,6 +984,7 @@ test('unity pipeline: scene open, play, a poll that survives the domain reload, 
     '(port file missing)',
     'editor status (busy)',
     'editor status',
+    'pipeline list_commands',
     'playtest state',
   ]);
   assert.deepEqual(world.editor.requests[0].parameters, { path: 'Assets/Scenes/Level1.unity' });
@@ -1035,8 +1062,66 @@ test('unity pipeline tools() hands the bridge --unity-project (repo dir + unityP
   await adapter.stop();
 });
 
-test('unity pipeline start without the PlaytestDriver commands fails, names the card and leaves play mode', async () => {
+test('unity pipeline without a PlaytestDriver: detected from the catalog, no missing command is ever called', async () => {
   const world = pipelineWorld({ driver: false });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+
+  assert.deepEqual(world.editor.log, [
+    'scene open',
+    'editor.playmode start',
+    '(port file missing)',
+    'editor status (busy)',
+    'editor status',
+    'pipeline list_commands',
+  ]);
+  assert.deepEqual(world.editor.requests.at(-1).parameters, { group: 'playtest', detail: 'compact' });
+  assert.deepEqual(world.editor.notFound, [], 'detection triggers no Command Not Found (no console error)');
+  assert.ok(world.logs.some((l) => /no PlaytestDriver \(playtest state, playtest input, playtest screenshot not listed\)/.test(l)), world.logs.join('\n'));
+
+  // The Playtester's bridge is told to use the built-ins.
+  const { mcpConfig } = adapter.tools();
+  assert.deepEqual(mcpConfig.mcpServers[SERVER_NAMES.unity].args.slice(-4), ['--unity-project', path.resolve(world.opts.projectDir), '--unity-driver', 'builtin']);
+  assert.equal(await adapter.combatFeelLog(), null, 'no driver, no combat log');
+
+  world.editor.log.length = 0;
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(world.editor.log, [
+    'console get',
+    'runtime status', 'scene list_open', 'gameobject find', 'gameobject find', 'component get_properties',
+    'capture game_view',
+    'editor.playmode stop',
+  ]);
+  assert.deepEqual(world.editor.notFound, []);
+  const state = JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.STATE_FILE), 'utf8'));
+  assert.equal(state.source, 'unity-builtin');
+  assert.equal(state.scene, 'Level1');
+  assert.deepEqual(state.players, [{ path: '/Player', localPosition: [-0.27, 2, 0], localScale: [0.8, 1.6, 1] }]);
+  assert.ok(isPng(path.join(adapter.evidenceDir, U.FINAL_SHOT)), 'the Game view capture is the final screenshot');
+});
+
+test('unity pipeline: busy / domain-reload answers to the catalog after play mode start are retried', async () => {
+  const world = pipelineWorld({ driver: false, busyList: 2 });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+
+  assert.deepEqual(world.editor.log.slice(-3), ['pipeline list_commands (busy)', 'pipeline list_commands (busy)', 'pipeline list_commands']);
+  assert.equal(world.t, 2000, 'two more polls after the play-mode wait');
+  assert.ok(adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args.includes('builtin'));
+  await adapter.stop();
+});
+
+test('unity pipeline with a PlaytestDriver: the bridge keeps the driver path (no --unity-driver flag)', async () => {
+  const world = pipelineWorld();
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  assert.ok(!adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args.includes('--unity-driver'));
+  assert.deepEqual(world.editor.notFound, []);
+  await adapter.stop();
+});
+
+test('unity pipeline: driver commands listed but broken - start fails, names the card and leaves play mode', async () => {
+  const world = pipelineWorld({ driver: false, driverListed: true });
   const adapter = A.createAdapter('unity', world.opts);
 
   await assert.rejects(adapter.start(pipelineProfile), (err) => {
@@ -1044,7 +1129,7 @@ test('unity pipeline start without the PlaytestDriver commands fails, names the 
     assert.ok(err.message.includes(U.PLAYTEST_DRIVER_CARD.text));
     return true;
   });
-  assert.deepEqual(world.editor.log.slice(-2), ['playtest state', 'editor.playmode stop'], 'a missing command is not retried');
+  assert.deepEqual(world.editor.log.slice(-3), ['pipeline list_commands', 'playtest state', 'editor.playmode stop'], 'a failed command is not retried');
   assert.deepEqual(adapter.tools().allowedTools, []);
   assert.equal(fs.existsSync(path.join(adapter.evidenceDir, U.FINAL_SHOT)), false, 'no evidence from a game that never ran');
 });
@@ -1079,6 +1164,7 @@ test('unity pipeline: a busy editor is waited out before play; a play whose answ
     '(port file missing)',
     'editor status (busy)',
     'editor status',
+    'pipeline list_commands',
     'playtest state',
   ]);
   assert.equal(world.t, 1500);
@@ -1446,8 +1532,10 @@ test('the PlaytestDriver card builds Unity Pipeline commands: dev-only guard, sc
   assert.match(card.details, /JSON/);
   assert.match(card.details, /Unity Test Framework/);
   assert.doesNotMatch(card.details, /execute_custom_tool|playtest_driver|PlaytestDriverTool/, 'no MCP for Unity custom tool left');
-  // The error start() shows while the driver is missing.
-  assert.ok(card.details.includes(`${U.NO_DRIVER_ERROR} (Unity command 'playtest state' failed: Command Not Found`));
+  // How a missing driver is detected, what runs without it, and the error of a broken one.
+  assert.ok(card.details.includes('`pipeline list_commands --group playtest` lists all three'));
+  assert.match(card.details, /built-in commands only/);
+  assert.ok(card.details.includes(`${U.NO_DRIVER_ERROR} (Unity command 'playtest state' failed: ...)`));
   assert.ok(card.details.includes(card.text));
 
   assert.ok(card.files.every((f) => f.startsWith('Assets/LunaPlaytest/')), 'every file under Assets/LunaPlaytest/');

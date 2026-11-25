@@ -87,10 +87,10 @@ const TOOL_DEFS = {
   ],
   unity: [
     { name: 'screenshot', description: 'Screenshot the Game view in play mode. Returns the image and its file name.', inputSchema: obj({ name: screenshotName }, ['name']) },
-    { name: 'game_state', description: "The game's JSON state snapshot from the PlaytestDriver (scene, player, score, UI...).", inputSchema: obj({}) },
+    { name: 'game_state', description: "The game's JSON state snapshot from the PlaytestDriver (scene, player, score, UI...). A game without the driver answers with source \"unity-builtin\": the scene and the Player's Transform only.", inputSchema: obj({}) },
     {
       name: 'send_input',
-      description: 'Scripted inputs through the PlaytestDriver, run in order. Step types: key {key, holdMs}, button {name, holdMs}, axis {name, value -1..1, holdMs}, click {x, y} (0..1 of the screen), ui {name} (click a UI element by its GameObject name), wait {ms}.',
+      description: 'Scripted inputs through the PlaytestDriver, run in order. Step types: key {key, holdMs}, button {name, holdMs}, axis {name, value -1..1, holdMs}, click {x, y} (0..1 of the screen), ui {name} (click a UI element by its GameObject name), wait {ms}. A game without the driver runs only key (Input System key names: Space, D, LeftArrow, Digit1) and wait steps.',
       inputSchema: obj({
         steps: {
           type: 'array',
@@ -300,6 +300,7 @@ module.exports = {
   BACKENDS,
   TOOL_DEFS,
   MAX_WAIT_MS,
+  MAX_HOLD_MS,
   MAX_TEXT_CHARS,
   BURST_MIN_FRAMES,
   BURST_MAX_FRAMES,
