@@ -180,13 +180,14 @@ test('a reserve-held Director step makes the run wait until the reserve reset, a
 
 // ---- the controller: the judge's verdicts for the asset tools (main.js lunasworkAssetsFor) ----
 
-test('the controller exposes runId() and judgeVerdicts() from the run record', async () => {
+test('the controller exposes runId(), judgeVerdicts() and higgsfieldResults() from the run record', async () => {
   const fake = noSpawn();
   const repoDir = packRepo();
   try {
     const h = controllerOn(repoDir, fake.exec);
     assert.equal(h.ctl.runId(), null);
     assert.equal(h.ctl.judgeVerdicts(), null);
+    assert.equal(h.ctl.higgsfieldResults(), null);
     await h.ctl.start({ projectId: 'game' });
     for (let i = 0; i < 5; i += 1) await h.ctl.idle();
     assert.equal(h.ctl.runId(), 'lwreserve1');
@@ -195,6 +196,12 @@ test('the controller exposes runId() and judgeVerdicts() from the run record', a
     const read = h.ctl.judgeVerdicts();
     assert.equal(read.runId, 'lwreserve1');
     assert.deepEqual(read.entries.map((e) => [e.tool, e.name, e.prompt.slice(0, 10)]), [['judge', 'Wood Crate', 'free pass ']]);
+    // luna_asset_blender's from provenance: the run's saved Higgsfield results, never an unsaved one.
+    assert.equal(h.ctl.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Wood Crate', prompt: 'crate', path: 'Assets/X/Art/Props/wood-crate.png', sources: ['art/higgsfield/prop/wood-crate.json'] }), true);
+    assert.equal(h.ctl.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Lost', prompt: 'x', path: 'art/higgsfield/prop/lost.json', unsaved: true }), true);
+    const made = h.ctl.higgsfieldResults();
+    assert.equal(made.runId, 'lwreserve1');
+    assert.deepEqual(made.entries.map((e) => [e.path, e.sources]), [['Assets/X/Art/Props/wood-crate.png', ['art/higgsfield/prop/wood-crate.json']]]);
   } finally {
     await removeDir(repoDir);
   }

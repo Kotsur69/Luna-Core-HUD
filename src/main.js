@@ -1459,6 +1459,7 @@ function lunasworkAssetsFor(sessionId, session) {
     recordSpend: (payload) => lunaswork.recordSpend(payload),
     recordAsset: (entry) => lunaswork.recordAsset(entry),
     judgeVerdicts: () => lunaswork.judgeVerdicts(),
+    higgsfieldResults: () => lunaswork.higgsfieldResults(),
     cappedTools: () => lunaswork.cappedTools(),
   });
 }

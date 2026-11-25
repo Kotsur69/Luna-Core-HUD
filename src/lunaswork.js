@@ -2015,6 +2015,8 @@ function createLunasWork(deps) {
     cappedTools: () => toolGuard.cappedTools(),
     // The judge's verdicts in the run record ({runId, entries}): the Higgsfield cost guard reads them.
     judgeVerdicts: () => toolGuard.judgeVerdicts(),
+    // The run's saved Higgsfield results ({runId, entries}): luna_asset_blender's `from` provenance check.
+    higgsfieldResults: () => toolGuard.higgsfieldResults(),
     runId: () => (run ? run.id : null),
     status,
     subscribe,

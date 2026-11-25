@@ -18,18 +18,14 @@
 //                    and the exact workflow + seed to art/comfyui/runs/ so the
 //                    draft can be made again
 //   higgsfieldFinal  a paid Higgsfield final (concept art, texture, VFX, key
-//                    art): the cost is estimated and BOOKED against the run's
-//                    spend cap (recordSpend, src/lunasworkToolGuard.js) before
-//                    anything is generated. A refused booking stops Higgsfield
-//                    for the rest of the run (the guard files the card); no
-//                    further Higgsfield call is made, not even an estimate.
-//                    The record art/higgsfield/<kind>/<stem>.json is written
-//                    before the download, so a paid job is never lost; a
-//                    result that does not end as files is still logged with
-//                    its cost (unsaved). A used name gets -v2, -v3...
+//                    art, a GLB): the cost is estimated and BOOKED against the
+//                    run's spend cap before anything is generated; optional
+//                    reference images; a forBlender result skips the Unity
+//                    import (src/lunasworkAssetHiggsfield.js)
 //
 // Every made file is imported through the Unity Pipeline (the asset calls of
-// helpers/playtest-bridge/unity.js); a texture also gets a material. An editor
+// helpers/playtest-bridge/unity.js), except a Higgsfield result bound for
+// luna_asset_blender; a texture also gets a material. An editor
 // that is not open fails only the import: the files stay, the worker is told
 // to import through its own Unity MCP. Every made asset is logged once
 // (logAsset: tool, kind, name, prompt, seed, cost, path) for the run report.
@@ -57,6 +53,7 @@ const comfyLib = require('./lunasworkComfy');
 const licenses = require('./lunasworkLicenses');
 const { blenderExportScript } = require('./lunasworkBlenderScript');
 const { createBlenderModel } = require('./lunasworkAssetBlender');
+const { MAX_USD_PER_CREDIT, resultStem, recordText, cleanParams, createHiggsfieldFinal } = require('./lunasworkAssetHiggsfield');
 const { cleanAudioPost, createAudioNormalizer, normalizeAll } = require('./lunasworkAudioNormalize');
 const { UNITY_PIPELINE_ASSETS, pipelineCall } = require('../helpers/playtest-bridge/unity');
 
@@ -88,26 +85,12 @@ const COMFY_KINDS = Object.freeze([...IMAGE_KINDS, ...MODEL_KINDS, 'audio']);
 // A Higgsfield credit in USD when the settings name none: on the high side,
 // so the cap binds early rather than late. Set the plan's real rate in settings.
 const DEFAULT_USD_PER_CREDIT = 0.1;
-const MAX_USD_PER_CREDIT = 10;
-const MAX_CREDITS = 10000;
 const MAX_NAME_CHARS = 80;
 const MAX_PROMPT_CHARS = 2000;
 const MAX_SLUG_CHARS = 60;
 const MAX_WORKFLOW_BYTES = 1024 * 1024;
-const MAX_HIGGSFIELD_RESULTS = 4;
-const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
-const MODEL_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
-const PARAM_KEY_RE = /^[a-z][a-z0-9_]{1,31}$/;
-// Flags the pipeline sets itself or that would point the CLI at files, accounts or other output.
-const RESERVED_PARAM_KEYS = Object.freeze(new Set(['json', 'wait', 'wait_timeout', 'output', 'out', 'file', 'path', 'dir', 'download', 'save', 'config', 'profile', 'token', 'api_key', 'help', 'version']));
-// Never a leading '-': a value must not read as a CLI flag.
-const PARAM_VALUE_RE = /^[A-Za-z0-9][\w:.-]{0,39}$/;
-const MAX_PARAMS = 8;
 const WORKFLOW_FILE_RE = /^[\w-]{1,80}\.json$/;
-const JOB_ID_RE = /^[\w-]{1,100}$/;
 const MAX_SEED = Number.MAX_SAFE_INTEGER;
-// What a Higgsfield result can turn out to be; a free name must be free for each.
-const RESULT_EXTS = Object.freeze(['png', 'jpg', 'webp', 'glb']);
 const IMAGE_EXTS = Object.freeze(['png', 'jpg', 'webp']);
 // Files Unity imports as a model, so they get a prefab.
 const MODEL_EXTS = Object.freeze(['fbx', 'glb', 'gltf']);
@@ -117,7 +100,6 @@ const HEAD_BYTES = 64;
 
 const FBX_BINARY = Buffer.from('Kaydara FBX Binary', 'latin1');
 const BLEND_MAGICS = Object.freeze([Buffer.from('BLENDER', 'latin1'), Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), Buffer.from([0x1f, 0x8b])]);
-const GLB_MAGIC = Buffer.from('glTF', 'latin1');
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const own = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
@@ -143,21 +125,6 @@ function assetPath(artRoot, kind, slug, ext) {
   return `${artRootOf(artRoot)}/${KINDS[kind].dir}/${slug}.${ext}`;
 }
 
-/** The file stem of result `i` of `n`: "<stem>" alone, "<stem>-1", "<stem>-2"... in a set. */
-const resultStem = (stem, i, n) => (n > 1 ? `${stem}-${i + 1}` : stem);
-
-/** A result URL as a source record keeps it: origin + path, no query (a signed URL's token stays out of git). */
-function recordUrl(raw) {
-  try {
-    const u = new URL(raw);
-    return `${u.origin}${u.pathname}`;
-  } catch {
-    return null;
-  }
-}
-
-const recordText = (record) => `${JSON.stringify(record, null, 2)}\n`;
-
 /**
  * A job's common fields, validated: a known kind (one of `allowed`), a name
  * that makes a slug, a one-line prompt.
@@ -172,29 +139,9 @@ function cleanJob(raw, allowed) {
   return { ok: true, kind: j.kind, name, slug, prompt: oneLine(j.prompt, MAX_PROMPT_CHARS) };
 }
 
-/** Higgsfield model params: a few plain key/value flags, nothing a shell could read. */
-function cleanParams(raw) {
-  if (raw === undefined || raw === null) return {};
-  if (!isObj(raw)) return null;
-  const entries = Object.entries(raw);
-  if (entries.length > MAX_PARAMS) return null;
-  const out = {};
-  for (const [k, v] of entries) {
-    const value = typeof v === 'number' && Number.isFinite(v) ? String(v) : v;
-    if (!PARAM_KEY_RE.test(k) || RESERVED_PARAM_KEYS.has(k) || typeof value !== 'string' || !PARAM_VALUE_RE.test(value)) return null;
-    out[k] = value;
-  }
-  return out;
-}
-
 const startsWith = (buf, magic) => Buffer.isBuffer(buf) && buf.length >= magic.length && buf.subarray(0, magic.length).equals(magic);
 const isFbx = (buf) => startsWith(buf, FBX_BINARY) || (Buffer.isBuffer(buf) && /^\s*; FBX/.test(buf.toString('latin1', 0, 64)));
 const isBlend = (buf) => BLEND_MAGICS.some((m) => startsWith(buf, m));
-
-/** The file extension a Higgsfield result's bytes prove: png / jpg / webp / glb, else null. */
-function resultExt(buf) {
-  return comfyLib.imageKind(buf) || (startsWith(buf, GLB_MAGIC) ? 'glb' : null);
-}
 
 // ---- the asset log ------------------------------------------------------------------------
 
@@ -232,12 +179,14 @@ function cleanAssetEntry(raw) {
 /**
  * @param {{repoPath:string, artRoot?:string, usdPerCredit?:number,
  *   comfy?:{run:(workflow:object)=>Promise<{promptId:string, images:{data:Buffer, ext:string}[]}>},
- *   higgsfield?:{estimate:(job:object)=>Promise<{credits:number}>, generate:(job:object)=>Promise<{jobId?:string, urls:string[], seed?:number}>},
+ *   higgsfield?:{estimate:(job:object)=>Promise<{credits:number}>, generate:(job:object)=>Promise<{jobId?:string, urls:string[], seed?:number}>,
+ *     upload?:(rel:string)=>Promise<{id:string}>},
  *   download?:(url:string)=>Promise<Buffer>,
  *   blender?:{executeCode:(code:string)=>Promise<unknown>},
  *   unity?:{exec:(command:string, parameters:object)=>Promise<unknown>},
  *   recordSpend:(p:{tool:string, costUsd:number})=>{ok:boolean, reason:string|null},
  *   cappedTools?:()=>string[], logAsset?:(entry:object)=>void, freeCandidatePassed?:(job:{name:string, kind:string, slug:string})=>boolean,
+ *   higgsfieldMade?:(claim:{path:string, record:string})=>boolean,
  *   fsImpl?:object, now?:()=>number, randomSeed?:()=>number,
  *   execFile?:Function}} deps  execFile = child_process.execFile for the optional ffmpeg audio post-process (tests fake it)
  */
@@ -248,8 +197,6 @@ function createAssetPipeline(deps) {
   const artRoot = artRootOf(d.artRoot);
   const usdPerCredit = typeof d.usdPerCredit === 'number' && d.usdPerCredit > 0 && d.usdPerCredit <= MAX_USD_PER_CREDIT ? d.usdPerCredit : DEFAULT_USD_PER_CREDIT;
   const newSeed = d.randomSeed || comfyLib.randomSeed;
-  // Set once a booking is refused: no more Higgsfield calls from this pipeline.
-  let higgsfieldStopped = null;
 
   if (typeof d.repoPath !== 'string' || !path.isAbsolute(d.repoPath)) throw new Error('the asset pipeline needs the absolute project repo path');
   const repoPath = path.resolve(d.repoPath);
@@ -467,6 +414,7 @@ function createAssetPipeline(deps) {
     log,
     ledgerFile: licenses.LEDGER_FILE,
     repoPath, artRoot, higgsfieldDir: SOURCE_DIRS.higgsfield, kinds: KINDS, // the checks of a `from` Higgsfield result
+    higgsfieldMade: d.higgsfieldMade, // whether this run's asset log backs a `from` record
   });
 
   // ---- ComfyUI -------------------------------------------------------------------------
@@ -538,149 +486,24 @@ function createAssetPipeline(deps) {
     return { ok: true, files, sources: [loaded.rel, runRel], seed, seeded: seeded.seeded, warnings, unity: imports, ledger: ledgerNote ? null : licenses.LEDGER_FILE, note };
   }
 
-  // ---- Higgsfield ----------------------------------------------------------------------
+  // ---- Higgsfield (src/lunasworkAssetHiggsfield.js) ------------------------------------
 
-  const cappedNow = () => (typeof d.cappedTools === 'function' ? d.cappedTools() : []);
-
-  /** The validated job and CLI request of a Higgsfield final, or a failure. Nothing is called yet. */
-  function higgsfieldRequest(raw) {
-    const job = cleanJob(raw, [...IMAGE_KINDS, ...MODEL_KINDS]);
-    if (!job.ok) return job;
-    if (higgsfieldStopped || cappedNow().includes('higgsfield')) return fail('capReached', higgsfieldStopped || 'the Higgsfield spend cap of this run is reached');
-    const h = d.higgsfield;
-    if (!h || typeof h.estimate !== 'function' || typeof h.generate !== 'function') return fail('toolDown', 'higgsfield not connected');
-    // Checked before paying: a result that cannot be fetched must not be bought.
-    if (typeof d.download !== 'function') return fail('toolDown', 'no downloader for Higgsfield results');
-    const model = isObj(raw) ? raw.model : undefined;
-    if (typeof model !== 'string' || !MODEL_ID_RE.test(model)) return fail('badModel', 'model must be a Higgsfield model id such as gpt_image_2_6');
-    const params = cleanParams(isObj(raw) ? raw.params : undefined);
-    if (!params) return fail('badParams', `params: at most ${MAX_PARAMS} plain key/value flags, each value starting with a letter or digit`);
-    if (!job.prompt) return fail('badPrompt', 'a Higgsfield final needs a prompt');
-    return { ok: true, job, request: { model, prompt: job.prompt, params } };
-  }
-
-  /** Estimate -> book against the run's cap. A refused booking stops Higgsfield for this pipeline. */
-  async function bookHiggsfield(request) {
-    let credits;
-    try {
-      const est = await d.higgsfield.estimate(request);
-      credits = isObj(est) ? est.credits : NaN;
-    } catch (err) {
-      return fail('higgsfieldFailed', `cost estimate failed: ${errText(err)}`);
-    }
-    if (typeof credits !== 'number' || !Number.isFinite(credits) || credits < 0 || credits > MAX_CREDITS) return fail('higgsfieldFailed', 'the cost estimate is not a usable number of credits');
-    const costUsd = Math.round(credits * usdPerCredit * 10000) / 10000;
-    const booked = d.recordSpend({ tool: 'higgsfield', costUsd });
-    if (!isObj(booked) || !booked.ok) {
-      const reason = (isObj(booked) && booked.reason) || 'refused';
-      higgsfieldStopped = `Higgsfield stopped for this run: the booking of $${costUsd.toFixed(2)} was refused (${reason})`;
-      return fail(reason === 'capReached' ? 'capReached' : 'spendRefused', higgsfieldStopped);
-    }
-    return { ok: true, credits, costUsd };
-  }
-
-  /** One downloaded result, checked: a Buffer under the cap that proves to be an image or a GLB. */
-  async function fetchResult(url) {
-    const data = await d.download(url);
-    if (!Buffer.isBuffer(data) || data.length > MAX_DOWNLOAD_BYTES) throw new Error('a result is missing or too large');
-    const ext = resultExt(data);
-    if (!ext) throw new Error('a result is not an image or a GLB model');
-    return { data, ext };
-  }
-
-  /**
-   * A booked generation that did not end as saved files. The record (when one
-   * was written) says why, the run report logs the cost, and the worker gets
-   * the job id and the result URLs to finish by hand.
-   */
-  function paidUnsaved(job, paid, info, detail) {
-    let text = detail;
-    if (info.record && info.recordData) {
-      try {
-        writeRepoFile(info.record, recordText({ ...info.recordData, status: 'notSaved', outputs: info.files || [], error: oneLine(detail, 300) }));
-      } catch (err) {
-        text += ` (the record could not be updated: ${errText(err)})`;
-      }
-    }
-    const logged = log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: info.seed, costUsd: paid.costUsd, credits: paid.credits, path: info.record || info.path, sources: info.record ? [info.record] : [], imported: false, unsaved: true });
-    return {
-      ...fail('higgsfieldFailed', text),
-      costUsd: paid.costUsd, credits: paid.credits, jobId: info.jobId || null, urls: info.urls || [], record: info.record || null, files: info.files || [],
-      ...(logged ? {} : { note: 'The run report could not log this cost; mention it in your hand-back.' }),
-    };
-  }
-
-  /**
-   * Record -> fetch every result -> write -> record again -> import -> log.
-   * The record goes first, so a paid job is never lost: its id and URLs are
-   * on disk before anything is downloaded. A name already used gets the next
-   * free version (-v2, -v3...): a paid final never overwrites another.
-   */
-  async function saveHiggsfield(job, request, paid, gen) {
-    const n = gen.urls.length;
-    const recordOf = (stem) => `${SOURCE_DIRS.higgsfield}/${job.kind}/${stem}.json`;
-    const fileOf = (stem, i, ext) => assetPath(artRoot, job.kind, resultStem(stem, i, n), ext);
-    const recordData = {
-      name: job.name, kind: job.kind, model: request.model, prompt: job.prompt, params: request.params, seed: gen.seed, jobId: gen.jobId,
-      credits: paid.credits, costUsd: paid.costUsd, urls: gen.urls.map(recordUrl).filter(Boolean), status: 'generated', outputs: [],
-    };
-    const files = [];
-    let record = null;
-    let stem;
-    try {
-      stem = freeStem(job.slug, (s) => [recordOf(s), ...gen.urls.flatMap((_, i) => RESULT_EXTS.map((ext) => fileOf(s, i, ext)))]);
-      record = writeRepoFile(recordOf(stem), recordText(recordData));
-      // Every result is fetched and checked before the first asset file is written.
-      const results = [];
-      for (const url of gen.urls) results.push(await fetchResult(url));
-      for (const [i, r] of results.entries()) files.push(writeRepoFile(fileOf(stem, i, r.ext), r.data));
-    } catch (err) {
-      const where = record ? ` and in ${record}` : '';
-      const saved = files.length ? `only partially saved (${files.length} of ${n} files)` : 'not saved';
-      return paidUnsaved(job, paid, { ...gen, path: `higgsfield:${gen.jobId || request.model}`, record, recordData, files }, `generated and paid, but ${saved}: ${errText(err)}. The job id and result URLs are in this answer${where}.`);
-    }
-    const notes = [];
-    try {
-      writeRepoFile(record, recordText({ ...recordData, status: 'saved', outputs: files }));
-    } catch (err) {
-      notes.push(`the files are saved, but ${record} could not be updated: ${oneLine(errText(err), 200)}`);
-    }
-    const ledgerNote = await ledgerGenerated('Higgsfield', job, files, record);
-    if (ledgerNote) notes.push(ledgerNote);
-    const imports = [];
-    for (const rel of files) imports.push(await importToUnity(rel, job.kind));
-    // The cost is booked once; it is logged on the first file of the generation.
-    for (const [i, rel] of files.entries()) {
-      log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: gen.seed, costUsd: i === 0 ? paid.costUsd : 0, credits: i === 0 ? paid.credits : 0, path: rel, sources: [record], imported: imports[i].ok });
-    }
-    const failed = imports.find((imp) => !imp.ok);
-    if (failed) notes.push(importNote(failed));
-    return { ok: true, files, sources: [record], costUsd: paid.costUsd, credits: paid.credits, jobId: gen.jobId, unity: imports, ledger: ledgerNote ? null : licenses.LEDGER_FILE, note: notes.length ? notes.join(' ') : null };
-  }
-
-  /** Validate -> estimate + book against the cap -> generate -> save (saveHiggsfield). */
-  async function higgsfieldFinal(raw) {
-    const req = higgsfieldRequest(raw);
-    if (!req.ok) return req;
-    // A passing free / local luna_asset_judge verdict for this asset makes a paid final unnecessary.
-    if (typeof d.freeCandidatePassed === 'function' && d.freeCandidatePassed(req.job)) return fail('freeCandidatePassed', `luna_asset_judge already passed a free or local candidate for "${req.job.name}" in this run: import that winner instead of paying for a Higgsfield final`);
-    const paid = await bookHiggsfield(req.request);
-    if (!paid.ok) return paid;
-    const { job, request } = req;
-    let out;
-    try {
-      out = await d.higgsfield.generate(request);
-    } catch (err) {
-      return paidUnsaved(job, paid, { seed: null, path: `higgsfield:${request.model}` }, `$${paid.costUsd.toFixed(2)} was booked, but the generation failed: ${errText(err)}`);
-    }
-    const gen = {
-      urls: (isObj(out) && Array.isArray(out.urls) ? out.urls : []).filter((u) => typeof u === 'string').slice(0, MAX_HIGGSFIELD_RESULTS),
-      jobId: isObj(out) && typeof out.jobId === 'string' && JOB_ID_RE.test(out.jobId) ? out.jobId : null,
-      seed: isObj(out) && Number.isSafeInteger(out.seed) && out.seed >= 0 ? out.seed : null,
-    };
-    if (!gen.urls.length) return paidUnsaved(job, paid, { ...gen, path: `higgsfield:${gen.jobId || request.model}` }, `$${paid.costUsd.toFixed(2)} was booked, but Higgsfield returned no result URL (job ${gen.jobId || 'unknown'})`);
-    return saveHiggsfield(job, request, paid, gen);
-  }
+  const higgsfieldFinal = createHiggsfieldFinal({
+    d,
+    usdPerCredit,
+    cleanJob: (raw) => cleanJob(raw, [...IMAGE_KINDS, ...MODEL_KINDS]),
+    modelKinds: MODEL_KINDS,
+    artRoot,
+    repoPath,
+    recordOf: (kind, stem) => `${SOURCE_DIRS.higgsfield}/${kind}/${stem}.json`,
+    fileOf: (kind, stem, ext) => assetPath(artRoot, kind, stem, ext),
+    files: { write: writeRepoFile, guard: guardPath, freeStem },
+    ledgerGenerated,
+    importToUnity,
+    importNote,
+    log,
+    ledgerFile: licenses.LEDGER_FILE,
+  });
 
   // The pieces src/lunasworkFreeAssets.js builds the library imports on.
   const shared = {
@@ -740,14 +563,14 @@ function unityAssetBrief({ kind, slug, source, artRoot, casting }) {
   const model = KINDS[k].model === true;
   const library = `Take it from a free asset library: luna_asset_search, then luna_asset_import {source, id, name, kind: "${k}"}; it lands under ${root}/${KINDS[k].dir}/.`;
   const make = source === 'library' ? library : source === 'blender' || model
-    ? `Make it in Blender through the Blender MCP (Blender must be running with its MCP add-on; load the blender-game-assets skill), then call the lunacore tool luna_asset_blender {name, kind: "${k}"}: it saves art/blender/${slug}.blend, exports ${root}/${KINDS[k].dir}/${slug}.fbx for Unity and makes the prefab. A Higgsfield concept, texture or GLB for this asset never goes straight into Unity: pass the saved file to luna_asset_blender {name, kind: "${k}", from: "<the saved Higgsfield file>"} (an image becomes the base color texture of the Blender object named like the asset, a GLB is imported), so it gets the toon pass, decimation and the FBX + prefab export.`
+    ? `Make it in Blender through the Blender MCP (Blender must be running with its MCP add-on; load the blender-game-assets skill), then call the lunacore tool luna_asset_blender {name, kind: "${k}"}: it saves art/blender/${slug}.blend, exports ${root}/${KINDS[k].dir}/${slug}.fbx for Unity and makes the prefab. A Higgsfield concept, texture or GLB for this asset never goes straight into Unity: generate it with luna_asset_higgsfield {..., forBlender: true} (saved, recorded and ledgered, no Unity import; a GLB of a 3D kind skips the import anyway; for a mesh use the model multi_image_to_3d with images: 1-4 repo reference views under art/ and params {"should_texture": "true"}), then pass the saved file to luna_asset_blender {name, kind: "${k}", from: "<the saved Higgsfield file>"} (an image becomes the base color texture of the Blender object named like the asset, a GLB is imported), so it gets the toon pass, decimation and the FBX + prefab export.`
     : `Drafts: the lunacore tool luna_asset_comfy {name, kind: "${k}", prompt, workflow} runs a workflow from ${COMFY_WORKFLOW_DIR}/ (API format, "{{prompt}}" placeholder) on the local ComfyUI and saves the workflow and seed under ${SOURCE_DIRS.comfyRuns}/. Finals: luna_asset_higgsfield {name, kind: "${k}", prompt, model} (load the higgsfield-media skill).`;
   return [
     `Files: the asset goes to ${root}/${KINDS[k].dir}/, its sources (Blender .blend, ComfyUI workflow + seed, Higgsfield record) to art/. Write only inside this repository.`,
     make,
     ...(Array.isArray(casting) ? casting.filter((p) => typeof p === 'string' && p) : []),
     'Paid generation goes ONLY through luna_asset_higgsfield: it books the cost against this run\'s Higgsfield budget first. Use the higgsfield CLI / higgsfield-bridge directly only to look up models. When a tool answers capReached, stop using Higgsfield for this run.',
-    'The luna_asset_* tools import the result into Unity through the Unity Pipeline (asset import, prefab for a model, material for a texture). When a result says the import failed, import it with your Unity MCP.',
+    'The luna_asset_* tools import the result into Unity through the Unity Pipeline (asset import, prefab for a model, material for a texture), except a luna_asset_higgsfield result bound for luna_asset_blender (forBlender). When a result says the import failed, import it with your Unity MCP.',
     LIBRARY_RULE,
     NO_RIPS_RULE,
     ART_DIRECTION_RULE,

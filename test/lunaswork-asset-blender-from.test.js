@@ -82,12 +82,20 @@ function fakeBlender() {
   };
 }
 
-function pipeline(dir, blender = fakeBlender()) {
+/**
+ * The pipeline over a temp repo. `runLog` = this run's asset log entries the
+ * provenance check reads (as src/lunasworkAssetTools.js wires it from the run record).
+ */
+function pipeline(dir, blender = fakeBlender(), { runLog = [], extra = {} } = {}) {
   const logged = [];
   const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return { ok: true }; } };
-  const p = P.createAssetPipeline({ repoPath: dir, unity, blender, recordSpend: () => ({ ok: true, reason: null }), logAsset: (e) => logged.push(e), now: () => 42 });
+  const higgsfieldMade = (claim) => F.runHiggsfieldMade({ runId: 'run-1', entries: runLog }, 'run-1', claim);
+  const p = P.createAssetPipeline({ repoPath: dir, unity, blender, recordSpend: () => ({ ok: true, reason: null }), logAsset: (e) => logged.push(e), now: () => 42, higgsfieldMade, ...extra });
   return { p, logged, blender, unity };
 }
+
+/** The asset log entry luna_asset_higgsfield leaves for a saved result. */
+const madeEntry = (saved) => ({ tool: 'higgsfield', kind: 'prop', name: 'Crate', path: saved.rel, sources: [saved.record], imported: false });
 
 function idx(code, needle) {
   const at = code.indexOf(needle);
@@ -107,7 +115,7 @@ const posixOf = (p) => p.split(path.sep).join('/');
 test('from = a Higgsfield PNG: the script loads it as the Base Color texture before the save and the toon pass', async () => {
   const dir = tempDir('lw-from-png-');
   const saved = savedHiggsfield(dir);
-  const { p, blender, logged } = pipeline(dir);
+  const { p, blender, logged } = pipeline(dir, fakeBlender(), { runLog: [madeEntry(saved)] });
   const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: saved.rel });
   assert.equal(res.ok, true, JSON.stringify(res));
   const code = blender.scripts[0];
@@ -129,13 +137,85 @@ test('from = a Higgsfield PNG: the script loads it as the Base Color texture bef
   assert.ok(idx(code, "luna_step('poly budget', luna_decimate, luna_objs)") < idx(code, 'bpy.ops.export_scene.fbx('));
   assert.ok(!code.includes('\nluna_from_model()'));
 
-  assert.deepEqual(res.from, { path: saved.rel, type: 'texture', record: saved.record });
+  assert.deepEqual(res.from, { path: saved.rel, type: 'texture', record: saved.record, recordProven: true });
   assert.deepEqual(res.sources, ['art/blender/crate.blend', saved.record, saved.rel]);
   assert.deepEqual(logged[0].sources, ['art/blender/crate.blend', saved.record, saved.rel]);
   assert.equal(logged[0].tool, 'blender');
   const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
   assert.match(ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \| LunaCore asset worker \(Higgsfield \+ Blender\) \| Own work \(generated\) \| Assets\/BladeBullet\/Art\/Props\/crate\.fbx \|/);
-  assert.doesNotMatch(res.note || '', /No Higgsfield record/);
+  assert.doesNotMatch(res.note || '', /No Higgsfield record|claimed/);
+});
+
+// ---- provenance: a record alone proves nothing ------------------------------------------
+
+test('from with a forged record (no luna_asset_higgsfield entry in this run): the answer and the ledger say "claimed"', async () => {
+  const dir = tempDir('lw-from-forged-');
+  // Both files are worker-writable: a record naming a file it never generated.
+  const saved = savedHiggsfield(dir);
+  const { p, logged } = pipeline(dir);
+  const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: saved.rel });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.from, { path: saved.rel, type: 'texture', record: saved.record, recordProven: false });
+  assert.match(res.note, /art\/higgsfield\/prop\/crate\.json is a claimed Higgsfield record: this run's asset log has no luna_asset_higgsfield result/);
+  const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
+  assert.match(ledger, /\| Crate \| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \| LunaCore asset worker \(Higgsfield \+ Blender\) \|/);
+  assert.doesNotMatch(ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \|/);
+  // The run report still lists what the worker named, so a reviewer can follow it.
+  assert.deepEqual(logged[0].sources, ['art/blender/crate.blend', saved.record, saved.rel]);
+});
+
+test('from: a log entry of another file, another record, another run or an unsaved result never proves a record', () => {
+  const saved = { rel: `${ART}/Props/crate.png`, record: 'art/higgsfield/prop/crate.json' };
+  const ok = madeEntry(saved);
+  const claim = { path: saved.rel, record: saved.record };
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'r', claim), true);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'other', claim), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [{ ...ok, path: `${ART}/Props/barrel.png` }] }, 'r', claim), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [{ ...ok, sources: ['art/higgsfield/prop/barrel.json'] }] }, 'r', claim), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [{ ...ok, unsaved: true }] }, 'r', claim), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [{ ...ok, tool: 'comfyui' }] }, 'r', claim), false);
+  for (const junk of [null, 'x', { runId: 'r' }, { runId: 'r', entries: 'nope' }]) assert.equal(F.runHiggsfieldMade(junk, 'r', claim), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, 'r', { path: saved.rel }), false);
+  assert.equal(F.runHiggsfieldMade({ runId: 'r', entries: [ok] }, null, claim), false);
+});
+
+test('from: a provenance reader that throws, or none at all, leaves the record claimed', async () => {
+  for (const higgsfieldMade of [() => { throw new Error('run file gone'); }, undefined]) {
+    const dir = tempDir('lw-from-noreader-');
+    const saved = savedHiggsfield(dir);
+    const { p } = pipeline(dir, fakeBlender(), { extra: { higgsfieldMade } });
+    const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: saved.rel });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.from.recordProven, false);
+    assert.match(fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8'), /\| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \|/);
+  }
+});
+
+test('a genuine luna_asset_higgsfield GLB (forBlender, no Unity import) goes through luna_asset_blender with its record proven', async () => {
+  const dir = tempDir('lw-from-genuine-');
+  const logged = [];
+  const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return { ok: true }; } };
+  const p = P.createAssetPipeline({
+    repoPath: dir, unity, blender: fakeBlender(), now: () => 42,
+    recordSpend: () => ({ ok: true, reason: null }),
+    logAsset: (e) => logged.push(e),
+    higgsfield: { estimate: async () => ({ credits: 2 }), generate: async () => ({ jobId: 'job_9', urls: ['https://cdn.example.test/crate.glb'] }) },
+    download: async () => GLB,
+    // As createAssetToolsFor wires it: this run's log, read back at call time.
+    higgsfieldMade: (claim) => F.runHiggsfieldMade({ runId: 'run-1', entries: logged }, 'run-1', claim),
+  });
+  const made = await p.higgsfieldFinal({ name: 'Crate', kind: 'prop', prompt: 'toon crate', model: 'multi_image_to_3d' });
+  assert.equal(made.ok, true, JSON.stringify(made));
+  assert.deepEqual(made.forBlender, [`${ART}/Props/crate.glb`]);
+  assert.deepEqual(unity.calls, []);
+  const res = await p.blenderModel({ name: 'Crate', kind: 'prop', from: made.files[0] });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.from, { path: `${ART}/Props/crate.glb`, type: 'model', record: 'art/higgsfield/prop/crate.json', recordProven: true });
+  assert.doesNotMatch(res.note || '', /claimed/);
+  // Only the Blender FBX reaches Unity: the GLB never got its own prefab.
+  assert.deepEqual(unity.calls.map((c) => [c.command, c.parameters.path]), [['assets import', `${ART}/Props/crate.fbx`], ['prefab create', `${ART}/Props/crate.prefab`]]);
+  const ledger = fs.readFileSync(path.join(dir, 'design', 'ASSET_LICENSES.md'), 'utf8');
+  assert.match(ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \| LunaCore asset worker \(Higgsfield \+ Blender\) \| Own work \(generated\) \| Assets\/BladeBullet\/Art\/Props\/crate\.fbx \|/);
 });
 
 test('from = a Higgsfield GLB: import, toon pass with decimate, then the same FBX export', async () => {

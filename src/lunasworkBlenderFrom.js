@@ -22,6 +22,13 @@
 // file whose magic bytes match its extension. Its Higgsfield record
 // (art/higgsfield/<kind>/<stem>.json, the one listing this file as an output)
 // is looked up, so the asset log and the license ledger can name it.
+//
+// Both the file and its record are worker-writable, so a record alone proves
+// nothing: runHiggsfieldMade checks this run's asset log (the run record,
+// src/lunasworkToolGuard.js higgsfieldResults) for the luna_asset_higgsfield
+// entry that saved exactly this file from exactly this record. Without one
+// the record is only "claimed" (src/lunasworkAssetBlender.js says so in the
+// answer and the ledger source).
 // ============================================================================
 
 'use strict';
@@ -165,28 +172,42 @@ function findRecord(rel, deps) {
 }
 
 /**
- * The checked `from` on disk: guarded inside the repo, no link on the way,
- * an existing file of the right type, and its Higgsfield record.
+ * A repo file a worker named, checked on disk: guarded inside the repo, no
+ * link on the way (realpath compare), not a hard link, under the size cap,
+ * magic bytes matching its type. Throws with the reason; returns the real
+ * path that was checked. Also the check of luna_asset_higgsfield reference
+ * images (src/lunasworkHiggsfieldRefs.js).
+ * @param {{rel:string, ext:string, type:'texture'|'model'}} from
+ * @param {{repoPath:string, fsImpl?:object, files:{guard:(rel:string)=>string}}} deps
+ * @returns {string} the real absolute path
+ */
+function checkRepoFile(from, deps) {
+  const fsx = deps.fsImpl || fs;
+  const target = deps.files.guard(from.rel);
+  const expected = path.join(realOf(fsx, deps.repoPath), ...from.rel.split('/'));
+  const real = realOf(fsx, target);
+  // A junction or symlink anywhere on the way (even one pointing back into the repo) changes the real path.
+  if (!samePath(real, expected)) throw new Error('it goes through a junction or link');
+  const st = fsx.statSync(real);
+  if (!st.isFile()) throw new Error('it is not a file');
+  // A hard link may share its bytes with a file outside the repo.
+  if (st.nlink > 1) throw new Error('it is a hard link');
+  if (st.size > MAX_FROM_BYTES) throw new Error(`it is larger than ${MAX_FROM_BYTES} bytes`);
+  checkMagic(fsx, real, from);
+  return real;
+}
+
+/**
+ * The checked `from` on disk (checkRepoFile) and its Higgsfield record.
  * @param {{rel:string, ext:string, type:string}} from from cleanFrom
  * @param {{repoPath:string, artRoot:string, higgsfieldDir:string, kinds:object, fsImpl?:object,
  *   files:{guard:(rel:string)=>string, stat:(rel:string)=>object|null, read:(rel:string, max:number)=>Buffer}}} deps
  * @returns {{ok:true, rel:string, abs:string, type:string, record:string|null}|{ok:false, error:string, detail:string}}
  */
 function resolveFrom(from, deps) {
-  const fsx = deps.fsImpl || fs;
   try {
-    const target = deps.files.guard(from.rel);
-    const expected = path.join(realOf(fsx, deps.repoPath), ...from.rel.split('/'));
-    const real = realOf(fsx, target);
-    // A junction or symlink anywhere on the way (even one pointing back into the repo) changes the real path.
-    if (!samePath(real, expected)) throw new Error('it goes through a junction or link');
-    const st = fsx.statSync(real);
-    if (!st.isFile()) throw new Error('it is not a file');
-    // A hard link may share its bytes with a file outside the repo.
-    if (st.nlink > 1) throw new Error('it is a hard link');
-    if (st.size > MAX_FROM_BYTES) throw new Error(`it is larger than ${MAX_FROM_BYTES} bytes`);
-    checkMagic(fsx, real, from);
     // Blender gets the real path that was checked, never one a link swapped in later can redirect.
+    const real = checkRepoFile(from, deps);
     return { ok: true, rel: from.rel, abs: real, type: from.type, record: findRecord(from.rel, deps) };
   } catch (err) {
     const why = err && err.code === 'ENOENT' ? 'no such file' : errText(err);
@@ -194,4 +215,21 @@ function resolveFrom(from, deps) {
   }
 }
 
-module.exports = { IMAGE_FROM_EXTS, MODEL_FROM_EXTS, REFUSED_MODEL_EXTS, cleanFrom, resolveFrom };
+/**
+ * Whether run `runId`'s asset log proves a `from` file is a genuine
+ * luna_asset_higgsfield result: a saved (not unsaved) higgsfield entry whose
+ * path is the file and whose sources include its record. The log is
+ * untrusted (it may come back from a run file), so every field is checked.
+ * @param {unknown} log {runId, entries} (src/lunasworkToolGuard.js higgsfieldResults)
+ * @param {string|null} runId the run this tab works for
+ * @param {{path:string, record:string}} claim
+ * @returns {boolean}
+ */
+function runHiggsfieldMade(log, runId, claim) {
+  if (!isObj(log) || typeof runId !== 'string' || !runId || log.runId !== runId || !Array.isArray(log.entries)) return false;
+  if (!isObj(claim) || typeof claim.path !== 'string' || !claim.path || typeof claim.record !== 'string' || !claim.record) return false;
+  return log.entries.some((e) => isObj(e) && e.tool === 'higgsfield' && e.unsaved !== true && e.path === claim.path
+    && Array.isArray(e.sources) && e.sources.includes(claim.record));
+}
+
+module.exports = { IMAGE_FROM_EXTS, MODEL_FROM_EXTS, REFUSED_MODEL_EXTS, SEGMENT_RE, cleanFrom, checkRepoFile, resolveFrom, runHiggsfieldMade };

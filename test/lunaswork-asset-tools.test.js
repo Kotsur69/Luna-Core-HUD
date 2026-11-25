@@ -543,6 +543,7 @@ function fakeRun(id) {
   return {
     recordAsset: (e) => live.recordAsset(e),
     judgeVerdicts: () => live.judgeVerdicts(),
+    higgsfieldResults: () => live.higgsfieldResults(),
     restart: () => { run = JSON.parse(JSON.stringify(run)); live = guard(); },
     edit: (fn) => { run = fn(run); },
   };
@@ -703,4 +704,85 @@ test('the Critic call is lean: no user settings, plugins or MCP servers ride alo
   assert.ok(args.includes('--strict-mcp-config'));
   assert.deepEqual(JSON.parse(args[args.indexOf('--mcp-config') + 1]), { mcpServers: {} });
   assert.equal(args[args.indexOf('--tools') + 1], 'Read');
+});
+
+// ---- luna_asset_blender `from`: provenance from the run record -------------------------
+
+/** A Blender add-on stand-in on the socket: writes the .blend and the FBX the script names. */
+function fakeBlenderNet() {
+  const fsx = require('fs');
+  const net = {
+    createConnection() {
+      const s = new EventEmitter();
+      s.setTimeout = () => {};
+      s.destroy = () => {};
+      s.write = (data) => {
+        const { code } = JSON.parse(data).params;
+        const [blend, fbx] = [...code.matchAll(/filepath=("(?:[^"\\]|\\.)*")/g)].map((m) => JSON.parse(m[1]));
+        fsx.writeFileSync(blend, Buffer.concat([Buffer.from('BLENDER-v400', 'latin1'), Buffer.alloc(16)]));
+        fsx.writeFileSync(fbx, Buffer.concat([Buffer.from('Kaydara FBX Binary  \0', 'latin1'), Buffer.alloc(16)]));
+        setImmediate(() => s.emit('data', Buffer.from(JSON.stringify({ status: 'success', result: { executed: true } }))));
+      };
+      setImmediate(() => s.emit('connect'));
+      return s;
+    },
+  };
+  return net;
+}
+
+test('luna_asset_blender from: the record is proven only by a higgsfield entry of this run in the run record', async () => {
+  const fsx = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const ART_X = 'Assets/X/Art';
+  const rel = `${ART_X}/Props/crate.png`;
+  const record = 'art/higgsfield/prop/crate.json';
+  const repoWith = () => {
+    const repo = fsx.mkdtempSync(path.join(os.tmpdir(), 'lw-from-prov-'));
+    for (const [r, data] of [[rel, PNG_BYTES], [record, JSON.stringify({ outputs: [rel] })]]) {
+      fsx.mkdirSync(path.dirname(path.join(repo, r)), { recursive: true });
+      fsx.writeFileSync(path.join(repo, r), data);
+    }
+    return repo;
+  };
+  const tools = T.createAssetToolsFor({
+    assetTools: () => ({ comfyuiPort: 8188, blenderPort: 9876, higgsfieldUsdPerCredit: 0.1, artRoot: ART_X }),
+    net: fakeBlenderNet(),
+  });
+  const runs = [];
+  const blenderFrom = async (run, runId) => {
+    const repo = repoWith();
+    runs.push(repo);
+    const ctx = tools({ repoPath: repo, runId, recordSpend: () => ({ ok: true }), recordAsset: (e) => run.recordAsset(e), cappedTools: () => [], judgeVerdicts: () => run.judgeVerdicts(), higgsfieldResults: () => run.higgsfieldResults() });
+    const res = await T.callAssetTool(T.BLENDER_TOOL, { name: 'Crate', kind: 'prop', from: rel }, ctx);
+    assert.equal(res.ok, true, JSON.stringify(res));
+    return { payload: res.payload, ledger: fsx.readFileSync(path.join(repo, 'design', 'ASSET_LICENSES.md'), 'utf8') };
+  };
+  try {
+    const run = fakeRun('lw-p');
+    // Forged: the record and the file exist, but no luna_asset_higgsfield call of this run made them.
+    const forged = await blenderFrom(run, 'lw-p');
+    assert.equal(forged.payload.from.recordProven, false);
+    assert.match(forged.payload.note, /claimed Higgsfield record/);
+    assert.match(forged.ledger, /\| Crate \| claimed Higgsfield record art\/higgsfield\/prop\/crate\.json \|/);
+
+    // Genuine: luna_asset_higgsfield logged it in this run; the run record survives a restart.
+    assert.equal(run.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Crate', prompt: 'toon crate', path: rel, sources: [record], costUsd: 0.2 }), true);
+    run.restart();
+    const genuine = await blenderFrom(run, 'lw-p');
+    assert.equal(genuine.payload.from.recordProven, true);
+    assert.doesNotMatch(genuine.payload.note || '', /claimed/);
+    assert.match(genuine.ledger, /\| Crate \| art\/higgsfield\/prop\/crate\.json \| LunaCore asset worker \(Higgsfield \+ Blender\) \|/);
+
+    // The same entry under another run id, an unsaved entry, or an unreadable record proves nothing.
+    assert.equal((await blenderFrom(run, 'lw-other')).payload.from.recordProven, false);
+    const unsaved = fakeRun('lw-u');
+    unsaved.recordAsset({ tool: 'higgsfield', kind: 'prop', name: 'Crate', prompt: 'x', path: rel, sources: [record], unsaved: true });
+    assert.deepEqual(unsaved.higgsfieldResults().entries, []);
+    assert.equal((await blenderFrom(unsaved, 'lw-u')).payload.from.recordProven, false);
+    const throwing = { ...run, higgsfieldResults: () => { throw new Error('run file gone'); } };
+    assert.equal((await blenderFrom(throwing, 'lw-p')).payload.from.recordProven, false);
+  } finally {
+    for (const repo of runs) await fsx.promises.rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
 });
