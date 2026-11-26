@@ -1515,6 +1515,106 @@ test('a journey that breaks after an inconclusive iteration still rolls back to 
   assert.deepEqual([cp.rollbacks[0].iteration, cp.rollbacks[0].toIteration, cp.rollbacks[0].reason], [3, 1, 'coreJourneyBroken']);
 });
 
+// ---- compile revert (src/lunasworkCompileRevert.js) ------------------------------------------
+
+const MERGE_HEAD = 'c'.repeat(40);
+/** A Unity build whose integration pushed a head: one merged package with its branch and touched files. */
+const mergedUnityBuild = (h, touched) => tickingBuild(h, (o) => ({
+  ok: true,
+  planId: 'p1',
+  killed: false,
+  integration: { state: 'done', error: null, skipped: [], headSha: MERGE_HEAD, selfCheck: { tests: 'passed', fixups: 0, pushedIntegrationBranch: null } },
+  plan: { packages: [{ id: 'pk', title: 'Player', merged: true, branch: 'luna/pk-abc12', touched, todos: o.cards.map((c) => c.text) }] },
+}));
+
+/** fakeCheckpoints plus revertMerges; `onRevert` runs on each call (e.g. the editor compiles again). */
+function revertingCheckpoints(onRevert = () => {}) {
+  const cp = fakeCheckpoints();
+  cp.reverts = [];
+  cp.dep.revertMerges = async (o) => {
+    cp.reverts.push(o);
+    onRevert(o);
+    return { ok: true, reverted: [{ sha: 'b'.repeat(40), subject: 'merge: luna/pk-abc12 (LunaCore God Mode)' }], packages: o.packages.map((p) => p.id), missing: [], already: [] };
+  };
+  return cp;
+}
+
+const editorBusy = () => Object.assign(new Error('the Unity editor stayed busy after 120s - not a playtest result'), {
+  code: UNITY_ENVIRONMENT_FAILURE, ok: false, environment: true, reason: 'editor-busy', errors: [],
+});
+
+test('a compile error in a file the merged package touched: its merge is reverted, its cards reopen with the errors, the playtest runs again - no pause', async () => {
+  const notices = [];
+  let h;
+  const cp = revertingCheckpoints(() => {
+    h.launchFails = false;
+  });
+  h = harness({ deps: { checkpoints: cp.dep, onToolDown: [(_run, down) => notices.push(down)] } });
+  h.launchFails = compileFailure();
+  h.next.build.push(mergedUnityBuild(h, ['Assets/Player.cs']));
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.equal(cp.reverts.length, 1);
+  assert.deepEqual([cp.reverts[0].headSha, cp.reverts[0].packages.map((p) => p.id)], [MERGE_HEAD, ['pk']]);
+  assert.equal(cp.rollbacks.length, 0, 'not the whole iteration');
+  assert.equal(notices.length, 0, 'never paused');
+  assert.equal(h.calls.playtest.length, 1, 'played on the reverted main');
+  assert.equal(h.syncs.length, 2, 'the checkout follows the merge, then the revert');
+  for (const at of [1, 2]) {
+    const t = h.todos.find((c) => c.at === at);
+    assert.equal(t.done, false);
+    assert.equal(t.state, undefined, 'open again, not built');
+    assert.match(t.details, /reverted this card's merge after iteration 1[\s\S]*- Assets\/Player\.cs:12: error CS0246: The type 'Hitbox' could not be found/);
+  }
+  assert.match(logText(h), /compile errors after iteration 1's merges \([^)]*\): reverted pk "Player" \(1 revert commit\(s\)\), 2 card\(s\) reopened - the playtest runs again/);
+  const run = h.ended[0];
+  assert.equal(run.toolDownPauses, 0);
+  assert.equal(run.history[0].inconclusive, undefined, 'the replay was a real playtest');
+  const saved = h.saves.find((s) => s && s.current && s.current.compileRevert);
+  assert.deepEqual([saved.current.compileRevert.ok, saved.current.compileRevert.packages], [true, ['pk']]);
+  assert.deepEqual(saved.current.build.closed, [], 'the reverted cards did not land');
+  assert.equal(saved.current.launch, null);
+});
+
+test('the replay still does not compile: one revert, then the pause as before', async () => {
+  const notices = [];
+  const cp = revertingCheckpoints();
+  const h = harness({ deps: { checkpoints: cp.dep, onToolDown: [(_run, down) => notices.push(down)] } });
+  h.launchFails = compileFailure();
+  h.next.build.push(mergedUnityBuild(h, ['Assets/Player.cs']));
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.equal(cp.reverts.length, 1);
+  assert.deepEqual([h.ctl.status().phase, h.ctl.status().waitReason], ['playtesting', TOOL_DOWN_REASON]);
+  assert.equal(notices[0].environment, 'compile-failed');
+  h.launchFails = false;
+  await h.fire();
+  assert.equal(cp.reverts.length, 1, 'no second revert in one iteration');
+  assert.equal(h.calls.playtest.length, 1);
+  assert.equal(h.ended[0].toolDownPauses, 1);
+});
+
+test('a compile error with no code merged this iteration, or an editor that stays busy, pauses as before', async () => {
+  const noMerge = revertingCheckpoints();
+  const h1 = harness({ deps: { checkpoints: noMerge.dep } });
+  h1.launchFails = compileFailure();
+  h1.next.director.push(NO_CARDS, STOP_CARD);
+  await h1.start();
+  assert.equal(h1.ctl.status().waitReason, TOOL_DOWN_REASON);
+  assert.deepEqual([noMerge.reverts.length, noMerge.rollbacks.length], [0, 0]);
+
+  const busy = revertingCheckpoints();
+  const h2 = harness({ deps: { checkpoints: busy.dep } });
+  h2.launchFails = editorBusy();
+  h2.next.build.push(mergedUnityBuild(h2, ['Assets/Player.cs']));
+  h2.next.director.push(DEFAULT, STOP_CARD);
+  await h2.start();
+  assert.equal(h2.ctl.status().waitReason, TOOL_DOWN_REASON);
+  assert.deepEqual([busy.reverts.length, busy.rollbacks.length], [0, 0]);
+  assert.equal(h2.stored.current.merges.packages[0].branch, 'luna/pk-abc12', 'the merge is on record');
+  assert.equal(h2.stored.current.compileRevert, null);
+});
+
 test('the PC is kept awake for the run and released at its end', async () => {
   const h = harness();
   const build = deferred();

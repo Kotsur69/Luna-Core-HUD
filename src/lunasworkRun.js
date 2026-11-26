@@ -41,6 +41,7 @@ const { cleanTargets, cleanVariants } = require('./lunasworkVariants');
 const { cleanGuardFields } = require('./lunasworkToolGuard');
 const { cleanAssetEstimate } = require('./lunasworkAssetCost');
 const { withRunBranches } = require('./lunasworkRunCleanup');
+const { cleanMerges, cleanCompileRevert } = require('./lunasworkCompileRevert');
 const { WORKER_MODEL_CHOICES, isWorkerModelChoice } = require('./claudeModels');
 
 const PREPROD = 'preprod';
@@ -604,6 +605,7 @@ function emptyCurrent() {
   return {
     cards: [], notes: null, planId: null, build: null, launch: null, inconclusive: null, report: null, playtest: null, verify: null,
     critic: null, ship: null, replay: null, checkpoint: null, hooks: null, hookNotes: [], variantTargets: [],
+    merges: null, compileRevert: null,
   };
 }
 
@@ -682,6 +684,10 @@ function cleanCurrent(raw) {
     hookNotes: cleanHookNotes(c.hookNotes),
     // LW 2.25a: the design-variant screens this iteration's explore pass screenshots.
     variantTargets: cleanTargets(c.variantTargets),
+    // What this iteration's build merged, and its compile revert (src/lunasworkCompileRevert.js):
+    // a restart never reverts twice.
+    merges: cleanMerges(c.merges),
+    compileRevert: cleanCompileRevert(c.compileRevert),
   };
 }
 

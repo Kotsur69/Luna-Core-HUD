@@ -208,7 +208,8 @@ const ENVIRONMENT_REASONS = Object.freeze({
 const ENVIRONMENT_REASON_LIST = Object.freeze(Object.values(ENVIRONMENT_REASONS));
 // Unity's words for a component whose script class is gone (not compiled, or a stale assembly).
 const MISSING_SCRIPT_RE = /\breferenced script\b[^\n]{0,160}\bis missing\b|\bassociated script can ?not be loaded\b|\bmissing \(mono script\)/i;
-const MAX_ENV_ERRORS = 5;
+// Ten: a compile revert (src/lunasworkCompileRevert.js) puts the first ten on the reopened cards.
+const MAX_ENV_ERRORS = 10;
 const MAX_ENV_ERROR_CHARS = 300;
 const MAX_ENV_DETAIL_CHARS = 300;
 
@@ -331,6 +332,18 @@ function rollbackDecision(history) {
     return { rollback: true, toIteration: sameMilestone.n, reason: 'scoreDrop' };
   }
   return { rollback: false };
+}
+
+/**
+ * The latest good iteration of `history` (scored, green, its core journeys
+ * not broken, not rolled back, not inconclusive): what a rollback goes back
+ * to. Null when there is none.
+ * @param {object[]} history
+ * @returns {number|null}
+ */
+function lastGoodIteration(history) {
+  const good = usable(history).filter(isGood);
+  return good.length ? good[good.length - 1].n : null;
 }
 
 /**
@@ -740,6 +753,7 @@ module.exports = {
   playtestEnvironment,
   isInconclusive,
   rollbackDecision,
+  lastGoodIteration,
   stopVerdict,
   normalizeStoredRun,
   CORE_PERSONA,
