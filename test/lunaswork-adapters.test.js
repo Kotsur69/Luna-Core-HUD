@@ -849,6 +849,21 @@ const P = require('../helpers/playtest-bridge/pipeline-http.js');
 const pipelineProfile = { adapter: 'unity', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 5 };
 // A fake bearer token, built at runtime (never a secret-shaped literal).
 const PIPE_TOKEN = Buffer.from(`lunacore-adapter-${'z'.repeat(20)}`).toString('base64');
+// A console capture session id as the editor makes them (a GUID in "N" format).
+const CONSOLE_SESSION = '0f'.repeat(16);
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+// What start() asks the editor before play mode when there is nothing to compile (lunasworkUnityEditor.js).
+const PREP_LOG = Object.freeze([
+  'editor set_auto_tick',
+  'editor status',
+  'editor invoke_menu',
+  'script recompile',
+  'script recompile_status',
+  'editor status',
+  'console get',
+]);
+// What stop() asks after the Playtester: the console window, state, final shot, play mode off, auto tick back.
+const STOP_LOG = Object.freeze(['console get', 'playtest state', 'playtest screenshot', 'editor.playmode stop', 'editor set_auto_tick']);
 
 /**
  * The open editor behind the Unity Pipeline at the HTTP level: the REAL
@@ -856,17 +871,65 @@ const PIPE_TOKEN = Buffer.from(`lunacore-adapter-${'z'.repeat(20)}`).toString('b
  * reloads the domain: the port file is gone for `reloadReads` reads, then the
  * editor answers 503 settling `busyReplies` times. `log` is what the editor saw.
  * Failure knobs: busyBeforePlay (play refused busy n times, not run),
- * lostPlayAnswer (play runs, its answer is lost), playFails, driverAuthFails.
+ * lostPlayAnswer (play runs, its answer is lost), playFails, driverAuthFails,
+ * statusFails (editor status fails in play mode).
+ * Before play mode (the recompile): compile 'up_to_date' (nothing to compile),
+ * {polls: n} (compiling for n status polls, then a domain reload), 'fails'
+ * (compile errors compileErrors), 'standing' (errors already standing: the
+ * recompile itself is refused), 'forever' (never done) or 'reloadForever'
+ * (compiled, then the editor never comes back from its domain reload). The console holds entries with
+ * seq numbers in one capture session; consoleBefore are logged before the
+ * playtest, playing logs the game's own NullReferenceException.
+ * listed: the playtest commands the catalog lists (default: all with driver).
  */
 function fakePipelineEditor({
   reloadReads = 1, busyReplies = 1, driver = true, reloadForever = false, statusFails = false,
   busyBeforePlay = 0, lostPlayAnswer = false, playFails = false, driverAuthFails = false,
   busyBeforeStop = 0, stopFails = 0, driverListed = driver, busyList = 0,
+  compile = 'up_to_date', compileErrors = [], consoleBefore = [], listed = null, consoleSession = CONSOLE_SESSION,
 } = {}) {
   const ed = {
     log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay, busyBeforeStop, stopFails,
     busyList, notFound: [], keys: [], playerX: -0.27,
+    autoTick: [], codeLoadCount: 1, compilePolls: 0, recompile: { status: 'idle', failed: false, errors: [] },
+    compilationFailed: compile === 'standing', consoleSession, console: [],
   };
+  ed.logConsole = (level, message) => ed.console.push({ seq: ed.console.length + 1, level, logType: level === 'error' ? 'Error' : 'Warning', message, stackTrace: '' });
+  for (const [level, message] of consoleBefore) ed.logConsole(level, message);
+  if (compile === 'standing') for (const message of compileErrors) ed.logConsole('error', message);
+  const consoleAnswer = (p) => {
+    const reset = p['since-session'] !== undefined && p['since-session'] !== ed.consoleSession;
+    const since = reset || p.since === undefined ? -1 : p.since;
+    const levels = p.level === 'error' ? ['error'] : ['error', 'warn'];
+    const entries = ed.console.filter((e) => e.seq > since && levels.includes(e.level)).slice(-p.tail);
+    const count = (level) => ed.console.filter((e) => e.level === level).length;
+    return {
+      entries, cursor: ed.console.length, session: ed.consoleSession, returned: entries.length, dropped: reset, reset,
+      counts: { error: count('error'), warn: count('warn'), log: 0 },
+      groundTruth: { compilationFailed: ed.compilationFailed, compiling: ed.recompile.status === 'compiling', consoleErrors: count('error'), ageMs: 40 },
+    };
+  };
+  const recompileStatus = () => {
+    if (ed.recompile.status === 'compiling' && compile !== 'forever') {
+      if (ed.compilePolls > 0) {
+        ed.compilePolls -= 1;
+      } else if (compile === 'fails' || (isObj(compile) && compile.fails === true)) {
+        ed.recompile = { status: 'completed', failed: true, errors: compileErrors };
+        ed.compilationFailed = true;
+        for (const message of compileErrors) ed.logConsole('error', message);
+      } else {
+        // Compiled: the domain reloads (the port file is gone once, or for good) and the scripts load again.
+        ed.recompile = { status: 'completed', failed: false, errors: [] };
+        ed.codeLoadCount += 1;
+        ed.missing = compile === 'reloadForever' ? Infinity : 1;
+      }
+    }
+    const answer = { ...ed.recompile, compilationFailed: ed.compilationFailed };
+    // As RecompileCommand.RecompileStatus: a status without evidence of its own defers to the native flag.
+    if (answer.compilationFailed && !answer.failed && ['idle', 'up_to_date'].includes(answer.status)) return { ...answer, status: 'completed', failed: true };
+    return answer;
+  };
+  const listedCommands = listed || (driverListed ? UN.DRIVER_COMMANDS : []);
   const readFile = async (file) => {
     ed.reads.push(file);
     if ((reloadForever && ed.playMode === 'playing') || ed.missing > 0) {
@@ -885,9 +948,26 @@ function fakePipelineEditor({
   const answers = {
     // The command catalog: the playtest group is listed only when the game has the driver.
     'pipeline list_commands': (p) => {
-      const commands = driverListed && p.group === 'playtest' ? UN.DRIVER_COMMANDS.map((command) => ({ command, group: 'playtest' })) : [];
+      const commands = p.group === 'playtest' ? listedCommands.map((command) => ({ command, group: 'playtest' })) : [];
       return ok({ commands, count: commands.length, total: commands.length, offset: 0, limit: null });
     },
+    // Before play mode: auto tick, asset refresh, the recompile and its status (com.unity.pipeline 1.0.0 shapes).
+    'editor set_auto_tick': (p) => {
+      ed.autoTick.push(p);
+      return ok({ enabled: p.enabled, intervalMs: p['interval-ms'], persisted: p.persist });
+    },
+    'editor invoke_menu': (p) => ok({ path: p.path, executed: true }),
+    'script recompile': () => {
+      if (compile === 'standing') return reply(400, { success: false, error: 'Command Failed', errorDetails: 'Scripts still have compile errors; nothing was recompiled.' });
+      if (compile === 'up_to_date') {
+        ed.recompile = { status: 'up_to_date', failed: false, errors: [] };
+        return ok({ status: 'up_to_date' });
+      }
+      ed.recompile = { status: 'compiling', failed: false, errors: [] };
+      ed.compilePolls = isObj(compile) ? compile.polls : 0;
+      return ok({ status: 'compiling' });
+    },
+    'script recompile_status': () => ok(recompileStatus()),
     // The editor's built-in commands (answer shapes as com.unity.pipeline 1.0.0 gave them live).
     'capture game_view': () => ok({ width: 1280, height: 720, encoding: 'png', base64: PNG, bytes: 18, source: 'screen', savedPath: null }),
     'runtime status': () => ok({ IsPlaying: ed.playMode === 'playing', LoadedLevelName: 'Level1', FrameCount: 120, TimeScale: 1, RealTimeSinceStartup: 12.5 }),
@@ -904,6 +984,7 @@ function fakePipelineEditor({
       ed.playMode = 'playing';
       ed.missing = reloadReads;
       ed.busy = busyReplies;
+      ed.logConsole('error', 'NullReferenceException in Enemy.Update');
       return ok({});
     },
     'editor.playmode stop': () => {
@@ -914,14 +995,16 @@ function fakePipelineEditor({
       ed.playMode = 'stopped';
       return ok({});
     },
-    'editor status': (p, command) => (statusFails ? notFound(command) : ok({
-      status: 'ready', compiling: false, domainReloadInProgress: false, playMode: ed.playMode, playerLoopTicking: true, runInBackground: true,
+    'editor status': (p, command) => (statusFails && ed.playMode === 'playing' ? notFound(command) : ok({
+      status: ed.recompile.status === 'compiling' ? 'compiling' : 'ready',
+      compiling: ed.recompile.status === 'compiling',
+      domainReloadInProgress: false,
+      codeLoadCount: ed.codeLoadCount,
+      playMode: ed.playMode,
+      playerLoopTicking: true,
+      runInBackground: true,
     })),
-    'console get': () => ok({
-      entries: [{ level: 'error', logType: 'Exception', message: 'NullReferenceException in Enemy.Update', stackTrace: 'Enemy.cs:12' }],
-      counts: { error: 1, warn: 0, log: 0 },
-      groundTruth: { compilationFailed: false, consoleErrors: 1 },
-    }),
+    'console get': (p) => ok(consoleAnswer(p)),
     'playtest state': (p, command) => {
       if (driverAuthFails) return reply(401, { success: false, error: 'Unauthorized' });
       return driver ? ok({ scene: 'Level1', score: 3 }) : notFound(command);
@@ -979,6 +1062,7 @@ test('unity pipeline: scene open, play, a poll that survives the domain reload, 
 
   assert.deepEqual(res, { handle: { kind: 'unity', scene: 'Assets/Scenes/Level1.unity' } });
   assert.deepEqual(world.editor.log, [
+    ...PREP_LOG,
     'scene open',
     'editor.playmode start',
     '(port file missing)',
@@ -987,7 +1071,11 @@ test('unity pipeline: scene open, play, a poll that survives the domain reload, 
     'pipeline list_commands',
     'playtest state',
   ]);
-  assert.deepEqual(world.editor.requests[0].parameters, { path: 'Assets/Scenes/Level1.unity' });
+  const params = (command) => world.editor.requests.find((r) => r.command === command).parameters;
+  assert.deepEqual(params('scene open'), { path: 'Assets/Scenes/Level1.unity' });
+  assert.deepEqual(params('editor set_auto_tick'), { enabled: true, 'interval-ms': 16, persist: true });
+  assert.deepEqual(params('editor invoke_menu'), { path: 'Assets/Refresh' });
+  assert.deepEqual(params('script recompile'), {}, 'no focus steal');
   assert.ok(world.editor.requests.every((r) => r.url === 'http://127.0.0.1:7802/api/exec' && r.auth === `Bearer ${PIPE_TOKEN}`));
   assert.equal(world.t, 1000, 'two retries, one poll interval apart');
   assert.deepEqual([world.editor.sessions, world.editor.closed], [1, 1], 'one editor = one connection, closed again');
@@ -1006,8 +1094,8 @@ test('unity pipeline stop saves unity-console.json, unity-state.json and final.p
 
   assert.equal(await adapter.stop(), true);
   assert.equal(await adapter.stop(), true);
-  assert.deepEqual(world.editor.log, ['console get', 'playtest state', 'playtest screenshot', 'editor.playmode stop']);
-  assert.deepEqual(world.editor.requests[0].parameters, { tail: 100, level: 'warning' });
+  assert.deepEqual(world.editor.log, STOP_LOG);
+  assert.deepEqual(world.editor.requests[0].parameters, { tail: 100, level: 'warning', since: 0, 'since-session': CONSOLE_SESSION });
   const consoleDump = JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.CONSOLE_FILE), 'utf8'));
   assert.equal(consoleDump.entries[0].message, 'NullReferenceException in Enemy.Update');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.STATE_FILE), 'utf8')), { scene: 'Level1', score: 3 });
@@ -1023,7 +1111,7 @@ test('unity pipeline stop: a busy editor (stop not run) gets editor.playmode sto
   world.editor.log.length = 0;
 
   assert.equal(await adapter.stop(), true);
-  assert.deepEqual(world.editor.log.slice(-3), ['editor.playmode stop (busy)', 'editor.playmode stop (busy)', 'editor.playmode stop']);
+  assert.deepEqual(world.editor.log.slice(-4), ['editor.playmode stop (busy)', 'editor.playmode stop (busy)', 'editor.playmode stop', 'editor set_auto_tick']);
   assert.equal(world.editor.playMode, 'stopped');
 });
 
@@ -1057,6 +1145,7 @@ test('unity pipeline tools() hands the bridge --unity-project (repo dir + unityP
     '--backend', 'unity',
     '--evidence-dir', adapter.evidenceDir,
     '--unity-project', unityDir,
+    '--unity-console-session', CONSOLE_SESSION, '--unity-console-cursor', '0',
   ]);
   assert.deepEqual(allowedTools, toolNames('unity').map((t) => `mcp__${SERVER_NAMES.unity}__${t}`));
   await adapter.stop();
@@ -1068,6 +1157,7 @@ test('unity pipeline without a PlaytestDriver: detected from the catalog, no mis
   await adapter.start(pipelineProfile);
 
   assert.deepEqual(world.editor.log, [
+    ...PREP_LOG,
     'scene open',
     'editor.playmode start',
     '(port file missing)',
@@ -1081,7 +1171,7 @@ test('unity pipeline without a PlaytestDriver: detected from the catalog, no mis
 
   // The Playtester's bridge is told to use the built-ins.
   const { mcpConfig } = adapter.tools();
-  assert.deepEqual(mcpConfig.mcpServers[SERVER_NAMES.unity].args.slice(-4), ['--unity-project', path.resolve(world.opts.projectDir), '--unity-driver', 'builtin']);
+  assert.deepEqual(mcpConfig.mcpServers[SERVER_NAMES.unity].args.slice(-8, -4), ['--unity-project', path.resolve(world.opts.projectDir), '--unity-driver', 'builtin']);
   assert.equal(await adapter.combatFeelLog(), null, 'no driver, no combat log');
 
   world.editor.log.length = 0;
@@ -1091,6 +1181,7 @@ test('unity pipeline without a PlaytestDriver: detected from the catalog, no mis
     'runtime status', 'scene list_open', 'gameobject find', 'gameobject find', 'component get_properties',
     'capture game_view',
     'editor.playmode stop',
+    'editor set_auto_tick',
   ]);
   assert.deepEqual(world.editor.notFound, []);
   const state = JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.STATE_FILE), 'utf8'));
@@ -1129,7 +1220,7 @@ test('unity pipeline: driver commands listed but broken - start fails, names the
     assert.ok(err.message.includes(U.PLAYTEST_DRIVER_CARD.text));
     return true;
   });
-  assert.deepEqual(world.editor.log.slice(-3), ['pipeline list_commands', 'playtest state', 'editor.playmode stop'], 'a failed command is not retried');
+  assert.deepEqual(world.editor.log.slice(-4), ['pipeline list_commands', 'playtest state', 'editor.playmode stop', 'editor set_auto_tick'], 'a failed command is not retried');
   assert.deepEqual(adapter.tools().allowedTools, []);
   assert.equal(fs.existsSync(path.join(adapter.evidenceDir, U.FINAL_SHOT)), false, 'no evidence from a game that never ran');
 });
@@ -1149,7 +1240,7 @@ test('unity pipeline: a failure that is not a reload ends the wait at once', asy
 
   await assert.rejects(adapter.start(pipelineProfile), /Unity command 'editor status' failed: Command Not Found/);
   assert.equal(world.t, 0, 'no retry');
-  assert.equal(world.editor.log.at(-1), 'editor.playmode stop');
+  assert.deepEqual(world.editor.log.slice(-2), ['editor.playmode stop', 'editor set_auto_tick']);
 });
 
 test('unity pipeline: a busy editor is waited out before play; a play whose answer is lost still reaches play mode', async () => {
@@ -1158,6 +1249,7 @@ test('unity pipeline: a busy editor is waited out before play; a play whose answ
   await adapter.start(pipelineProfile);
 
   assert.deepEqual(world.editor.log, [
+    ...PREP_LOG,
     'scene open',
     'editor.playmode start (busy)', // not run: sent again
     'editor.playmode start', // run, but the answer is lost: never sent twice
@@ -1178,7 +1270,7 @@ test('unity pipeline: a play that fails outright still leaves play mode on the w
   const adapter = A.createAdapter('unity', world.opts);
 
   await assert.rejects(adapter.start(pipelineProfile), /Unity command 'editor\.playmode start' failed: Play mode is disabled/);
-  assert.deepEqual(world.editor.log, ['scene open', 'editor.playmode start', 'editor.playmode stop']);
+  assert.deepEqual(world.editor.log, [...PREP_LOG, 'scene open', 'editor.playmode start', 'editor.playmode stop', 'editor set_auto_tick']);
 });
 
 test('unity pipeline: an editor that refuses LunaCore is not reported as a missing PlaytestDriver', async () => {
@@ -1190,7 +1282,7 @@ test('unity pipeline: an editor that refuses LunaCore is not reported as a missi
     assert.equal(err.message.includes(U.NO_DRIVER_ERROR), false);
     return true;
   });
-  assert.equal(world.editor.log.at(-1), 'editor.playmode stop');
+  assert.deepEqual(world.editor.log.slice(-2), ['editor.playmode stop', 'editor set_auto_tick']);
 });
 
 test('unity pipeline: unityProjectSubdir must stay inside the project; the transport follows unityMcpUrl', async () => {
@@ -1207,6 +1299,268 @@ test('unity pipeline: unityProjectSubdir must stay inside the project; the trans
   assert.equal(U.unityTransport({ adapter: 'unity' }), 'pipeline');
   assert.equal(U.unityTransport({ adapter: 'unity', unityMcpUrl: 'http://127.0.0.1:8080/mcp' }), 'mcp');
   assert.equal(U.unityTransport(null), 'pipeline');
+});
+
+// ============================================================================
+// unity pipeline: recompile before play, environment failures, auto tick,
+// the console window, a partial PlaytestDriver
+// ============================================================================
+
+const ED = require('../src/lunasworkUnityEditor.js');
+const { unityBackend: bridgeUnityBackend } = require('../helpers/playtest-bridge/bridge.js');
+
+const AUTO_TICK_ON = Object.freeze({ enabled: true, 'interval-ms': 16, persist: true });
+const count = (list, item) => list.filter((x) => x === item).length;
+
+/** The UserSettings config com.unity.pipeline keeps in the Unity project. */
+function writePipelineConfig(projectDir, config) {
+  const file = path.join(projectDir, ...ED.PIPELINE_CONFIG_PARTS);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, typeof config === 'string' ? config : JSON.stringify(config));
+}
+
+test('unity pipeline recompile: the wait polls until the compile and its domain reload are done, then plays the new code', async () => {
+  const world = pipelineWorld({ compile: { polls: 3 } });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+
+  const log = world.editor.log;
+  const firstPlay = log.indexOf('editor.playmode start');
+  const prep = log.slice(0, firstPlay);
+  // 3 polls still compiling, the one that sees it done hits the reload, the last one sees the new scripts.
+  assert.equal(count(prep, 'script recompile_status'), 5, prep.join('\n'));
+  assert.ok(prep.includes('(port file missing)'), 'the domain reload of the compile is waited out');
+  assert.ok(prep.indexOf('script recompile') > prep.indexOf('editor invoke_menu'), 'asset refresh first, then the recompile');
+  assert.deepEqual(prep.slice(-2), ['console get', 'scene open'], 'compile check, then the scene, then play');
+  assert.equal(world.editor.codeLoadCount, 2);
+  assert.equal(world.t, 2000 + 1000, 'four polls for the compile, two for play mode');
+  assert.equal(adapter.environmentFailure(), null);
+  assert.ok(adapter.tools().allowedTools.length > 0);
+
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(world.editor.autoTick, [AUTO_TICK_ON, AUTO_TICK_ON], 'on for the session, back to the editor default (watchdog on) after');
+});
+
+test('unity pipeline recompile: compile errors are an environment failure with the compiler messages - no play mode, no score', async () => {
+  const errors = [
+    'Assets/Game/Player.cs(12,5): error CS1002: ; expected',
+    'Assets/Game/Enemy.cs(40,9): error CS0103: The name \'hp\' does not exist in the current context',
+  ];
+  const world = pipelineWorld({ compile: { polls: 1, fails: true }, compileErrors: errors });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), (err) => {
+    assert.equal(U.isEnvironmentFailure(err), true);
+    assert.deepEqual([err.ok, err.environment, err.reason, err.code], [false, true, U.ENVIRONMENT_REASON.compileFailed, U.UNITY_ENVIRONMENT_FAILURE]);
+    assert.deepEqual(err.errors, errors);
+    assert.match(err.message, /^Unity could not compile the game's scripts \(2 compiler errors\): Assets\/Game\/Player\.cs\(12,5\): error CS1002/);
+    assert.match(err.message, /not a playtest result/);
+    return true;
+  });
+  // Fails at the compile, not after: the scene is never opened, play mode never entered.
+  assert.equal(world.editor.log.includes('editor.playmode start'), false);
+  assert.equal(world.editor.log.includes('scene open'), false);
+  assert.equal(world.editor.playMode, 'stopped');
+  assert.deepEqual(adapter.environmentFailure(), {
+    ok: false, environment: true, reason: 'compile-failed', message: adapter.environmentFailure().message, errors,
+  });
+  assert.deepEqual(adapter.tools().allowedTools, [], 'no Playtester tools');
+  assert.deepEqual(world.editor.autoTick, [AUTO_TICK_ON, AUTO_TICK_ON], 'auto tick put back on the failure path too');
+  assert.equal(world.editor.log.at(-1), 'editor set_auto_tick');
+});
+
+test('unity pipeline recompile: errors already standing (the recompile is refused) - environment failure with the console\'s compiler errors', async () => {
+  const errors = ['Assets/Game/Boss.cs(3,1): error CS0246: The type or namespace name \'Foo\' could not be found'];
+  const world = pipelineWorld({ compile: 'standing', compileErrors: errors, consoleBefore: [['warn', 'Shader warning: unused variable']] });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), (err) => {
+    assert.equal(err.reason, 'compile-failed');
+    assert.deepEqual(err.errors, errors, 'recompile_status has none after an editor launch: the console\'s compiler errors stand in');
+    return true;
+  });
+  assert.ok(world.logs.some((l) => /script recompile refused \(.*Scripts still have compile errors/.test(l)), world.logs.join('\n'));
+  assert.equal(world.editor.log.includes('editor.playmode start'), false);
+  assert.equal(count(world.editor.log, 'editor set_auto_tick'), 2);
+});
+
+test('unity pipeline recompile: still compiling at the end of the bounded wait is an environment failure (still-compiling)', async () => {
+  const world = pipelineWorld({ compile: 'forever' });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), (err) => {
+    assert.deepEqual([err.environment, err.reason], [true, 'still-compiling']);
+    assert.match(err.message, new RegExp(`^Unity was still compiling after ${ED.COMPILE_WAIT_MS / 1000}s - not a playtest result \\(Unity did not finish compiling`));
+    return true;
+  });
+  assert.ok(world.t >= ED.COMPILE_WAIT_MS, 'bounded by the named constant');
+  assert.ok(world.t < ED.COMPILE_WAIT_MS + 5000);
+  assert.equal(world.editor.log.includes('editor.playmode start'), false);
+  assert.deepEqual(world.editor.autoTick, [AUTO_TICK_ON, AUTO_TICK_ON], 'restored after the timeout');
+  assert.equal(adapter.environmentFailure().reason, 'still-compiling');
+});
+
+test('unity pipeline recompile: an editor that never comes back from its reload is an environment failure (editor-busy)', async () => {
+  const world = pipelineWorld({ compile: 'reloadForever' });
+  const adapter = A.createAdapter('unity', world.opts);
+
+  await assert.rejects(adapter.start(pipelineProfile), (err) => {
+    assert.deepEqual([err.environment, err.reason], [true, 'editor-busy']);
+    assert.match(err.message, /^the Unity editor stayed busy after 240s - not a playtest result \(.*last error: Unity editor not open on/);
+    return true;
+  });
+  assert.ok(world.t >= ED.COMPILE_WAIT_MS);
+  // The editor is gone: the restore is tried, fails and says so.
+  assert.ok(world.logs.some((l) => /could not restore the Unity auto tick setting/.test(l)), world.logs.join('\n'));
+});
+
+test('unity pipeline recompile: busy answers before and during the compile are retried, not failures', async () => {
+  const world = pipelineWorld({ compile: { polls: 1 } });
+  world.editor.busy = 3; // the editor is settling when LunaCore arrives
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  assert.deepEqual(world.editor.log.slice(0, 4), ['editor set_auto_tick (busy)', 'editor set_auto_tick (busy)', 'editor set_auto_tick (busy)', 'editor set_auto_tick']);
+  assert.equal(count(world.editor.log, 'editor set_auto_tick'), 1, 'a busy answer did not run: sent again, run once');
+  assert.ok(adapter.tools().allowedTools.length > 0);
+  await adapter.stop();
+});
+
+test('unity pipeline auto tick: the previous setting comes from the project\'s Pipeline config and is restored on success and failure', async () => {
+  const world = pipelineWorld();
+  writePipelineConfig(world.opts.projectDir, { m_HttpEnabled: true, m_WatchdogEnabled: false });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  assert.deepEqual(world.editor.autoTick, [AUTO_TICK_ON]);
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(world.editor.autoTick.at(-1), { enabled: false, 'interval-ms': 16, persist: true }, 'watchdog off: auto tick was off');
+  assert.equal(await adapter.stop(), true);
+  assert.equal(world.editor.autoTick.length, 2, 'restored once');
+
+  const failing = pipelineWorld({ playFails: true });
+  writePipelineConfig(failing.opts.projectDir, { m_WatchdogEnabled: false });
+  await assert.rejects(A.createAdapter('unity', failing.opts).start(pipelineProfile), /Play mode is disabled/);
+  assert.deepEqual(failing.editor.autoTick.map((p) => p.enabled), [true, false], 'restored when start fails after play');
+
+  const broken = pipelineWorld();
+  writePipelineConfig(broken.opts.projectDir, '{"m_WatchdogEnabled": nope');
+  const third = A.createAdapter('unity', broken.opts);
+  await third.start(pipelineProfile);
+  await third.stop();
+  assert.deepEqual(broken.editor.autoTick.at(-1), AUTO_TICK_ON, 'unreadable config: the package default');
+  assert.ok(broken.logs.some((l) => /Pipeline config unreadable \(not valid JSON\)/.test(l)), broken.logs.join('\n'));
+});
+
+test('unity pipeline auto tick: an editor that refuses set_auto_tick still compiles; nothing to restore', async () => {
+  const world = pipelineWorld();
+  const answers = world.editor;
+  const connect = world.opts.connectPipeline;
+  world.opts.connectPipeline = (dir) => {
+    const client = connect(dir);
+    return {
+      exec: (command, parameters) => (command === 'editor set_auto_tick'
+        ? Promise.reject(Object.assign(new Error("Unity command 'editor set_auto_tick' failed: EditorApplication.SignalTick not found"), { code: P.PIPELINE_ERROR.failed }))
+        : client.exec(command, parameters)),
+      close: client.close,
+    };
+  };
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  assert.ok(world.logs.some((l) => /auto tick refused \(.*SignalTick not found\); going on/.test(l)), world.logs.join('\n'));
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(answers.autoTick, [], 'never changed, never restored');
+});
+
+test('unity pipeline console window: entries logged before the playtest start are not in the evidence nor in the Playtester\'s console_errors', async () => {
+  const before = [
+    ['error', 'prefab create failed: Assets/Art/Crate.prefab'],
+    ['error', 'Could not create asset Assets/Art/e2e-tex.png'],
+    ['warn', 'Texture import warning: e2e-tex.png'],
+  ];
+  const world = pipelineWorld({ consoleBefore: before });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+
+  // The cursor is taken before play mode: everything up to seq 3 is outside the window.
+  const args = adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args;
+  assert.deepEqual(args.slice(-4), ['--unity-console-session', CONSOLE_SESSION, '--unity-console-cursor', '3']);
+
+  // The Playtester's console_errors through the bridge with exactly those flags: only the game's own error.
+  const bridge = createBridge({
+    backend: 'unity',
+    evidenceDir: tmpDir('lw-unity-window-'),
+    invoke: bridgeUnityBackend({
+      transport: 'pipeline',
+      consoleWindow: { session: args.at(-3), cursor: Number(args.at(-1)) },
+      connect: () => world.editor.connect(path.resolve(world.opts.projectDir)),
+    }),
+  });
+  const seen = JSON.parse((await bridge.callTool('console_errors', {})).content[0].text);
+  assert.deepEqual(seen.entries.map((e) => e.message), ['NullReferenceException in Enemy.Update']);
+  assert.deepEqual(seen.counts, { error: 1, warn: 0, log: 0 });
+
+  await adapter.stop();
+  const dump = JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.CONSOLE_FILE), 'utf8'));
+  assert.deepEqual(dump.entries.map((e) => e.message), ['NullReferenceException in Enemy.Update']);
+  assert.deepEqual(dump.counts, { error: 1, warn: 0, log: 0 }, 'not the buffer-wide {error 3, warn 1}');
+  assert.deepEqual(dump.window, { scope: 'since-start', startedAt: new Date(0).toISOString(), session: CONSOLE_SESSION, cursor: 3 }, 'the file says which window it covers');
+  assert.equal(dump.groundTruth.compilationFailed, false, 'the compile state stays');
+  assert.equal(dump.groundTruth.consoleErrors, 3, "the editor's own total is kept as the editor's, not counted as the playtest's");
+});
+
+test('unity pipeline console window: a new capture session (editor restart) is a fresh window', async () => {
+  const world = pipelineWorld({ consoleBefore: [['error', 'old error']] });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  // The editor restarted its console capture: new session, sequence numbers begin again.
+  world.editor.consoleSession = 'ab'.repeat(16);
+  world.editor.console = [];
+  world.editor.logConsole('warn', 'after the restart');
+  await adapter.stop();
+  const dump = JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.CONSOLE_FILE), 'utf8'));
+  assert.deepEqual(dump.entries.map((e) => e.message), ['after the restart']);
+  assert.deepEqual(dump.window, { scope: 'fresh-session', startedAt: new Date(0).toISOString(), session: CONSOLE_SESSION, cursor: 1, newSession: 'ab'.repeat(16) });
+  assert.deepEqual(dump.counts, { error: 0, warn: 1, log: 0 });
+});
+
+test('unity pipeline partial driver: state + input listed, no playtest screenshot - capture game_view stands in, nothing missing is called', async () => {
+  const world = pipelineWorld({ listed: ['playtest state', 'playtest input'] });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+
+  assert.deepEqual(world.editor.log.slice(-2), ['pipeline list_commands', 'playtest state'], 'the listed state is still checked');
+  assert.ok(world.logs.some((l) => /PlaytestDriver lacks playtest screenshot; the editor's built-in equivalent stands in/.test(l)), world.logs.join('\n'));
+  const args = adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args;
+  assert.ok(!args.includes('--unity-driver'), 'still the driver path');
+  assert.deepEqual(args.slice(args.indexOf('--unity-fallback'), args.indexOf('--unity-fallback') + 2), ['--unity-fallback', 'screenshot']);
+
+  world.editor.log.length = 0;
+  assert.equal(await adapter.stop(), true);
+  assert.deepEqual(world.editor.log, ['console get', 'playtest state', 'capture game_view', 'editor.playmode stop', 'editor set_auto_tick']);
+  assert.deepEqual(world.editor.notFound, [], 'playtest screenshot is never tried');
+  assert.ok(isPng(path.join(adapter.evidenceDir, U.FINAL_SHOT)), 'the Game view capture is the final screenshot');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(adapter.evidenceDir, U.STATE_FILE), 'utf8')), { scene: 'Level1', score: 3 }, "the driver's own state");
+});
+
+test('unity pipeline partial driver without playtest state: no state probe, built-in state, no combat log', async () => {
+  const world = pipelineWorld({ listed: ['playtest input', 'playtest screenshot'] });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  assert.equal(world.editor.log.at(-1), 'pipeline list_commands', 'nothing unlisted is probed');
+  const args = adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args;
+  assert.equal(args[args.indexOf('--unity-fallback') + 1], 'state');
+  assert.equal(await adapter.combatFeelLog(), null);
+  world.editor.log.length = 0;
+  await adapter.stop();
+  assert.deepEqual(world.editor.log.slice(1, 6), ['runtime status', 'scene list_open', 'gameobject find', 'gameobject find', 'component get_properties']);
+  assert.ok(world.editor.log.includes('playtest screenshot'));
+  assert.deepEqual(world.editor.notFound, []);
+});
+
+test('environmentFailureOf: a plain result for an environment failure, null for anything else', () => {
+  assert.equal(U.environmentFailureOf(new Error('boom')), null);
+  assert.equal(U.environmentFailureOf(null), null);
+  assert.equal(U.isEnvironmentFailure({ code: U.UNITY_ENVIRONMENT_FAILURE }), false, 'the code alone is not enough');
+  assert.deepEqual(Object.values(U.ENVIRONMENT_REASON).sort(), ['compile-failed', 'editor-busy', 'still-compiling']);
 });
 
 // ============================================================================
@@ -1532,8 +1886,8 @@ test('the PlaytestDriver card builds Unity Pipeline commands: dev-only guard, sc
   assert.match(card.details, /JSON/);
   assert.match(card.details, /Unity Test Framework/);
   assert.doesNotMatch(card.details, /execute_custom_tool|playtest_driver|PlaytestDriverTool/, 'no MCP for Unity custom tool left');
-  // How a missing driver is detected, what runs without it, and the error of a broken one.
-  assert.ok(card.details.includes('`pipeline list_commands --group playtest` lists all three'));
+  // How a missing command is detected, what runs without it, and the error of a broken one.
+  assert.ok(card.details.includes('each one only when `pipeline list_commands --group playtest` lists it'));
   assert.match(card.details, /built-in commands only/);
   assert.ok(card.details.includes(`${U.NO_DRIVER_ERROR} (Unity command 'playtest state' failed: ...)`));
   assert.ok(card.details.includes(card.text));
@@ -1560,6 +1914,42 @@ test('the PlaytestDriver card builds Unity Pipeline commands: dev-only guard, sc
   for (const key of ['text', 'details', 'verify', 'size', 'model', 'effort']) assert.equal(stored[key], card[key], key);
   assert.deepEqual(stored.acceptance, card.acceptance);
   assert.deepEqual(stored.files, card.files);
+});
+
+test('the PlaytestDriver card quotes the exact playtest contract LunaCore parses', () => {
+  const { PLAYTEST_CONTRACT } = require('../helpers/playtest-bridge/unityContract.js');
+  const card = U.PLAYTEST_DRIVER_CARD;
+  assert.equal(U.PLAYTEST_CONTRACT, PLAYTEST_CONTRACT);
+  assert.ok(card.details.includes(PLAYTEST_CONTRACT), 'verbatim in the card');
+  assert.ok(U.playtestDriverCard().details.includes(PLAYTEST_CONTRACT), 'and in every copy of it');
+  // [CliGroupCommand] editor code of group 'playtest', one method per command.
+  assert.match(PLAYTEST_CONTRACT, /const string Group = "playtest";/);
+  assert.match(PLAYTEST_CONTRACT, /\[CliGroupCommand\(Group, "[^"]+", Effect = CommandEffect\.ReadOnly\)\]\s+internal static ExitCode State\(CommandContext cmd\)/);
+  assert.match(PLAYTEST_CONTRACT, /internal static async Task<ExitCode> Input\(CommandContext cmd, \[CliArg\("steps", "[^"]+", Required = true\)\] string steps\)/);
+  assert.match(PLAYTEST_CONTRACT, /internal static async Task<ExitCode> Screenshot\(CommandContext cmd\)/);
+  // Command names and parameters exactly as pipelineDriver sends them.
+  const steps = [{ type: 'key', key: 'Space' }];
+  assert.deepEqual(UN.UNITY_PIPELINE.driver('state'), ['playtest state', {}]);
+  assert.deepEqual(UN.UNITY_PIPELINE.driver('input', { steps }), ['playtest input', { steps: JSON.stringify(steps) }]);
+  assert.deepEqual(UN.UNITY_PIPELINE.driver('screenshot'), ['playtest screenshot', {}]);
+  assert.ok(PLAYTEST_CONTRACT.includes('`playtest state`        parameters {}'));
+  assert.ok(PLAYTEST_CONTRACT.includes('`playtest input`        parameters {"steps": "<JSON array text>"} - ONE string parameter named steps'));
+  assert.ok(PLAYTEST_CONTRACT.includes('`playtest screenshot`   parameters {}'));
+  // Every step type the Playtester may send, with tools.js's limits.
+  for (const type of ['key', 'button', 'axis', 'click', 'ui', 'wait']) assert.ok(PLAYTEST_CONTRACT.includes(`{"type":"${type}"`), type);
+  assert.ok(PLAYTEST_CONTRACT.includes('1 to 50 steps') && PLAYTEST_CONTRACT.includes('"holdMs"?: 0..5000') && PLAYTEST_CONTRACT.includes('"ms": 0..15000'));
+  // The answer shapes the parsers read: state (+ combatFeelLog limits), input, screenshot.
+  assert.ok(PLAYTEST_CONTRACT.includes('{"scene": <active scene name>'));
+  assert.ok(PLAYTEST_CONTRACT.includes('hitStopFrames int 0..600') && PLAYTEST_CONTRACT.includes('timeScale {"from": 0..10'));
+  assert.ok(PLAYTEST_CONTRACT.includes('the newest 200 are kept'));
+  assert.ok(PLAYTEST_CONTRACT.includes('{"done": <number of steps run>}'));
+  assert.ok(PLAYTEST_CONTRACT.includes('{"png": <base64 of the PNG file bytes, no data: prefix>, "width": <px>, "height": <px>}'));
+  // Discovery and the built-in fallback per missing command.
+  assert.ok(PLAYTEST_CONTRACT.includes('`pipeline list_commands --group playtest --detail compact` ONCE'));
+  assert.match(PLAYTEST_CONTRACT, /playtest screenshot\s+-> capture game_view/);
+  assert.match(PLAYTEST_CONTRACT, /playtest input\s+-> runtime simulate_key: key and wait steps only/);
+  assert.match(PLAYTEST_CONTRACT, /playtest state\s+-> runtime status, scene list_open/);
+  assert.ok(normalizeTodo({ ...card, at: 1 }).details.includes(PLAYTEST_CONTRACT), 'the to-do store keeps it whole');
 });
 
 test('playtestDriverCard() is a fresh copy, tagged with the run', () => {

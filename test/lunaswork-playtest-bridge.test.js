@@ -862,11 +862,18 @@ test('builtin game_state: a Player the editor reports without a usable path is l
   assert.equal(sent.filter(([c]) => c === 'gameobject find').length, 1, 'tagged objects found: no name search');
 });
 
-test('playtestModeOf: driver only when all three playtest commands are listed', () => {
+test('playtestModeOf: builtin when none is listed, else the driver with a built-in fallback per missing command', () => {
   const listing = (names) => ({ commands: names.map((command) => ({ command })), count: names.length });
-  assert.deepEqual(UN.playtestModeOf(listing([])), { mode: 'builtin', missing: [...UN.DRIVER_COMMANDS] });
-  assert.deepEqual(UN.playtestModeOf(listing(['playtest state', 'playtest input', 'playtest screenshot'])), { mode: 'driver', missing: [] });
-  assert.deepEqual(UN.playtestModeOf(listing(['playtest state'])), { mode: 'builtin', missing: ['playtest input', 'playtest screenshot'] });
+  assert.deepEqual(UN.playtestModeOf(listing([])), { mode: 'builtin', missing: [...UN.DRIVER_COMMANDS], fallback: ['state', 'input', 'screenshot'] });
+  assert.deepEqual(UN.playtestModeOf(listing(['playtest state', 'playtest input', 'playtest screenshot'])), { mode: 'driver', missing: [], fallback: [] });
+  assert.deepEqual(UN.playtestModeOf(listing(['playtest state', 'playtest input'])), { mode: 'driver', missing: ['playtest screenshot'], fallback: ['screenshot'] });
+  assert.deepEqual(UN.playtestModeOf(listing(['playtest state'])), { mode: 'driver', missing: ['playtest input', 'playtest screenshot'], fallback: ['input', 'screenshot'] });
+  assert.deepEqual(UN.playtestModeOf(listing(['playtest stats', 'other thing'])).mode, 'builtin', 'only the exact names count');
+  assert.deepEqual(UN.fallbackActions(['screenshot', 'state']), ['state', 'screenshot'], 'checked and in action order');
+  for (const bad of [['eval'], ['screenshot', 'screenshot'], 'screenshot', [null]]) {
+    assert.throws(() => UN.fallbackActions(bad), /playtest fallback/, JSON.stringify(bad));
+  }
+  assert.throws(() => UN.playtestActions({ mode: 'driver', transport: 'mcp', fallback: ['screenshot'], call: () => {}, sleep: () => {} }), /need the Unity Pipeline transport/);
   assert.throws(() => UN.playtestModeOf(null), /without a commands list/);
   assert.throws(() => UN.playtestModeOf({ commands: 'playtest state' }), /without a commands list/);
   assert.deepEqual(UN.UNITY_PIPELINE_BUILTIN.listDriverCommands(), ['pipeline list_commands', { group: 'playtest', detail: 'compact' }]);
@@ -886,6 +893,84 @@ test('bridge flag --unity-driver: builtin or driver, Pipeline only for builtin',
   assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR, 'unity-driver': '' }), /--unity-driver must be/);
   assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-url': 'http://127.0.0.1:8080/mcp', 'unity-driver': 'builtin' }), /need the Unity Pipeline transport/);
   assert.deepEqual(B.parseArgv(['--unity-project', PIPE_DIR, '--unity-driver', 'builtin']), { 'unity-project': PIPE_DIR, 'unity-driver': 'builtin' });
+});
+
+test('bridge flags --unity-fallback and --unity-console-session / -cursor: checked at launch, Pipeline only', () => {
+  const pipe = { backend: 'unity', 'unity-project': PIPE_DIR };
+  const session = 'ab'.repeat(16);
+  assert.equal(typeof B.invokerFor({ ...pipe, 'unity-fallback': 'screenshot' }), 'function');
+  assert.equal(typeof B.invokerFor({ ...pipe, 'unity-fallback': 'input,screenshot' }), 'function');
+  assert.equal(typeof B.invokerFor({ ...pipe, 'unity-console-session': session, 'unity-console-cursor': '17' }), 'function');
+  assert.throws(() => B.invokerFor({ ...pipe, 'unity-fallback': 'eval' }), /playtest fallback/);
+  assert.throws(() => B.invokerFor({ ...pipe, 'unity-fallback': '' }), /--unity-fallback must list/);
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-url': 'http://127.0.0.1:8080/mcp', 'unity-fallback': 'screenshot' }), /need the Unity Pipeline transport/);
+  assert.throws(() => B.invokerFor({ ...pipe, 'unity-console-session': session }), /together/);
+  assert.throws(() => B.invokerFor({ ...pipe, 'unity-console-cursor': '3' }), /together/);
+  assert.throws(() => B.invokerFor({ ...pipe, 'unity-console-session': session, 'unity-console-cursor': '1e3' }), /whole number/);
+  assert.throws(() => B.invokerFor({ ...pipe, 'unity-console-session': 'a b', 'unity-console-cursor': '3' }), /session id/);
+  assert.throws(() => B.invokerFor({ backend: 'unity', 'unity-url': 'http://127.0.0.1:8080/mcp', 'unity-console-session': session, 'unity-console-cursor': '3' }), /Unity Pipeline transport/);
+  assert.deepEqual(B.parseArgv(['--unity-console-session', session, '--unity-console-cursor', '-1']), { 'unity-console-session': session, 'unity-console-cursor': '-1' });
+});
+
+test('the bridge with a partial PlaytestDriver (--unity-fallback screenshot): driver state and input, Game view capture for the screenshot', async () => {
+  // A game whose driver has state and input but no screenshot command.
+  const shot = PNG.toString('base64');
+  const notFound = [];
+  const answers = {
+    'playtest state': () => okReply({ scene: 'Arena', hp: 7 }),
+    'playtest input': (p) => okReply({ done: JSON.parse(p.steps).length }),
+    'capture game_view': () => okReply({ width: 1280, height: 720, encoding: 'png', base64: shot, bytes: PNG.length, source: 'screen', savedPath: null }),
+  };
+  const { client, requests } = fakePipeline({
+    reply: (body) => {
+      if (answers[body.command]) return answers[body.command](body.parameters);
+      notFound.push(body.command);
+      return jsonReply(400, { success: false, error: 'Command Not Found', errorDetails: `No command '${body.command}'` });
+    },
+  });
+  const invoke = B.unityBackend({ transport: 'pipeline', fallback: ['screenshot'], connect: () => ({ exec: client.exec, close: async () => {} }), sleep: async () => {} });
+  const evidenceDir = tmpDir('lw-bridge-partial-');
+  const bridge = B.createBridge({ backend: 'unity', evidenceDir, invoke });
+
+  const res = await bridge.callTool('screenshot', { name: 'partial' });
+  assert.equal(res.isError, undefined, JSON.stringify(res));
+  assert.deepEqual(res.content[1], { type: 'image', data: shot, mimeType: 'image/png' });
+  assert.ok(fs.existsSync(path.join(evidenceDir, 'partial.png')));
+  assert.deepEqual(JSON.parse((await bridge.callTool('game_state', {})).content[0].text), { scene: 'Arena', hp: 7 }, 'the driver state, not editor data');
+  const steps = [{ type: 'ui', name: 'Play' }];
+  assert.deepEqual(JSON.parse((await bridge.callTool('send_input', { steps })).content[0].text), { done: 1 }, 'ui steps still go to the driver');
+  assert.deepEqual(requests.map((r) => r.body.command), ['capture game_view', 'playtest state', 'playtest input']);
+  assert.deepEqual(notFound, [], 'the missing playtest screenshot is never called');
+});
+
+test('the bridge console window: console_errors holds only what was logged after the playtest start', async () => {
+  const session = 'cd'.repeat(16);
+  const entry = (seq, level, message) => ({ seq, level, logType: level === 'error' ? 'Error' : 'Warning', message, stackTrace: '' });
+  const buffer = [
+    entry(4, 'error', 'prefab create failed: Assets/Art/x.prefab'),
+    entry(5, 'warn', 'Could not create asset Assets/Art/e2e-tex.png'),
+    entry(6, 'error', 'NullReferenceException in Enemy.Update'),
+  ];
+  let answerSession = session;
+  const { client, requests } = fakePipeline({
+    // An editor that ignores `since`: the bridge must cut the window itself.
+    reply: () => okReply({ entries: buffer, cursor: 6, session: answerSession, reset: false, dropped: false, counts: { error: 2, warn: 1, log: 0 }, groundTruth: { compilationFailed: false, consoleErrors: 0 } }),
+  });
+  const invoke = B.unityBackend({ transport: 'pipeline', consoleWindow: { session, cursor: 5 }, connect: () => ({ exec: client.exec, close: async () => {} }) });
+  const bridge = B.createBridge({ backend: 'unity', evidenceDir: tmpDir('lw-bridge-window-'), invoke });
+
+  const res = JSON.parse((await bridge.callTool('console_errors', {})).content[0].text);
+  assert.deepEqual(requests[0].body.parameters, { tail: 100, level: 'warning', since: 5, 'since-session': session });
+  assert.deepEqual(res.entries.map((e) => e.message), ['NullReferenceException in Enemy.Update']);
+  assert.deepEqual(res.counts, { error: 1, warn: 0, log: 0 }, 'counts of the window, not of the buffer');
+  assert.deepEqual(res.window, { scope: 'since-start', startedAt: null, session, cursor: 5 });
+  assert.deepEqual(res.groundTruth, { compilationFailed: false, consoleErrors: 0 });
+
+  // The editor restarted its capture session: everything it holds now is newer than the start.
+  answerSession = 'ef'.repeat(16);
+  const fresh = JSON.parse((await bridge.callTool('console_errors', {})).content[0].text);
+  assert.equal(fresh.entries.length, 3);
+  assert.deepEqual(fresh.window, { scope: 'fresh-session', startedAt: null, session, cursor: 5, newSession: answerSession });
 });
 
 test('bridge flags: --unity-project must be absolute, --unity-url stays for legacy, never both', () => {

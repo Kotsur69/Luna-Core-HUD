@@ -95,8 +95,19 @@ function withCombatFeelLog(state) {
   return rest;
 }
 
+/** The limits parseEntry applies, for texts that describe the log (unityContract.js). */
+const COMBAT_FEEL_LIMITS = Object.freeze({
+  maxFrames: MAX_FRAMES,
+  maxDurationMs: MAX_DURATION_MS,
+  maxLatencyMs: MAX_LATENCY_MS,
+  maxTimeScale: MAX_TIME_SCALE,
+  maxAtMs: MAX_AT_MS,
+  reasonPattern: REASON_RE.source,
+});
+
 module.exports = {
   MAX_COMBAT_FEEL_ENTRIES,
+  COMBAT_FEEL_LIMITS,
   parseCombatFeelLog,
   withCombatFeelLog,
 };

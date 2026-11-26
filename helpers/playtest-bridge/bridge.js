@@ -15,7 +15,12 @@
 //                                          (pipeline-http.js); with
 //                                          --unity-driver builtin the editor's
 //                                          built-in commands stand in for a
-//                                          missing PlaytestDriver (unityBuiltin.js)
+//                                          missing PlaytestDriver (unityBuiltin.js),
+//                                          with --unity-fallback <actions> only
+//                                          for the driver commands it lacks;
+//                                          --unity-console-session / -cursor
+//                                          limit console_errors to the playtest
+//                                          (unityConsole.js)
 //   --backend unity --unity-url <url>      legacy: the MCP for Unity server,
 //                                          one short session per call
 //   Either way every call is a fixed entry of unity.js.
@@ -40,6 +45,7 @@ const { callControl } = require('./control');
 const { createMcpHttpClient, isLoopbackHttpUrl } = require('./mcp-http');
 const { createPipelineClient } = require('./pipeline-http');
 const { UNITY_TRANSPORTS, PLAYTEST_MODE, playtestActions, withCombatFeelLog } = require('./unity');
+const unityConsole = require('./unityConsole');
 const { captureBurst, buildSheet, burstSummary } = require('./burst');
 
 const SERVER_NAME = 'lunacore-playtest';
@@ -91,13 +97,18 @@ function electronBackend({ controlFile, call = callControl }) {
  * Unity: each tool is a fixed set of unity.js calls, through its own
  * short-lived client (one editor = one connection, never held between calls).
  * `mode` is what the adapter detected at start: the game's PlaytestDriver, or
- * the editor's built-in commands when the game has none (Pipeline only).
- * @param {{connect:()=>{close:Function}, transport?:'pipeline'|'mcp', mode?:'driver'|'builtin', sleep?:Function}} opts
+ * the editor's built-in commands when the game has none (Pipeline only);
+ * `fallback` the driver actions the game does not list (built-ins for those).
+ * `consoleWindow` {session, cursor} (Pipeline only): console_errors returns
+ * only what the console logged after the playtest started (unityConsole.js).
+ * @param {{connect:()=>{close:Function}, transport?:'pipeline'|'mcp', mode?:'driver'|'builtin',
+ *   fallback?:string[], consoleWindow?:{session:string, cursor:number}|null, sleep?:Function}} opts
  */
-function unityBackend({ connect, transport = 'mcp', mode = PLAYTEST_MODE.driver, sleep = realSleep }) {
+function unityBackend({ connect, transport = 'mcp', mode = PLAYTEST_MODE.driver, fallback = [], consoleWindow = null, sleep = realSleep }) {
   const api = UNITY_TRANSPORTS[transport];
   if (!api) throw new Error(`unknown Unity transport '${String(transport)}'`);
   const { calls, invoke } = api;
+  if (consoleWindow && transport !== 'pipeline') throw new Error('a console window needs the Unity Pipeline transport');
   const session = async (fn) => {
     const client = connect();
     try {
@@ -106,15 +117,20 @@ function unityBackend({ connect, transport = 'mcp', mode = PLAYTEST_MODE.driver,
       await client.close();
     }
   };
-  // Checks the mode up front: a bad one fails at launch, not at the first tool call.
-  playtestActions({ mode, transport, call: () => {}, sleep });
-  const driver = (fn) => session((call) => fn(playtestActions({ mode, transport, call, sleep })));
+  // Checks the mode, fallback and window up front: a bad one fails at launch, not at the first tool call.
+  playtestActions({ mode, transport, fallback, call: () => {}, sleep });
+  const window = consoleWindow ? unityConsole.consoleWindow(consoleWindow) : null;
+  const driver = (fn) => session((call) => fn(playtestActions({ mode, transport, fallback, call, sleep })));
+  const readConsole = async () => {
+    const answer = await session((call) => call(calls.console(window)));
+    return window ? unityConsole.windowedConsole(answer, window) : answer;
+  };
   const handlers = {
     screenshot: () => driver((d) => d.screenshot()),
     // The game's combatFeelLog is untrusted: cleaned and capped before the Playtester sees it.
     game_state: async () => withCombatFeelLog(await driver((d) => d.state())),
     send_input: ({ steps }) => driver((d) => d.input(steps)),
-    console_errors: () => session((call) => call(calls.console())),
+    console_errors: readConsole,
     wait: async ({ ms }) => {
       await sleep(ms);
       return { waited: ms };
@@ -251,18 +267,40 @@ function unityDriverMode(opts) {
   return mode;
 }
 
+/** --unity-fallback state,input,screenshot (any of them): driver actions that run on the built-ins. */
+function unityFallback(opts) {
+  const raw = opts['unity-fallback'];
+  if (raw === undefined) return [];
+  if (!raw) throw new Error('--unity-fallback must list driver actions, e.g. screenshot');
+  return raw.split(',');
+}
+
+const CURSOR_ARG_RE = /^(?:-1|\d{1,15})$/;
+
+/** --unity-console-session <id> --unity-console-cursor <seq>, both or neither: the playtest's console window. */
+function unityConsoleWindow(opts) {
+  const session = opts['unity-console-session'];
+  const cursor = opts['unity-console-cursor'];
+  if (session === undefined && cursor === undefined) return null;
+  if (session === undefined || cursor === undefined) throw new Error('give --unity-console-session and --unity-console-cursor together');
+  if (!CURSOR_ARG_RE.test(cursor)) throw new Error('--unity-console-cursor must be a whole number');
+  return unityConsole.consoleWindow({ session, cursor: Number(cursor) });
+}
+
 /** --unity-project <absolute dir> (Unity Pipeline) or legacy --unity-url <loopback url>, never both. */
 function unityInvoker(opts) {
   const project = opts['unity-project'];
   const url = opts['unity-url'];
   const mode = unityDriverMode(opts);
+  const fallback = unityFallback(opts);
+  const consoleWindow = unityConsoleWindow(opts);
   if (project !== undefined && url !== undefined) throw new Error('give --unity-project or --unity-url, not both');
   if (project !== undefined) {
     if (!project || !path.isAbsolute(project)) throw new Error('--unity-project must be an absolute directory');
-    return unityBackend({ transport: 'pipeline', mode, connect: () => createPipelineClient({ projectDir: project }) });
+    return unityBackend({ transport: 'pipeline', mode, fallback, consoleWindow, connect: () => createPipelineClient({ projectDir: project }) });
   }
   if (!isLoopbackHttpUrl(url)) throw new Error('--unity-url must be http on 127.0.0.1 / localhost');
-  return unityBackend({ transport: 'mcp', mode, connect: () => createMcpHttpClient({ url, clientName: 'lunacore-playtester' }) });
+  return unityBackend({ transport: 'mcp', mode, fallback, consoleWindow, connect: () => createMcpHttpClient({ url, clientName: 'lunacore-playtester' }) });
 }
 
 function main(argv = process.argv.slice(2)) {
