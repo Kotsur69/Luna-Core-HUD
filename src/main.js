@@ -68,6 +68,7 @@ const { resolveLocalLaunch, prepareLocalLaunch, prepareChainLaunch, launchWhenRe
 const { ensureFallbackProxy, stopAllFallbackProxies, onRoute: onFreeRoute } = require('./fallbackproxy');
 const { loadChains, resolveProfileChain } = require('./freechains');
 const { pickFreeProfileId } = require('./orchestraFree');
+const { clearLineSequence } = require('./shellClearLine');
 // The Antigravity (agy) profile and env for worker tabs and headless jobs.
 const { agyProfileId, agyEnv, isAgyProfile } = require('./agyprofile');
 const { createAgyModels, setSharedAgyModels } = require('./agymodels');
@@ -2398,7 +2399,13 @@ function spawnInto(session, profile, launch = null) {
         // Auto-recall's hook settings, when prepareIntake wrote them; a file the command cannot carry is deleted.
         const recalled = recallHookLaunch(carded, { claude, file: session.recallHook, dir: userDir(), sessionId: session.id });
         session.recallHook = recalled.file;
-        proc.write(`${recalled.command}\r`);
+        // Clear the input line first: stray keystrokes typed into a freshly
+        // focused tab would otherwise be glued in front of the command.
+        // Focus decision: createSession() activates every new tab (a God Mode
+        // worker included) and the renderer focuses the active tab; a no-focus
+        // path would need a new flag through createSession, broadcast and the
+        // renderer for a rare race, so focus is kept as is.
+        proc.write(`${clearLineSequence(DEFAULT_SHELL)}${recalled.command}\r`);
         session.todoTools = intakeState(startCommand, launched, Boolean(agyServer));
         // An override agy command gets no server, but ✨ still words its state for agy.
         session.todoCli = isAgyCommand(startCommand) ? 'agy' : null;
