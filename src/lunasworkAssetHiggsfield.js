@@ -138,7 +138,7 @@ function createHiggsfieldFinal(deps) {
   // Set once a booking is refused: no more Higgsfield calls from this pipeline.
   let stopped = null;
   const logLine = typeof d.logLine === 'function' ? d.logLine : () => {};
-  const cappedNow =() => (typeof d.cappedTools === 'function' ? d.cappedTools() : []);
+  const cappedNow = () => (typeof d.cappedTools === 'function' ? d.cappedTools() : []);
 
   /** The validated job and CLI request of a Higgsfield final, or a failure. Nothing is called yet. */
   function higgsfieldRequest(raw) {
@@ -179,7 +179,12 @@ function createHiggsfieldFinal(deps) {
   function catalogEstimate(model, err) {
     const unevaluable = UNEVALUABLE_COST_RE.exec(errText(err));
     if (!unevaluable || unevaluable[1] !== model) return null;
-    const credits = (typeof d.catalogCredits === 'function' ? d.catalogCredits : catalogCredits)(model);
+    let credits;
+    try {
+      credits = (typeof d.catalogCredits === 'function' ? d.catalogCredits : catalogCredits)(model);
+    } catch (catalogErr) {
+      return fail('higgsfieldFailed', `cost estimate failed: the Higgsfield CLI cannot price ${model} and the asset catalog could not be read: ${errText(catalogErr)}`);
+    }
     if (typeof credits !== 'number' || !Number.isFinite(credits) || credits <= 0 || credits > MAX_CREDITS) {
       return fail('higgsfieldFailed', `cost estimate failed: the Higgsfield CLI cannot price ${model} and the asset catalog has no usable credit price for it`);
     }

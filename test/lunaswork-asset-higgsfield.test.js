@@ -480,6 +480,12 @@ test('any other cost failure still fails with nothing booked: another error, ano
   assert.match(res.detail, /cannot price multi_image_to_3d and the asset catalog has no usable credit price/);
   assert.deepEqual(spends, []);
   assert.equal(h.calls.some((c) => c[0] === 'generate'), false);
+  // A catalog read that throws is a clean failure too, not a rejected call.
+  const broken = pipeline(dir, { higgsfield: h, catalogCredits: () => { throw new Error('EACCES: catalog'); } });
+  const thrown = await broken.p.higgsfieldFinal(args);
+  assert.equal(thrown.error, 'higgsfieldFailed');
+  assert.match(thrown.detail, /the asset catalog could not be read: EACCES: catalog/);
+  assert.deepEqual(broken.spends, []);
 });
 
 test('a character from multi_image_to_3d defaults to an a-pose at 1.6 m; the worker overrides it; other kinds get nothing', async () => {
