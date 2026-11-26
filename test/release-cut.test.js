@@ -407,6 +407,16 @@ test('a dirty checkout names its paths with porcelain codes; a real change still
   assert.deepEqual(release.releaseResult(res), { skipped: res.reason });
 });
 
+test('a rename keeps both names, each capped; token-shaped names are redacted', async () => {
+  const long = `src/${'n'.repeat(150)}.js`;
+  const token = ['ghp', 'A'.repeat(30)].join('_');
+  const res = await cut(fakeTools({ status: `R  ${long} -> src/short.js
+?? notes/${token}.txt
+` }));
+  assert.equal(res.reason, `uncommitted changes: R  ${long.slice(0, 100)} -> src/short.js, ?? notes/***.txt`);
+  assert.ok(!res.reason.includes(token));
+});
+
 test('a dirty checkout lists at most 10 paths, then "+N more"', async () => {
   const status = Array.from({ length: 13 }, (_, i) => `?? logs/run-${i}.txt`).join('\n');
   const res = await cut(fakeTools({ status }));
@@ -432,7 +442,7 @@ test('a failed index refresh is logged, never hidden; status still decides', asy
   assert.ok(logged.some((l) => /update-index --refresh failed: fatal: Unable to create index\.lock/.test(l)), logged.join('\n'));
 
   const dirty = await cut(fakeTools({ refreshFails: true, dirty: true }));
-  assert.equal(dirty.reason, 'uncommitted changes:  M src/main.js');
+  assert.equal(dirty.reason, 'uncommitted changes:  M src/main.js (git update-index --refresh failed: fatal: Unable to create index.lock: File exists.)');
 
   const broken = await cut(fakeTools({ refreshFails: true, statusFails: true }));
   assert.equal(broken.stage, 'status');
@@ -445,6 +455,13 @@ test('the dirty paths reach the run report and the Release now line', () => {
   const view = { id: 'p1', repoPath: '/r', baseBranch: 'main', packages: [], integration: { state: 'done', postMerge: { release: { skipped: reason } } } };
   assert.ok(buildReport(view, { now: 1 }).includes(`- Release skipped: ${reason}`), 'report line not cut');
   assert.equal(finishIpc.releaseLine({ ok: false, refused: true, stage: 'status', reason }), `- Release skipped: ${reason}`);
+});
+
+test('release now answers the renderer with the whole dirty-paths reason', async () => {
+  const reason = `uncommitted changes: ${Array.from({ length: 10 }, (_, i) => `?? logs/a-rather-long-folder-name/run-${i}.txt`).join(', ')} (+2 more)`;
+  const { ipcMain, log } = releaseIpc({ cutRelease: async () => ({ ok: false, refused: true, stage: 'status', reason }) });
+  assert.deepEqual(await ipcMain.call('orchestra:release-now', 'luna'), { ok: false, reason });
+  assert.equal(log.appended[0][1], `- Release skipped: ${reason}`);
 });
 
 test('latest.yml not naming the dashed setup stops before gh release', async () => {

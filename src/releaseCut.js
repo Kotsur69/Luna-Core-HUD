@@ -337,14 +337,24 @@ function porcelainEntries(stdout) {
     .split('\n')
     .map((l) => l.replace(/\r$/, ''))
     .filter((l) => l.trim())
-    .map((l) => `${l.slice(0, 2)} ${oneLine(l.slice(3), MAX_DIRTY_PATH) || '?'}`);
+    .map((l) => `${l.slice(0, 2)} ${porcelainPath(l.slice(3))}`);
 }
 
-/** "uncommitted changes:  M a, ?? b (+N more)" - the first MAX_DIRTY_PATHS entries. */
-function dirtyReason(prefix, entries) {
+/** One porcelain path, redacted and capped; a rename keeps both sides, each capped. */
+function porcelainPath(raw) {
+  const cap = (p) => oneLine(redact(p), MAX_DIRTY_PATH) || '?';
+  const arrow = raw.indexOf(' -> ');
+  return arrow < 0 ? cap(raw) : `${cap(raw.slice(0, arrow))} -> ${cap(raw.slice(arrow + 4))}`;
+}
+
+/** "uncommitted changes:  M a, ?? b (+N more)" - the first MAX_DIRTY_PATHS entries, plus a failed refresh. */
+function dirtyReason(prefix, status) {
+  const { entries, refreshError } = status;
   const shown = entries.slice(0, MAX_DIRTY_PATHS).join(', ');
   const more = entries.length > MAX_DIRTY_PATHS ? ` (+${entries.length - MAX_DIRTY_PATHS} more)` : '';
-  return `${prefix}: ${shown}${more}`;
+  // A failed refresh can itself leave stat-only changes listed: say so.
+  const refresh = refreshError ? ` (${refreshError})` : '';
+  return `${prefix}: ${shown}${more}${refresh}`;
 }
 
 /**
@@ -371,7 +381,7 @@ async function stillSame(git, base, head, log) {
   const status = await checkoutStatus(git, log);
   const changed = 'the checkout changed during the tests (uncommitted changes)';
   if (!status.ok) return `${changed}: ${status.reason}`;
-  if (status.entries.length) return dirtyReason(changed, status.entries);
+  if (status.entries.length) return dirtyReason(changed, status);
   const branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (!branch.ok || lastLine(branch.stdout) !== base) return `the checkout left ${base} during the tests`;
   return (await headOf(git)) === head ? null : `${base} moved during the tests`;
@@ -394,7 +404,7 @@ async function preflight(opts, d, git, npm) {
   const logLine = d.log || (() => {});
   const status = await checkoutStatus(git, logLine);
   if (!status.ok) return refuse('status', status.reason);
-  if (status.entries.length) return refuse('status', dirtyReason('uncommitted changes', status.entries));
+  if (status.entries.length) return refuse('status', dirtyReason('uncommitted changes', status));
   const branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (!branch.ok || lastLine(branch.stdout) !== base) return refuse('branch', `not on ${base}`);
   if (typeof landedSha !== 'string' || !SHA_RE.test(landedSha)) return refuse('landed', 'run not landed on base');

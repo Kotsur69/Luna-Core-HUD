@@ -199,7 +199,7 @@ function register(ipcMain, deps) {
       if (deps.recordRelease && deps.releaseResult) deps.recordRelease(target.planId, deps.releaseResult(res));
       if (deps.appendReport) deps.appendReport(target.planId, releaseLine(res));
       if (res && res.ok) return { ok: true, version: res.version, tag: res.tag, url: res.url || null };
-      return { ok: false, reason: reasonText(res && res.reason) };
+      return { ok: false, reason: reasonText(res && res.reason, res && res.refused ? MAX_RELEASE_REASON : undefined) };
     } catch (err) {
       console.error('[orchestra] release now failed:', err && err.message);
       return { ok: false, reason: 'failed' };
