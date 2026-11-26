@@ -187,7 +187,7 @@ const envelope = (raw) => ({ stdout: JSON.stringify({ structured_output: raw, to
 async function graphWithKilledReadTree(t, extra = {}) {
   const repo = tmpDir(t, 'lw-graph-to-');
   const runClaude = async (o) => {
-    if (!o.args.includes('ecc:doc-updater')) return envelope({ indexed: true, detail: 'ok' });
+    if (!o.prompt.includes('docs/CODEMAPS')) return envelope({ indexed: true, detail: 'ok' });
     fs.mkdirSync(path.join(o.cwd, 'docs', 'CODEMAPS'), { recursive: true });
     fs.writeFileSync(path.join(o.cwd, 'docs', 'CODEMAPS', 'overview.md'), '# Overview\n');
     return envelope({ updated: true, summary: 'maps' });

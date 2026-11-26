@@ -41,12 +41,15 @@ function setupRepo() {
 
 const envelope = (raw) => ({ stdout: JSON.stringify({ structured_output: raw, total_cost_usd: 0.01 }) });
 
+// The codemaps call is the one whose prompt names docs/CODEMAPS (there is no --agent to spot).
+const isCodemapsCall = (o) => o.prompt.includes('docs/CODEMAPS');
+
 /** A fake `claude`: the index call answers `index`, the codemaps call runs `write` in the repo first. */
 function fakeClaude({ index = { indexed: true, detail: 'ok' }, write = () => {}, maps = { updated: true, summary: 'maps' } } = {}) {
   const calls = [];
   const runClaude = async (o) => {
     calls.push(o);
-    if (o.args.includes('ecc:doc-updater')) {
+    if (isCodemapsCall(o)) {
       write(o.cwd);
       return maps && maps.error ? maps : envelope(maps);
     }
@@ -65,7 +68,9 @@ test('argv: the index call allows only index_repository; the updater gets no she
   assert.equal(idx[idx.indexOf('--tools') + 1], '');
   assert.equal(idx[idx.indexOf('--allowedTools') + 1], G.INDEX_TOOL);
   const maps = G.buildCodemapsArgs();
-  assert.equal(maps[maps.indexOf('--agent') + 1], 'ecc:doc-updater');
+  // With user settings off no plugin loads: --agent ecc:doc-updater exited 1 "not found" on every repo.
+  assert.ok(!maps.includes('--agent'), 'no plugin agent');
+  assert.ok(!maps.some((a) => a.includes('Read(./Library/**)')), 'no Unity denies outside a Unity project');
   assert.equal(maps[maps.indexOf('--tools') + 1], 'Read,Grep,Glob,Write,Edit');
   assert.match(maps[maps.indexOf('--disallowedTools') + 1], /Bash/);
   assert.ok(maps.includes('--strict-mcp-config'));
@@ -220,7 +225,7 @@ test('failures never throw: a failed index and a failed updater are notes, nothi
     assert.equal(res.ok, false, JSON.stringify(res));
     assert.equal(res.indexed, false);
     assert.equal(res.codemaps, 'failed');
-    assert.deepEqual(res.notes, ['code graph not re-indexed (claude): timeout', 'codemaps update failed: over budget - maps discarded']);
+    assert.deepEqual(res.notes, ['code graph not re-indexed (claude): timeout', 'codemaps update failed: claude budget: over budget - maps discarded']);
     assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), before);
     assert.equal(git(r.checkout, 'status', '--porcelain'), '', 'the half-written maps are gone');
 
