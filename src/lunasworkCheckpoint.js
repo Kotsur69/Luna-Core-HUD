@@ -23,6 +23,10 @@
 //      snapshot that matches the good tag is restored right after the revert
 //      reached origin; the restore goes into the card and DECISIONS.md too
 //
+// revertMerges (the compile revert, src/lunasworkCompileRevert.js) undoes only
+// named God Mode package merges (and each one's merge fix-up commit) the same
+// way: revert commits in a throwaway worktree, pushed as a fast-forward.
+//
 // NEVER a force-push or a reset, in any code path: history on origin only
 // grows. Every git call goes through guardedGit(), which refuses `reset`,
 // `update-ref`, force / delete / mirror pushes, `+` and `:` refspecs and tag
@@ -60,6 +64,10 @@ const BRANCH_RE = /^[A-Za-z0-9._/-]{1,200}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 // Top-level design/*.md: the design-pack files a rollback keeps (touchesOnlyDesignDocs).
 const DESIGN_DOCS_EXCLUDE = ':(exclude,glob)design/*.md';
+// The rollback reason of a compile revert (src/lunasworkCompileRevert.js).
+const COMPILE_FAILED_REASON = 'compileFailed';
+// How far back revertMerges looks on main's first-parent line for a package's merge.
+const MAX_MERGE_SCAN = 200;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
@@ -185,6 +193,48 @@ function revertArgs(commits) {
   return ['revert', '--no-edit', ...(commits.some((c) => c.merge) ? ['-m', '1'] : []), ...commits.map((c) => c.sha)];
 }
 
+/** The subject of God Mode's merge commit of one package branch (src/orchestraIntegrate.js mergeOne). */
+const mergeSubject = (branch) => `merge: ${branch} (LunaCore God Mode)`;
+/** The subject of a package's merge fix-up commit (src/orchestraMergeFixup.js). */
+const fixupSubject = (id) => `fix: make ${id} work with the merged packages`;
+
+/**
+ * Pure: the commits that undo named package merges. A package's merge is the
+ * first-parent merge commit with its branch's merge subject; its merge
+ * fix-up is kept with it only as the very next first-parent commit (fix-up
+ * subjects name the package id, which other plans reuse).
+ * @param {Array<{sha:string, merge:boolean, subject:string}>} all main's first-parent commits, newest first
+ * @param {Array<{sha:string}>} applied the same list net of revert pairs (src/lunasworkRevertPairs.js)
+ * @param {Array<{id:string, branch:string}>} packages
+ * @param {string|null} [headSha] the head the iteration's integration pushed: a merge
+ *   newer than it is not this iteration's (no bound when it is not on the list)
+ * @returns {{commits:object[], reverted:string[], missing:string[], already:string[]}}
+ *   commits newest first; reverted / missing / already = package ids
+ */
+function pickMerges(all, applied, packages, headSha = null) {
+  const list = Array.isArray(all) ? all : [];
+  const live = new Set((Array.isArray(applied) ? applied : []).map((c) => c.sha));
+  const start = Math.max(0, headSha ? list.findIndex((c) => c.sha === headSha) : 0);
+  const picked = new Set();
+  const out = { reverted: [], missing: [], already: [] };
+  for (const pkg of Array.isArray(packages) ? packages : []) {
+    const at = list.findIndex((c, i) => i >= start && c.merge && c.subject === mergeSubject(pkg.branch));
+    if (at < 0) {
+      out.missing.push(pkg.id);
+      continue;
+    }
+    if (!live.has(list[at].sha)) {
+      out.already.push(pkg.id);
+      continue;
+    }
+    picked.add(list[at].sha);
+    const next = at > start ? list[at - 1] : null;
+    if (next && !next.merge && next.subject === fixupSubject(pkg.id) && live.has(next.sha)) picked.add(next.sha);
+    out.reverted.push(pkg.id);
+  }
+  return { ...out, commits: list.filter((c) => picked.has(c.sha)) };
+}
+
 /**
  * Journeys that passed in the last good iteration and fail now: the
  * "core journey that passed before" rollback trigger.
@@ -247,6 +297,10 @@ function reasonText(reason, evidence = {}) {
     const names = (evidence.failedJourneys || []).filter(isObj).map((j) => `"${oneLine(j.name, 80)}"`).slice(0, 5);
     return `a core journey that passed before failed${names.length ? `: ${names.join(', ')}` : ''}`;
   }
+  if (reason === COMPILE_FAILED_REASON) {
+    const first = (Array.isArray(evidence.compileErrors) ? evidence.compileErrors : [])[0];
+    return `Unity could not compile the scripts after the merge${first ? `: ${oneLine(first, 160)}` : ''}`;
+  }
   if (reason === 'scoreDrop') {
     const m = evidence.milestone ? ` "${oneLine(evidence.milestone, 80)}"` : '';
     const from = Number.isFinite(evidence.scoreBefore) ? evidence.scoreBefore : '?';
@@ -278,6 +332,7 @@ function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, revert
     .slice(0, MAX_LISTED)
     .map((f) => `[${oneLine(f.severity, 10)}] ${oneLine(f.title, 160)}${f.screenshot ? ` (screenshot ${oneLine(f.screenshot, 200)})` : ''}`);
   const cards = (evidence.cards || []).slice(0, MAX_LISTED).map((t) => oneLine(t, 160));
+  const compileErrors = (Array.isArray(evidence.compileErrors) ? evidence.compileErrors : []).slice(0, MAX_LISTED).map((e) => oneLine(e));
   const commits = reverted.slice(0, MAX_LISTED).map((c) => `${c.sha.slice(0, 7)} ${oneLine(c.subject, 160)}`);
   if (reverted.length > MAX_LISTED) commits.push(`... and ${reverted.length - MAX_LISTED} more`);
   const details = [
@@ -286,6 +341,7 @@ function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, revert
     '',
     ...bulletList('Failing journeys', journeys),
     ...bulletList('Findings', findings),
+    ...bulletList('Compile errors', compileErrors),
     ...(evidence.evidenceDir ? [`Evidence folder: ${oneLine(evidence.evidenceDir, 300)}`, ''] : []),
     ...bulletList('Cards whose work was reverted (reopened)', cards),
     ...bulletList('Reverted commits', commits),
@@ -562,12 +618,55 @@ function createCheckpoints(deps = {}) {
     return { ...base, ok: true, reverted, headAfter: res.headAfter, ...recorded, ...(data ? { data } : {}) };
   }
 
-  return { tagIteration, rollback };
+  /**
+   * The compile revert (src/lunasworkCompileRevert.js): undoes the merges of
+   * named God Mode packages on origin's base branch with new revert commits
+   * (pickMerges over the newest MAX_MERGE_SCAN first-parent commits, net of
+   * earlier reverts), pushed as a fast-forward from a throwaway worktree. No
+   * tag, card or DECISIONS.md line: the caller reopens the packages' cards.
+   * A merge that a later commit already reverts (a restart after the push)
+   * counts as `already`; a merge not found on main as `missing`.
+   * @param {{repoPath:string, headSha:string, packages:Array<{id:string, branch:string}>}} o
+   *   headSha = the head the iteration's integration pushed (must be on the branch)
+   * @returns {Promise<{ok:boolean, nothing?:boolean, reverted?:Array<{sha:string, subject:string}>,
+   *   packages?:string[], missing?:string[], already?:string[], headAfter?:string|null, error?:string, detail?:string}>}
+   */
+  async function revertMerges(o) {
+    const fail = (error, detail, extra = {}) => ({ ok: false, error, ...(detail ? { detail } : {}), ...extra });
+    if (!isObj(o) || typeof o.headSha !== 'string' || !SHA_RE.test(o.headSha)) return fail('noMergeHead');
+    const head = await originHead(o.repoPath);
+    if (head.error) return fail(head.error, head.detail);
+    const onBranch = await git(o.repoPath, ['merge-base', '--is-ancestor', o.headSha, head.sha]);
+    if (!onBranch.ok) return fail('mergeNotOnBranch', onBranch.err);
+    const scan = ['--first-parent', `--max-count=${MAX_MERGE_SCAN}`];
+    const listed = await git(o.repoPath, ['log', ...scan, '--format=%H%x09%P%x09%s', head.sha]);
+    if (!listed.ok) return fail('logFailed', listed.err);
+    const bodies = await git(o.repoPath, ['log', ...scan, '--format=%H%x1f%B%x1e', head.sha]);
+    if (!bodies.ok) log(`[lunaswork] compile revert: commit bodies not read (${oneLine(bodies.err, 150)}) - revert pairs matched by subject`);
+    const all = parseLog(listed.out);
+    const net = netOfReverts(all, parseRevertLinks(bodies.ok ? bodies.out : ''));
+    const picked = pickMerges(all, net.applied, Array.isArray(o.packages) ? o.packages : [], o.headSha);
+    const found = { missing: picked.missing, already: picked.already };
+    if (!picked.commits.length) {
+      return picked.already.length ? { ok: true, nothing: true, reverted: [], packages: [], ...found } : fail('mergesNotFound', null, found);
+    }
+    const res = await revertInWorktree(o.repoPath, head.branch, head.sha, picked.commits);
+    if (!res.ok) return fail(res.error, res.detail, found);
+    const reverted = picked.commits.map(({ sha, subject }) => ({ sha, subject }));
+    return { ok: true, reverted, packages: picked.reverted, headAfter: res.headAfter, ...found };
+  }
+
+  return { tagIteration, rollback, revertMerges };
 }
 
 module.exports = {
   TAG_PREFIX,
   PACK_COMMIT_PREFIX,
+  COMPILE_FAILED_REASON,
+  MAX_MERGE_SCAN,
+  mergeSubject,
+  fixupSubject,
+  pickMerges,
   tagName,
   rolledBackTagName,
   forbiddenGit,

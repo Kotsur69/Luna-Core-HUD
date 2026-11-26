@@ -57,7 +57,9 @@
 // tool that is down (src/lunasworkToolGuard.js environmentDown, notification,
 // shared cap) and plays again once healthy. Past the cap the iteration goes on
 // marked inconclusive: no score, no rollback, the Critic's PLAYTEST_LOG entry
-// and the run report say why.
+// and the run report say why. One exception: a compile error right after this
+// iteration's merges reverts the guilty merge(s), reopens their cards with the
+// errors and plays again, once per iteration (src/lunasworkCompileRevert.js).
 //
 // Decision queue (src/lunasworkDecisions.js, idea #11): a card the Director
 // schedules that needsDecision() flags (new dependency, migration, deleting a
@@ -235,6 +237,7 @@ const { createVariantFlow } = require('./lunasworkVariantFlow');
 const { createPrototype } = require('./lunasworkPrototype');
 const { planAfterRun, startQueued } = require('./lunasworkQueue');
 const { withParkedEditor, editorFor, addParkOutcome, PARK_SKIP } = require('./lunasworkEditorPark');
+const { createCompileRevert, mergesOf } = require('./lunasworkCompileRevert');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -425,6 +428,18 @@ function createLunasWork(deps) {
     now,
     onToolDown: deps.onToolDown,
     log,
+  });
+  // A compile error right after this iteration's merges reverts the guilty merge (src/lunasworkCompileRevert.js).
+  const compileRevert = createCompileRevert({
+    run: () => run,
+    update: (fields) => update(fields),
+    logEvent: (text) => logEvent(text),
+    log,
+    checkpoints: deps.checkpoints || null,
+    cardBook,
+    todoStore: (projectId) => deps.todoStore(projectId),
+    syncCheckout: () => syncCheckout(),
+    restoreData: (c) => staging.restoreData({ ...c, profile: run.profile, todoStore: deps.todoStore(run.projectId) }),
   });
 
   /** The current run, or the last finished one (status). Replaced, never edited in place. */
@@ -1143,7 +1158,7 @@ function createLunasWork(deps) {
     if (run.iteration === 0) return endScaffold(build);
     transition('launching', {
       conflicts: cleanConflicts([...run.conflicts.filter((c) => c.n !== run.iteration), { n: run.iteration, files }]),
-      current: { ...run.current, build },
+      current: { ...run.current, build, merges: mergesOf(r, cards) },
     });
   }
 
@@ -1233,7 +1248,11 @@ function createLunasWork(deps) {
     // The launch is cleared, so after the wait this phase starts the app again (no
     // staging re-run) and a healthy start plays as usual. Past the shared pause
     // ceiling both say no and the failed launch goes on - inconclusive, unscored.
-    const paused = res && toolGuard.toolDownOf(res)
+    const toolIsDown = !!res && !!toolGuard.toolDownOf(res);
+    // A compile error right after this iteration's merges: the guilty merge is
+    // reverted and this phase plays again on the reverted main instead of pausing.
+    if (!toolIsDown && env && (await compileRevert.afterCompileFailure(env))) return;
+    const paused = toolIsDown
       ? toolGuard.toolDown(res, 'playtester')
       : !!env && toolGuard.environmentDown(env, 'playtester', run.profile && run.profile.adapter);
     if (paused) {

@@ -208,14 +208,18 @@ const ENVIRONMENT_REASONS = Object.freeze({
 const ENVIRONMENT_REASON_LIST = Object.freeze(Object.values(ENVIRONMENT_REASONS));
 // Unity's words for a component whose script class is gone (not compiled, or a stale assembly).
 const MISSING_SCRIPT_RE = /\breferenced script\b[^\n]{0,160}\bis missing\b|\bassociated script can ?not be loaded\b|\bmissing \(mono script\)/i;
-const MAX_ENV_ERRORS = 5;
+// Ten: a compile revert (src/lunasworkCompileRevert.js) puts the first ten compiler errors on the reopened cards.
+const MAX_ENV_ERRORS = 10;
+// Missing-script warnings: a few are enough for the report.
+const MAX_MISSING_SCRIPT_WARNINGS = 5;
 const MAX_ENV_ERROR_CHARS = 300;
 const MAX_ENV_DETAIL_CHARS = 300;
 
 const isPlainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
 const envText = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim().slice(0, max) : '');
-const envErrors = (list) => (Array.isArray(list) ? list : []).map((e) => envText(e, MAX_ENV_ERROR_CHARS)).filter(Boolean).slice(0, MAX_ENV_ERRORS);
+const envErrors = (list, max = MAX_ENV_ERRORS) =>
+  (Array.isArray(list) ? list : []).map((e) => envText(e, MAX_ENV_ERROR_CHARS)).filter(Boolean).slice(0, max);
 
 /**
  * An inconclusive marker {reason, detail, errors}, validated and capped, or
@@ -234,7 +238,7 @@ function cleanInconclusive(raw) {
 function missingScriptWarnings(entries) {
   return envErrors((Array.isArray(entries) ? entries : [])
     .map((e) => (typeof e === 'string' ? e : isPlainObj(e) && typeof e.message === 'string' ? e.message : ''))
-    .filter((m) => MISSING_SCRIPT_RE.test(m)));
+    .filter((m) => MISSING_SCRIPT_RE.test(m)), MAX_MISSING_SCRIPT_WARNINGS);
 }
 
 /**
@@ -331,6 +335,18 @@ function rollbackDecision(history) {
     return { rollback: true, toIteration: sameMilestone.n, reason: 'scoreDrop' };
   }
   return { rollback: false };
+}
+
+/**
+ * The latest good iteration of `history` (scored, green, its core journeys
+ * not broken, not rolled back, not inconclusive): what a rollback goes back
+ * to. Null when there is none.
+ * @param {object[]} history
+ * @returns {number|null}
+ */
+function lastGoodIteration(history) {
+  const good = usable(history).filter(isGood);
+  return good.length ? good[good.length - 1].n : null;
 }
 
 /**
@@ -740,6 +756,7 @@ module.exports = {
   playtestEnvironment,
   isInconclusive,
   rollbackDecision,
+  lastGoodIteration,
   stopVerdict,
   normalizeStoredRun,
   CORE_PERSONA,
