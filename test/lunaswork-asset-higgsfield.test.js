@@ -5,8 +5,11 @@
 //   forBlender  a result bound for luna_asset_blender `from` is saved,
 //               recorded, ledgered and logged with no Unity call
 //   images      1-4 repo reference images, checked, uploaded through the CLI
-//               and passed as a repeated --image; the cost is still booked
+//               and passed as a repeated --image (multi_image_to_3d: a
+//               repeated --image-references); the cost is still booked
 //               before the paid generate
+//   cost        a cost the CLI cannot evaluate books the catalog price as an
+//               estimate, still under the spend cap
 // Every tool is a fake; the CLI is a fake execFile. The repo is a temp dir.
 // ============================================================================
 
@@ -361,7 +364,7 @@ function fakeExec(answers) {
   return { execFile, calls };
 }
 
-test('Higgsfield CLI: the checked bytes are uploaded from a fresh private folder that is removed after; cost and create get a repeated --image', async () => {
+test('Higgsfield CLI: the checked bytes are uploaded from a fresh private folder that is removed after; multi_image_to_3d cost and create get a repeated --image-references', async () => {
   const tmpDir = tempRepo();
   const seen = [];
   const fake = fakeExec({ upload: { id: UPLOAD_A }, cost: { credits: 5 }, create: [{ id: 'job_3d', status: 'completed', results: [{ raw_url: 'https://cdn.example.test/m.glb' }] }] });
@@ -385,10 +388,118 @@ test('Higgsfield CLI: the checked bytes are uploaded from a fresh private folder
   const req = { model: 'multi_image_to_3d', prompt: 'toon crate', params: { should_texture: 'true' }, images: [UPLOAD_A, UPLOAD_B] };
   assert.deepEqual(await cli.estimate(req), { credits: 5 });
   await cli.generate(req);
-  assert.deepEqual(fake.calls[1].args, ['generate', 'cost', 'multi_image_to_3d', '--should_texture', 'true', '--image', UPLOAD_A, '--image', UPLOAD_B, '--json']);
-  assert.deepEqual(fake.calls[2].args, ['generate', 'create', 'multi_image_to_3d', '--should_texture', 'true', '--image', UPLOAD_A, '--image', UPLOAD_B, '--wait', '--wait-timeout', '20m', '--json']);
+  // The model's required image_references array: one repeated flag per upload id, in order.
+  assert.deepEqual(fake.calls[1].args, ['generate', 'cost', 'multi_image_to_3d', '--should_texture', 'true', '--image-references', UPLOAD_A, '--image-references', UPLOAD_B, '--json']);
+  assert.deepEqual(fake.calls[2].args, ['generate', 'create', 'multi_image_to_3d', '--should_texture', 'true', '--image-references', UPLOAD_A, '--image-references', UPLOAD_B, '--wait', '--wait-timeout', '20m', '--json']);
   assert.equal(fake.calls[1].opts.cwd, undefined);
   assert.equal(fake.calls[1].opts.env.NoDefaultCurrentDirectoryInExePath, '1');
+});
+
+test('Higgsfield CLI: an image model keeps the repeated --image', async () => {
+  const fake = fakeExec({ cost: { credits: 1.5 } });
+  const cli = T.createHiggsfieldCli({ execFile: fake.execFile, platform: 'win32', tmpDir: tempRepo() });
+  await cli.estimate({ model: 'nano_banana_flash', prompt: 'p', params: {}, images: [UPLOAD_A, UPLOAD_B] });
+  assert.deepEqual(fake.calls[0].args, ['generate', 'cost', 'nano_banana_flash', '--image', UPLOAD_A, '--image', UPLOAD_B, '--json']);
+});
+
+// ---- a cost the CLI cannot evaluate: the catalog estimate -------------------------------
+
+// The CLI's stderr, live 2026-11-25, for `generate cost multi_image_to_3d` with real upload ids.
+const UNEVALUABLE = (model) => `Error: Unsupported validation rules for ${model}: a validation rule could not be evaluated within the supported limits.`;
+const CATALOG_3D_CREDITS = 30;
+// `upload create` shares the sub-command name: only `generate create` is a paid generation.
+const isGenerate = (c) => c.args[0] === 'generate' && c.args[1] === 'create';
+const usdOf = (credits) => Math.round(credits * P.DEFAULT_USD_PER_CREDIT * 10000) / 10000;
+
+/** A pipeline on the real CLI adapter over a stubbed execFile: upload works, cost fails with `costError`. */
+function stubbedCliPipeline(dir, { costError, recordSpend, logLines = [], create = [{ id: 'job_3d', status: 'completed', results: [{ raw_url: 'https://cdn.example.test/m.glb' }] }] } = {}) {
+  const fake = fakeExec({ upload: { id: UPLOAD_A, type: 'image', url: 'https://cdn.example.test/u.png' }, cost: costError, create });
+  const cli = T.createHiggsfieldCli({ execFile: fake.execFile, platform: 'win32', tmpDir: tempRepo() });
+  const made = pipeline(dir, {
+    higgsfield: cli, download: async () => GLB, logLine: (line) => logLines.push(line),
+    ...(recordSpend ? { recordSpend } : {}),
+  });
+  return { ...made, fake, logLines };
+}
+
+test('a cost the CLI cannot evaluate books the catalog price as an estimate, logged as one, then generates', async () => {
+  const dir = tempRepo();
+  put(dir, 'art/refs/crate-front.png', PNG);
+  const { p, spends, logged, logLines, fake } = stubbedCliPipeline(dir, { costError: new Error(UNEVALUABLE('multi_image_to_3d')) });
+  const res = await p.higgsfieldFinal({ name: 'Crate', kind: 'prop', prompt: 'toon crate', model: 'multi_image_to_3d', images: ['art/refs/crate-front.png'], params: { should_texture: 'true' } });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(fake.calls.map((c) => c.args[0] === 'upload' ? 'upload' : c.args[1]), ['upload', 'cost', 'create']);
+  assert.deepEqual(fake.calls[2].args.slice(0, 7), ['generate', 'create', 'multi_image_to_3d', '--should_texture', 'true', '--image-references', UPLOAD_A]);
+  // Booked against the cap like a CLI price, before the paid generate.
+  assert.deepEqual(spends, [{ tool: 'higgsfield', costUsd: usdOf(CATALOG_3D_CREDITS) }]);
+  assert.deepEqual([res.credits, res.costUsd, res.costEstimate], [CATALOG_3D_CREDITS, usdOf(CATALOG_3D_CREDITS), 'catalog']);
+  assert.match(res.note, /is the asset catalog's ESTIMATE: the Higgsfield CLI cannot price multi_image_to_3d/);
+  assert.equal(logLines.length, 1);
+  assert.match(logLines[0], /Higgsfield cannot price multi_image_to_3d .*ESTIMATE of 30 credits against the spend cap/);
+  assert.deepEqual(logged.map((e) => [e.credits, e.costEstimate]), [[CATALOG_3D_CREDITS, 'catalog']]);
+  const record = JSON.parse(fs.readFileSync(path.join(dir, 'art', 'higgsfield', 'prop', 'crate.json'), 'utf8'));
+  assert.deepEqual([record.credits, record.costEstimate], [CATALOG_3D_CREDITS, 'catalog']);
+});
+
+test('a catalog estimate over the spend cap is refused: nothing generates and Higgsfield stops for the run', async () => {
+  const dir = tempRepo();
+  put(dir, 'art/refs/a.png', PNG);
+  const CAP_USD = 0.01;
+  const tried = [];
+  const recordSpend = (x) => { tried.push(x); return x.costUsd > CAP_USD ? { ok: false, reason: 'capReached' } : { ok: true, reason: null }; };
+  const { p, fake } = stubbedCliPipeline(dir, { costError: new Error(UNEVALUABLE('multi_image_to_3d')), recordSpend });
+  const args = { name: 'Crate', kind: 'prop', prompt: 'x', model: 'multi_image_to_3d', images: ['art/refs/a.png'] };
+  const res = await p.higgsfieldFinal(args);
+  assert.equal(res.error, 'capReached', JSON.stringify(res));
+  assert.match(res.detail, /the booking of the catalog estimate \$\d+\.\d{2} was refused \(capReached\)/);
+  assert.deepEqual(tried, [{ tool: 'higgsfield', costUsd: usdOf(CATALOG_3D_CREDITS) }]);
+  assert.equal(fake.calls.some(isGenerate), false, 'no paid generate');
+  const before = fake.calls.length;
+  assert.equal((await p.higgsfieldFinal(args)).error, 'capReached');
+  assert.equal(fake.calls.length, before, 'no further CLI call after the refusal');
+});
+
+test('any other cost failure still fails with nothing booked: another error, another model named, or no catalog price', async () => {
+  const dir = tempRepo();
+  put(dir, 'art/refs/a.png', PNG);
+  const args = { name: 'Crate', kind: 'prop', prompt: 'x', model: 'multi_image_to_3d', images: ['art/refs/a.png'] };
+  for (const message of ['Error: Not enough credits.', 'Error: Unsupported validation rules for multi_image_to_3d: missing field', UNEVALUABLE('nano_banana_flash')]) {
+    const { p, spends, fake, logLines } = stubbedCliPipeline(dir, { costError: new Error(message) });
+    const res = await p.higgsfieldFinal(args);
+    assert.equal(res.error, 'higgsfieldFailed', message);
+    assert.match(res.detail, /^cost estimate failed: higgsfield cost failed: /, message);
+    assert.deepEqual([spends, logLines], [[], []], message);
+    assert.equal(fake.calls.some(isGenerate), false, message);
+  }
+  // An unpriced model (the catalog has no credits for it) fails too, instead of booking a made-up price.
+  const h = fakeHiggsfield();
+  h.estimate = async () => { throw new Error(`higgsfield cost failed: ${UNEVALUABLE('multi_image_to_3d')}`); };
+  const { p, spends } = pipeline(dir, { higgsfield: h, catalogCredits: () => undefined });
+  const res = await p.higgsfieldFinal(args);
+  assert.equal(res.error, 'higgsfieldFailed');
+  assert.match(res.detail, /cannot price multi_image_to_3d and the asset catalog has no usable credit price/);
+  assert.deepEqual(spends, []);
+  assert.equal(h.calls.some((c) => c[0] === 'generate'), false);
+  // A catalog read that throws is a clean failure too, not a rejected call.
+  const broken = pipeline(dir, { higgsfield: h, catalogCredits: () => { throw new Error('EACCES: catalog'); } });
+  const thrown = await broken.p.higgsfieldFinal(args);
+  assert.equal(thrown.error, 'higgsfieldFailed');
+  assert.match(thrown.detail, /the asset catalog could not be read: EACCES: catalog/);
+  assert.deepEqual(broken.spends, []);
+});
+
+test('a character from multi_image_to_3d defaults to an a-pose at 1.6 m; the worker overrides it; other kinds get nothing', async () => {
+  const sent = async (kind, params, model = 'multi_image_to_3d') => {
+    const h = fakeHiggsfield({ result: 'https://cdn.example.test/m.glb' });
+    const { p } = pipeline(tempRepo(), { higgsfield: h, download: async () => GLB });
+    const res = await p.higgsfieldFinal({ name: 'Ronin', kind, prompt: 'x', model, ...(params ? { params } : {}) });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    return h.calls.find((c) => c[0] === 'generate')[1].params;
+  };
+  assert.deepEqual(await sent('character'), { pose_mode: 'a-pose', rigging_height_meters: '1.6' });
+  assert.deepEqual(await sent('character', { should_texture: 'true', pose_mode: 't-pose' }), { pose_mode: 't-pose', rigging_height_meters: '1.6', should_texture: 'true' });
+  assert.deepEqual(await sent('prop', { should_texture: 'true' }), { should_texture: 'true' });
+  assert.deepEqual(await sent('character', undefined, 'gpt_image_2_6'), {});
 });
 
 test('Higgsfield CLI: an unsafe upload name, missing bytes or an unsafe image id never reaches the CLI', async () => {

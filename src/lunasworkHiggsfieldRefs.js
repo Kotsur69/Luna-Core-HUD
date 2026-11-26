@@ -8,7 +8,8 @@
 // `higgsfield upload create <file> --json` (free, no generation) from a
 // private temp folder (src/lunasworkAssetTools.js createHiggsfieldCli upload);
 // the upload ids go to `generate cost` / `generate create` as a repeated
-// `--image <upload id>`.
+// `--image <upload id>` (multi_image_to_3d: a repeated
+// `--image-references <upload id>`, its image_references array).
 //
 // The paths are untrusted (a worker names them):
 //   cleanReferences   no disk access: 1-4 distinct plain relative paths

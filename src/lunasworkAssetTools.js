@@ -35,7 +35,9 @@
 //   Higgsfield  the `higgsfield` CLI: `generate cost` (credits), `generate
 //               create --wait --json` and `upload create <file> --json` (a
 //               reference image, before the estimate; its upload id goes to
-//               cost / create as a repeated --image). Every argument is a
+//               cost / create as a repeated --image, or a repeated
+//               --image-references for the models in IMAGE_REFERENCES_MODELS).
+//               Every argument is a
 //               validated plain token; the prompt goes on stdin, never on a
 //               command line. A reference upload gets the checked bytes in a
 //               fresh private temp folder (its working folder), never a repo
@@ -106,6 +108,13 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const CLI_TOKEN_RE = /^[A-Za-z0-9][\w:.-]{0,63}$/;
 // The file name a reference upload gets in its private temp folder (src/lunasworkHiggsfieldRefs.js).
 const UPLOAD_NAME_RE = /^reference-[1-9]\.(png|jpg|webp)$/;
+// Models whose references are the required array param `image_references`
+// (`higgsfield model get multi_image_to_3d --json`, 2026-11-25). The CLI takes
+// an array media param as a REPEATED flag, one id per flag: its own help says
+// "use repeated --image-references (or --image)". The long flag is used for
+// these so the argv names the param the model lists; --image (its short
+// alias) stays for every other model, whose argv is unchanged.
+const IMAGE_REFERENCES_MODELS = Object.freeze(new Set(['multi_image_to_3d']));
 const MAX_UPLOAD_BYTES = 30 * 1024 * 1024;
 const UPLOAD_TMP_PREFIX = 'luna-hf-ref-';
 // cmd.exe looks in the current folder before PATH unless this is set (as src/hostchat.js does).
@@ -203,7 +212,7 @@ const ASSET_TOOLS = Object.freeze([
         prompt: PROMPT_PROP,
         model: { type: 'string', description: 'A Higgsfield model id (job set type), e.g. "gpt_image_2_6".' },
         params: { type: 'object', description: 'Optional plain model flags, e.g. {"aspect_ratio": "16:9", "resolution": "2k"}. Reference images go in images, never here.' },
-        images: { type: 'array', minItems: 1, maxItems: MAX_REFERENCES, items: { type: 'string', maxLength: 300 }, description: `Optional: 1-${MAX_REFERENCES} reference images, repo-relative png / jpg / webp paths under art/ or the art root (e.g. "art/refs/crate-front.png"). Each is checked, uploaded through the Higgsfield CLI and passed as --image; for multi_image_to_3d they are the object views.` },
+        images: { type: 'array', minItems: 1, maxItems: MAX_REFERENCES, items: { type: 'string', maxLength: 300 }, description: `Optional: 1-${MAX_REFERENCES} reference images, repo-relative png / jpg / webp paths under art/ or the art root (e.g. "art/refs/crate-front.png"). Each is checked, uploaded through the Higgsfield CLI and passed as --image; for multi_image_to_3d they are the object views (its image_references, a repeated --image-references).` },
         forBlender: { type: 'boolean', description: 'true: the result is a luna_asset_blender input (from=), so it is NOT imported into Unity (no prefab, no material). Left out: a GLB of a 3D model kind skips the import too. false: always import.' },
       },
     },
@@ -487,7 +496,8 @@ function createHiggsfieldCli(opts = {}) {
     const images = Array.isArray(req.images) ? req.images : [];
     if (!CLI_TOKEN_RE.test(req.model) || !flags) throw new Error('higgsfield: the model or a param is not a plain token');
     if (images.length > MAX_REFERENCES || !images.every((id) => typeof id === 'string' && CLI_TOKEN_RE.test(id))) throw new Error('higgsfield: a reference image id is not a plain token');
-    return ['generate', sub, req.model, ...flags, ...images.flatMap((id) => ['--image', id]), ...extra, '--json'];
+    const imageFlag = IMAGE_REFERENCES_MODELS.has(req.model) ? '--image-references' : '--image';
+    return ['generate', sub, req.model, ...flags, ...images.flatMap((id) => [imageFlag, id]), ...extra, '--json'];
   }
 
   async function estimate(req) {
@@ -709,6 +719,7 @@ function createAssetToolsFor(deps) {
         cappedTools: ctx.cappedTools,
         freeCandidatePassed: (job) => freePass.check(job),
         higgsfieldMade,
+        logLine: log,
         logAsset: (entry) => {
           if (ctx.recordAsset(entry)) return;
           log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);
