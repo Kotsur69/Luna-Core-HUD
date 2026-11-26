@@ -35,13 +35,19 @@ const STEP_SHAPES = Object.freeze({
   wait: `{"type":"wait", "ms": 0..${MAX_WAIT_MS}}`,
 });
 
+// Where the [CliGroupCommand] / [CliArg] attributes come from. Not confirmed from a
+// com.unity.pipeline package on the machine that wrote this, so no namespace or
+// assembly is named: a guessed one ("Unity.Pipeline.Attributes") sent workers
+// down the wrong path. The package's own doc is the source of truth.
+const PIPELINE_ATTRIBUTES_GUIDANCE = 'Use the [CliGroupCommand] / [CliArg] attributes exactly as Documentation~/creating-commands.md of the com.unity.pipeline package shows (namespace and assembly from there, plus the autoReferenced flag of the package .asmdef; do not guess them). An Editor folder that belongs to no asmdef needs no asmdef of its own when that package assembly is autoReferenced; Assets/LunaPlaytest/Editor sits under LunaPlaytest.asmdef, so it keeps its own editor-only asmdef (includePlatforms Editor), which references LunaPlaytest and, by the name the package declares, the command assembly (autoReferenced never reaches a custom asmdef).';
+
 const [listCommand, listParams] = UNITY_PIPELINE_BUILTIN.listDriverCommands();
 const B = UNITY_PIPELINE_BUILTIN;
 
 const PLAYTEST_CONTRACT = [
   'PLAYTEST CONTRACT - exactly what LunaCore sends and parses (helpers/playtest-bridge/unity.js). Do not rename anything.',
   '',
-  'Editor code (Assets/LunaPlaytest/Editor/PlaytestCommands.cs, editor-only asmdef referencing Unity.Pipeline.Attributes):',
+  'Editor code (Assets/LunaPlaytest/Editor/PlaytestCommands.cs, editor-only; attribute namespace and assembly exactly as com.unity.pipeline Documentation~/creating-commands.md shows):',
   '    static class PlaytestCommands',
   '    {',
   `        const string Group = "${DRIVER_GROUP}";`,
@@ -82,4 +88,5 @@ const PLAYTEST_CONTRACT = [
 
 module.exports = {
   PLAYTEST_CONTRACT,
+  PIPELINE_ATTRIBUTES_GUIDANCE,
 };

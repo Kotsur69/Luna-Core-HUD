@@ -70,7 +70,8 @@ const {
   isPlaying, parseCombatFeelLog, withCombatFeelLog,
 } = require('../helpers/playtest-bridge/unity');
 const { windowedConsole, WINDOW_SCOPE } = require('../helpers/playtest-bridge/unityConsole');
-const { PLAYTEST_CONTRACT } = require('../helpers/playtest-bridge/unityContract');
+const { PLAYTEST_CONTRACT, PIPELINE_ATTRIBUTES_GUIDANCE } = require('../helpers/playtest-bridge/unityContract');
+const { MAX_COMBAT_FEEL_ENTRIES } = require('../helpers/playtest-bridge/combatFeelLog');
 const { PIPELINE_ERROR, isTransientPipelineError } = require('../helpers/playtest-bridge/pipeline-http');
 const {
   WAIT_TIMEOUT, UNITY_ENVIRONMENT_FAILURE, ENVIRONMENT_REASON, createWaits, previousAutoTick, restoreAutoTick, prepareEditor,
@@ -93,6 +94,13 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
 
 // ---- PlaytestDriver card ---------------------------------------------------------------
 
+// The state key and entry fields helpers/playtest-bridge/combatFeelLog.js reads
+// (parseCombatFeelLog / parseEntry); the card names them exactly.
+const COMBAT_FEEL_KEY = 'combatFeelLog';
+const COMBAT_FEEL_FIELDS = Object.freeze([
+  'hitStopFrames', 'hitStopMs', 'hitStopIntendedFrames', 'inputLatencyMs', 'hitboxToVfxFrames', 'timeScale',
+]);
+
 const PLAYTEST_DRIVER_GUARD = '#if UNITY_EDITOR || DEVELOPMENT_BUILD';
 // How start() reports a game without the driver (the card quotes it).
 const NO_DRIVER_ERROR = 'the game has no working PlaytestDriver';
@@ -114,14 +122,17 @@ const PLAYTEST_DRIVER_CARD = Object.freeze({
     "Build a dev-only PlaytestDriver so Luna's Work can playtest the game through the official Unity MCP (com.unity.pipeline, listed in Packages/manifest.json; docs: Library/PackageCache/com.unity.pipeline@*/Documentation~/creating-commands.md).",
     `Every runtime file starts with \`${PLAYTEST_DRIVER_GUARD}\` and ends with \`#endif\`: a release build must contain none of it.`,
     '',
+    'This is ONE card on purpose: driver, state and transport are built together. Split into separate cards, each piece was invisible to the Playtester until all of them landed, so no single card could be judged.',
+    '',
     'Runtime (Assets/LunaPlaytest, namespace LunaPlaytest, LunaPlaytest.asmdef):',
-    '- PlaytestDriver.cs: a MonoBehaviour singleton created by [RuntimeInitializeOnLoadMethod], DontDestroyOnLoad.',
+    '- PlaytestDriver.cs: a MonoBehaviour singleton created by [RuntimeInitializeOnLoadMethod], DontDestroyOnLoad. It needs nothing in the scene: never place it (or any helper) as a scene object or prefab instance. A scene object turns into a "missing script" when the code is reverted, which dropped the score and caused rollbacks.',
     '  - RunSteps(steps): a coroutine running scripted inputs in order: key {key, holdMs}, button {name, holdMs}, axis {name, value -1..1, holdMs}, click {x, y} (0..1 of the screen), ui {name} (click the active UI Button with that GameObject name), wait {ms}. Unknown step types are rejected, never guessed.',
     '  - Snapshot(): a JSON object - active scene, time, frame, Time.timeScale, the visible UI Button names, plus whatever the game registers with PlaytestDriver.RegisterState(key, Func<object>) (player position, health, score, open menu...).',
+    `  - Snapshot() combat timing (optional): register "${COMBAT_FEEL_KEY}" as a ring buffer (newest last, at most ${MAX_COMBAT_FEEL_ENTRIES}) of flat entries, every field optional, with exactly these keys: ${COMBAT_FEEL_FIELDS.join(', ')}. Shapes: hitStopFrames int, hitStopMs number, hitStopIntendedFrames int (what the attack data asked for), inputLatencyMs number (input press -> hitbox active), hitboxToVfxFrames int (hitbox active -> VFX spawned, may be < 0), timeScale {from, to, reason, atMs} (one Time.timeScale change; reason optional). Any other key is dropped; an entry with a malformed field is dropped whole (limits in the contract below).`,
     '  - Screenshot(): ScreenCapture.CaptureScreenshotAsTexture() at end of frame, EncodeToPNG, base64.',
     '- PlaytestInput.cs: first check how the game reads input, then drive that path. Input System: queue device state (InputSystem.QueueStateEvent) on a virtual Keyboard / Mouse / Gamepad. Legacy Input Manager: game code reads PlaytestInput.GetKey / GetButton / GetAxis, which fall through to UnityEngine.Input when no step is active. Keyboard + mouse and gamepad must both be drivable.',
     '',
-    `Editor commands (Assets/LunaPlaytest/Editor/PlaytestCommands.cs, in an editor-only asmdef that references Unity.Pipeline.Attributes; runtime code never references it): const string Group = "${DRIVER_GROUP}"; one [CliGroupCommand(Group, ...)] method per command.`,
+    `Editor commands (Assets/LunaPlaytest/Editor/PlaytestCommands.cs; runtime code never references them): const string Group = "${DRIVER_GROUP}"; one [CliGroupCommand(Group, ...)] method per command. ${PIPELINE_ATTRIBUTES_GUIDANCE}`,
     `- \`${DRIVER_GROUP} state\` (Effect = ReadOnly): cmd.Result.Write(the Snapshot() object).`,
     `- \`${DRIVER_GROUP} input --steps <json>\`: [CliArg("steps", ..., Required = true)] string steps, a JSON array. async Task<ExitCode>: start RunSteps, wait for it (await Task.Yield() loop, honour cmd.CancellationToken), then Result.Write({done: n}).`,
     `- \`${DRIVER_GROUP} screenshot\`: async; Result.Write({png, width, height}).`,
@@ -135,7 +146,8 @@ const PLAYTEST_DRIVER_CARD = Object.freeze({
     '',
     'Unity Test Framework PlayMode tests (Assets/LunaPlaytest/Tests/PlayMode): steps parse and run (a ui step clicks a test Button, a button step is visible through PlaytestInput, unknown types fail), Snapshot() is valid JSON with the scene name and registered keys, Screenshot() returns PNG bytes.',
     '',
-    'Verify against the editor that already has the project open: `unity test` in PlayMode (check `unity test --help` for the exact PlayMode flag name). Do NOT use `Unity -batchmode -projectPath .`: it cannot open a project the editor already has open. Then recompile and confirm `unity command playtest state` answers in play mode with a clean Console.',
+    'Running the tests: if you have a Unity editor with this project open, run the PlayMode tests there (Test Runner, PlayMode) and confirm `unity command playtest state` answers in play mode with a clean Console. If you have none, write "PlayMode tests not run here" in the hand-back; do not fake a run. Do NOT use `Unity -batchmode -projectPath .`: it cannot open a project the editor already has open.',
+    'Never add files whose only purpose is making a check pass (unity.cmd, grep.cmd, wrapper scripts, package.json): only the files this card lists, plus what the game itself needs.',
   ].join('\n'),
   acceptance: [
     `PlaytestDriver.cs and PlaytestInput.cs are wrapped in ${PLAYTEST_DRIVER_GUARD} ... #endif; a release build compiles without them`,
@@ -144,10 +156,9 @@ const PLAYTEST_DRIVER_CARD = Object.freeze({
     `\`unity command ${DRIVER_GROUP} input --steps '[{"type":"ui","name":"<a Button>"}]'\` clicks that button and answers {done: 1}`,
     `\`unity command ${DRIVER_GROUP} screenshot\` returns {png, width, height} with a base64 PNG of the Game view`,
     'Outside play mode the playtest commands fail with a clear message',
-    'The Unity Test Framework PlayMode tests pass through `unity test` against the running editor; Console clean',
+    'The Unity Test Framework PlayMode tests pass in the editor (or the hand-back says they were not run here); Console clean',
   ],
   files: PLAYTEST_DRIVER_FILES,
-  verify: 'unity test --platform PlayMode against the running editor (check `unity test --help` for the exact PlayMode flag name)',
   size: 'L',
   model: 'opus',
   effort: 'high',
@@ -551,6 +562,8 @@ module.exports = {
   PLAYTEST_DRIVER_GUARD,
   NO_DRIVER_ERROR,
   PLAYTEST_DRIVER_CARD,
+  COMBAT_FEEL_KEY,
+  COMBAT_FEEL_FIELDS,
   PLAYTEST_CONTRACT,
   UNITY_ENVIRONMENT_FAILURE,
   ENVIRONMENT_REASON,
