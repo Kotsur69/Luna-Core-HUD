@@ -8,10 +8,12 @@
 // milestone score by more than ROLLBACK_MARGIN. On a rollback:
 //
 //   1. in a temporary detached worktree, every first-parent commit since the
-//      last good tag is reverted in one `git revert --no-edit` sequence
-//      (`-m 1` when it holds merges: God Mode merges with --no-ff, so main's
-//      own line is merge commits plus fix-up commits) and the result is
-//      pushed as a normal fast-forward
+//      last good tag that is still applied is reverted in one `git revert
+//      --no-edit` sequence (`-m 1` when it holds merges: God Mode merges with
+//      --no-ff, so main's own line is merge commits plus fix-up commits) and
+//      the result is pushed as a normal fast-forward. A commit and its revert
+//      inside the range (an earlier rollback's) cancel out and are both left
+//      alone (src/lunasworkRevertPairs.js) - no "Reapply" chains
 //   2. the broken head is tagged `luna-work/<runId>/iter-<N>-rolled-back`
 //      (pushed), so the reverted work is easy to find as evidence
 //   3. the rolled-back work becomes a `bug` card tagged run:<id>, with the
@@ -42,6 +44,7 @@ const pack = require('./lunasworkPack');
 const { applyCards, REPRO_ACCEPTANCE } = require('./lunasworkCritic');
 const { runTag, MAX_DETAILS_CHARS, MAX_TEXT_CHARS } = require('./todorows');
 const { unlinkDependencyLinks, gitFailure } = require('./worktrees');
+const { revertLinkArgs, parseRevertLinks, netOfReverts } = require('./lunasworkRevertPairs');
 
 const TAG_PREFIX = 'luna-work';
 // Subject prefix of the design-pack commits (src/lunasworkPackCommit.js).
@@ -481,13 +484,20 @@ function createCheckpoints(deps = {}) {
     // Already at the good state (a restart after the push): nothing to revert.
     const same = await git(o.repoPath, ['diff', '--quiet', good, head.sha]);
     if (same.ok) return { ...base, ok: true, nothing: true, reverted: [], cards: [] };
-    const listed = await git(o.repoPath, ['log', '--first-parent', '--format=%H%x09%P%x09%s', `${good}..${head.sha}`]);
+    const range = `${good}..${head.sha}`;
+    const listed = await git(o.repoPath, ['log', '--first-parent', '--format=%H%x09%P%x09%s', range]);
     if (!listed.ok) return fail('logFailed', listed.err);
+    const bodies = await git(o.repoPath, revertLinkArgs(range));
+    if (!bodies.ok) return fail('logFailed', bodies.err);
+    // An earlier rollback's reverts and the work they undid cancel out: only
+    // what is still applied is reverted, so no "Reapply" chain is made.
+    const net = netOfReverts(parseLog(listed.out), parseRevertLinks(bodies.out));
+    if (net.cancelled.length) log(`[lunaswork] rollback: ${net.cancelled.length} commit(s) already undone by reverts since ${toTag} left out`);
     // Design-pack commits (src/lunasworkPackCommit.js) are docs only: a revert
     // keeps them. The subject alone is not trusted - a commit is kept only when
     // every file it touches is a design/*.md file.
     const commits = [];
-    for (const c of parseLog(listed.out)) {
+    for (const c of net.applied) {
       if (!c.subject.startsWith(PACK_COMMIT_PREFIX) || !(await touchesOnlyDesignDocs(o.repoPath, c.sha))) commits.push(c);
     }
     if (!commits.length) return { ...base, ok: true, nothing: true, reverted: [], cards: [] };

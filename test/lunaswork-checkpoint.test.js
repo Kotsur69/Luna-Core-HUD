@@ -35,6 +35,7 @@ const {
   createCheckpoints,
 } = require('../src/lunasworkCheckpoint');
 const { REPRO_ACCEPTANCE } = require('../src/lunasworkCritic');
+const { commitDesignPack } = require('../src/lunasworkPackCommit');
 const { createStaging, backupDirFor, MANIFEST_FILE } = require('../src/lunasworkStaging');
 const { validateProfile } = require('../src/lunasworkSettings');
 
@@ -323,6 +324,44 @@ test('rollback reverts exactly the first-parent range since the good tag, histor
   assert.equal(again.nothing, true);
   assert.equal(originMain(origin), after);
   assert.equal(store.list.length, 1);
+});
+
+test('a rollback after an earlier rollback reverts only what is still applied: no Reapply chain, back at the good tree', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  const cp = createCheckpoints({ git: recorder(), tmpDir: () => root });
+  mergePackage(repo, 'one');
+  assert.equal((await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 1 })).ok, true);
+  mergePackage(repo, 'two');
+  assert.equal((await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 2 })).ok, true);
+  const good = originMain(origin);
+
+  // Iteration 3: a package and a fix-up broke the game - rolled back to iter-2.
+  mergePackage(repo, 'three');
+  fixupCommit(repo, 'three fix');
+  const first = await cp.rollback({ repoPath: repo, runId: RUN, iteration: 3, toIteration: 2, reason: 'scoreDrop' });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  assert.equal(first.reverted.length, 2);
+  // The checkout follows origin (syncCheckout), and the next Director's pack
+  // commit takes the rollback's DECISIONS.md line along.
+  git(repo, 'pull', '--ff-only', 'origin', 'main');
+  const pack = await commitDesignPack({ repoPath: repo, git: recorder(), label: 'iteration 4 contracts and assets' });
+  assert.equal(pack.committed, true, JSON.stringify(pack));
+
+  // Iteration 4: two more packages, then the core journey broke again.
+  mergePackage(repo, 'four-a');
+  mergePackage(repo, 'four-b');
+  const broken = originMain(origin);
+  const second = await cp.rollback({ repoPath: repo, runId: RUN, iteration: 4, toIteration: 2, reason: 'coreJourneyBroken' });
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.deepEqual(second.reverted.map((c) => c.subject), ['Merge package four-b', 'Merge package four-a']);
+
+  const after = originMain(origin);
+  const made = git(origin, 'log', '--format=%s', `${broken}..${after}`).split('\n');
+  assert.deepEqual(made, ['Revert "Merge package four-a"', 'Revert "Merge package four-b"'], 'two reverts, nothing else');
+  const all = git(origin, 'log', '--format=%s', `${good}..${after}`).split('\n');
+  assert.ok(!all.some((s) => /^Reapply|^Revert "Revert/.test(s)), all.join(' | '));
+  assert.equal(git(origin, 'diff', '--stat', good, after, '--', '.', ':(exclude)design'), '', 'the code is back at the iter-2 tree');
+  assert.match(git(origin, 'show', `${after}:design/DECISIONS.md`), /iter-3-rolled-back/, 'the design pack history stays');
 });
 
 test('a rejected push leaves origin as it was and makes no card', async (t) => {
