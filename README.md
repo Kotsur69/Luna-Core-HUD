@@ -7,7 +7,24 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.41.0 — Unity editor parking and run-end cleanup.**
+> **Current release: v0.42.0 — Revert the guilty merge on a post-merge compile error.**
+> - revert the guilty merge on a post-merge compile error
+> - two-pass loudness, absolute ffmpeg, audioPost in tool schemas
+> - Fix: a profile's own Unity check stays red when its output shows a real
+>   failure
+> - Fix: PlaytestDriver card without prose verify, exact telemetry keys
+> - Fix: keep the missing-script warning cap at five
+> - Fix: Unity builds keep no verify and never fall back to npm test
+> - Fix: whole dirty reason in Release now, redacted paths, renames
+> - Fix: name dirty paths and ignore stat-only changes
+> - Fix: stop Unity packages going red at integration for want of an editor
+> - Fix: harden the audio post-process after review
+> - Fix: harden Blender staging placement after review
+> - Fix: keep the untouched .blend on a repeated toon pass and stage Blender
+>   writes
+> - Fix: give asset-prep packages the asset tool kit
+>
+> **v0.41.0 — Unity editor parking and run-end cleanup.**
 > - park the Unity editor around merges and rollbacks, close editors on
 >   worktrees before removal
 > - clean up a run's worktrees and merged branches at run end
