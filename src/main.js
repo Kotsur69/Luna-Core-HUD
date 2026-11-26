@@ -1787,9 +1787,17 @@ const lunasworkMailReplies = createMailReplies({
   log: (line) => console.info(line),
 });
 
+/** A tab is open in `root` or below it: Luna's Work never removes that worktree. */
+const worktreeHasOpenTab = (root) => {
+  const base = path.resolve(root).toLowerCase();
+  return [...sessions.values()].some((s) => s && typeof s.cwd === 'string' && path.resolve(s.cwd).toLowerCase().startsWith(base));
+};
+
 // Luna's Work run controller (src/lunaswork.js): all of its deps are built in
 // src/lunasworkWiring.js; main only hands over what it owns.
 const lunaswork = createLunasWorkRuntime({
+  // The run-end cleanup keeps a worktree with an open tab (src/lunasworkRunCleanup.js).
+  worktreeInUse: worktreeHasOpenTab,
   queue: lunasworkQueue,
   widget: lunasworkWidget,
   mailReplies: lunasworkMailReplies,
@@ -1877,10 +1885,7 @@ const lunasworkMachine = createMachineRuntime({
   // Any open God Mode run: a worktree cleanup only ever waits longer for it.
   godModeBusy: () => orchestraRuns.anyOpen(),
   // A worktree with an open tab is never removed.
-  worktreeInUse: (root) => {
-    const base = path.resolve(root).toLowerCase();
-    return [...sessions.values()].some((s) => s && typeof s.cwd === 'string' && path.resolve(s.cwd).toLowerCase().startsWith(base));
-  },
+  worktreeInUse: worktreeHasOpenTab,
   mail: { sender: reportMail.sender },
   log: (line) => console.info(line),
 });
