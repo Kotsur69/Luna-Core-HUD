@@ -500,6 +500,8 @@ function mergedSection(view) {
 /** One check's state; the smoke says when it timed out and was run again. */
 function checkText(sc, key) {
   const state = oneLine(sc[key], 16) || 'skipped';
+  // orchestraUnityVerify.js: worded like a package's verifyDeferred note.
+  if (state === 'deferred') return 'deferred to the live Unity editor (no editor on the merge worktree)';
   if (key !== 'smoke' || sc.smokeRetried !== true) return state;
   return state === 'ok' ? `${state} (timed out once, passed when run again)` : `${state} (timed out, and again when run once more)`;
 }

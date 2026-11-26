@@ -45,13 +45,18 @@
 //
 // A Unity build (the profile's adapter is `unity`, or the repo is a Unity
 // project) merges in a worktree no Unity editor has open: wrapPlanner tells
-// the planner package verify runs without an editor, and moves any verify
-// that calls the unity CLI or is prose into the package prompt as an editor
-// check for the worker (src/orchestraUnityVerify.js). The integration defers
-// a verify that still fails only for want of an editor.
+// the planner `verify` is always empty, and moves every verify a package
+// still has into its prompt as a check (src/orchestraUnityVerify.js), worded
+// for its role: with a scene worker in the plan only the scene worker runs
+// editor checks; every other package leaves them for the live editor after
+// the merge. The integration defers a verify that still fails only for want
+// of an editor.
 //
 // The self-check gate itself stays God Mode's (orchestraSelfCheck.js): red
 // after the one fix-up try = luna/<slug>-integration is pushed, never the base.
+// workerSettings tells it a Unity build is running (`unityBuild`, and whether
+// the check command is the profile's own), so God Mode's default `npm test`
+// is not run there and a check red only for want of an editor is deferred.
 // ============================================================================
 
 'use strict';
@@ -240,6 +245,10 @@ function createGodModeBuilder(deps) {
       unityVerify: false,
     };
     try {
+      // No Unity editor is open where God Mode merges: the plan's verifies and
+      // the self-check (also when finishing an interrupted plan) know it.
+      const unity = isUnityProject(opts.repoPath);
+      active.unityVerify = unity || opts.adapter === 'unity';
       const interrupted = interruptedPlan(opts);
       if (interrupted) return await finishInterrupted(interrupted);
       if (foreignPlanOpen(opts)) return { ok: false, error: 'godModeBusy' };
@@ -249,10 +258,7 @@ function createGodModeBuilder(deps) {
       const agy = opts.agy === true;
       const agyEnv = agy && typeof deps.agyEnv === 'function' ? deps.agyEnv() : null;
       if (agy && !agyEnv) return { ok: false, error: 'noAgyProfile' };
-      const unity = isUnityProject(opts.repoPath);
       if (unity) await prepareUnity(opts.repoPath);
-      // No Unity editor is open where God Mode merges: package verify must run without one.
-      active.unityVerify = unity || opts.adapter === 'unity';
       // A free or agy build does not plan on Claude: the Claude alias means nothing there.
       const plannerModel = opts.free || agy ? null : (isClaudeModel(opts.plannerModel) ? opts.plannerModel : plannerModelFor(cards));
       const made = await deps.orchestra.makePlan({
@@ -342,11 +348,26 @@ function createGodModeBuilder(deps) {
     return kit ? { allowedTools: kit.allowedTools, disallowedTools: kit.disallowedTools, mcpConfigPath: kit.mcpConfigPath, addDirs: kit.addDirs } : null;
   }
 
-  /** God Mode's worker settings while a Luna's Work build runs; `base` untouched otherwise. */
+  /**
+   * God Mode's worker settings while a Luna's Work build runs; `base` untouched
+   * otherwise. A Unity build adds `unityBuild` for the self-check
+   * (orchestraUnityVerify.selfCheckCommandOf); every other build has no such key.
+   */
   function workerSettings(base) {
     if (!active) return base;
     const b = isObj(base) ? base : {};
-    return { ...b, model: 'plan', integration: 'merge', checkCommand: active.checkCommand || b.checkCommand };
+    const unityBuild = active.unityVerify ? { unityBuild: { own: ownCheckCommand(b) } } : {};
+    return { ...b, model: 'plan', integration: 'merge', checkCommand: active.checkCommand || b.checkCommand, ...unityBuild };
+  }
+
+  /**
+   * Whether the build's check command is its profile's own: set, and not God
+   * Mode's 'Final check command' (checkCommandFor in lunasworkRun.js falls
+   * back to that one, so an equal command reads as God Mode's).
+   */
+  function ownCheckCommand(base) {
+    const own = active.checkCommand.trim();
+    return !!own && own !== (typeof base.checkCommand === 'string' ? base.checkCommand.trim() : '');
   }
 
   /**
@@ -354,7 +375,7 @@ function createGodModeBuilder(deps) {
    * controller's card choices, then every scene / prefab package folded into
    * the one scene worker (a plan without scene work is left as it was). A
    * Unity build also plans with the Unity verify rules, and no package keeps
-   * a verify that needs an editor.
+   * a verify: each one moves into its prompt as a check fit for its role.
    */
   function wrapPlanner(runPlanner) {
     return async (args) => {
@@ -363,18 +384,30 @@ function createGodModeBuilder(deps) {
       if (!active || !isObj(res) || !res.ok || !isObj(res.raw) || !Array.isArray(res.raw.packages)) return res;
       const modelled = res.raw.packages.map((p) => (isObj(p) ? { ...p, model: packageModel(p.todoAts, active.models, p.model) } : p));
       const routed = scene.routeScenePackages(modelled, active.cards);
-      const packages = (unityRun ? routed.map(withEditorFreeVerify) : routed).map(withKitNote);
+      const sceneBuild = routed.some((p) => isObj(p) && p.id === scene.SCENE_WORKER_ID);
+      const packages = (unityRun ? routed.map((p) => withEditorFreeVerify(p, checkRole(p, sceneBuild))) : routed).map(withKitNote);
       return { ...res, raw: { ...res.raw, packages } };
     };
   }
 
-  /** The package with a verify that needs a Unity editor (or is prose) moved into its prompt. */
-  function withEditorFreeVerify(pkg) {
-    const out = unityVerify.editorFreeVerify(pkg, MAX_PROMPT_CHARS);
+  /**
+   * Who may run a package's moved check (orchestraUnityVerify CHECK_ROLES):
+   * next to a scene worker only the scene worker opens Unity (every other
+   * package got lunasworkScene's "do not open the Unity editor" note); a plan
+   * without one lets every worker use its own editor, as before.
+   */
+  function checkRole(pkg, sceneBuild) {
+    return !sceneBuild || (isObj(pkg) && pkg.id === scene.SCENE_WORKER_ID) ? 'editor' : 'noEditor';
+  }
+
+  /** The package with its verify moved into its prompt as a check worded for `role`. */
+  function withEditorFreeVerify(pkg, role) {
+    const out = unityVerify.editorFreeVerify(pkg, MAX_PROMPT_CHARS, role);
     if (out === pkg) return pkg;
-    const whole = out.prompt.endsWith(unityVerify.editorCheckNote(pkg.verify));
-    const where = whole ? 'moved into the prompt as an editor check' : 'emptied; the editor check was shortened or left out to fit the prompt cap';
-    log(`[lunaswork-build] ${pkg.id}: verify needs a Unity editor (${unityVerify.editorBoundReason(pkg.verify)}) - ${where}`);
+    const whole = out.prompt.endsWith(unityVerify.editorCheckNote(pkg.verify, role));
+    const where = whole ? 'moved into the prompt as a check' : 'emptied; the check was shortened or left out to fit the prompt cap';
+    const why = unityVerify.editorBoundReason(pkg.verify) || 'shell';
+    log(`[lunaswork-build] ${pkg.id}: verify in a Unity build (${why}, ${role}) - ${where}`);
     return out;
   }
 

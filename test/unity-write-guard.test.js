@@ -27,6 +27,21 @@ test('a Unity package brief forbids live writes into another project\'s editor',
   assert.ok(text.indexOf(U.UNITY_LIVE_RULE) < text.indexOf('LUNA_DONE u'));
 });
 
+// Blade&bullet (2026-11-26): workers committed grep.cmd, unity.cmd, wrapper
+// .ps1 scripts and a package.json so LunaCore's verify / check would pass.
+test('a Unity package brief forbids files that only make a verify or check command pass', () => {
+  const text = briefText(pkg({ prompt: 'Add the Unity game clock.', verify: '' }), 'luna/u-1');
+  assert.ok(text.includes(U.UNITY_LIVE_RULE));
+  assert.match(U.UNITY_LIVE_RULE, /Never add files whose only purpose is to make a LunaCore verify or check command pass/);
+  for (const shim of ['unity.cmd', 'grep.cmd', 'wrapper .ps1 scripts', 'a package.json with a test script']) {
+    assert.ok(U.UNITY_LIVE_RULE.includes(shim), shim);
+  }
+  assert.match(U.UNITY_LIVE_RULE, /if a check cannot run here, say so in your final message/);
+  // The rule stays one line of the brief's Rules list.
+  assert.ok(U.UNITY_LIVE_RULE.startsWith('- Unity: '));
+  assert.doesNotMatch(U.UNITY_LIVE_RULE, /\n/);
+});
+
 test('Unity detection reads title, prompt and files; other packages get no Unity line', () => {
   assert.equal(U.isUnityPackage(pkg({ title: 'Unity guard' })), true);
   assert.equal(U.isUnityPackage(pkg({ files: ['helpers/playtest-bridge/pipeline-http.js'] })), true);

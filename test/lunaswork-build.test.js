@@ -279,7 +279,7 @@ function unityBuilder(isUnity) {
   return { orchestra, builder, planner, seen, logs };
 }
 
-test('a unity-adapter build: the planner is told verify runs without an editor; no package keeps a unity or prose verify', async () => {
+test('a unity-adapter build: verify is always "" - every package\'s verify, a shell check too, moves into its prompt', async () => {
   const { orchestra, builder, planner, seen, logs } = unityBuilder(false);
   const building = builder.build({ projectId: 'game', repoPath: '/repo', cards: UNITY_CARDS, checkCommand: '', adapter: 'unity' });
   await tick();
@@ -287,24 +287,125 @@ test('a unity-adapter build: the planner is told verify runs without an editor; 
 
   assert.match(seen[0].extraPrompt, /^Re-size the packages\./, 'an extra request already there stays first');
   assert.match(seen[0].extraPrompt, /Unity project/);
-  assert.match(seen[0].extraPrompt, /Never a `unity \.\.\.` command/);
+  assert.match(seen[0].extraPrompt, /"verify" is always ""/);
   const byId = Object.fromEntries(planned.map((p) => [p.id, p]));
+  const before = Object.fromEntries(unityPackages().map((p) => [p.id, p]));
   for (const p of planned) {
-    assert.doesNotMatch(p.verify, /\bunity\b/i, `${p.id}: no unity CLI in verify`);
-    assert.equal(editorBoundReason(p.verify), null, `${p.id}: verify runs without an editor`);
+    assert.equal(p.verify, '', `${p.id}: no verify left`);
+    assert.ok(p.prompt.startsWith(before[p.id].prompt), `${p.id}: the prompt itself is kept whole`);
+    assert.ok(p.prompt.includes(before[p.id].verify), `${p.id}: its former verify is a check in the prompt`);
   }
-  assert.equal(byId['game-clock'].verify, '');
-  assert.match(byId['game-clock'].prompt, /^Build the clock\. Commit when done\./);
-  assert.ok(byId['game-clock'].prompt.includes('unity command test run --filter GameClockTests'), 'the editor check moved into the prompt');
-  assert.equal(byId.hud.verify, '', 'prose is no verify');
-  assert.match(byId.hud.prompt, /Open the editor and check the HUD/);
-  assert.equal(byId.docs.verify, 'grep -q "GameClock" docs/clock.md', 'a static check is kept');
-  assert.equal(byId.docs.prompt, 'Write the docs.');
-  assert.ok(logs.some((l) => /game-clock: verify needs a Unity editor \(unity\)/.test(l)));
-  assert.ok(logs.some((l) => /hud: verify needs a Unity editor \(prose\)/.test(l)));
+  // No scene worker in this plan: every worker may use its own editor, as before.
+  assert.match(byId['game-clock'].prompt, /Editor check: .*against your own Unity editor before you commit/);
+  assert.match(byId.hud.prompt, /Editor check: /);
+  assert.match(byId.docs.prompt, /Check: LunaCore runs no package verify command in this Unity project/);
+  assert.doesNotMatch(byId.docs.prompt, /not run here/);
+  assert.ok(logs.some((l) => /game-clock: verify in a Unity build \(unity, editor\) - moved into the prompt/.test(l)));
+  assert.ok(logs.some((l) => /hud: verify in a Unity build \(prose, editor\)/.test(l)));
+  assert.ok(logs.some((l) => /docs: verify in a Unity build \(shell, editor\)/.test(l)));
 
   orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
   await building;
+});
+
+// Next to a scene worker, lunasworkScene tells every other package "Do not
+// open the Unity editor": the moved check must not tell it to run one.
+const SCENE_CARDS = [
+  { at: 1, text: 'Game clock', files: ['Assets/Scripts/GameClock.cs'] },
+  { at: 2, text: 'Hero sprite', files: ['Assets/Game/Art/hero.png', 'design/ASSETS.md'] },
+  { at: 3, text: 'Place the clock in the scene', files: ['Assets/Scenes/Main.unity'] },
+];
+const scenePackages = () => [
+  {
+    id: 'game-clock',
+    todoAts: [1],
+    prompt: 'Build the clock.',
+    files: ['Assets/Scripts/GameClock.cs'],
+    dependsOn: [],
+    verify: 'unity command script recompile && unity command test run --filter GameClockTests',
+  },
+  { id: 'art', todoAts: [2], prompt: 'Make the hero.', files: ['Assets/Game/Art/hero.png', 'design/ASSETS.md'], dependsOn: [], verify: 'test -f Assets/Game/Art/hero.png' },
+  { id: 'scene', todoAts: [3], prompt: 'Place the clock.', files: ['Assets/Scenes/Main.unity'], dependsOn: ['game-clock'], verify: 'unity command console read' },
+];
+
+async function plannedScene(over = {}) {
+  const logs = [];
+  const orchestra = fakeOrchestra();
+  const builder = createGodModeBuilder({
+    orchestra,
+    profileId: () => null,
+    env: () => ({}),
+    isUnityProject: () => true,
+    configureUnityMerge: async () => ({ ok: true }),
+    log: (l) => logs.push(l),
+    ...over,
+  });
+  const planner = builder.wrapPlanner(async () => ({ ok: true, raw: { packages: scenePackages() } }));
+  const building = builder.build({ projectId: 'game', repoPath: '/repo', cards: SCENE_CARDS, checkCommand: '' });
+  await tick();
+  const planned = (await planner({})).raw.packages;
+  orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await building;
+  return { byId: Object.fromEntries(planned.map((p) => [p.id, p])), logs };
+}
+
+test('a Unity build with a scene worker: the scene worker may use its editor; code and asset-prep packages may not', async () => {
+  const { byId, logs } = await plannedScene();
+  assert.deepEqual(Object.keys(byId).sort(), ['art', 'game-clock', 'scene-worker']);
+  for (const p of Object.values(byId)) assert.equal(p.verify, '', `${p.id}: no verify left`);
+
+  const sceneWorker = byId['scene-worker'].prompt;
+  assert.match(sceneWorker, /Editor check: .*run it yourself against your own Unity editor/);
+  assert.ok(sceneWorker.includes('unity command console read'), 'the scene worker keeps its check');
+  assert.doesNotMatch(sceneWorker, /not run here/);
+
+  for (const id of ['game-clock', 'art']) {
+    const prompt = byId[id].prompt;
+    assert.match(prompt, /Do not open the Unity editor|do not open Unity/, `${id}: lunasworkScene's note`);
+    assert.match(prompt, /Check \(not run here\): do not open the Unity editor for it/, id);
+    assert.match(prompt, /after the merge in the live Unity editor/, id);
+    assert.match(prompt, /list this check as "not run here" in your hand-back/, id);
+    assert.doesNotMatch(prompt, /run it yourself|against your own Unity editor/, `${id}: no contradiction`);
+  }
+  assert.match(byId['game-clock'].prompt, /review your C# carefully for compile errors \(usings, asmdef references, method signatures\)/);
+  assert.ok(byId['game-clock'].prompt.includes('unity command test run --filter GameClockTests'));
+  assert.ok(byId.art.prompt.includes('test -f Assets/Game/Art/hero.png'));
+  assert.ok(logs.some((l) => /game-clock: verify in a Unity build \(unity, noEditor\)/.test(l)));
+  assert.ok(logs.some((l) => /scene-worker: verify in a Unity build \(unity, editor\)/.test(l)));
+});
+
+test('a non-Unity build with scene work: verifies stay where the planner put them', async () => {
+  const { byId } = await plannedScene({ isUnityProject: () => false });
+  assert.equal(byId['game-clock'].verify, scenePackages()[0].verify);
+  assert.equal(byId.art.verify, 'test -f Assets/Game/Art/hero.png');
+  assert.doesNotMatch(byId['game-clock'].prompt, /not run here|Editor check/);
+});
+
+test('workerSettings: a Unity build tells the self-check so, and whether the check command is the profile\'s own', async () => {
+  const run = async (opts, base) => {
+    const orchestra = fakeOrchestra();
+    const builder = createGodModeBuilder({ orchestra, profileId: () => null, env: () => ({}), isUnityProject: () => false, configureUnityMerge: async () => ({ ok: true }) });
+    const building = builder.build({ projectId: 'game', repoPath: '/repo', cards: UNITY_CARDS, ...opts });
+    await tick();
+    const settings = builder.workerSettings(base);
+    orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+    await building;
+    return settings;
+  };
+  const godMode = { model: 'opus', checkCommand: 'npm test' };
+  // No profile command: lunasworkRun.checkCommandFor handed over God Mode's.
+  assert.deepEqual((await run({ checkCommand: 'npm test', adapter: 'unity' }, godMode)).unityBuild, { own: false });
+  assert.deepEqual((await run({ checkCommand: '', adapter: 'unity' }, godMode)).unityBuild, { own: false });
+  // The profile's own command differs from God Mode's.
+  const own = await run({ checkCommand: 'pwsh tools/check.ps1', adapter: 'unity' }, godMode);
+  assert.deepEqual(own.unityBuild, { own: true });
+  assert.equal(own.checkCommand, 'pwsh tools/check.ps1');
+  // A non-Unity build: no key, settings exactly as before.
+  assert.deepEqual(await run({ checkCommand: 'npm run check', adapter: 'web' }, godMode), {
+    model: 'plan',
+    checkCommand: 'npm run check',
+    integration: 'merge',
+  });
 });
 
 test('a Unity project build (ProjectVersion.txt) gets the same; a non-Unity build is planned as before', async () => {
@@ -420,6 +521,28 @@ test('after a restart mid-build, the restored plan\'s pushed work is merged firs
   assert.equal(res.ok, true);
   assert.equal(res.resumed, true);
   assert.deepEqual(res.integration, finished.integration);
+});
+
+test('finishing an interrupted Unity build: the self-check already knows it is a Unity build', async () => {
+  const restored = { id: 'p7', projectId: 'game', settled: false, killed: false, packages: [{ id: 'a', state: 'pushed', merged: false }] };
+  const godMode = { checkCommand: 'npm test' };
+  const resume = async (isUnity, opts) => {
+    const seen = [];
+    let builder = null;
+    const orchestra = fakeOrchestra({
+      view: () => restored,
+      finishRun: async () => (seen.push(builder.workerSettings(godMode)), { ok: true, plan: { ...restored, integration: { state: 'done' } } }),
+    });
+    builder = createGodModeBuilder({ orchestra, profileId: () => null, env: () => ({}), isUnityProject: () => isUnity, configureUnityMerge: async () => ({ ok: true }) });
+    const res = await builder.build(buildOpts({ resumePlanId: 'p7', ownPlanIds: ['p7'], ...opts }));
+    assert.equal(res.resumed, true);
+    return seen[0];
+  };
+  // The unity adapter, or a Unity project: God Mode's npm test is no check command there.
+  assert.deepEqual((await resume(false, { adapter: 'unity', checkCommand: 'npm test' })).unityBuild, { own: false });
+  assert.deepEqual((await resume(true, { checkCommand: 'pwsh tools/check.ps1' })).unityBuild, { own: true });
+  // Any other build resumes exactly as before: no unityBuild key.
+  assert.equal('unityBuild' in (await resume(false, { adapter: 'web' })), false);
 });
 
 test('a restored plan with nothing pushed, an older own plan, or a settled one is planned afresh', async () => {
