@@ -1585,6 +1585,49 @@ test('the checkout is fast-forwarded after every build, before the app is launch
   assert.match(logText(h2), /checkout not updated: no fast-forward/);
 });
 
+test('a Unity run parks the editor around the checkout update and books the outcome', async () => {
+  const order = [];
+  const unityAdapter = (name, o) => ({
+    name,
+    evidenceDir: path.join(EVIDENCE, `lunaswork-${o.runId}`, `iter-${o.iteration}`),
+    start: async () => ({}),
+    startConsole: () => [],
+    stop: async () => true,
+    tools: () => ({}),
+    park: async (profile) => {
+      order.push(`park ${profile.scene}`);
+      return { parked: true, discarded: true, skipped: null, detail: '', reopen: profile.scene };
+    },
+    unpark: async (state) => {
+      order.push(`unpark ${state.reopen}`);
+      return { reopened: true };
+    },
+  });
+  const h = harness({
+    deps: {
+      createAdapter: unityAdapter,
+      syncCheckout: async () => {
+        order.push('sync');
+        return { ok: true };
+      },
+    },
+  });
+  h.profile = { adapter: 'unity', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 60, checkCommand: '' };
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.deepEqual(order.slice(0, 3), ['park Assets/Scenes/Level1.unity', 'sync', 'unpark Assets/Scenes/Level1.unity']);
+  assert.equal(restoreRun(h.stored).editorPark.discarded, 1);
+  assert.match(logText(h), /unsaved editor changes were dropped/);
+});
+
+test('a web run fast-forwards the checkout without any park', async () => {
+  const h = harness();
+  h.next.critic.push(shipCritic());
+  await h.start();
+  assert.equal(h.syncs.length, 1);
+  assert.deepEqual(restoreRun(h.stored).editorPark, { discarded: 0, unreachable: 0, failed: 0, last: null });
+});
+
 test('a Stop pressed during a step that ends in a wait ends the run, it does not wait first', async () => {
   for (const answer of [{ ok: true, error: 'limit', cards: [] }, () => Promise.reject(new Error('boom'))]) {
     const h = harness();

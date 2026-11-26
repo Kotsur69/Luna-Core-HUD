@@ -87,6 +87,21 @@ function pipelineDriver(action, params = {}) {
   }
 }
 
+/**
+ * C# for `script eval` that parks the editor on an empty, untitled scene
+ * (src/lunasworkEditorPark.js). com.unity.pipeline 1.0.0 has no command for
+ * it: `scene create` saves the new scene to a file. EditorSceneManager.NewScene
+ * shows no save prompt (only the File menu asks) and in Single mode closes
+ * every open scene, DISCARDING unsaved changes - nothing is ever saved.
+ * Fails in play mode.
+ */
+const NEW_SCENE_CODE = [
+  'var scene = UnityEditor.SceneManagement.EditorSceneManager.NewScene(',
+  '  UnityEditor.SceneManagement.NewSceneSetup.EmptyScene, UnityEditor.SceneManagement.NewSceneMode.Single);',
+  'if (!scene.IsValid()) throw new System.Exception("could not open an empty scene");',
+  'return scene.path;',
+].join('\n');
+
 /** Unity Pipeline: call name -> [command, parameters]. */
 const UNITY_PIPELINE = Object.freeze({
   play: () => ['editor.playmode start', {}],
@@ -94,6 +109,12 @@ const UNITY_PIPELINE = Object.freeze({
   // result: {status, compiling, domainReloadInProgress, playMode 'stopped'|'playing', playerLoopTicking, runInBackground}
   state: () => ['editor status', {}],
   openScene: (scenePath) => ['scene open', { path: scenePath }],
+  // result: [{name, path, isLoaded, isDirty, isActive, rootCount}] (read-only; path '' for an untitled scene)
+  openScenes: () => ['scene list_open', {}],
+  // An empty untitled scene in Single mode, unsaved changes discarded; result: '' (its path).
+  // Needs the Pipeline's script eval capability. The legacy MCP table has no
+  // equivalent (manage_scene create saves a file), so only the Pipeline parks.
+  newScene: () => ['script eval', { code: NEW_SCENE_CODE }],
   // result: {entries:[{seq, level, logType, message, stackTrace}], cursor, session, reset, dropped,
   // counts:{error, warn, log}, groundTruth:{compilationFailed, compiling, consoleErrors, ageMs}};
   // with a window only entries after its cursor (unityConsole.js).
