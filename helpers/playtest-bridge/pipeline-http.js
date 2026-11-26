@@ -62,7 +62,40 @@ const PIPELINE_ERROR = Object.freeze({
   busy: 'UNITY_PIPELINE_BUSY',
   notJson: 'UNITY_PIPELINE_NOT_JSON',
   failed: 'UNITY_PIPELINE_FAILED',
+  notAllowed: 'UNITY_PIPELINE_NOT_ALLOWED',
 });
+
+// Commands that only read the editor. Everything else (including `script eval`
+// and any command this list does not know) counts as a write for the
+// allowedProjects guard, so an unknown command is refused, not let through.
+const READ_ONLY_NAME_RE = /^(?:get|list|find|inspect|status|read|query|search|skills|info)(?:_[a-z_]+)?$/i;
+
+/** True when a '<group> <name>' command only reads the editor. */
+function isReadOnlyCommand(command) {
+  if (typeof command !== 'string') return false;
+  const words = command.trim().split(' ');
+  return words.length >= 2 && READ_ONLY_NAME_RE.test(words[words.length - 1]);
+}
+
+/** A project dir in comparable form: resolved, no trailing separator, case-folded on Windows. */
+function projectKey(dir, platform = process.platform) {
+  const resolved = path.resolve(dir).replace(/[\\/]+$/, '');
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Normalized allowed set, or null when no guard is configured. Absent means
+ * unguarded on purpose: Luna's Work playtests drive the game's own editor.
+ * @param {unknown} allowed
+ * @returns {Set<string>|null}
+ */
+function allowedSet(allowed) {
+  if (allowed === undefined || allowed === null) return null;
+  if (!Array.isArray(allowed) || allowed.some((d) => typeof d !== 'string' || !path.isAbsolute(d))) {
+    throw new Error('allowedProjects must be a list of absolute paths');
+  }
+  return new Set(allowed.map((d) => projectKey(d)));
+}
 
 // What a domain reload looks like from outside: the descriptor is missing or
 // half written, the old port refuses or hangs, the editor is settling.
@@ -165,19 +198,38 @@ function checkDescriptor(raw, projectDir, nowMs) {
       `Unity editor on ${projectDir} stopped answering: its last heartbeat is ${Math.round(ageMs / 1000)} s old (limit ${HEARTBEAT_MAX_AGE_MS / 1000} s)`,
     );
   }
-  return { port: raw.port, token };
+  // projectPath is optional: only the allowedProjects guard reads it.
+  const projectPath = typeof raw.projectPath === 'string' && path.isAbsolute(raw.projectPath) ? raw.projectPath : null;
+  return { port: raw.port, token, projectPath };
 }
 
 /**
  * @param {{projectDir:string, fetch?:Function, readFile?:(file:string)=>Promise<string>|string,
- *   now?:()=>number, timeoutMs?:number}} opts projectDir = the Unity project (holds Library/)
+ *   now?:()=>number, timeoutMs?:number, allowedProjects?:string[]}} opts projectDir = the Unity project (holds Library/);
+ *   allowedProjects = absolute project dirs write commands may touch (worker repo, scratch
+ *   projects); absent = no guard, so Luna's Work playtests keep driving the game's editor
  * @returns {{exec:(command:string, parameters?:object)=>Promise<unknown>, close:()=>Promise<void>}}
  */
-function createPipelineClient({ projectDir, fetch: fetchFn = globalThis.fetch, readFile = readUtf8, now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function createPipelineClient({ projectDir, fetch: fetchFn = globalThis.fetch, readFile = readUtf8, now = Date.now, timeoutMs = DEFAULT_TIMEOUT_MS, allowedProjects } = {}) {
   if (typeof projectDir !== 'string' || !path.isAbsolute(projectDir)) throw new Error('the Unity project dir must be an absolute path');
   if (typeof fetchFn !== 'function') throw new Error('fetch is not available');
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive whole number');
   const file = descriptorFile(projectDir);
+  const allowed = allowedSet(allowedProjects);
+
+  /**
+   * With allowedProjects set, a write command runs only when both the client's
+   * project dir and the editor's own projectPath (when it names one) are allowed.
+   */
+  function refuseOutsideWrite(command, editorPath) {
+    if (!allowed || isReadOnlyCommand(command)) return;
+    const outside = [projectDir, editorPath].find((dir) => dir && !allowed.has(projectKey(dir)));
+    if (!outside) return;
+    throw pipelineError(
+      PIPELINE_ERROR.notAllowed,
+      `Unity command '${command}' refused: the editor's project ${outside} is not in the allowed projects (a worker repo or a scratch project)`,
+    );
+  }
 
   /** Read fresh on every request: a domain reload rewrites it. */
   async function readDescriptor() {
@@ -263,6 +315,7 @@ function createPipelineClient({ projectDir, fetch: fetchFn = globalThis.fetch, r
     }
     if (!isObj(parameters)) throw new Error('Unity Pipeline parameters must be an object');
     const descriptor = await readDescriptor();
+    refuseOutsideWrite(command, descriptor.projectPath);
     const clean = (text) => scrub(text, descriptor.token);
     const fail = (code, message, extra) => pipelineError(code, clean(message), extra);
     const res = await send(descriptor, command, parameters, fail);
@@ -280,6 +333,7 @@ module.exports = {
   HEARTBEAT_MAX_AGE_MS,
   PIPELINE_ERROR,
   descriptorFile,
+  isReadOnlyCommand,
   isTransientPipelineError,
   pipelineCommandDidNotRun,
   createPipelineClient,
