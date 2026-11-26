@@ -54,7 +54,7 @@ const { execFile } = require('child_process');
 const { parsePlannerOutput } = require('./orchestraPlan');
 const { isUsageLimitText } = require('./orchestraPlanWait');
 const { checkCwd } = require('./projects');
-const { gatePassed, isStepBack, pickModel, MAX_TEXT_CHARS } = require('./lunasworkRules');
+const { gatePassed, isStepBack, pickModel, MAX_TEXT_CHARS, cleanInconclusive } = require('./lunasworkRules');
 const { applyAdd, applyUpdate, MAX_TASKS_PER_CALL } = require('./intake');
 const { normalizeTodos, runTag, cleanTags, MAX_DETAILS_CHARS, MAX_ACCEPTANCE_CHARS, MAX_ITEMS, STEER_TAG, BUILT_STATE } = require('./todorows');
 const pack = require('./lunasworkPack');
@@ -666,7 +666,7 @@ const stuckCardBrief = (c) => ({ ...openCardBrief(c), details: clean(c.details, 
  * @param {{repoDir:string, runId:string, iteration:number, milestone?:string|null,
  *   report:object, history?:object[], gitLog?:string, models?:object, env?:object,
  *   stuckCards?:number[], todoStore:{read:Function, write:Function, now?:Function},
- *   closedCards?:{text:string, kind?:string|null}[],
+ *   closedCards?:{text:string, kind?:string|null}[], inconclusive?:{reason:string, detail:string, errors:string[]}|null,
  *   runClaude?:(call:{args:string[], prompt:string, cwd:string, env:object, timeoutMs:number})=>Promise<object>,
  *   log?:(message:string, detail?:unknown)=>void, now?:()=>number, timeoutMs?:number, budgetUsd?:number}} opts
  * @returns {Promise<{ok:boolean, verdict:'continue'|'ship', model:string|null, modelReason:string|null,
@@ -715,6 +715,8 @@ async function runCritic(opts) {
 
     const docs = loadDocs(o.repoDir);
     const report = isObj(o.report) ? o.report : {};
+    // The playtest's environment failed (lunasworkRules.playtestEnvironment): no score this iteration.
+    const inconclusive = cleanInconclusive(o.inconclusive);
     const gate = gateStatus({ shipCriteria: docs.shipCriteria, scores: report.scores, milestone: o.milestone || null });
     const pick = pickModel('critic', o.models, { gate: gate.currentPassed, stepBack: base.stepBack })
       || { model: FALLBACK_MODEL, reason: 'default' };
@@ -743,6 +745,7 @@ async function runCritic(opts) {
         openCards: open.map(openCardBrief),
         stuckCards: stuck.map(stuckCardBrief),
         gate,
+        inconclusive,
       }),
       cwd: o.repoDir,
       env: o.env || process.env,
@@ -783,6 +786,7 @@ async function runCritic(opts) {
       gate,
       architectureCut: docs.architectureCut,
       closedCards: o.closedCards,
+      inconclusive,
     });
     return {
       ...state,

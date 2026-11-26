@@ -21,6 +21,11 @@
 //                                editor that never settles throws an
 //                                ENVIRONMENT failure (isEnvironmentFailure,
 //                                environmentFailure()): not a game result.
+//                                Last, the console window is read once:
+//                                startConsole() = what was logged before the
+//                                Playtester's first action (the controller
+//                                looks for missing-script warnings there,
+//                                lunasworkRules.playtestEnvironment).
 //   tools()        -> the bridge with the Unity tool set: screenshot, game
 //                     state, scripted input, console, wait. All through the
 //                     PlaytestDriver / the console - no file or code access.
@@ -64,7 +69,7 @@ const {
   UNITY_TRANSPORTS, DRIVER_GROUP, PLAYTEST_MODE, UNITY_PIPELINE_BUILTIN, playtestModeOf, playtestActions,
   isPlaying, parseCombatFeelLog, withCombatFeelLog,
 } = require('../helpers/playtest-bridge/unity');
-const { windowedConsole } = require('../helpers/playtest-bridge/unityConsole');
+const { windowedConsole, WINDOW_SCOPE } = require('../helpers/playtest-bridge/unityConsole');
 const { PLAYTEST_CONTRACT } = require('../helpers/playtest-bridge/unityContract');
 const { PIPELINE_ERROR, isTransientPipelineError } = require('../helpers/playtest-bridge/pipeline-http');
 const {
@@ -78,6 +83,9 @@ const CONSOLE_FILE = 'unity-console.json';
 const STATE_FILE = 'unity-state.json';
 const FINAL_SHOT = 'final.png';
 const MAX_EVIDENCE_CHARS = 512 * 1024;
+// The console entries kept from the playtest start (the environment check reads them).
+const MAX_START_ENTRIES = 100;
+const MAX_START_ENTRY_CHARS = 500;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
@@ -224,6 +232,7 @@ function createUnityAdapter(ctx) {
   let fallback = []; // driver actions the game does not list: they run on the built-ins
   let consoleWindow = null; // {session, cursor, startedAt}: the console from the playtest start on
   let envFailure = null; // the last start's environment failure, as a plain result
+  let startEntries = []; // console entries of the window logged during start(): before the playtest's own actions
   const autoTick = { changed: false, previous: null }; // set by prepareEditor, put back by stop()
   let playing = false; // play mode was entered by start()
   let started = false; // ... and the driver answered
@@ -334,12 +343,14 @@ function createUnityAdapter(ctx) {
     target = targetFor(valid);
     profile = valid;
     envFailure = null;
+    startEntries = [];
     try {
       await session(async (call) => {
         await prepare(call);
         const deadline = await enterPlayMode(call);
         ({ mode, fallback } = await detectMode(call, deadline));
         await checkDriver(call, deadline);
+        startEntries = await readStartConsole(call);
       });
     } catch (err) {
       envFailure = environmentFailureOf(err);
@@ -358,6 +369,30 @@ function createUnityAdapter(ctx) {
   async function consoleEvidence(call) {
     const answer = await call(target.calls.console(consoleWindow));
     return target.transport === 'pipeline' ? windowedConsole(answer, consoleWindow) : answer;
+  }
+
+  /**
+   * What the console window holds once play mode runs and the driver answered,
+   * before the Playtester's first action (scene load: missing-script
+   * warnings). Pipeline with a console window only: without a cursor the
+   * buffer's old entries cannot be told apart. Best effort: a failed read is
+   * a log line and no entries.
+   * @returns {Promise<{level:string, message:string}[]>}
+   */
+  async function readStartConsole(call) {
+    if (target.transport !== 'pipeline' || !consoleWindow) return [];
+    try {
+      const { window, entries } = windowedConsole(await call(target.calls.console(consoleWindow)), consoleWindow);
+      // A cursor the editor could not honour returns its tail: old entries could pass for new ones.
+      if (window.scope !== WINDOW_SCOPE.sinceStart && window.scope !== WINDOW_SCOPE.freshSession) return [];
+      return entries
+        .filter((e) => typeof e.message === 'string' && e.message)
+        .slice(0, MAX_START_ENTRIES)
+        .map((e) => ({ level: typeof e.level === 'string' ? e.level : '', message: e.message.slice(0, MAX_START_ENTRY_CHARS) }));
+    } catch (err) {
+      log(`[lunaswork] Unity console at the playtest start not read: ${errText(err)}`);
+      return [];
+    }
   }
 
   /** Console, final state and final screenshot; each one on its own, best effort. */
@@ -471,7 +506,14 @@ function createUnityAdapter(ctx) {
    */
   const environmentFailure = () => (envFailure ? { ...envFailure, errors: [...envFailure.errors] } : null);
 
-  return { name: 'unity', evidenceDir: ctx.evidenceDir, start, stop, tools, combatFeelLog, environmentFailure };
+  /**
+   * The console entries the last start() saw before the playtest's own actions
+   * (lunasworkRules.playtestEnvironment looks for missing-script warnings).
+   * @returns {{level:string, message:string}[]} fresh copies
+   */
+  const startConsole = () => startEntries.map((e) => ({ ...e }));
+
+  return { name: 'unity', evidenceDir: ctx.evidenceDir, start, stop, tools, combatFeelLog, environmentFailure, startConsole };
 }
 
 module.exports = {

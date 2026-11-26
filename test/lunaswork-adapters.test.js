@@ -490,6 +490,7 @@ function electronWorld({ ready = true, exitOnQuit = true, platform = 'win32', it
 
 const E = require('../src/lunasworkElectron.js');
 const U = require('../src/lunasworkUnity.js');
+const R = require('../src/lunasworkRules.js');
 const Scene = require('../src/lunasworkScene.js');
 const { BRIDGE_PATH, WRAPPER_PATH, SERVER_NAMES } = require('../src/lunasworkBridge.js');
 const { toolNames } = require('../helpers/playtest-bridge/tools.js');
@@ -864,6 +865,8 @@ const PREP_LOG = Object.freeze([
 ]);
 // What stop() asks after the Playtester: the console window, state, final shot, play mode off, auto tick back.
 const STOP_LOG = Object.freeze(['console get', 'playtest state', 'playtest screenshot', 'editor.playmode stop', 'editor set_auto_tick']);
+// The start's last call: one console read before the Playtester's first action (the missing-script check).
+const START_CONSOLE = 'console get';
 
 /**
  * The open editor behind the Unity Pipeline at the HTTP level: the REAL
@@ -893,7 +896,7 @@ function fakePipelineEditor({
   busyBeforePlay = 0, lostPlayAnswer = false, playFails = false, driverAuthFails = false,
   busyBeforeStop = 0, stopFails = 0, driverListed = driver, busyList = 0,
   compile = 'up_to_date', compileErrors = [], consoleBefore = [], listed = null, consoleSession = CONSOLE_SESSION,
-  reloadDelayPolls = 0, recompileLost = null, noGroundTruth = false, vanishAfterPolls = 0, lostAutoTick = 0,
+  reloadDelayPolls = 0, recompileLost = null, noGroundTruth = false, vanishAfterPolls = 0, lostAutoTick = 0, playLogs = [],
 } = {}) {
   const ed = {
     log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay, busyBeforeStop, stopFails,
@@ -1007,6 +1010,8 @@ function fakePipelineEditor({
       ed.missing = reloadReads;
       ed.busy = busyReplies;
       ed.logConsole('error', 'NullReferenceException in Enemy.Update');
+      // The scene load of play mode (missing-script warnings of a stale assembly).
+      for (const [level, message] of playLogs) ed.logConsole(level, message);
       return ok({});
     },
     'editor.playmode stop': () => {
@@ -1106,6 +1111,7 @@ test('unity pipeline: scene open, play, a poll that survives the domain reload, 
     'editor status',
     'pipeline list_commands',
     'playtest state',
+    START_CONSOLE,
   ]);
   const params = (command) => world.editor.requests.find((r) => r.command === command).parameters;
   assert.deepEqual(params('scene open'), { path: 'Assets/Scenes/Level1.unity' });
@@ -1200,8 +1206,9 @@ test('unity pipeline without a PlaytestDriver: detected from the catalog, no mis
     'editor status (busy)',
     'editor status',
     'pipeline list_commands',
+    START_CONSOLE,
   ]);
-  assert.deepEqual(world.editor.requests.at(-1).parameters, { group: 'playtest', detail: 'compact' });
+  assert.deepEqual(world.editor.requests.at(-2).parameters, { group: 'playtest', detail: 'compact' });
   assert.deepEqual(world.editor.notFound, [], 'detection triggers no Command Not Found (no console error)');
   assert.ok(world.logs.some((l) => /no PlaytestDriver \(playtest state, playtest input, playtest screenshot not listed\)/.test(l)), world.logs.join('\n'));
 
@@ -1232,7 +1239,7 @@ test('unity pipeline: busy / domain-reload answers to the catalog after play mod
   const adapter = A.createAdapter('unity', world.opts);
   await adapter.start(pipelineProfile);
 
-  assert.deepEqual(world.editor.log.slice(-3), ['pipeline list_commands (busy)', 'pipeline list_commands (busy)', 'pipeline list_commands']);
+  assert.deepEqual(world.editor.log.slice(-4), ['pipeline list_commands (busy)', 'pipeline list_commands (busy)', 'pipeline list_commands', START_CONSOLE]);
   assert.equal(world.t, 2000, 'two more polls after the play-mode wait');
   assert.ok(adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args.includes('builtin'));
   await adapter.stop();
@@ -1294,6 +1301,7 @@ test('unity pipeline: a busy editor is waited out before play; a play whose answ
     'editor status',
     'pipeline list_commands',
     'playtest state',
+    START_CONSOLE,
   ]);
   assert.equal(world.t, 1500);
   assert.ok(world.logs.some((l) => /Unity play mode: no answer \(.*fetch failed: UND_ERR_SOCKET\)/.test(l)), world.logs.join('\n'));
@@ -1630,7 +1638,7 @@ test('unity pipeline partial driver: state + input listed, no playtest screensho
   const adapter = A.createAdapter('unity', world.opts);
   await adapter.start(pipelineProfile);
 
-  assert.deepEqual(world.editor.log.slice(-2), ['pipeline list_commands', 'playtest state'], 'the listed state is still checked');
+  assert.deepEqual(world.editor.log.slice(-3), ['pipeline list_commands', 'playtest state', START_CONSOLE], 'the listed state is still checked');
   assert.ok(world.logs.some((l) => /PlaytestDriver lacks playtest screenshot; the editor's built-in equivalent stands in/.test(l)), world.logs.join('\n'));
   const args = adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args;
   assert.ok(!args.includes('--unity-driver'), 'still the driver path');
@@ -1648,7 +1656,7 @@ test('unity pipeline partial driver without playtest state: no state probe, buil
   const world = pipelineWorld({ listed: ['playtest input', 'playtest screenshot'] });
   const adapter = A.createAdapter('unity', world.opts);
   await adapter.start(pipelineProfile);
-  assert.equal(world.editor.log.at(-1), 'pipeline list_commands', 'nothing unlisted is probed');
+  assert.deepEqual(world.editor.log.slice(-2), ['pipeline list_commands', START_CONSOLE], 'nothing unlisted is probed');
   const args = adapter.tools().mcpConfig.mcpServers[SERVER_NAMES.unity].args;
   assert.equal(args[args.indexOf('--unity-fallback') + 1], 'state');
   assert.equal(await adapter.combatFeelLog(), null);
@@ -1657,6 +1665,24 @@ test('unity pipeline partial driver without playtest state: no state probe, buil
   assert.deepEqual(world.editor.log.slice(1, 6), ['runtime status', 'scene list_open', 'gameobject find', 'gameobject find', 'component get_properties']);
   assert.ok(world.editor.log.includes('playtest screenshot'));
   assert.deepEqual(world.editor.notFound, []);
+});
+
+test('unity pipeline start: startConsole() holds what the window logged before the first action; older entries stay out', async () => {
+  const missing = "The referenced script on this Behaviour (Game Object 'Player') is missing!";
+  const world = pipelineWorld({
+    consoleBefore: [['warn', 'The referenced script (Unknown) on this Behaviour is missing! (another tool, earlier)']],
+    playLogs: [['warn', missing]],
+  });
+  const adapter = A.createAdapter('unity', world.opts);
+  assert.deepEqual(adapter.startConsole(), [], 'nothing before a start');
+  await adapter.start(pipelineProfile);
+  const entries = adapter.startConsole();
+  assert.deepEqual(entries.map((e) => e.message), ['NullReferenceException in Enemy.Update', missing]);
+  assert.deepEqual(entries.map((e) => e.level), ['error', 'warn']);
+  assert.deepEqual(R.missingScriptWarnings(entries), [missing], 'the environment check finds it');
+  entries.length = 0;
+  assert.equal(adapter.startConsole().length, 2, 'fresh copies');
+  await adapter.stop();
 });
 
 test('environmentFailureOf: a plain result for an environment failure, null for anything else', () => {

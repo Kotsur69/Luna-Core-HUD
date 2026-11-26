@@ -51,6 +51,14 @@
 // the iteration counts as rolled back. One lap summary per iteration (laps)
 // feeds the run report (src/lunasworkReport.js, via onRunEnd).
 //
+// Inconclusive playtests (lunasworkRules.playtestEnvironment): the app's
+// environment failed - no compile, editor busy, no start, missing-script
+// warnings before the first action. Not a game result: the run pauses like a
+// tool that is down (src/lunasworkToolGuard.js environmentDown, notification,
+// shared cap) and plays again once healthy. Past the cap the iteration goes on
+// marked inconclusive: no score, no rollback, the Critic's PLAYTEST_LOG entry
+// and the run report say why.
+//
 // Decision queue (src/lunasworkDecisions.js, idea #11): a card the Director
 // schedules that needsDecision() flags (new dependency, migration, deleting a
 // feature, DESIGN.md beyond an append) is held and asked about; the rest of
@@ -137,6 +145,7 @@ const {
   rollbackDecision,
   nextFailCounts,
   stuckOutcome,
+  playtestEnvironment,
 } = require('./lunasworkRules');
 const { AGY_MODEL } = require('./claudeModels');
 const { isAgyModel } = require('./workerModels');
@@ -860,20 +869,52 @@ function createLunasWork(deps) {
     }
   }
 
-  /** Starts the project's app with the profile pinned at start. @returns {Promise<{ok:boolean, error?:string}>} */
+  /**
+   * Starts the project's app with the profile pinned at start. A failed start
+   * carries its environment check (`inconclusive`, lunasworkRules.playtestEnvironment):
+   * the adapter's environment failure (compile, editor busy) or any other
+   * start failure, and missing-script warnings logged before the playtest's
+   * own actions (the app is stopped again then).
+   * @returns {Promise<{ok:boolean, error?:string, inconclusive?:object}>}
+   */
   async function startApp() {
     await stopApp();
     const profile = run.profile;
-    if (!profile) return { ok: false, error: 'no profile' };
+    const failed = (error, environment = null) =>
+      ({ ok: false, error, inconclusive: playtestEnvironment({ launch: { ok: false, error, environment } }) });
+    if (!profile) return failed('no profile');
+    let adapter;
     try {
-      live.adapter = deps.createAdapter(profile.adapter, { projectDir: run.repoPath, runId: run.id, iteration: run.iteration });
-      if (live.adapter.evidenceDir) update({ evidenceDir: live.adapter.evidenceDir });
-      const started = await live.adapter.start(profile);
+      adapter = deps.createAdapter(profile.adapter, { projectDir: run.repoPath, runId: run.id, iteration: run.iteration });
+      live.adapter = adapter;
+      if (adapter.evidenceDir) update({ evidenceDir: adapter.evidenceDir });
+      const started = await adapter.start(profile);
       live.url = started && started.url;
-      return { ok: true };
     } catch (err) {
       await stopApp();
-      return { ok: false, error: errText(err).slice(0, MAX_LOG_TEXT) };
+      return failed(errText(err).slice(0, MAX_LOG_TEXT), environmentOf(err));
+    }
+    const inconclusive = playtestEnvironment({ startConsole: startConsoleOf(adapter) });
+    if (!inconclusive) return { ok: true };
+    await stopApp();
+    return { ok: false, error: inconclusive.detail, inconclusive };
+  }
+
+  /** The adapter's environment-failure result an error carries (src/lunasworkUnityEditor.js), else null. */
+  function environmentOf(err) {
+    if (!isObj(err) || err.environment !== true) return null;
+    return { reason: err.reason, message: errText(err), errors: Array.isArray(err.errors) ? err.errors : [] };
+  }
+
+  /** What the console held before the playtest's own actions (adapters with startConsole: unity). */
+  function startConsoleOf(adapter) {
+    if (!adapter || typeof adapter.startConsole !== 'function') return [];
+    try {
+      const entries = adapter.startConsole();
+      return Array.isArray(entries) ? entries : [];
+    } catch (err) {
+      log(`[lunaswork] could not read the console at the playtest start: ${errText(err)}`);
+      return [];
     }
   }
 
@@ -1145,10 +1186,17 @@ function createLunasWork(deps) {
   async function stepPlaytesting() {
     const launch = run.current.launch;
     let res = launch && launch.ok === false ? { ok: false, error: 'launchFailed', detail: launch.error } : null;
+    // A failed app start (startApp's environment check) makes the playtest inconclusive.
+    // A staging failure or a production hold (src/lunasworkStaging.js) is not one: its
+    // card or decision is work for the run, which a pause would only hold up.
+    let env = res ? launch.inconclusive || null : null;
     // After a restart the app from 'launching' is gone: start it again.
     if (!res && !live.adapter) {
       const started = await startApp();
-      if (!started.ok) res = { ok: false, error: 'launchFailed', detail: started.error };
+      if (!started.ok) {
+        res = { ok: false, error: 'launchFailed', detail: started.error };
+        env = started.inconclusive || null;
+      }
     }
     // LW 2.25b: the prototype is played once, for navigation only, then Mati approves it.
     if (prototype.isPlaytest()) {
@@ -1157,13 +1205,19 @@ function createLunasWork(deps) {
       logModel('playtester', res.model, `${res.modelReason || 'setting'} (prototype navigation)`);
       return prototype.afterPlaytest(res);
     }
-    // The app's tool (the Unity editor / its Pipeline) is down: pause. The launch is
-    // cleared, so after the wait this phase starts the app again (no staging re-run).
-    // Past the pause ceiling toolDown() says no and the failed launch goes on as before.
-    if (res && toolGuard.toolDown(res, 'playtester')) {
+    // The app's tool (the Unity editor / its Pipeline) is down, or its environment
+    // failed (no compile, editor busy, missing scripts): pause with a notification.
+    // The launch is cleared, so after the wait this phase starts the app again (no
+    // staging re-run) and a healthy start plays as usual. Past the shared pause
+    // ceiling both say no and the failed launch goes on - inconclusive, unscored.
+    const paused = res && toolGuard.toolDownOf(res)
+      ? toolGuard.toolDown(res, 'playtester')
+      : !!env && toolGuard.environmentDown(env, 'playtester', run.profile && run.profile.adapter);
+    if (paused) {
       update({ current: { ...run.current, launch: null } });
       return;
     }
+    if (env) logEvent(`playtest inconclusive (${env.reason}): ${env.detail.slice(0, 150)} - no score, no rollback`);
     const built = cardBook.builtCards(run.projectId);
     if (!res) res = await playtestAndStop('explore', checkList(built), run.current.variantTargets);
     if (isLimit(res)) return limited(res, 'playtester');
@@ -1177,7 +1231,7 @@ function createLunasWork(deps) {
     // LW 2.25a: variant screenshots -> the choice goes to the decision queue.
     variantFlow.afterPlaytest(res.report);
     transition('critiquing', {
-      current: { ...run.current, report, playtest, verify },
+      current: { ...run.current, report, playtest, verify, inconclusive: env },
       failCounts: nextFailCounts(run.failCounts, { failed: verify.failed, closed: verify.closed }),
     });
   }
@@ -1204,6 +1258,8 @@ function createLunasWork(deps) {
       todoStore: deps.todoStore(run.projectId),
       // LW 2.22a: the iteration's CHANGELOG.md entry.
       closedCards: closedCards(),
+      // The playtest's environment failed: the PLAYTEST_LOG entry says inconclusive, not broken.
+      ...(run.current.inconclusive ? { inconclusive: run.current.inconclusive } : {}),
     });
   }
 
@@ -1396,8 +1452,11 @@ function createLunasWork(deps) {
     const recordOf = (ok) => ({
       n: run.iteration,
       milestone: milestone || null,
-      // No gate score (the Critic could not compute one) counts as no progress.
-      score: critic.milestone && Number.isFinite(critic.milestone.score) ? critic.milestone.score : 0,
+      // An inconclusive playtest (its environment failed) records no score at all: never
+      // a 0 that a rollback or the next lap would measure against. Otherwise no gate score
+      // (the Critic could not compute one) counts as no progress.
+      score: c.inconclusive ? null : critic.milestone && Number.isFinite(critic.milestone.score) ? critic.milestone.score : 0,
+      ...(c.inconclusive ? { inconclusive: c.inconclusive } : {}),
       // B1: a card closes once the Playtester confirmed it in the app.
       cardsClosed: c.verify ? c.verify.closed.length : c.build ? (c.build.closed || []).length : 0,
       selfCheck: c.build ? c.build.selfCheck : 'green',

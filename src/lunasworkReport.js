@@ -10,6 +10,8 @@
 //        ## Verdict           the verdict and why
 //        ## Iterations        cards planned / closed / opened, score,
 //                             merge + self-check, checkpoint tag or rollback
+//        ## Inconclusive playtests  iterations whose environment failed (no
+//                             score, no rollback): reason and compiler errors
 //        ## Scores per milestone
 //        ## Rollbacks         from / to tag, why, the reverted commits
 //        ## Model choices     every choice with its reason (the run log)
@@ -144,7 +146,12 @@ function verdictWhy(run) {
   const verdict = verdictOf(run);
   const milestone = run.milestone ? ` "${oneLine(run.milestone, 80)}"` : '';
   if (verdict === 'ship') return 'The Critic said every gate in SHIP_CRITERIA.md passes, and a fresh SHIP-confirmation Playtester agreed.';
-  if (verdict === 'plateau') return `No score gain and no card closed in the last ${PLATEAU_WINDOW} iterations of milestone${milestone}.`;
+  if (verdict === 'plateau') {
+    // A plateau of unplayed iterations is an environment problem, not a stuck game.
+    const unplayed = list(run.laps).slice(-PLATEAU_WINDOW).filter((l) => isObj(l.inconclusive)).length;
+    const env = unplayed ? ` ${unplayed} of them could not be playtested: the environment failed (see Inconclusive playtests).` : '';
+    return `No score gain and no card closed in the last ${PLATEAU_WINDOW} iterations of milestone${milestone}.${env}`;
+  }
   if (verdict === 'red') return `The merged result stayed red after fix-up in ${RED_STREAK} iterations in a row, so it was not pushed to the base branch.`;
   const reason = run.stopReason ? STOP_REASONS[run.stopReason] || oneLine(run.stopReason, 80) : 'stopped';
   return `Stopped: ${reason}.`;
@@ -169,6 +176,10 @@ function needsYou(run) {
     if (rb && rb.ok) needs.push(`Iteration ${lap.n} was rolled back (${oneLine(rb.why || rb.reason, 200)}) - its work is a bug card now.`);
     else if (rb) needs.push(`Iteration ${lap.n}: the rollback failed (${oneLine(rb.error || 'failed', 80)}) - the base branch still has that work.`);
     else if (lap.checkpoint && lap.checkpoint.tagError) needs.push(`Iteration ${lap.n}: the checkpoint tag was not pushed (${oneLine(lap.checkpoint.tagError, 80)}).`);
+  }
+  const unplayed = laps.filter((lap) => isObj(lap.inconclusive)).map((lap) => lap.n);
+  if (unplayed.length) {
+    needs.push(`Iteration(s) ${unplayed.join(', ')} could not be playtested: the environment failed (see Inconclusive playtests) - fix the editor or project setup.`);
   }
   // LW 2.22a: the release after the docs iteration.
   const release = isObj(run.shipDocs) && isObj(run.shipDocs.release) ? run.shipDocs.release : null;
@@ -201,11 +212,35 @@ function checkpointText(lap) {
 
 const ITERATION_HEAD = ['#', 'Milestone', 'Score', 'Cards closed', 'Cards opened', 'Merge / self-check', 'Checkpoint'];
 
+const inconclusiveOf = (lap) => (isObj(lap.inconclusive) && typeof lap.inconclusive.reason === 'string' ? lap.inconclusive : null);
+// The compiler errors one inconclusive line quotes.
+const MAX_INCONCLUSIVE_ERRORS = 3;
+
+function scoreText(lap) {
+  const env = inconclusiveOf(lap);
+  if (env) return `inconclusive (${oneLine(env.reason, 40)})`;
+  return Number.isFinite(lap.score) ? String(lap.score) : '-';
+}
+
+/**
+ * The iterations whose playtest was inconclusive (the environment failed):
+ * the reason, what failed and a short compiler-error summary, one line each.
+ */
+function inconclusivePlaytests(run) {
+  return list(run.laps).filter(inconclusiveOf).map((lap) => {
+    const env = inconclusiveOf(lap);
+    const errors = (Array.isArray(env.errors) ? env.errors : []).filter((e) => typeof e === 'string' && e.trim());
+    const more = errors.length > MAX_INCONCLUSIVE_ERRORS ? ` (+${errors.length - MAX_INCONCLUSIVE_ERRORS} more)` : '';
+    const summary = errors.length ? `; compiler errors / warnings: ${errors.slice(0, MAX_INCONCLUSIVE_ERRORS).map((e) => oneLine(e, 160)).join('; ')}${more}` : '';
+    return `Iteration ${lap.n}: inconclusive - environment failure (${oneLine(env.reason, 40)}): ${oneLine(env.detail, 200) || 'the playtest could not run'}${summary}. No score, no rollback.`;
+  });
+}
+
 function iterationCells(lap) {
   return [
     String(lap.n),
     oneLine(lap.milestone, 80) || '-',
-    Number.isFinite(lap.score) ? String(lap.score) : '-',
+    scoreText(lap),
     `${lap.cardsClosed.length} / ${lap.cardsPlanned}`,
     lap.cardsUpdated ? `${lap.cardsOpened} new, ${lap.cardsUpdated} updated` : String(lap.cardsOpened),
     selfCheckText(lap),
@@ -374,6 +409,7 @@ function buildRunReport(run, extra = {}) {
     '',
     ...iterationTable(laps),
     '',
+    ...(inconclusivePlaytests(r).length ? ['## Inconclusive playtests', '', ...bullets(inconclusivePlaytests(r)), ''] : []),
     '## Scores per milestone',
     '',
     ...bullets(scoresByMilestone(r).map(([m, points]) => `${m}: ${scoreLine(points)}`)),
@@ -468,6 +504,7 @@ function renderRunReportHtml(run, extra = {}) {
     h.section('Needs you', h.list([...needsYou(r), ...mediaNeeds(extra.media)], 'Nothing - all done')),
     h.section('Verdict', `<p>${esc(`${VERDICT_LABEL[verdict]} - ${verdictWhy(r)}`)}</p>`),
     h.section('Iterations', h.table(ITERATION_HEAD, laps.map((l) => iterationCells(l).map((c) => esc(c))), 'No iteration finished')),
+    inconclusivePlaytests(r).length ? h.section('Inconclusive playtests', h.list(inconclusivePlaytests(r), 'None')) : '',
     h.section('Scores per milestone', scoresHtml(r)),
     h.section('Rollbacks', rollbackHtml(r)),
     h.section('Model choices', h.list(modelChoices(r), 'No model choice logged')),

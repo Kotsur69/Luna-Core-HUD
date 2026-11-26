@@ -27,7 +27,7 @@
 'use strict';
 
 const path = require('path');
-const { PHASES, ROLES, isModelChoice, normalizeModels, normalizeStoredRun } = require('./lunasworkRules');
+const { PHASES, ROLES, isModelChoice, normalizeModels, normalizeStoredRun, cleanInconclusive } = require('./lunasworkRules');
 const settingsStore = require('./lunasworkSettings');
 const { keyFor } = require('./todo');
 const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./todorows');
@@ -422,6 +422,8 @@ function cleanLap(raw) {
     ...opt('fixups', finite(raw.fixups)),
     ...opt('playtestOk', typeof raw.playtestOk === 'boolean' ? raw.playtestOk : null),
     ...opt('playtestError', str(raw.playtestError, 100)),
+    // The playtest's environment failed: no score, no rollback (lunasworkRules.playtestEnvironment).
+    ...opt('inconclusive', cleanInconclusive(raw.inconclusive)),
     criticVerdict: raw.criticVerdict === 'ship' ? 'ship' : 'continue',
     ...opt('shipAgrees', typeof raw.shipAgrees === 'boolean' ? raw.shipAgrees : null),
     checkpoint: cleanCheckpoint(raw.checkpoint),
@@ -528,6 +530,7 @@ function buildLap(current, record, extra = {}) {
     fixups: build.fixups,
     playtestOk: c.playtest ? c.playtest.ok : null,
     playtestError: c.playtest ? c.playtest.error : null,
+    inconclusive: record.inconclusive,
     criticVerdict: critic.verdict,
     shipAgrees: c.ship ? c.ship.agrees : null,
     checkpoint: c.checkpoint,
@@ -598,7 +601,7 @@ function cleanGateHold(raw) {
 
 function emptyCurrent() {
   return {
-    cards: [], notes: null, planId: null, build: null, launch: null, report: null, playtest: null, verify: null,
+    cards: [], notes: null, planId: null, build: null, launch: null, inconclusive: null, report: null, playtest: null, verify: null,
     critic: null, ship: null, replay: null, checkpoint: null, hooks: null, hookNotes: [], variantTargets: [],
   };
 }
@@ -647,6 +650,13 @@ function cleanQuarantine(raw) {
   return [...byName.values()].slice(-MAX_QUARANTINE);
 }
 
+/** The app start of an iteration: ok / error, and its failed environment check (inconclusive). */
+function cleanLaunch(raw) {
+  const launch = cleanSmall(raw, { ok: 'bool', error: 'str' });
+  const inconclusive = launch ? cleanInconclusive(raw.inconclusive) : null;
+  return inconclusive ? { ...launch, inconclusive } : launch;
+}
+
 function cleanCurrent(raw) {
   const c = isObj(raw) ? raw : {};
   const build = cleanSmall(c.build, BUILD_KEYS);
@@ -656,7 +666,9 @@ function cleanCurrent(raw) {
     // The God Mode plan of this iteration's build: a restart finishes it (lunasworkBuild).
     planId: str(c.planId, 100),
     build: build && ['green', 'red'].includes(build.selfCheck) ? build : null,
-    launch: cleanSmall(c.launch, { ok: 'bool', error: 'str' }),
+    launch: cleanLaunch(c.launch),
+    // The playtest went on past the tool-down pauses with a failed environment: no score.
+    inconclusive: cleanInconclusive(c.inconclusive),
     report: cleanReport(c.report),
     playtest: cleanSmall(c.playtest, PASS_KEYS),
     verify: cleanSmall(c.verify, VERIFY_KEYS),

@@ -16,8 +16,11 @@
 //   restart    -> validating the stored run (normalizeStoredRun)
 //
 // One iteration record: { n, milestone, score 0-100, cardsClosed, selfCheck
-// 'green'|'red', coreJourneysOk, rolledBack }. Scores are only ever compared
-// within one milestone: a new, harder milestone starts lower by design.
+// 'green'|'red', coreJourneysOk, rolledBack, inconclusive? }. Scores are only
+// ever compared within one milestone: a new, harder milestone starts lower by
+// design. An inconclusive iteration (inconclusive = {reason, detail, errors}:
+// the environment failed, playtestEnvironment) has score null: it is never
+// scored, never rolled back and never a rollback target.
 // History functions skip malformed entries instead of throwing.
 // God Mode is not touched here.
 // ============================================================================
@@ -184,27 +187,111 @@ function gatePassed(gate) {
   return criteria.length > 0 && criteria.every((c) => c && c.passed === true);
 }
 
+// ---- inconclusive playtests: the environment, not the game, failed -----------------------
+//
+// Run lwmwwnl7xf rolled back iterations 3 and 4 for a milestone score that fell
+// 32 -> 0, but the 0 came from the environment (stale assemblies, missing-script
+// warnings, other tools' console errors). Each rollback reverted real work and
+// caused the next 0. A playtest whose environment check failed is INCONCLUSIVE:
+// it records no score for the milestone and never rolls anything back.
+
+const ENVIRONMENT_REASONS = Object.freeze({
+  // The adapter's own failures (src/lunasworkUnityEditor.js ENVIRONMENT_REASON).
+  compileFailed: 'compile-failed',
+  stillCompiling: 'still-compiling',
+  editorBusy: 'editor-busy',
+  // The app / adapter did not start for any other reason.
+  adapterStart: 'adapter-start',
+  // Missing-script warnings in the console before the playtest's own actions: stale assemblies.
+  missingScripts: 'missing-scripts',
+});
+const ENVIRONMENT_REASON_LIST = Object.freeze(Object.values(ENVIRONMENT_REASONS));
+// Unity's words for a component whose script class is gone (not compiled, or a stale assembly).
+const MISSING_SCRIPT_RE = /\breferenced script\b[^\n]{0,160}\bis missing\b|\bassociated script can ?not be loaded\b|\bmissing \(mono script\)/i;
+const MAX_ENV_ERRORS = 5;
+const MAX_ENV_ERROR_CHARS = 300;
+const MAX_ENV_DETAIL_CHARS = 300;
+
+const isPlainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+// eslint-disable-next-line no-control-regex
+const envText = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim().slice(0, max) : '');
+const envErrors = (list) => (Array.isArray(list) ? list : []).map((e) => envText(e, MAX_ENV_ERROR_CHARS)).filter(Boolean).slice(0, MAX_ENV_ERRORS);
+
+/**
+ * An inconclusive marker {reason, detail, errors}, validated and capped, or
+ * null. `errors` = the compiler errors or missing-script warnings (a few).
+ */
+function cleanInconclusive(raw) {
+  if (!isPlainObj(raw) || !ENVIRONMENT_REASON_LIST.includes(raw.reason)) return null;
+  return { reason: raw.reason, detail: envText(raw.detail, MAX_ENV_DETAIL_CHARS), errors: envErrors(raw.errors) };
+}
+
+/**
+ * The missing-script warnings among console entries ({level, message} or plain
+ * strings) logged before the playtest's own actions.
+ * @returns {string[]} their messages, capped
+ */
+function missingScriptWarnings(entries) {
+  return envErrors((Array.isArray(entries) ? entries : [])
+    .map((e) => (typeof e === 'string' ? e : isPlainObj(e) && typeof e.message === 'string' ? e.message : ''))
+    .filter((m) => MISSING_SCRIPT_RE.test(m)));
+}
+
+/**
+ * The environment check of one playtest start. Inconclusive when the code did
+ * not compile or was still compiling, the editor stayed busy past the wait,
+ * the adapter could not start, or the console held missing-script warnings
+ * before the playtest's own actions.
+ * @param {{launch?:{ok?:boolean, error?:string, environment?:{reason?:string, message?:string, detail?:string, errors?:string[]}}|null,
+ *   startConsole?:Array<object|string>}} input
+ *   launch = the app start (environment = the adapter's environment-failure result);
+ *   startConsole = the console entries logged between the start and the first action
+ * @returns {{reason:string, detail:string, errors:string[]}|null} null = the environment is healthy
+ */
+function playtestEnvironment({ launch = null, startConsole = [] } = {}) {
+  if (isPlainObj(launch) && launch.ok === false) {
+    const env = isPlainObj(launch.environment) ? launch.environment : null;
+    const known = env && ENVIRONMENT_REASON_LIST.includes(env.reason) ? env.reason : null;
+    const detail = (env && (env.detail || env.message)) || launch.error || 'the app did not start';
+    return cleanInconclusive({ reason: known || ENVIRONMENT_REASONS.adapterStart, detail, errors: env ? env.errors : [] });
+  }
+  const missing = missingScriptWarnings(startConsole);
+  if (!missing.length) return null;
+  return cleanInconclusive({
+    reason: ENVIRONMENT_REASONS.missingScripts,
+    detail: `${missing.length} missing-script warning(s) before the playtest's own actions - stale or uncompiled scripts`,
+    errors: missing,
+  });
+}
+
+/** A history record whose playtest was inconclusive (no score, never a rollback). */
+const isInconclusive = (r) => isPlainObj(r) && cleanInconclusive(r.inconclusive) !== null;
+
 // ---- history: plateau, red, rollback ---------------------------------------------------
 
-/** Entries usable by the history rules; anything malformed is skipped. */
+/** Entries usable by the history rules; anything malformed or inconclusive is skipped. */
 const usable = (history) =>
-  (Array.isArray(history) ? history : []).filter((r) => r && typeof r === 'object' && Number.isFinite(r.score));
+  (Array.isArray(history) ? history : []).filter((r) => isPlainObj(r) && Number.isFinite(r.score) && !isInconclusive(r));
 
 const milestoneOf = (r) => (typeof r.milestone === 'string' ? r.milestone : null);
 
 /**
  * No score above the best before the window, and no card closed, for
- * PLATEAU_WINDOW iterations - all within the current milestone.
+ * PLATEAU_WINDOW iterations - all within the current milestone. An
+ * inconclusive iteration in the window counts as no progress (nothing was
+ * verified), so a run whose environment stays broken past the tool-down
+ * pauses still ends; it never counts as the best score before the window.
  */
 function isPlateau(history) {
-  const all = usable(history);
+  const all = (Array.isArray(history) ? history : []).filter((r) => usable([r]).length || isInconclusive(r));
   if (!all.length) return false;
   const current = milestoneOf(all[all.length - 1]);
   const same = all.filter((r) => milestoneOf(r) === current);
   if (same.length <= PLATEAU_WINDOW) return false;
   const window = same.slice(-PLATEAU_WINDOW);
-  const bestBefore = Math.max(...same.slice(0, -PLATEAU_WINDOW).map((r) => r.score));
-  return window.every((r) => r.score <= bestBefore && !(r.cardsClosed > 0));
+  const before = usable(same.slice(0, -PLATEAU_WINDOW));
+  const bestBefore = before.length ? Math.max(...before.map((r) => r.score)) : -Infinity;
+  return window.every((r) => (isInconclusive(r) || r.score <= bestBefore) && !(r.cardsClosed > 0));
 }
 
 /** Self-check stayed red after fix-up RED_STREAK iterations in a row. */
@@ -220,10 +307,15 @@ const isGood = (r) => r.selfCheck === 'green' && r.coreJourneysOk !== false && r
  * Whether the latest iteration must be reverted on `main`. A red iteration
  * never reached `main`, and a rolled-back one is already reverted, so neither
  * is rolled back. A score drop only counts against the last good iteration
- * of the same milestone; a broken core journey counts against any.
+ * of the same milestone; a broken core journey counts against any. An
+ * inconclusive iteration (its environment failed) is never rolled back and is
+ * never the good iteration a later one is measured against.
  * @returns {{rollback:boolean, toIteration?:number, reason?:string}}
  */
 function rollbackDecision(history) {
+  const records = (Array.isArray(history) ? history : []).filter(isPlainObj);
+  // Checked on the raw list: usable() drops it, which would judge the iteration before it again.
+  if (records.length && isInconclusive(records[records.length - 1])) return { rollback: false };
   const all = usable(history);
   if (!all.length) return { rollback: false };
   const latest = all[all.length - 1];
@@ -432,15 +524,19 @@ const clampScore = (v) => (Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 
 /**
  * One stored record, or null. A record without a real score or self-check
  * result is dropped rather than filled in: an invented 0 or 'red' would fake
- * a rollback baseline or a RED stop after a corrupted save.
+ * a rollback baseline or a RED stop after a corrupted save. An inconclusive
+ * record keeps no score at all (null), never a 0.
  */
 function normalizeRecord(raw) {
   if (!raw || typeof raw !== 'object' || !Number.isInteger(raw.n) || raw.n < 1) return null;
-  if (!Number.isFinite(raw.score) || !['green', 'red'].includes(raw.selfCheck)) return null;
+  if (!['green', 'red'].includes(raw.selfCheck)) return null;
+  const inconclusive = cleanInconclusive(raw.inconclusive);
+  if (!inconclusive && !Number.isFinite(raw.score)) return null;
   return {
     n: raw.n,
     milestone: strOrNull(raw.milestone, MAX_TEXT_CHARS),
-    score: clampScore(raw.score),
+    score: inconclusive ? null : clampScore(raw.score),
+    ...(inconclusive ? { inconclusive } : {}),
     cardsClosed: Number.isInteger(raw.cardsClosed) && raw.cardsClosed > 0 ? raw.cardsClosed : 0,
     selfCheck: raw.selfCheck,
     coreJourneysOk: raw.coreJourneysOk !== false,
@@ -638,6 +734,11 @@ module.exports = {
   gatePassed,
   isPlateau,
   isRedStreak,
+  ENVIRONMENT_REASONS,
+  cleanInconclusive,
+  missingScriptWarnings,
+  playtestEnvironment,
+  isInconclusive,
   rollbackDecision,
   stopVerdict,
   normalizeStoredRun,

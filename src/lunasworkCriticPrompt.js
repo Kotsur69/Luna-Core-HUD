@@ -93,15 +93,25 @@ function stuckLines(stuckCards) {
   ];
 }
 
+/** The rule for an inconclusive playtest (its environment failed), only when there is one. */
+function inconclusiveLines(inconclusive) {
+  if (!isObj(inconclusive) || typeof inconclusive.reason !== 'string') return [];
+  return [
+    `- INCONCLUSIVE playtest (${inconclusive.reason}): the app's environment failed before the Playtester could play (see "Environment failure" below), so this iteration records no score and is not rolled back. Do not file cards about the game being broken from this report. Compiler errors that point at the game's own code are one bug card. Say "inconclusive" and why in logEntry.verdict.`,
+  ];
+}
+
 /**
  * The Critic's prompt.
  * @param {{iteration:number, docs:Record<string,string>, report:object, history:object[],
- *   gitLog:string, openCards:object[], gate:object, stuckCards?:object[]}} input
- *   stuckCards = open cards of this run that are stuck (same brief shape as openCards)
+ *   gitLog:string, openCards:object[], gate:object, stuckCards?:object[], inconclusive?:object|null}} input
+ *   stuckCards = open cards of this run that are stuck (same brief shape as openCards);
+ *   inconclusive = the failed environment check {reason, detail, errors} (lunasworkRules.playtestEnvironment)
  * @returns {string}
  */
-function buildCriticPrompt({ iteration, docs, report, history, gitLog, openCards, gate, stuckCards = [] }) {
+function buildCriticPrompt({ iteration, docs, report, history, gitLog, openCards, gate, stuckCards = [], inconclusive = null }) {
   const stuck = Array.isArray(stuckCards) ? stuckCards : [];
+  const env = inconclusiveLines(inconclusive);
   const stepBack = isStepBack(iteration)
     ? [
       `STEP BACK - iteration ${iteration} is a step-back iteration. Before anything else, re-read BRIEF.md and DESIGN.md below and ask: is this still that product?`,
@@ -126,6 +136,7 @@ function buildCriticPrompt({ iteration, docs, report, history, gitLog, openCards
     '- Every bug card: details must tell the builder to write a failing test that reproduces the bug first, then fix it; acceptance must include "A test reproduces the bug".',
     '- Do not duplicate open cards. To change one, set updatesCardId to its "at" and write it out in full. Leave cards that are still right alone.',
     ...stuckLines(stuck),
+    ...env,
     ...(reportBrief(report).combatFeel
       ? ['- combatFeel in the playtest report is measured frame timing from the game (hit-stop, Time.timeScale changes, input latency, hitbox -> VFX). Its "Out of spec" values are evidence for feel or bug cards that screenshots cannot give.']
       : []),
@@ -146,6 +157,7 @@ function buildCriticPrompt({ iteration, docs, report, history, gitLog, openCards
     ...fence('design/PLAYTEST_LOG.md (latest entries)', tail(docs.playtestLog, MAX_LOG_TAIL_CHARS)),
     ...fence('Open cards of this run (JSON)', json(openCards, MAX_DOC_CHARS)),
     ...(stuck.length ? fence('Stuck cards to split (JSON)', json(stuck, MAX_DOC_CHARS)) : []),
+    ...(env.length ? fence('Environment failure (JSON)', json(inconclusive, MAX_REPORT_CHARS)) : []),
     ...fence('Playtest report (JSON)', json(reportBrief(report), MAX_REPORT_CHARS)),
     ...fence('Score history (JSON, 0-100 per milestone)', json(Array.isArray(history) ? history : [], MAX_DOC_CHARS)),
     ...fence(`git log of iteration ${iteration}`, capped(clean(gitLog, MAX_GITLOG_CHARS * 2), MAX_GITLOG_CHARS)),

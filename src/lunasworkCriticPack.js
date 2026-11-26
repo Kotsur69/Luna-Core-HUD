@@ -28,14 +28,36 @@ const bullets = (items) => (items.length ? items.map((i) => `- ${oneLine(i)}`) :
 // A journey's own "#"/"##" lines would split TEST_PLAN.md's sections.
 const demoteHeadings = (text) => text.replace(/^#{1,2}(?=\s)/gm, '####');
 
+// The compiler errors (or missing-script warnings) an inconclusive entry quotes.
+const MAX_INCONCLUSIVE_ERRORS = 3;
+
+/**
+ * The lines that name an inconclusive iteration: the environment reason, what
+ * failed and a short compiler-error summary. [] for a conclusive one.
+ * @param {{reason?:string, detail?:string, errors?:string[]}|null} inconclusive
+ */
+function inconclusiveLines(inconclusive) {
+  if (!inconclusive || typeof inconclusive.reason !== 'string') return [];
+  const errors = Array.isArray(inconclusive.errors) ? inconclusive.errors.filter((e) => typeof e === 'string' && e.trim()) : [];
+  const more = errors.length > MAX_INCONCLUSIVE_ERRORS ? [`- ... ${errors.length - MAX_INCONCLUSIVE_ERRORS} more`] : [];
+  return [
+    `**Inconclusive:** environment failure (${oneLine(inconclusive.reason)}) - ${oneLine(inconclusive.detail) || 'the playtest could not run'}. No score recorded for the milestone, no rollback.`,
+    ...(errors.length ? ['', `**Compiler errors / warnings (${errors.length}):**`, ...errors.slice(0, MAX_INCONCLUSIVE_ERRORS).map((e) => `- ${oneLine(e)}`), ...more] : []),
+    '',
+  ];
+}
+
 /** One PLAYTEST_LOG.md entry, within lunasworkPack's append cap. */
-function formatLogEntry({ iteration, date, logEntry, gate, verdict }) {
+function formatLogEntry({ iteration, date, logEntry, gate, verdict, inconclusive = null }) {
+  const env = inconclusiveLines(inconclusive);
+  const score = env.length ? ', score not recorded (inconclusive)' : gate.score === null ? '' : `, score ${gate.score}/100`;
   const milestone = gate.current
-    ? `Milestone: ${gate.current} - gate ${gate.currentPassed ? 'passed' : 'not passed'}${gate.score === null ? '' : `, score ${gate.score}/100`}`
+    ? `Milestone: ${gate.current} - gate ${gate.currentPassed ? 'passed' : 'not passed'}${score}`
     : 'Milestone: none defined';
   const text = [
-    `## Iteration ${iteration} - ${date} - ${verdict.toUpperCase()}`,
+    `## Iteration ${iteration} - ${date} - ${verdict.toUpperCase()}${env.length ? ' - INCONCLUSIVE' : ''}`,
     '',
+    ...env,
     milestone,
     '',
     `**Played:** ${oneLine(logEntry.played) || '-'}`,
@@ -216,12 +238,12 @@ function appendChangelog(repoDir, entry) {
  * LW 2.22a's CHANGELOG.md entry from `closedCards`.
  * @returns {{written:string[], warnings:object[]}}
  */
-function writePack(repoDir, critique, { iteration, date, gate, architectureCut = false, closedCards = [] }) {
+function writePack(repoDir, critique, { iteration, date, gate, architectureCut = false, closedCards = [], inconclusive = null }) {
   const written = [];
   const warnings = [];
   const source = `critic, iteration ${iteration}`;
   const ops = [
-    ['PLAYTEST_LOG.md', pack.appendPlaytestLog(formatLogEntry({ iteration, date, logEntry: critique.logEntry, gate, verdict: critique.verdict }))],
+    ['PLAYTEST_LOG.md', pack.appendPlaytestLog(formatLogEntry({ iteration, date, logEntry: critique.logEntry, gate, verdict: critique.verdict, inconclusive }))],
     ['ARCHITECTURE.md', critique.architecture && !architectureCut ? pack.writeArchitecture(critique.architecture) : undefined],
     ...critique.decisions.map((d) => ['DECISIONS.md', pack.appendDecision({ ...d, source })]),
     ...critique.newJourneys.map((j) => ['TEST_PLAN.md', pack.appendJourney(demoteHeadings(j))]),
