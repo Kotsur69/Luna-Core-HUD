@@ -156,6 +156,16 @@ test("refresh: the CLI's error JSON is quoted, with the exit code", async (t) =>
   assert.deepEqual(res.notes, ['codemaps update failed: claude exited 1, claude error JSON (failed): Agent crashed reading Assets - maps discarded']);
 });
 
+test('refresh: a key in the error JSON or the runner detail is masked in the note', async (t) => {
+  const fakeKey = ['sk', 'ant', 'z'.repeat(40)].join('-');
+  const stdout = JSON.stringify({ is_error: true, result: `bad key ${fakeKey}` });
+  const { res } = await refreshWith(t, { stdout, exitCode: 1 });
+  assert.ok(!res.notes[0].includes(fakeKey), res.notes[0]);
+  assert.match(res.notes[0], /redacted/);
+  const { detail } = G.describeClaudeFailure({ error: 'failed', detail: `token ${fakeKey}` });
+  assert.ok(!detail.includes(fakeKey) && /redacted/.test(detail), detail);
+});
+
 test('refresh: no claude on PATH is a skip with that reason, not a failure', async (t) => {
   const { res, dir } = await refreshWith(t, { error: 'noClaude' });
   assert.equal(res.codemaps, 'skipped');

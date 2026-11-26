@@ -65,6 +65,7 @@ const { execClaude } = require('./lunasworkCritic');
 const { resolveOnPath } = require('./lunasworkSecondOpinion');
 const { withScratchIndex } = require('./gitScratchIndex');
 const { gitFailure } = require('./worktrees');
+const { scrub } = require('./hostscrub');
 
 const CODEMAPS_DIR = 'docs/CODEMAPS';
 const CLI_COMMAND = 'codebase-memory-mcp';
@@ -108,6 +109,8 @@ const CODEMAPS_SCHEMA = {
 };
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+// The CLI's own words in a note: secrets masked first, then capped.
+const said = (s) => clip(scrub(String(s === undefined || s === null ? '' : s)), MAX_FAILURE_CHARS);
 const clip = (s, max = MAX_NOTE_CHARS) => String(s === undefined || s === null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max);
 const noop = () => {};
 
@@ -204,20 +207,20 @@ function buildCodemapsPrompt({ iteration, unity = false }) {
 function describeClaudeFailure(call) {
   if (!isObj(call)) return { skip: false, detail: 'claude gave no answer' };
   if (call.error === 'noClaude') return { skip: true, detail: 'claude CLI not found on PATH' };
-  const said = clip(call.stderr || (ARGV_ECHO_RE.test(String(call.detail || '')) ? '' : call.detail), MAX_FAILURE_CHARS);
-  if (call.error === 'limit') return { skip: true, detail: `Claude usage limit${said ? `: ${said}` : ''}` };
+  const why = said(call.stderr || (ARGV_ECHO_RE.test(String(call.detail || '')) ? '' : call.detail));
+  if (call.error === 'limit') return { skip: true, detail: `Claude usage limit${why ? `: ${why}` : ''}` };
   const signal = call.signal ? ` (${call.signal})` : '';
   const head = call.error === 'timeout'
     ? `claude timed out${Number.isFinite(call.timeoutMs) ? ` after ${Math.round(call.timeoutMs / 1000)}s` : ''}${signal}`
     : Number.isInteger(call.exitCode) ? `claude exited ${call.exitCode}${signal}` : `claude ${call.error || 'failed'}${signal}`;
-  return { skip: false, detail: said ? `${head}: ${said}` : head };
+  return { skip: false, detail: why ? `${head}: ${why}` : head };
 }
 
 /** A claude envelope that parsed as an error (is_error JSON on stdout), with the exit code when there was one. */
 function describeEnvelopeFailure(call, parsed) {
   const exit = Number.isInteger(call.exitCode) ? `claude exited ${call.exitCode}, ` : '';
-  if (parsed.error === 'badJson') return `${exit}claude answer was not JSON${call.stderr ? `: ${clip(call.stderr, MAX_FAILURE_CHARS)}` : ''}`;
-  return `${exit}claude error JSON (${parsed.error})${parsed.detail ? `: ${clip(parsed.detail, MAX_FAILURE_CHARS)}` : ''}`;
+  if (parsed.error === 'badJson') return `${exit}claude answer was not JSON${call.stderr ? `: ${said(call.stderr)}` : ''}`;
+  return `${exit}claude error JSON (${parsed.error})${parsed.detail ? `: ${said(parsed.detail)}` : ''}`;
 }
 
 const inCodemaps = (file) => {
@@ -342,7 +345,7 @@ function createGraphRefresher(deps = {}) {
     const parsed = parsePlannerOutput(call.stdout);
     if (parsed.ok) return { ok: true };
     // The account hit its limit mid-call: nothing is wrong with the maps step itself.
-    if (parsed.error === 'limit') return { ok: false, skip: true, detail: `Claude usage limit: ${clip(parsed.detail, MAX_FAILURE_CHARS)}` };
+    if (parsed.error === 'limit') return { ok: false, skip: true, detail: `Claude usage limit: ${said(parsed.detail)}` };
     return { ok: false, detail: describeEnvelopeFailure(call, parsed) };
   }
 
