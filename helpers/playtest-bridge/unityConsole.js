@@ -37,8 +37,18 @@ const CONSOLE_LEVEL = 'warning';
 // A capture session id: a GUID in "N" format (32 hex digits); a little slack for other formats.
 const SESSION_RE = /^[A-Za-z0-9-]{1,64}$/;
 
-/** What a window read covers: entries after the start, a fresh session, or the whole buffer. */
-const WINDOW_SCOPE = Object.freeze({ sinceStart: 'since-start', freshSession: 'fresh-session', wholeBuffer: 'whole-buffer' });
+/**
+ * What a window read covers: entries after the start; a fresh session (the
+ * editor's capture restarted); the same session but a cursor the editor could
+ * not honour (it returned its tail: counted as a fresh window too); or the
+ * whole buffer (no window).
+ */
+const WINDOW_SCOPE = Object.freeze({
+  sinceStart: 'since-start',
+  freshSession: 'fresh-session',
+  cursorReset: 'cursor-reset',
+  wholeBuffer: 'whole-buffer',
+});
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const isCursor = (v) => Number.isSafeInteger(v) && v >= -1;
@@ -54,18 +64,20 @@ function consoleWindow({ session, cursor, startedAt = null }) {
 }
 
 /**
- * The window a `console get` answer opens at the playtest start, or null when
- * the editor's answer carries no usable cursor and session (an editor without
- * cursors: the reads then cover the whole buffer and say so).
+ * The window a `console get` answer opens at the playtest start. Without a
+ * usable cursor and session the window is null and `reason` says why (the
+ * reads then cover the whole buffer and say so).
  * @param {unknown} answer
  * @param {string} startedAt ISO time of the start
+ * @returns {{window:{session:string, cursor:number, startedAt:string|null}|null, reason:string|null}}
  */
 function consoleWindowOf(answer, startedAt) {
-  if (!isObj(answer)) return null;
+  if (!isObj(answer)) return { window: null, reason: 'the console answer is not an object' };
+  if (answer.session === undefined && answer.cursor === undefined) return { window: null, reason: 'the console answer has no cursor or session' };
   try {
-    return consoleWindow({ session: answer.session, cursor: answer.cursor, startedAt });
-  } catch {
-    return null;
+    return { window: consoleWindow({ session: answer.session, cursor: answer.cursor, startedAt }), reason: null };
+  } catch (err) {
+    return { window: null, reason: err.message };
   }
 }
 
@@ -94,27 +106,30 @@ function countLevels(entries) {
   return counts;
 }
 
-/** Same session as the window and the cursor honoured: entries after the cursor count. */
-function sameSession(answer, window) {
-  return answer.session === window.session && answer.reset !== true;
+/** Which window an answer read against `window` covers. */
+function scopeOf(answer, window) {
+  if (!window) return WINDOW_SCOPE.wholeBuffer;
+  if (answer.session !== window.session) return WINDOW_SCOPE.freshSession;
+  return answer.reset === true ? WINDOW_SCOPE.cursorReset : WINDOW_SCOPE.sinceStart;
 }
 
 /**
  * A `console get` answer cut to the playtest window: the entries, counts over
- * them, the editor's groundTruth, and which window they cover.
+ * them, the editor's groundTruth, and which window they cover. `unplaced`
+ * counts entries left out because they carry no seq to place them after the
+ * cursor; `truncated` says the editor returned a full tail, so older entries
+ * of the window (and their counts) may be missing; `dropped` is the editor's
+ * own gap flag.
  * @param {unknown} answer
  * @param {{session:string, cursor:number, startedAt?:string|null}|null} window
- * @returns {{window:object, entries:object[], counts:object, groundTruth:object|null, dropped?:true}}
+ * @returns {{window:object, entries:object[], counts:object, groundTruth:object|null, unplaced?:number, truncated?:true, dropped?:true}}
  */
 function windowedConsole(answer, window) {
   const a = isObj(answer) ? answer : {};
   const all = Array.isArray(a.entries) ? a.entries.filter(isObj) : [];
-  let scope = WINDOW_SCOPE.wholeBuffer;
-  let entries = all;
-  if (window) {
-    scope = sameSession(a, window) ? WINDOW_SCOPE.sinceStart : WINDOW_SCOPE.freshSession;
-    if (scope === WINDOW_SCOPE.sinceStart) entries = all.filter((e) => isCursor(e.seq) && e.seq > window.cursor);
-  }
+  const scope = scopeOf(a, window);
+  const entries = scope === WINDOW_SCOPE.sinceStart ? all.filter((e) => isCursor(e.seq) && e.seq > window.cursor) : all;
+  const unplaced = scope === WINDOW_SCOPE.sinceStart ? all.filter((e) => !isCursor(e.seq)).length : 0;
   const cover = {
     scope,
     startedAt: window ? window.startedAt || null : null,
@@ -127,6 +142,8 @@ function windowedConsole(answer, window) {
     entries,
     counts: countLevels(entries),
     groundTruth: isObj(a.groundTruth) ? a.groundTruth : null,
+    ...(unplaced ? { unplaced } : {}),
+    ...(all.length >= CONSOLE_TAIL ? { truncated: true } : {}),
     ...(a.dropped === true ? { dropped: true } : {}),
   };
 }

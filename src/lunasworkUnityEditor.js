@@ -49,12 +49,11 @@ const { PIPELINE_ERROR, isTransientPipelineError, pipelineCommandDidNotRun } = r
 const POLL_MS = 500;
 // err.code of a wait that ran out of its deadline.
 const WAIT_TIMEOUT = 'LUNA_UNITY_WAIT_TIMEOUT';
-// The bounded wait for refresh + recompile + its domain reload + the compile check.
+// The bounded wait for refresh + recompile + its domain reload + the compile
+// check. A successful compile always reloads the scripts (codeLoadCount + 1):
+// until it has, the new code is not loaded, so the wait holds - past this it
+// is an environment failure, never a playtest of the old code.
 const COMPILE_WAIT_MS = 4 * 60 * 1000;
-// A successful compile reloads the domain (codeLoadCount + 1). An idle editor
-// whose count did not move is accepted after this long, so a compile that
-// reloads nothing cannot stall the start.
-const RELOAD_GRACE_MS = 5 * 1000;
 // A groundTruth sample older than this describes an older console (the package's own limit is 2 s).
 const GROUND_TRUTH_MAX_AGE_MS = 2000;
 // An editor that gives no groundTruth at all: recompile_status alone decides after this long.
@@ -138,8 +137,9 @@ function cleanErrors(list) {
 }
 
 /** An Error that IS the environment-failure result {ok:false, environment:true, reason, errors}. */
-function environmentFailure(reason, message, errors = []) {
-  return Object.assign(new Error(message), { code: UNITY_ENVIRONMENT_FAILURE, ok: false, environment: true, reason, errors: cleanErrors(errors) });
+function environmentFailure(reason, message, errors = [], cause = undefined) {
+  const err = new Error(message, cause ? { cause } : undefined);
+  return Object.assign(err, { code: UNITY_ENVIRONMENT_FAILURE, ok: false, environment: true, reason, errors: cleanErrors(errors) });
 }
 
 /** True for the error prepareEditor() throws when the editor, not the game, failed. */
@@ -171,11 +171,16 @@ function compileFailure(errors) {
   return environmentFailure(ENVIRONMENT_REASON.compileFailed, `Unity could not compile the game's scripts${count}${first} - not a playtest result`, clean);
 }
 
-/** A wait that ran out: still compiling, or an editor that stayed busy. */
+/**
+ * A wait that ran out: still compiling, or an editor that stayed busy. The
+ * message names the last recompile status seen and what was skipped on the way.
+ */
 function timeoutFailure(err, watch) {
   const reason = watch.state === 'compiling' ? ENVIRONMENT_REASON.stillCompiling : ENVIRONMENT_REASON.editorBusy;
   const what = reason === ENVIRONMENT_REASON.stillCompiling ? 'Unity was still compiling' : 'the Unity editor stayed busy';
-  return environmentFailure(reason, `${what} after ${seconds(COMPILE_WAIT_MS)}s - not a playtest result (${errText(err)})`);
+  const seen = watch.lastStatus === null ? '' : `; last recompile status: ${watch.lastStatus}`;
+  const notes = watch.notes.length ? `; ${watch.notes.join('; ')}` : '';
+  return environmentFailure(reason, `${what} after ${seconds(COMPILE_WAIT_MS)}s - not a playtest result (${errText(err)}${seen}${notes})`, [], err);
 }
 
 // ---- auto tick ----------------------------------------------------------------------
@@ -189,17 +194,28 @@ function timeoutFailure(err, watch) {
  */
 function previousAutoTick(unityProjectDir, log = () => {}) {
   const file = path.join(unityProjectDir, ...PIPELINE_CONFIG_PARTS);
-  let watchdog = DEFAULT_WATCHDOG_ENABLED;
+  const fallback = (why) => {
+    log(`[lunaswork] Unity Pipeline config ${why}; auto tick goes back to the package default after the playtest`);
+    return { enabled: DEFAULT_WATCHDOG_ENABLED, intervalMs: AUTO_TICK_INTERVAL_MS };
+  };
+  let text;
   try {
-    const text = fs.readFileSync(file, 'utf8');
-    if (text.length > MAX_CONFIG_CHARS) throw new Error('too large');
-    const config = JSON.parse(text);
-    if (isObj(config) && typeof config.m_WatchdogEnabled === 'boolean') watchdog = config.m_WatchdogEnabled;
+    text = fs.readFileSync(file, 'utf8');
   } catch (err) {
-    // Never the parser's message: it would quote the file.
-    const why = err && typeof err.code === 'string' ? err.code : 'not valid JSON';
-    if (!err || err.code !== 'ENOENT') log(`[lunaswork] Unity Pipeline config unreadable (${why}); auto tick goes back to the package default after the playtest`);
+    // No config file: the editor runs on the package defaults too.
+    if (err && err.code === 'ENOENT') return { enabled: DEFAULT_WATCHDOG_ENABLED, intervalMs: AUTO_TICK_INTERVAL_MS };
+    return fallback(`unreadable (${err && typeof err.code === 'string' ? err.code : errText(err)})`);
   }
+  if (text.length > MAX_CONFIG_CHARS) return fallback(`too large (over ${MAX_CONFIG_CHARS} characters)`);
+  let config;
+  try {
+    config = JSON.parse(text);
+  } catch {
+    // Never the parser's message: it would quote the file.
+    return fallback('unreadable (not valid JSON)');
+  }
+  // Without the key the editor itself uses the default as well (EditorPipelineConfig.DefaultWatchdogEnabled).
+  const watchdog = isObj(config) && typeof config.m_WatchdogEnabled === 'boolean' ? config.m_WatchdogEnabled : DEFAULT_WATCHDOG_ENABLED;
   return { enabled: watchdog, intervalMs: AUTO_TICK_INTERVAL_MS };
 }
 
@@ -207,32 +223,43 @@ function previousAutoTick(unityProjectDir, log = () => {}) {
 const commandFailed = (err) => !!err && err.code === PIPELINE_ERROR.failed;
 
 /**
- * One preparation step whose failure is not fatal: refused -> `onFailed`, a
- * lost answer -> logged (it may have run). A wait that ran out still throws.
+ * One idempotent editor action (`set_auto_tick` is declared Idempotent, the
+ * Assets/Refresh menu item only re-imports): any transient failure - busy, a
+ * domain reload, a lost answer - is sent again until `deadline`.
+ */
+function idempotent(io, deadline, call, timeoutMessage) {
+  const once = async () => {
+    await io.call(call);
+    return true;
+  };
+  return io.waits.pollUntil(deadline, once, timeoutMessage);
+}
+
+/**
+ * One preparation step whose refusal is not fatal: refused (the command ran
+ * and failed, or does not exist) -> `onFailed` and a log line. A wait that
+ * ran out still throws.
  */
 async function optionalStep(io, deadline, call, what, onFailed = () => {}) {
   try {
-    await io.waits.act(deadline, () => io.call(call), `Unity did not take the ${what} within ${seconds(COMPILE_WAIT_MS)}s`);
+    await idempotent(io, deadline, call, `Unity did not take the ${what} within ${seconds(COMPILE_WAIT_MS)}s`);
   } catch (err) {
-    if (commandFailed(err)) {
-      onFailed();
-      io.log(`[lunaswork] Unity ${what} refused (${errText(err)}); going on`);
-      return;
-    }
-    if (!isTransientPipelineError(err)) throw err;
-    io.log(`[lunaswork] Unity ${what}: no answer (${errText(err)}), going on`);
+    if (!commandFailed(err)) throw err;
+    onFailed();
+    io.log(`[lunaswork] Unity ${what} refused (${errText(err)}); going on`);
   }
 }
 
 /**
- * Puts the previous auto tick setting back; throws when the editor did not take it.
+ * Puts the previous auto tick setting back (retried through busy answers and
+ * the domain reload of leaving play mode); throws when the editor did not take it.
  * @param {{call:Function, waits:object, autoTick:{changed:boolean, previous:object|null}}} io
  * @param {number} deadline
  */
 async function restoreAutoTick(io, deadline) {
   if (!io.autoTick.changed) return;
   const previous = io.autoTick.previous || { enabled: DEFAULT_WATCHDOG_ENABLED, intervalMs: AUTO_TICK_INTERVAL_MS };
-  await io.waits.act(deadline, () => io.call(UNITY_PIPELINE_EDITOR.setAutoTick(previous)), 'Unity did not take the auto tick setting back in time');
+  await idempotent(io, deadline, UNITY_PIPELINE_EDITOR.setAutoTick(previous), 'Unity did not take the auto tick setting back in time');
   io.autoTick.changed = false;
 }
 
@@ -254,39 +281,68 @@ async function editorStatus(io, deadline) {
   return isObj(status) ? status : {};
 }
 
-/** `script recompile`: a refusal (compile errors standing) or a lost answer leaves the verdict to the status poll. */
+/**
+ * `script recompile`: a refusal (compile errors standing) or a lost answer
+ * leaves the verdict to the status poll and the compile check.
+ * @returns {Promise<'started'|'refused'|'lost'>}
+ */
 async function triggerRecompile(io, deadline) {
   try {
     await io.waits.act(deadline, () => io.call(UNITY_PIPELINE_EDITOR.recompile()), `Unity did not start the recompile within ${seconds(COMPILE_WAIT_MS)}s`);
+    return 'started';
   } catch (err) {
     if (commandFailed(err)) {
       io.log(`[lunaswork] Unity script recompile refused (${errText(err)}); reading its status`);
-      return;
+      return 'refused';
     }
     if (!isTransientPipelineError(err)) throw err;
     io.log(`[lunaswork] Unity script recompile: no answer (${errText(err)}), waiting for the editor`);
+    return 'lost';
   }
 }
 
-/** True once the scripts reloaded since `before` (or when either side has no count). */
+/** True once the scripts reloaded since `before`; null when the editor gives no codeLoadCount to tell. */
 function reloadedSince(before, status) {
   const a = before.codeLoadCount;
   const b = status.codeLoadCount;
-  return !Number.isInteger(a) || !Number.isInteger(b) || a !== b;
+  if (!Number.isInteger(a) || !Number.isInteger(b)) return null;
+  return a !== b;
+}
+
+/** A recompile status as the timeout message shows it. */
+function statusText(rs) {
+  if (isObj(rs) && typeof rs.status === 'string') return `'${rs.status.slice(0, 40)}'`;
+  return `no status (${JSON.stringify(rs === undefined ? null : rs).slice(0, 80)})`;
 }
 
 /**
- * Polls until the recompile is done and its domain reload finished.
+ * Polls until the recompile is done and its domain reload finished. The
+ * watch state changes only on an answer, so a reload at the very end keeps
+ * what the editor last said (compiling or busy). A recompile whose answer
+ * was lost and whose status still reads idle never ran: it is sent once more.
+ * @param {'started'|'refused'|'lost'} trigger how `script recompile` went
  * @returns {Promise<{failed:boolean, errors:string[], status:string}>}
  */
-async function waitForCompile(io, deadline, before, watch) {
+async function waitForCompile(io, deadline, before, watch, trigger) {
   let result = null;
-  let idleSince = null;
+  let resent = trigger !== 'lost';
+  const once = (note) => {
+    if (!watch.notes.includes(note)) {
+      watch.notes.push(note);
+      io.log(`[lunaswork] Unity: ${note}`);
+    }
+  };
   const probe = async () => {
-    watch.state = 'busy';
     const rs = await io.call(UNITY_PIPELINE_EDITOR.recompileStatus());
+    watch.lastStatus = statusText(rs);
     const status = isObj(rs) && typeof rs.status === 'string' ? rs.status : '';
-    if (RECOMPILE_RUNNING.has(status)) watch.state = 'compiling';
+    watch.state = RECOMPILE_RUNNING.has(status) ? 'compiling' : 'busy';
+    if (status === 'idle' && !resent) {
+      resent = true;
+      once('the recompile answer was lost and its status reads idle: sending it again');
+      await triggerRecompile(io, deadline);
+      return false;
+    }
     if (!RECOMPILE_DONE.has(status)) return false;
     if (rs.failed === true) {
       result = { failed: true, errors: cleanErrors(rs.errors), status };
@@ -295,13 +351,14 @@ async function waitForCompile(io, deadline, before, watch) {
     const es = await io.call(UNITY_PIPELINE.state());
     if (editorBusy(es)) {
       if (isObj(es) && es.compiling === true) watch.state = 'compiling';
-      idleSince = null;
       return false;
     }
-    if (status === 'completed' && !reloadedSince(before, es)) {
-      if (idleSince === null) idleSince = io.now();
-      if (io.now() - idleSince < RELOAD_GRACE_MS) return false;
-      io.log(`[lunaswork] Unity compiled but did not reload its scripts within ${seconds(RELOAD_GRACE_MS)}s; going on`);
+    const reloaded = reloadedSince(before, es);
+    if (status === 'completed' && reloaded === null) once('editor status gave no codeLoadCount; the script reload is judged by compiling / domainReloadInProgress alone');
+    if (status === 'completed' && reloaded === false) {
+      // Compiled, the new scripts not loaded yet: playing now would run the old code.
+      once('compiled, waiting for the script reload');
+      return false;
     }
     result = { failed: false, errors: [], status };
     return true;
@@ -312,17 +369,20 @@ async function waitForCompile(io, deadline, before, watch) {
 
 /**
  * The compile check: a `console get --level error` whose groundTruth is a
- * fresh sample of an editor that is not compiling.
+ * fresh sample of an editor that is not compiling. `requireTruth` (the
+ * recompile was refused or its answer lost, so the status may predate it):
+ * no verdict without groundTruth - it is waited for until the deadline.
  * @returns {Promise<object>} the console answer
  */
-async function readCompileCheck(io, deadline, watch) {
+async function readCompileCheck(io, deadline, watch, requireTruth) {
   let answer = null;
   let missingSince = null;
   const probe = async () => {
-    watch.state = 'busy';
     answer = await io.call(UNITY_PIPELINE_EDITOR.compileCheck());
     const truth = isObj(answer) && isObj(answer.groundTruth) ? answer.groundTruth : null;
+    watch.state = 'busy';
     if (!truth) {
+      if (requireTruth) return false;
       if (missingSince === null) missingSince = io.now();
       return io.now() - missingSince >= GROUND_TRUTH_GRACE_MS;
     }
@@ -347,22 +407,26 @@ async function readCompileCheck(io, deadline, watch) {
  */
 async function prepareEditor(io) {
   const deadline = io.now() + COMPILE_WAIT_MS;
-  const watch = { state: 'busy' };
+  // What the editor showed last and what was skipped: the timeout message says it.
+  const watch = { state: 'busy', lastStatus: null, notes: [] };
   try {
     // From here on restoreAutoTick() puts the setting back, even when the answer is lost.
     io.autoTick.changed = true;
     await optionalStep(io, deadline, UNITY_PIPELINE_EDITOR.setAutoTick(AUTO_TICK_SESSION), 'auto tick', () => {
       io.autoTick.changed = false;
+      watch.notes.push('auto tick was refused, so an unfocused editor may not tick');
     });
     const before = await editorStatus(io, deadline);
     // `script recompile` refreshes too; the menu item runs first so a new asset is imported either way.
     await optionalStep(io, deadline, UNITY_PIPELINE_EDITOR.refresh(), 'asset refresh');
-    await triggerRecompile(io, deadline);
-    const compiled = await waitForCompile(io, deadline, before, watch);
-    const check = await readCompileCheck(io, deadline, watch);
+    const trigger = await triggerRecompile(io, deadline);
+    if (trigger !== 'started') watch.notes.push(`the recompile was ${trigger === 'refused' ? 'refused' : 'sent without an answer'}`);
+    const compiled = await waitForCompile(io, deadline, before, watch, trigger);
+    const check = await readCompileCheck(io, deadline, watch, trigger !== 'started');
     const truth = isObj(check) && isObj(check.groundTruth) ? check.groundTruth : null;
     if (compiled.failed || (truth && truth.compilationFailed === true)) throw compileFailure(compileErrors(compiled.errors, check));
-    return { window: consoleWindowOf(check, new Date(io.now()).toISOString()), groundTruth: truth };
+    const { window, reason } = consoleWindowOf(check, new Date(io.now()).toISOString());
+    return { window, windowProblem: reason, groundTruth: truth };
   } catch (err) {
     if (err && err.code === WAIT_TIMEOUT) throw timeoutFailure(err, watch);
     throw err;
@@ -373,7 +437,6 @@ module.exports = {
   POLL_MS,
   WAIT_TIMEOUT,
   COMPILE_WAIT_MS,
-  RELOAD_GRACE_MS,
   AUTO_TICK_SESSION,
   PIPELINE_CONFIG_PARTS,
   UNITY_ENVIRONMENT_FAILURE,

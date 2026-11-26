@@ -981,8 +981,9 @@ test('unityConsole: the window call, the cut, the counts and what a window cover
   for (const bad of [{ session: 'x y', cursor: 1 }, { session, cursor: 1.5 }, { session, cursor: -2 }, { session: 7, cursor: 1 }, { session: 'a'.repeat(65), cursor: 1 }]) {
     assert.throws(() => UC.consoleCall(bad), /session id|cursor/, JSON.stringify(bad));
   }
-  assert.equal(UC.consoleWindowOf({ entries: [] }, 'now'), null, 'an editor without cursors opens no window');
-  assert.deepEqual(UC.consoleWindowOf({ cursor: 4, session }, '2026-11-26T10:00:00.000Z'), { session, cursor: 4, startedAt: '2026-11-26T10:00:00.000Z' });
+  assert.deepEqual(UC.consoleWindowOf({ entries: [] }, 'now'), { window: null, reason: 'the console answer has no cursor or session' }, 'an editor without cursors opens no window');
+  assert.deepEqual(UC.consoleWindowOf({ cursor: 4, session: 'not a session' }, 'now'), { window: null, reason: 'the Unity console session id is not usable' }, 'and says why');
+  assert.deepEqual(UC.consoleWindowOf({ cursor: 4, session }, '2026-11-26T10:00:00.000Z'), { window: { session, cursor: 4, startedAt: '2026-11-26T10:00:00.000Z' }, reason: null });
 
   const answer = {
     session,
@@ -995,8 +996,13 @@ test('unityConsole: the window call, the cut, the counts and what a window cover
   assert.deepEqual(cut.entries.map((e) => e.message), ['new warn', 'new error'], 'only entries after the cursor; one without a seq cannot be placed');
   assert.deepEqual(cut.counts, { error: 1, warn: 1, log: 0 });
   assert.deepEqual(cut.window, { scope: 'since-start', startedAt: 'start', session, cursor: 4 });
+  assert.equal(cut.unplaced, 1, 'the entry without a seq is reported, not silently lost');
+  assert.equal(cut.truncated, undefined);
   assert.equal(cut.dropped, true, 'a gap the editor reports is kept');
-  assert.deepEqual(UC.windowedConsole({ ...answer, reset: true }, { session, cursor: 4 }).window.scope, 'fresh-session', 'a refused cursor is a fresh window too');
+  const reset = UC.windowedConsole({ ...answer, reset: true }, { session, cursor: 4 });
+  assert.deepEqual([reset.window.scope, reset.entries.length, 'newSession' in reset.window], ['cursor-reset', 4, false], 'a refused cursor in the same session: its tail, labelled as such');
+  const full = UC.windowedConsole({ session, entries: Array.from({ length: UC.CONSOLE_TAIL }, (_, i) => ({ seq: 10 + i, level: 'error', message: 'spam' })) }, { session, cursor: 4 });
+  assert.deepEqual([full.counts.error, full.truncated], [UC.CONSOLE_TAIL, true], 'a full tail says older entries may be missing');
   const whole = UC.windowedConsole(answer, null);
   assert.equal(whole.window.scope, 'whole-buffer');
   assert.equal(whole.entries.length, 4);

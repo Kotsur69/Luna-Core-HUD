@@ -266,7 +266,7 @@ function createUnityAdapter(ctx) {
     autoTick.previous = previousAutoTick(target.dir, log);
     const prepared = await prepareEditor({ call, now: ctx.now, waits: { pollUntil, act }, log, autoTick });
     consoleWindow = prepared.window;
-    if (!consoleWindow) log('[lunaswork] Unity console gave no cursor: the console evidence covers its whole buffer');
+    if (!consoleWindow) log(`[lunaswork] Unity console window not opened (${prepared.windowProblem}): the console evidence covers its whole buffer`);
   }
 
   /** @returns {Promise<number>} the start deadline, shared with the driver check */

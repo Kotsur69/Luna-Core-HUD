@@ -877,7 +877,13 @@ const STOP_LOG = Object.freeze(['console get', 'playtest state', 'playtest scree
  * {polls: n} (compiling for n status polls, then a domain reload), 'fails'
  * (compile errors compileErrors), 'standing' (errors already standing: the
  * recompile itself is refused), 'forever' (never done) or 'reloadForever'
- * (compiled, then the editor never comes back from its domain reload). The console holds entries with
+ * (compiled, then the editor never comes back from its domain reload).
+ * reloadDelayPolls: 'completed' shows for n more status polls before the
+ * scripts reload (codeLoadCount unchanged meanwhile, editor idle).
+ * recompileLost: 'ran' (it runs, the answer is lost) or 'notRun' (lost before
+ * it ran, once). noGroundTruth: the console answers without groundTruth.
+ * vanishAfterPolls: the editor disappears after n recompile_status answers.
+ * lostAutoTick: n set_auto_tick answers lost after the setting was applied. The console holds entries with
  * seq numbers in one capture session; consoleBefore are logged before the
  * playtest, playing logs the game's own NullReferenceException.
  * listed: the playtest commands the catalog lists (default: all with driver).
@@ -887,12 +893,14 @@ function fakePipelineEditor({
   busyBeforePlay = 0, lostPlayAnswer = false, playFails = false, driverAuthFails = false,
   busyBeforeStop = 0, stopFails = 0, driverListed = driver, busyList = 0,
   compile = 'up_to_date', compileErrors = [], consoleBefore = [], listed = null, consoleSession = CONSOLE_SESSION,
+  reloadDelayPolls = 0, recompileLost = null, noGroundTruth = false, vanishAfterPolls = 0, lostAutoTick = 0,
 } = {}) {
   const ed = {
     log: [], requests: [], reads: [], dirs: [], sessions: 0, closed: 0, playMode: 'stopped', missing: 0, busy: 0, busyBeforePlay, busyBeforeStop, stopFails,
     busyList, notFound: [], keys: [], playerX: -0.27,
     autoTick: [], codeLoadCount: 1, compilePolls: 0, recompile: { status: 'idle', failed: false, errors: [] },
     compilationFailed: compile === 'standing', consoleSession, console: [],
+    reloadIn: 0, statusPolls: 0, recompileLost, lostAutoTick, codeLoadAtPlay: null,
   };
   ed.logConsole = (level, message) => ed.console.push({ seq: ed.console.length + 1, level, logType: level === 'error' ? 'Error' : 'Warning', message, stackTrace: '' });
   for (const [level, message] of consoleBefore) ed.logConsole(level, message);
@@ -903,14 +911,23 @@ function fakePipelineEditor({
     const levels = p.level === 'error' ? ['error'] : ['error', 'warn'];
     const entries = ed.console.filter((e) => e.seq > since && levels.includes(e.level)).slice(-p.tail);
     const count = (level) => ed.console.filter((e) => e.level === level).length;
+    const groundTruth = { compilationFailed: ed.compilationFailed, compiling: ed.recompile.status === 'compiling', consoleErrors: count('error'), ageMs: 40 };
     return {
       entries, cursor: ed.console.length, session: ed.consoleSession, returned: entries.length, dropped: reset, reset,
       counts: { error: count('error'), warn: count('warn'), log: 0 },
-      groundTruth: { compilationFailed: ed.compilationFailed, compiling: ed.recompile.status === 'compiling', consoleErrors: count('error'), ageMs: 40 },
+      ...(noGroundTruth ? {} : { groundTruth }),
     };
   };
   const recompileStatus = () => {
-    if (ed.recompile.status === 'compiling' && compile !== 'forever') {
+    ed.statusPolls += 1;
+    if (vanishAfterPolls && ed.statusPolls >= vanishAfterPolls) ed.missing = Infinity;
+    if (ed.reloadIn > 0) {
+      ed.reloadIn -= 1;
+      if (ed.reloadIn === 0) {
+        ed.codeLoadCount += 1;
+        ed.missing = 1;
+      }
+    } else if (ed.recompile.status === 'compiling' && compile !== 'forever') {
       if (ed.compilePolls > 0) {
         ed.compilePolls -= 1;
       } else if (compile === 'fails' || (isObj(compile) && compile.fails === true)) {
@@ -920,8 +937,12 @@ function fakePipelineEditor({
       } else {
         // Compiled: the domain reloads (the port file is gone once, or for good) and the scripts load again.
         ed.recompile = { status: 'completed', failed: false, errors: [] };
-        ed.codeLoadCount += 1;
-        ed.missing = compile === 'reloadForever' ? Infinity : 1;
+        if (reloadDelayPolls > 0) {
+          ed.reloadIn = reloadDelayPolls;
+        } else {
+          ed.codeLoadCount += 1;
+          ed.missing = compile === 'reloadForever' ? Infinity : 1;
+        }
       }
     }
     const answer = { ...ed.recompile, compilationFailed: ed.compilationFailed };
@@ -982,6 +1003,7 @@ function fakePipelineEditor({
     'editor.playmode start': () => {
       if (playFails) return reply(400, { success: false, error: 'Play mode is disabled in this project' });
       ed.playMode = 'playing';
+      ed.codeLoadAtPlay = ed.codeLoadCount;
       ed.missing = reloadReads;
       ed.busy = busyReplies;
       ed.logConsole('error', 'NullReferenceException in Enemy.Update');
@@ -1028,9 +1050,23 @@ function fakePipelineEditor({
       ed.log.push(`${command} (busy)`);
       return reply(503, { success: false, status: 'busy', busyReason: 'settling', retryable: true });
     }
+    const socketDropped = () => new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) });
+    if (command === 'script recompile' && ed.recompileLost === 'notRun') {
+      ed.recompileLost = null;
+      ed.log.push(`${command} (lost before it ran)`);
+      throw socketDropped();
+    }
     ed.log.push(command);
     const res = answers[command] ? answers[command](parameters, command) : notFound(command);
-    if (playing && lostPlayAnswer) throw new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) });
+    if (playing && lostPlayAnswer) throw socketDropped();
+    if (command === 'script recompile' && ed.recompileLost === 'ran') {
+      ed.recompileLost = null;
+      throw socketDropped();
+    }
+    if (command === 'editor set_auto_tick' && ed.lostAutoTick > 0) {
+      ed.lostAutoTick -= 1;
+      throw socketDropped();
+    }
     return res;
   };
   ed.connect = (dir) => {
@@ -1423,6 +1459,73 @@ test('unity pipeline recompile: busy answers before and during the compile are r
   assert.equal(count(world.editor.log, 'editor set_auto_tick'), 1, 'a busy answer did not run: sent again, run once');
   assert.ok(adapter.tools().allowedTools.length > 0);
   await adapter.stop();
+});
+
+test('unity pipeline recompile: "completed" before the scripts reloaded is not done - play waits for the new code', async () => {
+  const world = pipelineWorld({ compile: { polls: 0 }, reloadDelayPolls: 3 });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  assert.equal(world.editor.codeLoadAtPlay, 2, 'play mode started only after codeLoadCount moved');
+  assert.ok(world.logs.some((l) => /compiled, waiting for the script reload/.test(l)), world.logs.join('\n'));
+  assert.equal(count(world.logs, world.logs.find((l) => /waiting for the script reload/.test(l))), 1, 'said once');
+  await adapter.stop();
+});
+
+test('unity pipeline recompile: a lost recompile answer - waited out when it ran, sent again when its status still reads idle', async () => {
+  const ran = pipelineWorld({ compile: { polls: 1 }, recompileLost: 'ran' });
+  const a1 = A.createAdapter('unity', ran.opts);
+  await a1.start(pipelineProfile);
+  assert.equal(count(ran.editor.log, 'script recompile'), 1, 'never sent twice when it may have run');
+  assert.equal(ran.editor.codeLoadAtPlay, 2);
+  assert.ok(ran.logs.some((l) => /script recompile: no answer/.test(l)), ran.logs.join('\n'));
+  await a1.stop();
+
+  const lost = pipelineWorld({ compile: { polls: 1 }, recompileLost: 'notRun' });
+  const a2 = A.createAdapter('unity', lost.opts);
+  await a2.start(pipelineProfile);
+  assert.deepEqual(lost.editor.log.filter((l) => l.startsWith('script recompile ') || l === 'script recompile'), ['script recompile (lost before it ran)', 'script recompile']);
+  assert.ok(lost.logs.some((l) => /status reads idle: sending it again/.test(l)), lost.logs.join('\n'));
+  assert.equal(lost.editor.codeLoadAtPlay, 2, 'the new code is played, not the old');
+  await a2.stop();
+});
+
+test('unity pipeline recompile: without groundTruth the status decides after a grace - unless the recompile went unanswered', async () => {
+  const plain = pipelineWorld({ noGroundTruth: true });
+  const a1 = A.createAdapter('unity', plain.opts);
+  await a1.start(pipelineProfile);
+  assert.ok(plain.logs.some((l) => /gave no groundTruth; the compile verdict is recompile_status alone/.test(l)), plain.logs.join('\n'));
+  await a1.stop();
+
+  const unsure = pipelineWorld({ noGroundTruth: true, compile: { polls: 0 }, recompileLost: 'ran' });
+  await assert.rejects(A.createAdapter('unity', unsure.opts).start(pipelineProfile), (err) => {
+    assert.deepEqual([err.environment, err.reason], [true, 'editor-busy']);
+    assert.match(err.message, /Unity gave no current compile state/);
+    assert.match(err.message, /the recompile was sent without an answer/);
+    return true;
+  });
+  assert.equal(unsure.editor.log.includes('editor.playmode start'), false, 'no playtest on an unconfirmed compile');
+});
+
+test('unity pipeline recompile: a hung compile whose editor then vanishes still reports still-compiling, with the last status', async () => {
+  const world = pipelineWorld({ compile: 'forever', vanishAfterPolls: 3 });
+  await assert.rejects(A.createAdapter('unity', world.opts).start(pipelineProfile), (err) => {
+    assert.equal(err.reason, 'still-compiling', 'the last answer said compiling; the reload after it does not change that');
+    assert.match(err.message, /last error: Unity editor not open on/);
+    assert.match(err.message, /last recompile status: 'compiling'/);
+    assert.ok(err.cause instanceof Error, 'the wait that ran out is the cause');
+    return true;
+  });
+});
+
+test('unity pipeline auto tick: set_auto_tick is idempotent - a lost answer is sent again, on start and on restore', async () => {
+  const world = pipelineWorld({ lostAutoTick: 1 });
+  const adapter = A.createAdapter('unity', world.opts);
+  await adapter.start(pipelineProfile);
+  assert.deepEqual(world.editor.autoTick, [AUTO_TICK_ON, AUTO_TICK_ON], 'lost once, sent again');
+  world.editor.lostAutoTick = 1; // the restore's answer is lost in the reload of leaving play mode
+  assert.equal(await adapter.stop(), true);
+  assert.equal(world.editor.autoTick.length, 4);
+  assert.equal(world.logs.some((l) => /could not restore/.test(l)), false, world.logs.join('\n'));
 });
 
 test('unity pipeline auto tick: the previous setting comes from the project\'s Pipeline config and is restored on success and failure', async () => {
