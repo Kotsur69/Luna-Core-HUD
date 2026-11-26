@@ -523,6 +523,28 @@ test('after a restart mid-build, the restored plan\'s pushed work is merged firs
   assert.deepEqual(res.integration, finished.integration);
 });
 
+test('finishing an interrupted Unity build: the self-check already knows it is a Unity build', async () => {
+  const restored = { id: 'p7', projectId: 'game', settled: false, killed: false, packages: [{ id: 'a', state: 'pushed', merged: false }] };
+  const godMode = { checkCommand: 'npm test' };
+  const resume = async (isUnity, opts) => {
+    const seen = [];
+    let builder = null;
+    const orchestra = fakeOrchestra({
+      view: () => restored,
+      finishRun: async () => (seen.push(builder.workerSettings(godMode)), { ok: true, plan: { ...restored, integration: { state: 'done' } } }),
+    });
+    builder = createGodModeBuilder({ orchestra, profileId: () => null, env: () => ({}), isUnityProject: () => isUnity, configureUnityMerge: async () => ({ ok: true }) });
+    const res = await builder.build(buildOpts({ resumePlanId: 'p7', ownPlanIds: ['p7'], ...opts }));
+    assert.equal(res.resumed, true);
+    return seen[0];
+  };
+  // The unity adapter, or a Unity project: God Mode's npm test is no check command there.
+  assert.deepEqual((await resume(false, { adapter: 'unity', checkCommand: 'npm test' })).unityBuild, { own: false });
+  assert.deepEqual((await resume(true, { checkCommand: 'pwsh tools/check.ps1' })).unityBuild, { own: true });
+  // Any other build resumes exactly as before: no unityBuild key.
+  assert.equal('unityBuild' in (await resume(false, { adapter: 'web' })), false);
+});
+
 test('a restored plan with nothing pushed, an older own plan, or a settled one is planned afresh', async () => {
   for (const view of [
     { id: 'p7', projectId: 'game', settled: false, killed: false, packages: [{ id: 'a', state: 'stalled', merged: false }] },

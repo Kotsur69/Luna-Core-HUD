@@ -411,6 +411,42 @@ test('selfCheckDeferred: God Mode\'s command by shape + output, the profile\'s o
   assert.equal(uv.selfCheckDeferred('unity command test run', missing, undefined), false);
 });
 
+test("selfCheckDeferred: the profile's own command stays red when its output shows a real failure next to the no-Pipeline line", () => {
+  // A wrapper (pwsh / npm script) that carries on after a failing step and
+  // then calls the unity CLI: the no-Pipeline line is last, the real red is above it.
+  const genuine = [
+    'Assets/Scripts/Clock.cs(3,4): error CS1002: ; expected',
+    'Tests failed: 3 of 10 failed',
+    'Assertion failed in clock.test',
+    'compile failed: 3 errors',
+    'Compilation failed with 2 errors',
+    "'grep' is not recognized as an internal or external command,",
+    'bash: grep: command not found',
+    'NullReferenceException: Object reference not set to an instance of an object',
+    'FAIL tools/check.test.js',
+    'Failed: 2, Passed: 8',
+    '2 failing',
+  ];
+  for (const line of genuine) {
+    const result = { ok: false, output: `${line}\n${NO_PIPELINE}` };
+    assert.equal(uv.selfCheckDeferred('pwsh tools/check.ps1', result, { own: true }), false, line);
+    assert.equal(uv.selfCheckDeferred('npm test', result, { own: true }), false, line);
+  }
+  // The wrapper's own exit noise and passing counts are not a failure of their own.
+  const noise = [
+    `> game@1.0.0 test\n> unity command test run\n\n${NO_PIPELINE}`,
+    `${NO_PIPELINE}\nnpm error Lifecycle script \`test\` failed with error:\nnpm error code 1\nnpm error command failed`,
+    `npm ERR! Test failed.  See above for more details.\n${NO_PIPELINE}`,
+    `Build succeeded. 0 Warning(s) 0 Error(s)\nFailed: 0, Passed: 12\n0 failing\n${NO_PIPELINE}`,
+  ];
+  for (const output of noise) {
+    assert.equal(uv.selfCheckDeferred('npm test', { ok: false, output }, { own: true }), true, output);
+  }
+  // God Mode's command keeps deferToUnityEditor's rule exactly (shape + output).
+  const compiled = { ok: false, output: `Assets/Scripts/Clock.cs(3,4): error CS1002: ; expected\n${NO_PIPELINE}` };
+  assert.equal(uv.selfCheckDeferred('unity command test run', compiled, { own: false }), uv.deferToUnityEditor('unity command test run', compiled));
+});
+
 test('UNITY_FIXUP_RULE forbids a package.json, *.cmd shims and wrapper scripts made to pass the check', () => {
   assert.match(uv.UNITY_FIXUP_RULE, /package\.json/);
   assert.match(uv.UNITY_FIXUP_RULE, /\*\.cmd/);

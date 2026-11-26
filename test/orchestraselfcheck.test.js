@@ -822,7 +822,8 @@ test('runSelfCheck, Unity build: a check red only for want of an editor is defer
     // The profile's own command: read by its output (unityEditorMissing).
     assert.equal((await tests('pwsh tools/check.ps1', { own: true }, missing)).tests, 'deferred');
     // Genuine failures stay red, own command or not.
-    for (const output of [`not ok 1 - clock ticks\n${NO_PIPELINE}`, 'error CS0246: The type or namespace name could not be found', '']) {
+    const compileThenUnity = `Assets/Scripts/Clock.cs(3,4): error CS1002: ; expected\n${NO_PIPELINE}`;
+    for (const output of [`not ok 1 - clock ticks\n${NO_PIPELINE}`, compileThenUnity, 'error CS0246: The type or namespace name could not be found', '']) {
       const red = await tests('pwsh tools/check.ps1', { own: true }, { ok: false, output });
       assert.equal(red.tests, 'failed', output);
     }

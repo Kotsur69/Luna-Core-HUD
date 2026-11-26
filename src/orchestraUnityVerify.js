@@ -250,11 +250,47 @@ function selfCheckCommandOf({ command, build, unityDir, fallback }) {
   return { checkCommand: cmd, unity: { own } };
 }
 
+// A line that shows a failure of its own next to the no-Pipeline error (a
+// wrapper script that carried on after a failing step, then called the unity
+// CLI). parseVerifyOutput reads only `Error:`-style lines and test names, so
+// these cover what it misses: compiler diagnostics, failing counts, a missing
+// command, an exception. Zero counts ("0 Error(s)", "Failed: 0") never match.
+const GENUINE_FAILURE_RES = Object.freeze([
+  /\b[Ee]rror\s+[A-Z]{1,5}\d{2,5}\b/, // error CS1002, error MSB3073
+  /\bcompil\w*\s+(?:failed|errors?)\b|\bcompiler errors?\b/i,
+  /\b(?:tests?|assert\w*)\s+fail/i, // Tests failed, Assertion failed
+  /^FAIL\b/,
+  /\b[1-9]\d*\s+(?:failed|failing|failures?|errors?)\b/i, // 3 failed, 2 errors
+  /\b(?:failed|failures?|errors?)\s*[:=]\s*[1-9]/i, // Failed: 2
+  /\bnot recognized as\b|\bcommand not found\b/i, // cmd.exe, bash
+  /\b\w*Exception\b/, // NullReferenceException
+]);
+// A wrapper's report of its own exit, not a failure of its own: npm's error /
+// warn lines and its script echo (`> unity command ...`).
+const WRAPPER_NOISE_RE = /^(?:npm (?:error|ERR!|warn|WARN)(?:\s|$)|>\s)/;
+const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+
+/**
+ * True when a line of `output` other than the no-Pipeline error and a
+ * wrapper's exit noise shows a failure of its own (GENUINE_FAILURE_RES).
+ * @param {unknown} output
+ * @returns {boolean}
+ */
+function otherFailureShown(output) {
+  return String(output || '')
+    .split(/\r?\n/)
+    .map((l) => l.replace(ANSI_RE, '').trim())
+    .filter((l) => l && !NO_PIPELINE_RE.test(l) && !WRAPPER_NOISE_RE.test(l))
+    .some((l) => GENUINE_FAILURE_RES.some((re) => re.test(l)));
+}
+
 /**
  * True when a Unity build's red check command failed only for want of an
- * editor: the profile's own command by its output alone (unityEditorMissing),
- * God Mode's by its output and its shape (deferToUnityEditor). Never outside
- * a Unity build (`unity` null).
+ * editor. God Mode's command: by its output and its shape
+ * (deferToUnityEditor). The profile's own command (any shape, e.g. a wrapper
+ * script): by its output alone - unityEditorMissing, and no other line shows
+ * a failure of its own (otherFailureShown), so a real red is never deferred.
+ * Never outside a Unity build (`unity` null).
  * @param {unknown} command
  * @param {{ok?:boolean, output?:string, timedOut?:boolean}|null} result runVerify's result
  * @param {{own?:boolean}|null|undefined} unity selfCheckCommandOf's `unity`
@@ -262,7 +298,8 @@ function selfCheckCommandOf({ command, build, unityDir, fallback }) {
  */
 function selfCheckDeferred(command, result, unity) {
   if (!isObj(unity)) return false;
-  return unity.own === true ? unityEditorMissing(result) : deferToUnityEditor(command, result);
+  if (unity.own === true) return unityEditorMissing(result) && !otherFailureShown(result.output);
+  return deferToUnityEditor(command, result);
 }
 
 /** The self-check fix-up brief's extra rule in a Unity build: no files that only make a check pass. */
