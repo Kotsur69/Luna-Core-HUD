@@ -9,7 +9,10 @@
 // catalog (`pipeline list_commands --group playtest`, which answers an empty
 // list for a missing group), never by trying a playtest command.
 //
-// Without the driver the same three actions run on built-in commands. Checked
+// Without the driver the same three actions run on built-in commands, each
+// one on its own: a game whose driver lists `playtest state` and `playtest
+// input` but no `playtest screenshot` keeps its own state and input and gets
+// `capture game_view` for the screenshot (playtestModeOf's fallback). Checked
 // live 2026-11-25 (Blade & Bullet, Unity 6000.6.4f1, com.unity.pipeline 1.0.0):
 //   screenshot  `capture game_view` with no output-path: the PNG comes back
 //               inline as base64 (~30 ms), so no file is written into the
@@ -95,17 +98,35 @@ const UNITY_PIPELINE_BUILTIN = Object.freeze({
 });
 
 /**
- * The mode a `pipeline list_commands --group playtest` answer calls for:
- * driver only when all three driver commands are listed.
- * @returns {{mode:string, missing:string[]}}
+ * What a `pipeline list_commands --group playtest` answer allows: the game's
+ * own command for every listed action, the editor's built-in stand-in for
+ * every missing one (`fallback`: screenshot -> `capture game_view`, input ->
+ * key and wait steps, state -> editor data). Builtin mode when none is listed,
+ * driver mode (with fallbacks) as soon as one is.
+ * @returns {{mode:string, missing:string[], fallback:string[]}}
  */
 function playtestModeOf(listing) {
   if (!isObj(listing) || !Array.isArray(listing.commands)) {
     throw new Error("Unity answered 'pipeline list_commands' without a commands list");
   }
   const listed = new Set(listing.commands.filter(isObj).map((c) => c.command));
-  const missing = DRIVER_COMMANDS.filter((command) => !listed.has(command));
-  return { mode: missing.length ? PLAYTEST_MODE.builtin : PLAYTEST_MODE.driver, missing };
+  const fallback = DRIVER_ACTIONS.filter((action) => !listed.has(`${DRIVER_GROUP} ${action}`));
+  const missing = fallback.map((action) => `${DRIVER_GROUP} ${action}`);
+  const mode = fallback.length === DRIVER_ACTIONS.length ? PLAYTEST_MODE.builtin : PLAYTEST_MODE.driver;
+  return { mode, missing, fallback };
+}
+
+/** The driver actions that run on built-ins, checked; throws on an unknown or repeated one. */
+function fallbackActions(raw) {
+  if (!Array.isArray(raw)) throw new Error('the playtest fallback must be a list of actions');
+  const seen = new Set();
+  for (const action of raw) {
+    if (!DRIVER_ACTIONS.includes(action) || seen.has(action)) {
+      throw new Error(`the playtest fallback must name each of ${DRIVER_ACTIONS.join(', ')} at most once`);
+    }
+    seen.add(action);
+  }
+  return DRIVER_ACTIONS.filter((action) => seen.has(action));
 }
 
 /** A finite-number vector of the editor's answer, else null. */
@@ -236,10 +257,12 @@ function builtinActions(call, sleep) {
 
 module.exports = {
   DRIVER_GROUP,
+  DRIVER_ACTIONS,
   DRIVER_COMMANDS,
   PLAYTEST_MODE,
   UNITY_PIPELINE_BUILTIN,
   playtestModeOf,
+  fallbackActions,
   builtinActions,
   inputKey,
 };

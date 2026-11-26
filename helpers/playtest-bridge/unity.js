@@ -30,9 +30,16 @@
 //   screenshot  -> {png:<base64>, width, height}   (Game view, play mode only)
 //
 // A game without the driver (Pipeline only): the adapter reads once per
-// session whether the `playtest` group exists (unityBuiltin.js, no trial
-// call of a missing command) and then runs the same three actions on the
-// editor's built-in commands. playtestActions() picks the set by mode.
+// session which `playtest` commands exist (unityBuiltin.js, no trial call of
+// a missing command) and runs every missing action on the editor's built-in
+// commands - all three without the driver, only the missing ones (e.g. the
+// screenshot) with a partial one. playtestActions() picks per action.
+// The exact contract the game's driver must meet: unityContract.js.
+//
+// Before play mode (Pipeline only) the adapter makes the editor compile the
+// merged code: UNITY_PIPELINE_EDITOR (auto tick, asset refresh, recompile and
+// its status, the compile check) - see src/lunasworkUnityEditor.js. The
+// console is read in the playtest's window only (unityConsole.js).
 // ============================================================================
 
 'use strict';
@@ -40,6 +47,7 @@
 const unityAnimation = require('./unityAnimation');
 const combatFeelLog = require('./combatFeelLog');
 const unityBuiltin = require('./unityBuiltin');
+const { consoleCall } = require('./unityConsole');
 
 const UNITY_MCP_TOOLS = Object.freeze({
   editor: 'manage_editor',
@@ -48,9 +56,11 @@ const UNITY_MCP_TOOLS = Object.freeze({
   custom: 'execute_custom_tool',
 });
 const DRIVER_TOOL = 'playtest_driver';
-const { DRIVER_GROUP, PLAYTEST_MODE } = unityBuiltin;
+const { DRIVER_GROUP, DRIVER_ACTIONS, PLAYTEST_MODE } = unityBuiltin;
 const CONSOLE_COUNT = 100;
-const PIPELINE_CONSOLE_LEVEL = 'warning';
+// Compile errors read for an environment failure (`console get --level error`).
+const COMPILE_ERROR_TAIL = 50;
+const MAX_AUTO_TICK_INTERVAL_MS = 1000;
 
 /** Legacy MCP for Unity: call name -> [tool, args]; functions take the call's own parameters. */
 const UNITY_MCP = Object.freeze({
@@ -84,9 +94,45 @@ const UNITY_PIPELINE = Object.freeze({
   // result: {status, compiling, domainReloadInProgress, playMode 'stopped'|'playing', playerLoopTicking, runInBackground}
   state: () => ['editor status', {}],
   openScene: (scenePath) => ['scene open', { path: scenePath }],
-  // result: {entries:[{level, logType, message, stackTrace}], counts:{error, warn, log}, groundTruth:{compilationFailed, consoleErrors}}
-  console: () => ['console get', { tail: CONSOLE_COUNT, level: PIPELINE_CONSOLE_LEVEL }],
+  // result: {entries:[{seq, level, logType, message, stackTrace}], cursor, session, reset, dropped,
+  // counts:{error, warn, log}, groundTruth:{compilationFailed, compiling, consoleErrors, ageMs}};
+  // with a window only entries after its cursor (unityConsole.js).
+  console: (window) => consoleCall(window),
   driver: pipelineDriver,
+});
+
+/**
+ * Unity Pipeline calls that bring the editor up to date before play mode
+ * (src/lunasworkUnityEditor.js). Read from the com.unity.pipeline 1.0.0
+ * source (Editor/Commands/RecompileCommand.cs, AutoTickCommand.cs,
+ * EditorStatusCommand.cs, Runtime/Commands/ConsoleCommand.cs):
+ *   setAutoTick      result {enabled, intervalMs, persisted} - the state AFTER the
+ *                    call; nothing reads the state before it. persist keeps it
+ *                    across the domain reloads of the recompile and of play mode.
+ *   recompile        AssetDatabase.Refresh + compile, works unfocused (no focus
+ *                    steal). result {status: compiling|up_to_date}; with compile
+ *                    errors standing it FAILS (status failed). A successful
+ *                    compile reloads the domain: the answer may be lost.
+ *   recompileStatus  {status: idle|triggered|compiling|completed|up_to_date,
+ *                    failed, errors:[compiler messages], compilationFailed}
+ *   editor status    (UNITY_PIPELINE.state) adds compiling, domainReloadInProgress,
+ *                    codeLoadCount (+1 per script reload)
+ *   compileCheck     the console's groundTruth {compilationFailed, compiling,
+ *                    ageMs}, the error entries (compiler messages) and the
+ *                    cursor + session the playtest window starts from
+ */
+const UNITY_PIPELINE_EDITOR = Object.freeze({
+  setAutoTick: ({ enabled, intervalMs }) => {
+    if (typeof enabled !== 'boolean') throw new Error('auto tick enabled must be true or false');
+    if (!Number.isInteger(intervalMs) || intervalMs < 0 || intervalMs > MAX_AUTO_TICK_INTERVAL_MS) {
+      throw new Error(`auto tick interval must be a whole number of ms from 0 to ${MAX_AUTO_TICK_INTERVAL_MS}`);
+    }
+    return ['editor set_auto_tick', { enabled, 'interval-ms': intervalMs, persist: true }];
+  },
+  refresh: () => UNITY_PIPELINE_ASSETS.refresh(),
+  recompile: () => ['script recompile', {}],
+  recompileStatus: () => ['script recompile_status', {}],
+  compileCheck: () => ['console get', { tail: COMPILE_ERROR_TAIL, level: 'error' }],
 });
 
 // A project asset path LunaCore built: "Assets/" then segments of word
@@ -248,24 +294,34 @@ const UNITY_TRANSPORTS = Object.freeze({
   mcp: Object.freeze({ calls: UNITY_MCP, invoke: unityCall }),
 });
 
+const BUILTIN_NEEDS_PIPELINE = 'the built-in playtest commands need the Unity Pipeline transport';
+
 /**
  * The PlaytestDriver's three actions (state, input(steps), screenshot) for one
  * session: the game's own `playtest` commands, or in builtin mode the editor's
- * built-in Pipeline commands (unityBuiltin.js; Pipeline transport only).
- * @param {{mode?:string, transport?:'pipeline'|'mcp', call:Function, sleep:Function}} opts
+ * built-in Pipeline commands (unityBuiltin.js; Pipeline transport only). In
+ * driver mode `fallback` names the actions the game's driver does not list:
+ * those run on the built-ins too (a missing `playtest screenshot` ->
+ * `capture game_view`).
+ * @param {{mode?:string, transport?:'pipeline'|'mcp', call:Function, sleep:Function, fallback?:string[]}} opts
  */
-function playtestActions({ mode = PLAYTEST_MODE.driver, transport = 'pipeline', call, sleep }) {
+function playtestActions({ mode = PLAYTEST_MODE.driver, transport = 'pipeline', call, sleep, fallback = [] }) {
+  const missing = unityBuiltin.fallbackActions(fallback);
   if (mode === PLAYTEST_MODE.builtin) {
-    if (transport !== 'pipeline') throw new Error('the built-in playtest commands need the Unity Pipeline transport');
+    if (transport !== 'pipeline') throw new Error(BUILTIN_NEEDS_PIPELINE);
     return unityBuiltin.builtinActions(call, sleep);
   }
   if (mode !== PLAYTEST_MODE.driver) throw new Error(`unknown playtest mode '${String(mode)}'`);
   const { calls } = UNITY_TRANSPORTS[transport];
-  return {
+  const driver = {
     state: () => call(calls.driver('state')),
     input: (steps) => call(calls.driver('input', { steps })),
     screenshot: () => call(calls.driver('screenshot')),
   };
+  if (!missing.length) return driver;
+  if (transport !== 'pipeline') throw new Error(BUILTIN_NEEDS_PIPELINE);
+  const builtin = unityBuiltin.builtinActions(call, sleep);
+  return Object.fromEntries(DRIVER_ACTIONS.map((action) => [action, missing.includes(action) ? builtin[action] : driver[action]]));
 }
 
 // ---- animation frame sync (unityAnimation.js) ---------------------------------------
@@ -286,14 +342,17 @@ module.exports = {
   UNITY_MCP,
   UNITY_PIPELINE,
   UNITY_PIPELINE_ASSETS,
+  UNITY_PIPELINE_EDITOR,
   checkTextureApplied,
   UNITY_TRANSPORTS,
   DRIVER_TOOL,
   DRIVER_GROUP,
+  DRIVER_ACTIONS,
   DRIVER_COMMANDS: unityBuiltin.DRIVER_COMMANDS,
   PLAYTEST_MODE,
   UNITY_PIPELINE_BUILTIN: unityBuiltin.UNITY_PIPELINE_BUILTIN,
   playtestModeOf: unityBuiltin.playtestModeOf,
+  fallbackActions: unityBuiltin.fallbackActions,
   playtestActions,
   resultText,
   unwrap,
