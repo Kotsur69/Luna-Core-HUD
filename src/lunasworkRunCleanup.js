@@ -17,7 +17,11 @@
 //   2. fetches origin (--prune), so "merged" is judged against origin/<base>
 //   3. removes the worktree of every recorded branch - never one with an open
 //      tab, never a dirty one (worktrees.removeWorktree refuses it, and it
-//      unlinks node_modules junctions first, so their targets keep every file)
+//      unlinks node_modules junctions first, so their targets keep every file).
+//      removeWorktree closes Unity editors open on the worktree first; then
+//      any editor still open under .luna-worktrees/<project> is closed too
+//      (src/unityWorktreeEditors.js) - never one on the main checkout, never
+//      one on a worktree with an open tab or kept for uncommitted changes
 //   4. deletes each recorded local and remote luna/ branch whose tip
 //      origin/<base> contains: merged, or merged and later rolled back (the
 //      revert commits come after it). A branch with unmerged work (a red
@@ -26,13 +30,14 @@
 // Nothing is removed while God Mode has a plan open on the project. The
 // result rides on the run snapshot (run.gitCleanup) into the run report,
 // whose "Branches and worktrees" section (cleanupSection) lists every kept
-// branch and why. Every function resolves and never rejects.
+// branch and worktree folder and why, and every Unity editor it closed. Every function resolves and never rejects.
 // ============================================================================
 
 'use strict';
 
 const path = require('path');
 const worktrees = require('./worktrees');
+const unityEditors = require('./unityWorktreeEditors');
 
 // Only LunaCore's own branch names (worktrees.js deletes nothing else).
 const OWN_BRANCH_RE = /^luna\/[a-z0-9][a-z0-9-]{0,63}$/;
@@ -48,6 +53,7 @@ const REASONS = Object.freeze({
   godModeBusy: 'God Mode had a plan open on the project',
   linkRemoveFailed: 'a node_modules link would not go',
   gitFailed: 'git failed',
+  editorOpen: 'a Unity editor on it would not close',
 });
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -57,6 +63,7 @@ const samePath = (a, b) => {
   const norm = (p) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
   return norm(a) === norm(b);
 };
+const isWithin = (parent, child) => unityEditors.isWithin(parent, child);
 
 // ---- pure ----------------------------------------------------------------------------
 
@@ -107,16 +114,23 @@ function cleanupSection(result, opts = {}) {
       kept.set(k.branch, { ...entry, where: [...entry.where, where] });
     }
   }
+  const editors = isObj(result.editors) ? result.editors : {};
+  const closed = Array.isArray(editors.closed) ? editors.closed.filter(isObj) : [];
+  const notClosed = Array.isArray(editors.failed) ? editors.failed.filter(isObj) : [];
+  const editorAt = (e) => (typeof e.projectPath === 'string' && e.projectPath ? where(e.projectPath) : 'an unknown folder');
   const items = [
     ...[...kept].map(([branch, k]) => `Kept ${branch} (${k.where.join(' + ')}): ${k.reason}`),
     ...(Array.isArray(wt.kept) ? wt.kept : []).map((w) => `Worktree kept: ${where(w.root)} (${w.branch}): ${reasonText(w.reason)}`),
+    ...closed.map((e) => `Closed Unity editor on ${editorAt(e)} (pid ${e.pid}, ${e.how === 'killed' ? 'killed' : 'quit'})`),
+    ...notClosed.map((e) => `Unity editor not closed: ${editorAt(e)}${e.pid ? ` (pid ${e.pid})` : ''}`),
     ...files.map((f) => `Uncommitted in the checkout: ${f}`),
   ].slice(0, MAX_LISTED);
   const counts = [wt.removed.length, local.deleted.length, remote.deleted.length];
   if (!items.length && !counts.some(Boolean) && !result.error) return null;
   const error = result.error ? ` Cleanup stopped early: ${reasonText(result.error)}.` : '';
+  const editorNote = closed.length ? ` Closed ${closed.length} Unity editor(s) left open on worktrees.` : '';
   return {
-    intro: `Removed ${counts[0]} worktree(s); deleted ${counts[1]} local and ${counts[2]} origin branch(es) already on the base branch.${error}`,
+    intro: `Removed ${counts[0]} worktree(s); deleted ${counts[1]} local and ${counts[2]} origin branch(es) already on the base branch.${editorNote}${error}`,
     items,
   };
 }
@@ -133,17 +147,23 @@ const DEFAULT_GIT = Object.freeze({
   pruneOrigin: (repo) => worktrees.pruneOrigin(repo),
 });
 
+// The sweep looks for a Unity project up to the worktree folder's sub-folders' sub-folders.
+const SWEEP_PROJECT_DEPTH = 3;
+const DEFAULT_CLOSE_EDITORS = (root, opts) => unityEditors.closeEditorsIfUnity(root, { ...opts, maxDepth: SWEEP_PROJECT_DEPTH });
+
 /**
  * @param {{git?:Partial<typeof DEFAULT_GIT>, inUse?:(root:string)=>boolean, busy?:(run:object)=>boolean,
- *   log?:(line:string)=>void}} [deps]
+ *   log?:(line:string)=>void, closeEditors?:(root:string, opts:object)=>Promise<{closed:object[], failed:object[]}>}} [deps]
  *   inUse: a tab is open in that folder (without it every worktree counts as in use and stays)
  *   busy: God Mode has a plan open on the run's project
+ *   closeEditors: the end-of-run sweep of Unity editors under the project's worktree folder
  */
 function createRunCleanup(deps = {}) {
   const git = { ...DEFAULT_GIT, ...(isObj(deps.git) ? deps.git : {}) };
   const inUse = typeof deps.inUse === 'function' ? deps.inUse : () => true;
   const busy = typeof deps.busy === 'function' ? deps.busy : () => false;
   const log = typeof deps.log === 'function' ? deps.log : () => {};
+  const closeEditors = typeof deps.closeEditors === 'function' ? deps.closeEditors : DEFAULT_CLOSE_EDITORS;
 
   async function leftoverFiles(repoPath) {
     const res = await git.run(repoPath, ['status', '--porcelain', '--untracked-files=all', '--', ...LUNACORE_PATHS]);
@@ -156,9 +176,17 @@ function createRunCleanup(deps = {}) {
     return worktrees.isSafeBase(name) && !OWN_BRANCH_RE.test(name) ? name : null;
   }
 
+  /** Adds a removeWorktree / closeEditors answer's editors to out.editors. */
+  function addEditors(out, editors) {
+    if (!isObj(editors)) return;
+    for (const key of ['closed', 'failed']) {
+      if (Array.isArray(editors[key])) out.editors[key].push(...editors[key].filter(isObj));
+    }
+  }
+
   async function removeWorktrees(repoPath, branches, out) {
     const listed = await git.listWorktrees(repoPath);
-    if (!Array.isArray(listed)) return 'worktreeListFailed';
+    if (!Array.isArray(listed)) return { error: 'worktreeListFailed', listed: null };
     const own = new Set(branches);
     for (const w of listed) {
       if (!isObj(w) || !own.has(w.branch) || samePath(w.root, repoPath)) continue;
@@ -167,16 +195,49 @@ function createRunCleanup(deps = {}) {
         continue;
       }
       const res = await git.removeWorktree(repoPath, w.root);
+      addEditors(out, res && res.editors);
       if (res && res.ok) {
         out.worktrees.removed.push(w.root);
+        if (res.fallback) log(`[lunaswork] worktree ${w.root} deleted without git (${res.fallback})`);
         continue;
       }
-      out.worktrees.kept.push({ root: w.root, branch: w.branch, reason: (res && res.error) || 'failed' });
+      const editorStuck = isObj(res && res.editors) && Array.isArray(res.editors.failed) && res.editors.failed.length > 0;
+      const reason = editorStuck && res.error === 'gitFailed' ? 'editorOpen' : (res && res.error) || 'failed';
+      out.worktrees.kept.push({ root: w.root, branch: w.branch, reason });
       log(`[lunaswork] worktree ${w.root} kept: ${(res && (res.detail || res.error)) || 'failed'}`);
     }
     const pruned = await git.pruneWorktrees(repoPath);
     if (pruned && pruned.ok === false) log(`[lunaswork] git worktree prune failed: ${pruned.detail || pruned.error || 'failed'}`);
-    return null;
+    return { error: null, listed };
+  }
+
+  /**
+   * Closes any Unity editor still open under the project's worktree folder
+   * (.luna-worktrees/<project>) - never one on the main checkout or the run's
+   * repoPath, never one on a worktree with an open tab or kept as dirty.
+   */
+  async function sweepEditors(run, listed, out, tag) {
+    const main = listed.find((w) => isObj(w) && typeof w.root === 'string');
+    if (!main) return;
+    const mainRoot = path.resolve(main.root);
+    const sweepRoot = path.dirname(worktrees.worktreePathFor(mainRoot, 'x'));
+    const openTabs = listed.filter((w) => isObj(w) && typeof w.root === 'string' && !samePath(w.root, mainRoot) && inUse(w.root)).map((w) => w.root);
+    // A worktree kept for its uncommitted work keeps its editor too: closing it could lose unsaved state.
+    const keptDirty = out.worktrees.kept.filter((w) => w.reason === 'dirty').map((w) => w.root);
+    const leaveOpen = [...openTabs, ...keptDirty];
+    const skip = (projectPath) => leaveOpen.some((root) => isWithin(root, projectPath));
+    let res;
+    try {
+      res = await closeEditors(sweepRoot, { repoPath: [mainRoot, run.repoPath], skip });
+    } catch (err) {
+      res = { closed: [], failed: [{ pid: null, projectPath: null, detail: errText(err).slice(0, 200) }] };
+    }
+    addEditors(out, res);
+    for (const f of isObj(res) && Array.isArray(res.failed) ? res.failed : []) {
+      log(`${tag}: Unity editor ${(f && f.pid) || '?'} not closed: ${(f && f.detail) || 'failed'}`);
+    }
+    const closed = isObj(res) && Array.isArray(res.closed) ? res.closed.length : 0;
+    if (closed) log(`${tag}: closed ${closed} Unity editor(s) still open under ${sweepRoot}`);
   }
 
   /** Deletes what origin/<base> contains, locally and on origin; 'missing' = already gone. */
@@ -196,7 +257,14 @@ function createRunCleanup(deps = {}) {
    *   branches:{deleted:string[], kept:object[]}, remote:{deleted:string[], kept:object[]}, error?:string}>}
    */
   async function atRunEnd(run) {
-    const out = { ok: true, files: [], worktrees: { removed: [], kept: [] }, branches: { deleted: [], kept: [] }, remote: { deleted: [], kept: [] } };
+    const out = {
+      ok: true,
+      files: [],
+      worktrees: { removed: [], kept: [] },
+      branches: { deleted: [], kept: [] },
+      remote: { deleted: [], kept: [] },
+      editors: { closed: [], failed: [] },
+    };
     const tag = `[lunaswork] run ${isObj(run) ? String(run.id || '?').slice(0, 64) : '?'}`;
     try {
       if (!isObj(run) || typeof run.repoPath !== 'string' || !path.isAbsolute(run.repoPath)) return { ...out, ok: false, error: 'noRepo' };
@@ -214,8 +282,9 @@ function createRunCleanup(deps = {}) {
       const fetched = await git.pruneOrigin(run.repoPath);
       // A stale origin/<base> only makes fewer branches look merged: the cleanup still goes on.
       if (!fetched || !fetched.ok) log(`${tag}: fetch from origin failed (${(fetched && (fetched.detail || fetched.error)) || 'failed'})`);
-      const listError = await removeWorktrees(run.repoPath, branches, out);
-      if (listError) out.error = listError;
+      const removal = await removeWorktrees(run.repoPath, branches, out);
+      if (removal.error) out.error = removal.error;
+      else await sweepEditors(run, removal.listed, out, tag);
       await deleteBranches(run.repoPath, branches, base, out);
       const kept = new Set([...out.branches.kept, ...out.remote.kept].map((k) => k.branch));
       log(`${tag} cleanup: ${out.worktrees.removed.length} worktree(s) removed, ${out.branches.deleted.length} local + ${out.remote.deleted.length} origin branch(es) deleted${kept.size ? `, kept ${[...kept].join(', ')}` : ''}`);
