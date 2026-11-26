@@ -43,6 +43,13 @@
 // before each build, and makePlan an ownership map giving every scene and
 // prefab to the scene worker (LW 2.12's guard enforces it once merged).
 //
+// A Unity build (the profile's adapter is `unity`, or the repo is a Unity
+// project) merges in a worktree no Unity editor has open: wrapPlanner tells
+// the planner package verify runs without an editor, and moves any verify
+// that calls the unity CLI or is prose into the package prompt as an editor
+// check for the worker (src/orchestraUnityVerify.js). The integration defers
+// a verify that still fails only for want of an editor.
+//
 // The self-check gate itself stays God Mode's (orchestraSelfCheck.js): red
 // after the one fix-up try = luna/<slug>-integration is pushed, never the base.
 // ============================================================================
@@ -51,6 +58,7 @@
 
 const scene = require('./lunasworkScene');
 const { MAX_PROMPT_CHARS } = require('./orchestraPlan');
+const unityVerify = require('./orchestraUnityVerify');
 
 // Between a package prompt and its tool kit note.
 const KIT_NOTE_GAP = '\n\n';
@@ -123,7 +131,7 @@ function createGodModeBuilder(deps) {
   const log = deps.log || (() => {});
   const isUnityProject = deps.isUnityProject || scene.isUnityProject;
   const configureUnityMerge = deps.configureUnityMerge || scene.configureUnityMerge;
-  /** @type {null|{projectId:string, checkCommand:string, models:Map<number,string>, cards:object[], planId:string|null, settle:Function}} */
+  /** @type {null|{projectId:string, checkCommand:string, models:Map<number,string>, cards:object[], planId:string|null, settle:Function, unityVerify:boolean}} */
   let active = null;
 
   /** LW 3.36b: UnityYAMLMerge for every worktree; a failure is logged, the build goes on. */
@@ -199,8 +207,8 @@ function createGodModeBuilder(deps) {
    * agy profile's env); refused with 'noAgyProfile' when there is no agy profile.
    * @param {{projectId:string, repoPath:string, cards:object[], checkCommand:string, free?:boolean, agy?:boolean,
    *   resumePlanId?:string|null, ownPlanIds?:string[], onPlan?:(planId:string)=>void, plannerModel?:string,
-   *   cappedTools?:string[]|(()=>string[])}} opts cappedTools: paid tools past the run's spend cap
-   *   (a function is read again for every worker tab)
+   *   cappedTools?:string[]|(()=>string[]), adapter?:string}} opts cappedTools: paid tools past the run's spend cap
+   *   (a function is read again for every worker tab); adapter: the project profile's ('unity' = a Unity build)
    *   ownPlanIds: plans this run made (replaceable); onPlan: the plan id, once made;
    *   plannerModel: God Mode's planner model (default: the strongest model of the cards)
    * @returns {Promise<object>} the onRunSettled result {planId, killed, integration, plan} plus ok,
@@ -228,6 +236,8 @@ function createGodModeBuilder(deps) {
       cards,
       planId: null,
       settle,
+      // Set once the build knows it is a Unity build (below).
+      unityVerify: false,
     };
     try {
       const interrupted = interruptedPlan(opts);
@@ -241,6 +251,8 @@ function createGodModeBuilder(deps) {
       if (agy && !agyEnv) return { ok: false, error: 'noAgyProfile' };
       const unity = isUnityProject(opts.repoPath);
       if (unity) await prepareUnity(opts.repoPath);
+      // No Unity editor is open where God Mode merges: package verify must run without one.
+      active.unityVerify = unity || opts.adapter === 'unity';
       // A free or agy build does not plan on Claude: the Claude alias means nothing there.
       const plannerModel = opts.free || agy ? null : (isClaudeModel(opts.plannerModel) ? opts.plannerModel : plannerModelFor(cards));
       const made = await deps.orchestra.makePlan({
@@ -340,16 +352,30 @@ function createGodModeBuilder(deps) {
   /**
    * runPlanner for God Mode during a build: package models from the
    * controller's card choices, then every scene / prefab package folded into
-   * the one scene worker (a plan without scene work is left as it was).
+   * the one scene worker (a plan without scene work is left as it was). A
+   * Unity build also plans with the Unity verify rules, and no package keeps
+   * a verify that needs an editor.
    */
   function wrapPlanner(runPlanner) {
     return async (args) => {
-      const res = await runPlanner(args);
+      const unityRun = !!active && active.unityVerify === true;
+      const res = await runPlanner(unityRun ? unityVerify.withUnityPlannerRules(args) : args);
       if (!active || !isObj(res) || !res.ok || !isObj(res.raw) || !Array.isArray(res.raw.packages)) return res;
       const modelled = res.raw.packages.map((p) => (isObj(p) ? { ...p, model: packageModel(p.todoAts, active.models, p.model) } : p));
-      const packages = scene.routeScenePackages(modelled, active.cards).map(withKitNote);
+      const routed = scene.routeScenePackages(modelled, active.cards);
+      const packages = (unityRun ? routed.map(withEditorFreeVerify) : routed).map(withKitNote);
       return { ...res, raw: { ...res.raw, packages } };
     };
+  }
+
+  /** The package with a verify that needs a Unity editor (or is prose) moved into its prompt. */
+  function withEditorFreeVerify(pkg) {
+    const out = unityVerify.editorFreeVerify(pkg, MAX_PROMPT_CHARS);
+    if (out === pkg) return pkg;
+    const whole = out.prompt.endsWith(unityVerify.editorCheckNote(pkg.verify));
+    const where = whole ? 'moved into the prompt as an editor check' : 'emptied; the editor check was shortened or left out to fit the prompt cap';
+    log(`[lunaswork-build] ${pkg.id}: verify needs a Unity editor (${unityVerify.editorBoundReason(pkg.verify)}) - ${where}`);
+    return out;
   }
 
   /**

@@ -219,7 +219,12 @@ function skippedLine(s, view) {
 /** What the integration did for a package beyond a plain merge, for the Notes column. */
 function integrationNotes(p, integ) {
   const has = (key) => list(integ[key]).includes(p.id);
-  return [has('secondPass') ? 'merged on second pass' : '', has('fixedUp') ? 'fixed by fix-up after the merge' : ''].filter(Boolean);
+  return [
+    has('secondPass') ? 'merged on second pass' : '',
+    has('fixedUp') ? 'fixed by fix-up after the merge' : '',
+    // orchestraUnityVerify.js: the verify needs an editor, and none is open on the merge worktree.
+    has('verifyDeferred') ? 'verify deferred to the live Unity editor (no editor on the merge worktree)' : '',
+  ].filter(Boolean);
 }
 
 /** Packages that went in only on the integration's second pass, as their own list. */

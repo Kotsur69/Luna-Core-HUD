@@ -928,6 +928,8 @@ function normalizeIntegration(raw) {
     fixedUp: idList(o.fixedUp),
     // Merged only on the integration's second pass (orchestraSecondPass.js).
     secondPass: idList(o.secondPass),
+    // Merged with the verify deferred to the live Unity editor (orchestraUnityVerify.js).
+    ...(idList(o.verifyDeferred).length ? { verifyDeferred: idList(o.verifyDeferred) } : {}),
     // End-of-run self-check (orchestraSelfCheck.js), null until one ran.
     selfCheck: normalizeSelfCheck(o.selfCheck),
     manualActions: (Array.isArray(o.manualActions) ? o.manualActions : [])

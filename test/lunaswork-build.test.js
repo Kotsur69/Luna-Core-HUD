@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createGodModeBuilder, packageModel, planCard } = require('../src/lunasworkBuild');
+const { editorBoundReason } = require('../src/orchestraUnityVerify');
 
 const tick = () => new Promise((r) => setImmediate(r));
 
@@ -240,6 +241,91 @@ test('wrapPlanner gives each package the strongest model of its cards, only duri
   assert.equal(planned.raw.packages[1].model, 'sonnet', 'the planner result is not mutated');
   orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
   await building;
+});
+
+// Run lwmwxd1zal (2026-11-26): `unity command ...` verifies went red at the
+// integration, where no Unity editor is open. A Unity build's plan has none.
+const UNITY_CARDS = [
+  { at: 1, text: 'Game clock', files: ['Assets/Scripts/GameClock.cs'] },
+  { at: 2, text: 'HUD', files: ['Assets/Scripts/Hud.cs'] },
+  { at: 3, text: 'Clock docs', files: ['docs/clock.md'] },
+];
+const unityPackages = () => [
+  {
+    id: 'game-clock',
+    todoAts: [1],
+    prompt: 'Build the clock. Commit when done.',
+    files: ['Assets/Scripts/GameClock.cs'],
+    dependsOn: [],
+    verify: 'unity command script recompile && unity command test run --filter GameClockTests (edit mode: ok true, empty errors/warnings)',
+  },
+  { id: 'hud', todoAts: [2], prompt: 'Build the HUD.', files: ['Assets/Scripts/Hud.cs'], dependsOn: [], verify: 'Open the editor and check the HUD' },
+  { id: 'docs', todoAts: [3], prompt: 'Write the docs.', files: ['docs/clock.md'], dependsOn: [], verify: 'grep -q "GameClock" docs/clock.md' },
+];
+
+function unityBuilder(isUnity) {
+  const logs = [];
+  const orchestra = fakeOrchestra();
+  const builder = createGodModeBuilder({
+    orchestra,
+    profileId: () => null,
+    env: () => ({}),
+    isUnityProject: () => isUnity,
+    configureUnityMerge: async () => ({ ok: true }),
+    log: (l) => logs.push(l),
+  });
+  const seen = [];
+  const planner = builder.wrapPlanner(async (args) => (seen.push(args), { ok: true, raw: { packages: unityPackages() } }));
+  return { orchestra, builder, planner, seen, logs };
+}
+
+test('a unity-adapter build: the planner is told verify runs without an editor; no package keeps a unity or prose verify', async () => {
+  const { orchestra, builder, planner, seen, logs } = unityBuilder(false);
+  const building = builder.build({ projectId: 'game', repoPath: '/repo', cards: UNITY_CARDS, checkCommand: '', adapter: 'unity' });
+  await tick();
+  const planned = (await planner({ cwd: '/repo', extraPrompt: 'Re-size the packages.' })).raw.packages;
+
+  assert.match(seen[0].extraPrompt, /^Re-size the packages\./, 'an extra request already there stays first');
+  assert.match(seen[0].extraPrompt, /Unity project/);
+  assert.match(seen[0].extraPrompt, /Never a `unity \.\.\.` command/);
+  const byId = Object.fromEntries(planned.map((p) => [p.id, p]));
+  for (const p of planned) {
+    assert.doesNotMatch(p.verify, /\bunity\b/i, `${p.id}: no unity CLI in verify`);
+    assert.equal(editorBoundReason(p.verify), null, `${p.id}: verify runs without an editor`);
+  }
+  assert.equal(byId['game-clock'].verify, '');
+  assert.match(byId['game-clock'].prompt, /^Build the clock\. Commit when done\./);
+  assert.ok(byId['game-clock'].prompt.includes('unity command test run --filter GameClockTests'), 'the editor check moved into the prompt');
+  assert.equal(byId.hud.verify, '', 'prose is no verify');
+  assert.match(byId.hud.prompt, /Open the editor and check the HUD/);
+  assert.equal(byId.docs.verify, 'grep -q "GameClock" docs/clock.md', 'a static check is kept');
+  assert.equal(byId.docs.prompt, 'Write the docs.');
+  assert.ok(logs.some((l) => /game-clock: verify needs a Unity editor \(unity\)/.test(l)));
+  assert.ok(logs.some((l) => /hud: verify needs a Unity editor \(prose\)/.test(l)));
+
+  orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await building;
+});
+
+test('a Unity project build (ProjectVersion.txt) gets the same; a non-Unity build is planned as before', async () => {
+  const unity = unityBuilder(true);
+  const building = unity.builder.build({ projectId: 'game', repoPath: '/repo', cards: UNITY_CARDS, checkCommand: '' });
+  await tick();
+  const planned = (await unity.planner({})).raw.packages;
+  assert.ok(planned.every((p) => editorBoundReason(p.verify) === null));
+  assert.match(unity.seen[0].extraPrompt, /Unity project/);
+  unity.orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await building;
+
+  const web = unityBuilder(false);
+  const webBuild = web.builder.build({ projectId: 'site', repoPath: '/repo', cards: UNITY_CARDS, checkCommand: '', adapter: 'web' });
+  await tick();
+  const args = { cwd: '/repo' };
+  const plain = (await web.planner(args)).raw.packages;
+  assert.equal(web.seen[0], args, 'the planner args are untouched');
+  assert.deepEqual(plain.map((p) => p.verify), unityPackages().map((p) => p.verify), 'verify untouched');
+  web.orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await webBuild;
 });
 
 test('packageModel: haiku is not a God Mode worker model; agy:<id> cards keep their variant; no known card keeps the planner pick', () => {

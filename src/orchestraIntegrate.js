@@ -39,6 +39,8 @@ const { runAgyPrint } = require('./orchestraAgy');
 const { verifyDetail } = require('./orchestraVerifyDetail');
 const { fixAfterMerge } = require('./orchestraMergeFixup');
 const { secondPass, skippedDependency, skipEntry } = require('./orchestraSecondPass');
+// A Unity verify that only lacked an editor on the integration worktree is deferred, not red.
+const { deferToUnityEditor, VERIFY_DEFERRED_UNITY } = require('./orchestraUnityVerify');
 
 const GH_TIMEOUT_MS = 60 * 1000;
 const RESOLVER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -392,10 +394,14 @@ async function mergeAttempts(ctx, pkg, attempts) {
  * or conflict failure gets ONE more try with the stronger resolver (a
  * second-pass `retry` goes straight to it); a red verify is run once more
  * (timing-sensitive tests), then gets ONE fix-up worker
- * (orchestraMergeFixup.js) before it counts as red. Never throws.
+ * (orchestraMergeFixup.js) before it counts as red. A verify that failed
+ * only because no Unity editor is open on the integration worktree (none may
+ * be) is not run again and not red: the merge stays, marked verifyDeferred
+ * (orchestraUnityVerify.js) - Luna's Work checks it in the live editor after
+ * the checkout update. Never throws.
  * @param {{wt:object, deps:object, verifyImpl:Function, baseSha:string, fixIo:object}} ctx
  * @param {{retry?:boolean}} [opts]
- * @returns {Promise<{ok:true, fixedUp?:true}
+ * @returns {Promise<{ok:true, fixedUp?:true, verifyDeferred?:'unity-editor'}
  *   | {ok:false, stage:string, detail:string, files:string[], fixup?:'failed'}>}
  */
 async function mergeAndVerify(ctx, pkg, opts = {}) {
@@ -404,8 +410,9 @@ async function mergeAndVerify(ctx, pkg, opts = {}) {
   if (!res.ok) return { ok: false, stage: res.stage, detail: res.detail, files: res.files || [] };
   if (!pkg.verify) return { ok: true };
   let verified = await verifyImpl(pkg.verify, wt.cwd);
-  if (!verified.ok) verified = await verifyImpl(pkg.verify, wt.cwd);
+  if (!verified.ok && !deferToUnityEditor(pkg.verify, verified)) verified = await verifyImpl(pkg.verify, wt.cwd);
   if (verified.ok) return { ok: true };
+  if (deferToUnityEditor(pkg.verify, verified)) return { ok: true, verifyDeferred: VERIFY_DEFERRED_UNITY };
   const fixed = await fixAfterMerge({ root: wt.root, cwd: wt.cwd, pkg, output: verified.output, baseSha: ctx.baseSha }, ctx.fixIo);
   if (fixed.tried && fixed.ok) return { ok: true, fixedUp: true };
   const red = { ok: false, stage: 'verify', detail: verifyDetail(fixed.tried ? fixed.output : verified.output, { root: wt.root }), files: [] };
@@ -566,7 +573,7 @@ async function resetForReuse(wt, baseSha, execImpl) {
  *   stopped?:() => boolean}} deps fixup: the one-at-a-time fix-up worker
  *   (orchestraFixup.js); stopped: true once the run is killed or paused -
  *   no new fix-up starts then
- * @returns {Promise<{ok:boolean, merged:string[], fixedUp?:string[], secondPass?:string[],
+ * @returns {Promise<{ok:boolean, merged:string[], fixedUp?:string[], secondPass?:string[], verifyDeferred?:string[],
  *   skipped:Array<{id:string, stage:string, detail:string, files:string[], fixup?:'failed'}>,
  *   stage?:string, failedId?:string|null, detail?:string, headSha?:string|null, root?:string|null}>}
  */
@@ -580,6 +587,8 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
   const fixedUp = [];
   // Merged only on the second pass.
   const secondPassIds = [];
+  // Merged with the verify deferred to the live Unity editor (orchestraUnityVerify.js).
+  const verifyDeferred = [];
   const fail = (stage, detail, failedId) => ({
     ok: false,
     merged,
@@ -613,7 +622,13 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
         await runGit(repoPath, ['branch', '-D', wt.branch], execImpl);
       }
     }
-    return { ...result, fixedUp: [...fixedUp], secondPass: [...secondPassIds], root: result.ok || checkOnly ? null : wt.root };
+    return {
+      ...result,
+      fixedUp: [...fixedUp],
+      secondPass: [...secondPassIds],
+      verifyDeferred: [...verifyDeferred],
+      root: result.ok || checkOnly ? null : wt.root,
+    };
   };
 
   const installed = await (deps.installImpl || ensureInstall)(wt.root, verifyImpl);
@@ -633,6 +648,12 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
     skippedIds.add(id);
     skipped.push(skipEntry(id, res));
   };
+  // tryPackage for both passes, noting a package merged with its verify deferred.
+  const attempt = async (pkg, opts) => {
+    const res = await tryPackage(ctx, pkg, opts);
+    if (res.ok && res.verifyDeferred && !verifyDeferred.includes(pkg.id)) verifyDeferred.push(pkg.id);
+    return res;
+  };
   for (const pkg of packages) {
     const blocker = skippedDependency(pkg, dependsOf, skippedIds);
     if (blocker) {
@@ -641,7 +662,7 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
     }
     // A package that did not go in is reset away; without that nothing
     // later may be merged or pushed - the bad package could ride along.
-    const res = await tryPackage(ctx, pkg);
+    const res = await attempt(pkg);
     if (res.ok) {
       merged.push(pkg.id);
       if (res.fixedUp) fixedUp.push(pkg.id);
@@ -654,7 +675,7 @@ async function integrateMerge({ repoPath, base, slug, packages, checkOnly }, dep
   // One second pass (orchestraSecondPass.js) for what the order may have
   // cost; not in a check-only throwaway build.
   if (skipped.length && !checkOnly) {
-    const second = await secondPass({ packages, skipped, tryPackage: (pkg, opts) => tryPackage(ctx, pkg, opts), stopped: ctx.fixIo.stopped });
+    const second = await secondPass({ packages, skipped, tryPackage: attempt, stopped: ctx.fixIo.stopped });
     merged.push(...second.merged);
     fixedUp.push(...second.fixedUp);
     secondPassIds.push(...second.merged);

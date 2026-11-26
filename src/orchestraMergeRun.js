@@ -37,7 +37,14 @@ function taskOf(plan, id) {
 function recordLists(run, res) {
   if (!res || typeof res !== 'object' || res.ok !== true) return;
   const prev = run.integration || {};
-  run.integration = { ...prev, fixedUp: union(prev.fixedUp, res.fixedUp), secondPass: union(prev.secondPass, res.secondPass) };
+  // Merged with the verify deferred to the live Unity editor (orchestraUnityVerify.js); no key without one.
+  const deferred = union(prev.verifyDeferred, res.verifyDeferred);
+  run.integration = {
+    ...prev,
+    fixedUp: union(prev.fixedUp, res.fixedUp),
+    secondPass: union(prev.secondPass, res.secondPass),
+    ...(deferred.length ? { verifyDeferred: deferred } : {}),
+  };
 }
 
 /**

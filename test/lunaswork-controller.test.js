@@ -402,6 +402,8 @@ test("checkCommand precedence end to end; God Mode's own default is unchanged", 
   h.next.critic.push(shipCritic());
   await h.start();
   assert.equal(h.calls.build[0].checkCommand, 'npm run check');
+  // The profile's adapter rides along: a 'unity' build plans editor-free verifies (src/orchestraUnityVerify.js).
+  assert.equal(h.calls.build[0].adapter, 'web');
 
   const h2 = harness();
   h2.godMode.checkCommand = 'npm test -- --runInBand';

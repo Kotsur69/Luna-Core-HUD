@@ -1097,6 +1097,8 @@ function createLunasWork(deps) {
       cards,
       // Pinned at start (the profile's, else God Mode's setting).
       checkCommand: run.checkCommand,
+      // 'unity': package verify must run without an editor (src/orchestraUnityVerify.js).
+      ...(run.profile && typeof run.profile.adapter === 'string' ? { adapter: run.profile.adapter } : {}),
       free,
       // God Mode plans and works on the Antigravity CLI (src/lunasworkBuild.js).
       ...(agy ? { agy: true } : {}),
