@@ -75,6 +75,7 @@ const { STYLE_PASSES, DEFAULT_STYLE_PASS, MIN_POLY_BUDGET, MAX_POLY_BUDGET, PROP
 const { createComfyClient, readCappedBody } = require('./lunasworkComfy');
 const { createPipelineClient } = require('../helpers/playtest-bridge/pipeline-http');
 const { createFreeAssets, KINDS_BY_TYPE } = require('./lunasworkFreeAssets');
+const { MIN_BPM, MAX_BPM, TARGET_LUFS, TRUE_PEAK_DB, LOUDNESS_TOLERANCE_LU, FFMPEG_PATH_ENV } = require('./lunasworkAudioNormalize');
 const { ALL_SOURCES } = require('./lunasworkAssetFanout');
 const { createFreeSources, SOURCE_IDS, TYPES: LIBRARY_TYPES, RESOLUTIONS, redact } = require('./lunasworkFreeSources');
 const { createAssetJudge, createVerdictStore, MIN_CANDIDATES, MAX_CANDIDATES, CANDIDATES_DIR } = require('./lunasworkAssetJudge');
@@ -164,6 +165,20 @@ const errText = (err) => (err instanceof Error ? err.message : String(err));
 const DEFERRED_IMPORT_DESCRIPTION = ' Without a Unity editor in the worktree (an asset-prep worker) the Unity import / prefab step is deferred to the scene-worker package: the answer says so (unityDeferred: true) and it is not a failure.';
 const NAME_PROP = { type: 'string', description: 'The asset name as in design/ASSETS.md, e.g. "Ronin Hero". It names the files.' };
 const PROMPT_PROP = { type: 'string', description: 'The generation prompt (the ASSETS.md spec plus the art direction).' };
+// The executors read audioPost through lunasworkAudioNormalize.cleanAudioPost; the limits come from the same module.
+const BPM_PROP = (what) => ({ type: 'integer', minimum: MIN_BPM, maximum: MAX_BPM, description: `${what}, an integer from ${MIN_BPM} to ${MAX_BPM}. targetBpm and bpm go together: give both or neither.` });
+const AUDIO_POST_PROP = {
+  type: 'object',
+  additionalProperties: false,
+  description: `Optional ffmpeg post-process for kind "audio" only (refused for other kinds). Once given, trim and loudnorm default to true; {} applies both. targetBpm and bpm are a pair: give both (each an integer from ${MIN_BPM} to ${MAX_BPM}) or neither. ffmpeg comes from ${FFMPEG_PATH_ENV} or PATH; when it is missing or fails, the original audio is kept and the answer's note says why.`,
+  properties: {
+    trim: { type: 'boolean', default: true, description: 'Strip leading silence, so a hit or parry SFX fires on frame 0.' },
+    loudnorm: { type: 'boolean', default: true, description: `Normalize integrated loudness to ${TARGET_LUFS} LUFS (within ${LOUDNESS_TOLERANCE_LU} LU, true peak at most ${TRUE_PEAK_DB} dBTP); short SFX are measured padded with silence. When the true peak blocks the gain, the note says how far under target the clip may end.` },
+    targetBpm: BPM_PROP('The tempo to time-stretch the clip to (needs bpm)'),
+    bpm: BPM_PROP('The source tempo of the clip (needs targetBpm)'),
+  },
+  // The pairing rule is in the descriptions, not in dependentRequired: not every client's schema subset accepts that keyword; cleanAudioPost enforces it.
+};
 
 const ASSET_TOOLS = Object.freeze([
   {
@@ -196,6 +211,7 @@ const ASSET_TOOLS = Object.freeze([
         prompt: PROMPT_PROP,
         workflow: { type: 'string', description: 'A workflow file name in art/comfyui/, e.g. "concept.json", "tts.json", "sfx.json", "mesh3d.json".' },
         seed: { type: 'integer', minimum: 0, description: 'Optional; a fresh seed is picked and saved when omitted.' },
+        audioPost: AUDIO_POST_PROP,
       },
     },
   },
@@ -245,6 +261,7 @@ const ASSET_TOOLS = Object.freeze([
         name: NAME_PROP,
         kind: { type: 'string', enum: [...new Set(Object.values(KINDS_BY_TYPE).flat())], description: 'models: character, prop, environment, model; textures: texture, sprite, ui, vfx, other; HDRIs: texture, other; sounds: audio.' },
         resolution: { type: 'string', enum: [...RESOLUTIONS], description: 'Textures, HDRIs and Poly Haven models; default 2k.' },
+        audioPost: AUDIO_POST_PROP,
       },
     },
   },
@@ -652,8 +669,9 @@ function createDownloader(opts = {}) {
  * @param {{assetTools:()=>{comfyuiPort:number, blenderPort:number, higgsfieldUsdPerCredit:number, artRoot:string},
  *   keys?:{get:(source:string)=>string|null, secrets:()=>string[]},
  *   net?:object, execFile?:Function, fetch?:Function, lookup?:Function, platform?:string, env?:()=>object, log?:(line:string)=>void,
- *   runClaude?:Function, verdicts?:object}} deps  runClaude / verdicts = the judge's Critic runner and verdict store (tests)
+ *   runClaude?:Function, verdicts?:object, ffmpegPath?:string}} deps  runClaude / verdicts = the judge's Critic runner and verdict store (tests)
  *   keys = the asset library keys (src/lunasworkAssetKeys.js); none -> the keyed libraries answer noKey
+ *   execFile also runs the audioPost ffmpeg pass; ffmpegPath = a fixed absolute ffmpeg (unset: LUNACORE_FFMPEG_PATH / PATH)
  *   ctx.runId / ctx.judgeVerdicts / ctx.recordJudgeVerdict = the run this tab works for, a read of its judge
  *   verdicts ({runId, verdicts, entries}, src/lunaswork.js) and their writer: the Higgsfield cost guard
  *   (src/lunasworkJudgeGuard.js) decides from the run record first; ctx.castRepoPath = the run's own
@@ -720,6 +738,9 @@ function createAssetToolsFor(deps) {
         freeCandidatePassed: (job) => freePass.check(job),
         higgsfieldMade,
         logLine: log,
+        // The optional ffmpeg audio post-process: unset in the app (child_process.execFile, ffmpeg from LUNACORE_FFMPEG_PATH / PATH).
+        execFile: deps.execFile,
+        ffmpegPath: deps.ffmpegPath,
         logAsset: (entry) => {
           if (ctx.recordAsset(entry)) return;
           log(`[lunaswork-assets] asset not logged: ${oneLine(entry.path, 120)}`);

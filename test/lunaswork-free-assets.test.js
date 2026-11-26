@@ -65,13 +65,17 @@ function tempRepo() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'lw-free-assets-'));
 }
 
+// The ffmpeg binary is resolved to an absolute, existing file; the fake execFile never runs it.
+const FAKE_FFMPEG = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lw-ffmpeg-bin-')), 'ffmpeg.exe');
+fs.writeFileSync(FAKE_FFMPEG, '');
+
 /** The real executor over a temp repo, a fake Unity and the given fake fetch. */
-function library(dir, fetch, { keys = KEYS, execFile } = {}) {
+function library(dir, fetch, { keys = KEYS, execFile, ffmpegPath = FAKE_FFMPEG } = {}) {
   // set_properties answers like the live editor: the texture was applied.
   const answer = (command) => (command === 'material set_properties' ? { applied: ['_BaseMap'], unknown: [] } : { ok: true });
   const unity = { calls: [], exec: async (command, parameters) => { unity.calls.push({ command, parameters }); return answer(command); } };
   const logged = [];
-  const pipe = P.createAssetPipeline({ repoPath: dir, artRoot: ART, unity, recordSpend: () => ({ ok: true }), logAsset: (e) => logged.push(e), now: () => 1, execFile });
+  const pipe = P.createAssetPipeline({ repoPath: dir, artRoot: ART, unity, recordSpend: () => ({ ok: true }), logAsset: (e) => logged.push(e), now: () => 1, execFile, ffmpegPath });
   const keyStore = { get: (s) => keys[s] || null, secrets: () => Object.values(keys) };
   const lib = F.createFreeAssets({
     shared: pipe.shared,
@@ -1118,10 +1122,15 @@ test('fan-out helpers: withTimeout rejects with code timeout, mergeResults caps 
 
 // ---- the optional ffmpeg audio post-process ---------------------------------------------
 
+// loudnorm's measuring-pass JSON: -20 LUFS, -8 dBTP -> a plain +6 dB gain fits under -1.5 dBTP.
+const MEASURED = '{\n  "input_i" : "-20.00",\n  "input_tp" : "-8.00",\n  "input_lra" : "3.00",\n  "input_thresh" : "-30.00",\n  "target_offset" : "0.10"\n}\n';
+
 /**
- * A fake child_process.execFile for ffmpeg. `outcome`: 'ok' writes `bytes` to
- * the output (the last token), 'enoent' fails like a missing binary, 'fail'
- * exits non-zero after leaving a partial output, 'empty' writes 0 bytes.
+ * A fake child_process.execFile for ffmpeg. The measuring pass (null muxer)
+ * answers MEASURED unless the binary is 'enoent'. `outcome` of the writing
+ * pass: 'ok' writes `bytes` to the output (the last token), 'enoent' fails
+ * like a missing binary, 'fail' exits non-zero after leaving a partial
+ * output, 'empty' writes 0 bytes.
  */
 function fakeFfmpeg(outcome, bytes) {
   const calls = [];
@@ -1129,6 +1138,7 @@ function fakeFfmpeg(outcome, bytes) {
     calls.push({ cmd, args, opts });
     const out = args[args.length - 1];
     if (outcome === 'enoent') return setImmediate(() => cb(Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' }), '', ''));
+    if (args.includes('null')) return setImmediate(() => cb(null, '', `[Parsed_loudnorm_2 @ 0x1]\n${MEASURED}`));
     if (outcome === 'fail') {
       fs.writeFileSync(out, Buffer.from('partial'));
       return setImmediate(() => cb(Object.assign(new Error('Command failed'), { code: 1 }), '', `header\n${out}: Error while filtering: Invalid argument\n`));
@@ -1163,9 +1173,13 @@ test('audioPost on an audio import: ffmpeg gets plain argument tokens, no shell,
   assert.equal(res.ok, true, JSON.stringify(res));
   const rel = `${ART}/Audio/parry-clang.ogg`;
   assert.deepEqual(res.files, [rel]);
-  assert.equal(ffmpeg.calls.length, 1);
-  const { cmd, args, opts } = ffmpeg.calls[0];
-  assert.equal(cmd, 'ffmpeg');
+  // The measuring pass first, then the writing pass with the measured gain.
+  assert.equal(ffmpeg.calls.length, 2);
+  assert.ok(ffmpeg.calls[0].args.includes('null'), 'the first pass only measures');
+  const measuredFile = ffmpeg.calls[0].args[ffmpeg.calls[0].args.indexOf('-i') + 1];
+  for (const a of ffmpeg.calls[0].args.filter((t) => t !== measuredFile)) assert.equal(SHELL_META_RE.test(a), false, `plain token: ${a}`);
+  const { cmd, args, opts } = ffmpeg.calls[1];
+  assert.equal(cmd, FAKE_FFMPEG, 'the absolute binary, never a bare name');
   assert.equal(opts.shell, undefined, 'never a shell');
   const target = path.join(dir, ...rel.split('/'));
   const out = args[args.length - 1];
@@ -1173,7 +1187,7 @@ test('audioPost on an audio import: ffmpeg gets plain argument tokens, no shell,
   assert.match(path.basename(out), /^\.parry-clang\.ogg\.[0-9a-f]{12}\.tmp\.ogg$/, 'dot-prefixed: Unity ignores it');
   assert.deepEqual(args, [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-n', '-protocol_whitelist', 'file', '-i', target, '-vn',
-    '-af', 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=1.2,loudnorm=I=-14:TP=-1.5:LRA=11',
+    '-af', 'silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,atempo=1.2,volume=6dB',
     '-ar', '48000', out,
   ]);
   for (const a of args.filter((t) => t !== target && t !== out)) assert.equal(SHELL_META_RE.test(a), false, `plain token: ${a}`);
@@ -1185,14 +1199,14 @@ test('audioPost on an audio import: ffmpeg gets plain argument tokens, no shell,
   assert.deepEqual(unity.calls.map((c) => c.command), ['editor invoke_menu']);
 });
 
-test('audioPost: no ffmpeg on PATH (ENOENT) keeps the original bytes and adds a note', async () => {
+test('audioPost: an ffmpeg that cannot be started (ENOENT) keeps the original bytes and adds a note', async () => {
   const dir = tempRepo();
   const ffmpeg = fakeFfmpeg('enoent');
   const { lib } = freesoundImport(dir, ffmpeg);
   const res = await lib.importAsset({ source: 'freesound', id: '201', kind: 'audio', audioPost: { trim: true } });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(fs.readFileSync(path.join(dir, ...res.main.split('/'))), OGG);
-  assert.match(res.note, /ffmpeg was not found on PATH; the original audio was kept/);
+  assert.match(res.note, /ffmpeg was not found \(its resolved binary could not be started\); the original audio was kept/);
   assert.deepEqual(tmpLeft(dir), []);
 });
 
