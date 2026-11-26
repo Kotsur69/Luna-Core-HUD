@@ -44,6 +44,7 @@ const workerBrief = require('./workerBrief');
 const followupLaunch = require('./orchestraFollowupsLaunch');
 const { normalizeFollowupEntries, followupBriefLines } = require('./orchestraFollowups');
 const pushSecrets = require('./pushSecrets');
+const { unityRuleLines } = require('./orchestraBriefUnity');
 const { createMergeRunDeps } = require('./orchestraMergeRun');
 const { planWaitDecision, createPlanWaiter } = require('./orchestraPlanWait');
 // A planner limit with another Claude account free: replan after this long.
@@ -210,6 +211,7 @@ function briefText(pkg, branch, opts = {}) {
     `- ${COMMIT_EARLY_RULE}`,
     '- When the work is done and verified, commit it on this branch with a conventional commit message.',
     pushSecrets.FAKE_SECRET_RULE,
+    ...unityRuleLines(pkg),
     `- End your final message with the line \`LUNA_DONE ${pkg.id}\`, or \`LUNA_BLOCKED ${pkg.id}: <reason>\` if you cannot finish.`,
     '',
   ].join('\n');
