@@ -33,10 +33,19 @@
 // merged, a code worker that edits a scene or prefab is stopped at once.
 //
 // configureUnityMerge(): UnityYAMLMerge as the git merge driver for
-// .unity / .prefab / .asset - a managed block in .gitattributes, the same
-// block in the common git dir's info/attributes (shared by every worktree,
-// effective before anything is committed), and `git config merge.*` (local
-// config is shared by every worktree of the repo too).
+// .unity / .prefab / .asset - a managed block in the common git dir's
+// info/attributes (git reads $GIT_COMMON_DIR/info/attributes in every
+// worktree, so it covers the builders' worktrees too, and it is never a
+// tracked file) and `git config merge.*` (local config is shared by every
+// worktree of the repo too).
+//
+// The tracked .gitattributes is never written: a block there left the game
+// checkout dirty after every run. A managed block an earlier LunaCore wrote
+// into .gitattributes is removed only while it is uncommitted (the index
+// copy has no block) - that edit was LunaCore's alone, and taking it out
+// leaves the checkout as clean as it was. Once the block is committed or
+// staged it is part of the project's history (Mati's or a build's commit):
+// it is left alone, as it says nothing info/attributes does not.
 // ============================================================================
 
 'use strict';
@@ -88,6 +97,7 @@ const MERGE_DRIVER = 'unityyamlmerge';
 const MERGE_EXTENSIONS = Object.freeze(['unity', 'prefab', 'asset']);
 const BLOCK_BEGIN = "# >>> LunaCore: UnityYAMLMerge for scenes, prefabs and assets (Luna's Work) >>>";
 const BLOCK_END = '# <<< LunaCore: UnityYAMLMerge <<<';
+const GITATTRIBUTES = '.gitattributes';
 const VERSION_RE = /^\d{4}\.\d+\.\d+[abfpx]\d+$/;
 // Goes into a command git runs through sh: no quoting or expansion characters.
 const UNSAFE_TOOL_CHARS = /["$`\n\r]/;
@@ -356,6 +366,55 @@ function withAttributesBlock(text) {
   return `${body ? `${body}\n\n` : ''}${block}\n`;
 }
 
+/** `text` without the managed block and the blank lines around it ('' when nothing else is left). */
+function withoutAttributesBlock(text) {
+  const src = typeof text === 'string' ? text.replace(/\r\n/g, '\n') : '';
+  const start = src.indexOf(BLOCK_BEGIN);
+  const end = start >= 0 ? src.indexOf(BLOCK_END, start) : -1;
+  if (start < 0 || end < 0) return src;
+  const rest = [src.slice(0, start).replace(/\n+$/, ''), src.slice(end + BLOCK_END.length).replace(/^\n+/, '')].filter(Boolean).join('\n');
+  return rest ? rest.replace(/\n*$/, '\n') : '';
+}
+
+// Line endings and trailing blank lines do not count when two attribute files are compared.
+const sameAttributes = (a, b) => String(a).replace(/\r\n/g, '\n').trimEnd() === String(b).replace(/\r\n/g, '\n').trimEnd();
+
+/**
+ * Takes a managed block an earlier LunaCore left uncommitted out of the
+ * tracked .gitattributes; a committed or staged one is kept (see the header).
+ * @returns {Promise<'none'|'kept'|'removed'>}
+ */
+async function dropUncommittedBlock(repoDir, execImpl, fsImpl) {
+  const file = path.join(repoDir, GITATTRIBUTES);
+  let text;
+  try {
+    text = String(fsImpl.readFileSync(file, 'utf8'));
+  } catch {
+    return 'none';
+  }
+  if (!text.includes(BLOCK_BEGIN)) return 'none';
+  const stripped = withoutAttributesBlock(text);
+  const listed = await runGit(repoDir, ['ls-files', '--', GITATTRIBUTES], execImpl);
+  if (!listed.ok) return 'kept';
+  if (!listed.stdout.trim()) {
+    // Never committed: LunaCore made the file, or put its block into one nobody added yet.
+    if (stripped) fsImpl.writeFileSync(file, stripped);
+    else fsImpl.rmSync(file, { force: true });
+    return 'removed';
+  }
+  const indexed = await runGit(repoDir, ['show', `:${GITATTRIBUTES}`], execImpl);
+  if (!indexed.ok || indexed.stdout.includes(BLOCK_BEGIN)) return 'kept';
+  if (!sameAttributes(stripped, indexed.stdout)) {
+    // Mati's own uncommitted rules stay; only the block goes.
+    fsImpl.writeFileSync(file, stripped);
+    return 'removed';
+  }
+  // The block was the only change: the index copy comes back byte for byte (line endings too).
+  const restored = await runGit(repoDir, ['checkout', '--', GITATTRIBUTES], execImpl);
+  if (!restored.ok) fsImpl.writeFileSync(file, stripped);
+  return 'removed';
+}
+
 /** Writes the managed block into one attributes file. @returns {boolean} whether it changed */
 function upsertAttributes(file, fsImpl) {
   let before = '';
@@ -387,7 +446,8 @@ function driverConfig(tool) {
  * @param {string} repoDir
  * @param {{mergeTool?:string, execImpl?:Function, fsImpl?:object, platform?:string, env?:object}} [opts]
  *   mergeTool: an explicit UnityYAMLMerge path (otherwise Unity Hub's, for the project's version)
- * @returns {Promise<{ok:boolean, attributes:boolean, driver:boolean, tool?:string, warning?:string, error?:string}>}
+ * @returns {Promise<{ok:boolean, attributes:boolean, driver:boolean, tool?:string, warning?:string, error?:string,
+ *   legacyBlock?:'removed'|'kept'}>} legacyBlock: what became of a LunaCore block found in .gitattributes
  */
 async function configureUnityMerge(repoDir, opts = {}) {
   const fsImpl = opts.fsImpl || fs;
@@ -395,17 +455,18 @@ async function configureUnityMerge(repoDir, opts = {}) {
   try {
     const common = await runGit(repoDir, ['rev-parse', '--git-common-dir'], execImpl);
     if (!common.ok || !common.stdout.trim()) return { ok: false, attributes: false, driver: false, error: 'notGitRepo' };
-    upsertAttributes(path.join(repoDir, '.gitattributes'), fsImpl);
     upsertAttributes(path.join(path.resolve(repoDir, common.stdout.trim()), 'info', 'attributes'), fsImpl);
+    const legacy = await dropUncommittedBlock(repoDir, execImpl, fsImpl);
+    const base = { ok: true, attributes: true, driver: false, ...(legacy === 'none' ? {} : { legacyBlock: legacy }) };
 
     const tool = opts.mergeTool || findUnityYamlMerge(repoDir, { fsImpl, platform: opts.platform, env: opts.env });
-    if (!tool) return { ok: true, attributes: true, driver: false, warning: "UnityYAMLMerge not found for the project's editor version" };
-    if (UNSAFE_TOOL_CHARS.test(tool)) return { ok: false, attributes: true, driver: false, error: 'badMergeTool' };
+    if (!tool) return { ...base, warning: "UnityYAMLMerge not found for the project's editor version" };
+    if (UNSAFE_TOOL_CHARS.test(tool)) return { ...base, ok: false, error: 'badMergeTool' };
     for (const [key, value] of driverConfig(tool)) {
       const res = await runGit(repoDir, ['config', key, value], execImpl);
-      if (!res.ok) return { ok: false, attributes: true, driver: false, error: 'gitConfigFailed', detail: res.stderr.trim().slice(0, 300) };
+      if (!res.ok) return { ...base, ok: false, error: 'gitConfigFailed', detail: res.stderr.trim().slice(0, 300) };
     }
-    return { ok: true, attributes: true, driver: true, tool };
+    return { ...base, driver: true, tool };
   } catch (err) {
     return { ok: false, attributes: false, driver: false, error: 'failed', detail: String(err && err.message).slice(0, 300) };
   }
@@ -427,5 +488,6 @@ module.exports = {
   isUnityProject,
   findUnityYamlMerge,
   withAttributesBlock,
+  withoutAttributesBlock,
   configureUnityMerge,
 };

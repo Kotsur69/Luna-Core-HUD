@@ -978,8 +978,9 @@ function createLunasWork(deps) {
     if (r.stop) requestStop('steer');
     // B5: work outside DESIGN.md / ROADMAP.md waits for Mati.
     cardFlow.askAboutScope(r.outOfScope);
-    // A DESIGN.md append must be on main before the builders branch from it.
-    if (r.designAppended) await commitPack(`iteration ${run.iteration} design append`);
+    // The Director's CONTRACTS.md / DESIGN.md append and the asset step's ASSETS.md
+    // rows must be on main before the builders' worktrees branch from it.
+    await commitPack(`iteration ${run.iteration} ${r.designAppended ? 'design append' : 'contracts and assets'}`);
     // Read the holds again: a decision may have been answered (or taken its
     // default) while the Director was thinking.
     const stillHeld = heldNow();

@@ -1630,6 +1630,26 @@ test('design pack: committed after the Critic and before the checkpoint tag; a f
   assert.ok(log.some((t) => /design pack committed \(1 file\(s\)\), pushed/.test(t)), 'the run carried on after the failure');
 });
 
+test("design pack: the Director's CONTRACTS.md / ASSETS.md commit lands before the build makes its worktrees", async () => {
+  const commits = [];
+  let h = null;
+  const packCommit = async (o) => {
+    commits.push({ label: o.label, repoPath: o.repoPath, builds: h.calls.build.length });
+    return { ok: true, committed: true, pushed: true, files: ['design/CONTRACTS.md', 'design/ASSETS.md'] };
+  };
+  h = harness({ todos: Array.from({ length: 4 }, (_, i) => card(i + 1)), scores: [60, 70], deps: { packCommit } });
+  const appended = () => ({ ...oneCardEach(h)(), designAppended: true });
+  h.next.director.push(oneCardEach(h), appended, STOP_CARD);
+  await h.start();
+  assert.equal(h.calls.build.length, 2);
+  const before = (n) => commits.find((c) => c.label.startsWith(`iteration ${n} `) && !c.label.endsWith('design pack'));
+  // Each iteration's Director commit happens while that iteration's build has not started yet.
+  assert.deepEqual(before(1), { label: 'iteration 1 contracts and assets', repoPath: REPO, builds: 0 });
+  assert.deepEqual(before(2), { label: 'iteration 2 design append', repoPath: REPO, builds: 1 });
+  assert.deepEqual(commits.find((c) => c.label === 'iteration 1 design pack'), { label: 'iteration 1 design pack', repoPath: REPO, builds: 1 });
+  assert.ok(h.ctl.runLog().some((e) => /design pack committed \(2 file\(s\)\), pushed/.test(e.text || '')));
+});
+
 test('checkpoints: only a journey that passed before rolls back; one that never passed does not', async () => {
   const cp = fakeCheckpoints();
   const h = harness({ todos: Array.from({ length: 6 }, (_, i) => card(i + 1)), scores: [50, 50, 50], deps: { checkpoints: cp.dep } });
