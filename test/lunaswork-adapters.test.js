@@ -2030,10 +2030,13 @@ test('the PlaytestDriver card builds Unity Pipeline commands: dev-only guard, sc
   }
   assert.ok(card.files.some((f) => f.includes('/Tests/PlayMode/')));
 
-  // Verify runs against the open editor: batch mode cannot open a project the editor holds.
-  assert.match(card.verify, /^unity test .*PlayMode/);
-  assert.match(card.verify, /`unity test --help`/);
-  assert.doesNotMatch(card.verify, /-batchmode|-projectPath/);
+  // No verify command: a prose one ran through cmd.exe and workers wrote shims to make it pass.
+  assert.equal('verify' in card, false);
+  assert.equal('verify' in U.playtestDriverCard(), false);
+  assert.doesNotMatch(card.details, /`unity test[ `]/, 'no prose unity test command');
+  assert.match(card.details, /run the PlayMode tests there/);
+  assert.match(card.details, /PlayMode tests not run here/);
+  assert.match(card.details, /Never add files whose only purpose is making a check pass \(unity\.cmd, grep\.cmd, wrapper scripts, package\.json\)/);
   assert.match(card.details, /Do NOT use `Unity -batchmode -projectPath \.`/);
 
   assert.ok(card.acceptance.some((a) => a.includes(U.PLAYTEST_DRIVER_GUARD)));
@@ -2043,9 +2046,53 @@ test('the PlaytestDriver card builds Unity Pipeline commands: dev-only guard, sc
 
   // It survives the to-do store unchanged (no field is cut).
   const stored = normalizeTodo({ ...card, at: 1 });
-  for (const key of ['text', 'details', 'verify', 'size', 'model', 'effort']) assert.equal(stored[key], card[key], key);
+  for (const key of ['text', 'details', 'size', 'model', 'effort']) assert.equal(stored[key], card[key], key);
+  assert.equal(stored.verify ?? null, null, 'no verify after the store either');
   assert.deepEqual(stored.acceptance, card.acceptance);
   assert.deepEqual(stored.files, card.files);
+});
+
+test('the PlaytestDriver card names the exact combatFeelLog keys the bridge parses', () => {
+  const { parseCombatFeelLog } = require('../helpers/playtest-bridge/combatFeelLog.js');
+  // Verified against helpers/playtest-bridge/combatFeelLog.js: each key survives parseEntry on its own.
+  const VERIFIED = ['hitStopFrames', 'hitStopMs', 'hitStopIntendedFrames', 'inputLatencyMs', 'hitboxToVfxFrames', 'timeScale'];
+  assert.deepEqual([...U.COMBAT_FEEL_FIELDS], VERIFIED);
+  assert.equal(U.COMBAT_FEEL_KEY, 'combatFeelLog');
+  const sample = {
+    hitStopFrames: 3, hitStopMs: 50, hitStopIntendedFrames: 3, inputLatencyMs: 40, hitboxToVfxFrames: 1,
+    timeScale: { from: 1, to: 0.2, reason: 'DeadSecond', atMs: 1000 },
+  };
+  for (const key of VERIFIED) {
+    assert.deepEqual(parseCombatFeelLog({ [U.COMBAT_FEEL_KEY]: [{ [key]: sample[key] }] }), [{ [key]: sample[key] }], key);
+  }
+  // A key the parser does not read is dropped.
+  assert.deepEqual(parseCombatFeelLog({ combatFeelLog: [{ hitStop: 3 }] }), []);
+  const snapshotLine = U.PLAYTEST_DRIVER_CARD.details.split('\n').find((l) => l.includes('Snapshot() combat timing'));
+  assert.ok(snapshotLine, 'a Snapshot() combat timing line');
+  assert.ok(snapshotLine.includes('"combatFeelLog"'));
+  assert.ok(snapshotLine.includes(`exactly these keys: ${VERIFIED.join(', ')}`));
+  assert.ok(snapshotLine.includes('timeScale {from, to, reason, atMs}'));
+});
+
+test('the PlaytestDriver card is one self-bootstrapping card that places nothing in the scene', () => {
+  const { details } = U.PLAYTEST_DRIVER_CARD;
+  assert.match(details, /This is ONE card on purpose/);
+  assert.match(details, /each piece was invisible to the Playtester/);
+  assert.match(details, /\[RuntimeInitializeOnLoadMethod\]/);
+  assert.match(details, /needs nothing in the scene: never place it/);
+  assert.match(details, /"missing script" when the code is reverted/);
+});
+
+test('the PlaytestDriver card takes the Pipeline attributes from the package docs, never a guessed assembly', () => {
+  const { PIPELINE_ATTRIBUTES_GUIDANCE, PLAYTEST_CONTRACT } = require('../helpers/playtest-bridge/unityContract.js');
+  const { details } = U.PLAYTEST_DRIVER_CARD;
+  assert.ok(details.includes(PIPELINE_ATTRIBUTES_GUIDANCE));
+  assert.match(PIPELINE_ATTRIBUTES_GUIDANCE, /\[CliGroupCommand\] \/ \[CliArg\] attributes exactly as Documentation~\/creating-commands\.md of the com\.unity\.pipeline package shows/);
+  assert.match(PIPELINE_ATTRIBUTES_GUIDANCE, /autoReferenced/);
+  // Not confirmed from a package on this machine: no namespace or assembly is named.
+  for (const text of [details, PLAYTEST_CONTRACT]) {
+    assert.doesNotMatch(text, /Unity\.Pipeline\.Attributes|Unity\.Pipeline\.Commands/);
+  }
 });
 
 test('the PlaytestDriver card quotes the exact playtest contract LunaCore parses', () => {
