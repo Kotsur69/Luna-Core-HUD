@@ -973,6 +973,49 @@ test('the bridge console window: console_errors holds only what was logged after
   assert.deepEqual(fresh.window, { scope: 'fresh-session', startedAt: null, session, cursor: 5, newSession: answerSession });
 });
 
+test('unityConsole: the window call, the cut, the counts and what a window covers', () => {
+  const UC = require('../helpers/playtest-bridge/unityConsole.js');
+  const session = '12'.repeat(16);
+  assert.deepEqual(UN.UNITY_PIPELINE.console(), ['console get', { tail: 100, level: 'warning' }], 'no window: the buffer tail, as before');
+  assert.deepEqual(UN.UNITY_PIPELINE.console({ session, cursor: 9 }), ['console get', { tail: 100, level: 'warning', since: 9, 'since-session': session }]);
+  for (const bad of [{ session: 'x y', cursor: 1 }, { session, cursor: 1.5 }, { session, cursor: -2 }, { session: 7, cursor: 1 }, { session: 'a'.repeat(65), cursor: 1 }]) {
+    assert.throws(() => UC.consoleCall(bad), /session id|cursor/, JSON.stringify(bad));
+  }
+  assert.equal(UC.consoleWindowOf({ entries: [] }, 'now'), null, 'an editor without cursors opens no window');
+  assert.deepEqual(UC.consoleWindowOf({ cursor: 4, session }, '2026-11-26T10:00:00.000Z'), { session, cursor: 4, startedAt: '2026-11-26T10:00:00.000Z' });
+
+  const answer = {
+    session,
+    entries: [{ seq: 3, level: 'error', message: 'old' }, { seq: 5, level: 'warning', message: 'new warn' }, { level: 'error', message: 'no seq' }, 'junk', { seq: 6, level: 'Error', message: 'new error' }],
+    counts: { error: 9, warn: 9, log: 9 },
+    groundTruth: { compilationFailed: false, consoleErrors: 9 },
+    dropped: true,
+  };
+  const cut = UC.windowedConsole(answer, { session, cursor: 4, startedAt: 'start' });
+  assert.deepEqual(cut.entries.map((e) => e.message), ['new warn', 'new error'], 'only entries after the cursor; one without a seq cannot be placed');
+  assert.deepEqual(cut.counts, { error: 1, warn: 1, log: 0 });
+  assert.deepEqual(cut.window, { scope: 'since-start', startedAt: 'start', session, cursor: 4 });
+  assert.equal(cut.dropped, true, 'a gap the editor reports is kept');
+  assert.deepEqual(UC.windowedConsole({ ...answer, reset: true }, { session, cursor: 4 }).window.scope, 'fresh-session', 'a refused cursor is a fresh window too');
+  const whole = UC.windowedConsole(answer, null);
+  assert.equal(whole.window.scope, 'whole-buffer');
+  assert.equal(whole.entries.length, 4);
+  assert.deepEqual(UC.windowedConsole(null, null), { window: { scope: 'whole-buffer', startedAt: null, session: null, cursor: null }, entries: [], counts: { error: 0, warn: 0, log: 0 }, groundTruth: null });
+});
+
+test('UNITY_PIPELINE_EDITOR: the fixed recompile / auto tick / compile check calls', () => {
+  const E = UN.UNITY_PIPELINE_EDITOR;
+  assert.deepEqual(E.setAutoTick({ enabled: true, intervalMs: 16 }), ['editor set_auto_tick', { enabled: true, 'interval-ms': 16, persist: true }]);
+  assert.deepEqual(E.setAutoTick({ enabled: false, intervalMs: 0 }), ['editor set_auto_tick', { enabled: false, 'interval-ms': 0, persist: true }]);
+  for (const bad of [{ enabled: 'yes', intervalMs: 16 }, { enabled: true, intervalMs: -1 }, { enabled: true, intervalMs: 1.5 }, { enabled: true, intervalMs: 5000 }]) {
+    assert.throws(() => E.setAutoTick(bad), /auto tick/, JSON.stringify(bad));
+  }
+  assert.deepEqual(E.refresh(), ['editor invoke_menu', { path: 'Assets/Refresh' }], 'the same refresh the asset pipeline uses');
+  assert.deepEqual(E.recompile(), ['script recompile', {}], 'never --focus: the editor stays in the background');
+  assert.deepEqual(E.recompileStatus(), ['script recompile_status', {}]);
+  assert.deepEqual(E.compileCheck(), ['console get', { tail: 50, level: 'error' }]);
+});
+
 test('bridge flags: --unity-project must be absolute, --unity-url stays for legacy, never both', () => {
   assert.equal(typeof B.invokerFor({ backend: 'unity', 'unity-project': PIPE_DIR }), 'function');
   assert.equal(typeof B.invokerFor({ backend: 'unity', 'unity-url': 'http://127.0.0.1:8080/mcp' }), 'function');
