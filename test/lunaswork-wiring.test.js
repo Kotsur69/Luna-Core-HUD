@@ -101,6 +101,38 @@ test('syncCheckout never merges over local work: a diverged checkout is reported
   }
 });
 
+test('syncCheckout wraps only a fast-forward that moves HEAD in aroundChange (the Unity editor park)', async () => {
+  const r = setupRepos();
+  try {
+    const wrapped = [];
+    const aroundChange = async (step) => {
+      wrapped.push(git(r.checkout, 'rev-parse', 'HEAD'));
+      const res = await step();
+      wrapped.push(git(r.checkout, 'rev-parse', 'HEAD'));
+      return res;
+    };
+    // Nothing new on origin: no wrap at all.
+    assert.deepEqual(await syncCheckout(r.checkout, { aroundChange }), { ok: true });
+    assert.equal(wrapped.length, 0);
+    const before = git(r.checkout, 'rev-parse', 'HEAD');
+    const merged = r.pushFromElsewhere('v2\n');
+    assert.deepEqual(await syncCheckout(r.checkout, { aroundChange }), { ok: true });
+    assert.deepEqual(wrapped, [before, merged], 'the fast-forward ran inside the wrap');
+    // A diverged checkout is refused before the wrap.
+    wrapped.length = 0;
+    fs.writeFileSync(path.join(r.checkout, 'local.txt'), 'mine\n');
+    git(r.checkout, 'add', 'local.txt');
+    git(r.checkout, 'commit', '-q', '-m', 'local work');
+    r.pushFromElsewhere('v3\n');
+    const res = await syncCheckout(r.checkout, { aroundChange });
+    assert.equal(res.ok, false);
+    assert.match(res.detail, /no fast-forward/);
+    assert.equal(wrapped.length, 0);
+  } finally {
+    await r.done();
+  }
+});
+
 test('syncCheckout refuses a detached HEAD and a folder that is not a repo', async () => {
   const r = setupRepos();
   try {

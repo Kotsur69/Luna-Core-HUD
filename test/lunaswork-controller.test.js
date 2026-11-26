@@ -1603,21 +1603,32 @@ test('a Unity run parks the editor around the checkout update and books the outc
       return { reopened: true };
     },
   });
-  const h = harness({
-    deps: {
-      createAdapter: unityAdapter,
-      syncCheckout: async () => {
-        order.push('sync');
-        return { ok: true };
-      },
-    },
-  });
-  h.profile = { adapter: 'unity', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 60, checkCommand: '' };
-  h.next.critic.push(shipCritic());
+  // Like lunasworkWiring.syncCheckout: aroundChange wraps the fast-forward only when HEAD moves.
+  const syncWith = (moves) => async (repoPath, opts) => {
+    order.push('fetch');
+    if (!moves) return { ok: true };
+    return opts.aroundChange(async () => {
+      order.push('fast-forward');
+      return { ok: true };
+    });
+  };
+  const unityRun = (moves) => {
+    const h = harness({ deps: { createAdapter: unityAdapter, syncCheckout: syncWith(moves) } });
+    h.profile = { adapter: 'unity', scene: 'Assets/Scenes/Level1.unity', readyTimeoutSec: 60, checkCommand: '' };
+    h.next.critic.push(shipCritic());
+    return h;
+  };
+  const h = unityRun(true);
   await h.start();
-  assert.deepEqual(order.slice(0, 3), ['park Assets/Scenes/Level1.unity', 'sync', 'unpark Assets/Scenes/Level1.unity']);
+  assert.deepEqual(order.slice(0, 4), ['fetch', 'park Assets/Scenes/Level1.unity', 'fast-forward', 'unpark Assets/Scenes/Level1.unity']);
   assert.equal(restoreRun(h.stored).editorPark.discarded, 1);
   assert.match(logText(h), /unsaved editor changes were dropped/);
+  // Nothing new on origin: no park, so no unsaved edit is dropped for nothing.
+  order.length = 0;
+  const idle = unityRun(false);
+  await idle.start();
+  assert.deepEqual(order, ['fetch']);
+  assert.equal(restoreRun(idle.stored).editorPark.discarded, 0);
 });
 
 test('a web run fast-forwards the checkout without any park', async () => {

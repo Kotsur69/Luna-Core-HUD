@@ -1167,16 +1167,16 @@ function createLunasWork(deps) {
   async function syncCheckout() {
     if (!deps.syncCheckout) return;
     // The only step here that rewrites the checkout's files (God Mode merges and the
-    // rollback's reverts happen in worktrees): a Unity editor is parked around it
-    // (src/lunasworkEditorPark.js), so no "modified externally" dialog blocks it.
-    await withParkedEditor({ editor: parkedEditor(), log, onPark: recordPark }, async () => {
-      try {
-        const res = await deps.syncCheckout(run.repoPath);
-        if (isObj(res) && res.ok === false) logEvent(`checkout not updated: ${String(res.detail || 'failed').slice(0, 200)}`);
-      } catch (err) {
-        logEvent(`checkout not updated: ${errText(err).slice(0, 200)}`);
-      }
-    });
+    // rollback's reverts happen in worktrees): a Unity editor is parked around the
+    // fast-forward (src/lunasworkEditorPark.js), so no "modified externally" dialog
+    // blocks it. syncCheckout calls aroundChange only when HEAD will move.
+    const aroundChange = (step) => withParkedEditor({ editor: parkedEditor(), log, onPark: recordPark }, step);
+    try {
+      const res = await deps.syncCheckout(run.repoPath, { aroundChange });
+      if (isObj(res) && res.ok === false) logEvent(`checkout not updated: ${String(res.detail || 'failed').slice(0, 200)}`);
+    } catch (err) {
+      logEvent(`checkout not updated: ${errText(err).slice(0, 200)}`);
+    }
   }
 
   /** The run's Unity editor {park, unpark}, or null (not a Unity profile). */

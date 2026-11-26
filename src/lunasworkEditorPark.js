@@ -140,10 +140,11 @@ function createEditorPark(ctx) {
     try {
       await session((call) => once(call, deadline, UNITY_PIPELINE.newScene(), 'open an empty scene'));
     } catch (err) {
-      // No answer: the empty scene may be open now, so the scene is reopened after the git step.
+      // No answer: the empty scene may be open now, so the scene is reopened after
+      // the git step, and unsaved changes count as dropped (the conservative report).
       if (err && err.code === PIPELINE_ERROR.timeout) {
         log(`[lunaswork] Unity editor park: no answer to the empty scene (${errText(err)}); reopening after the git step`);
-        return { parked: true, discarded: false, skipped: null, detail: 'no answer', reopen };
+        return { parked: true, discarded: dirty.length > 0, skipped: null, detail: 'no answer', reopen };
       }
       return skipped(skipReason(err), errText(err));
     }

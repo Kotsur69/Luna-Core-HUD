@@ -180,14 +180,15 @@ test('a refused empty scene (script eval off) skips the park; nothing to reopen'
   assert.match(tally.last, /refused: .*script eval is disabled/);
 });
 
-test('a lost answer to the empty scene still reopens after the git step', async () => {
+test('a lost answer to the empty scene still reopens after the git step and counts a dirty scene as dropped', async () => {
   const log = [];
   const editor = fakeEditor({
-    'scene list_open': openScenes(false),
+    'scene list_open': openScenes(true),
     'script eval': () => { throw pipelineErr(PIPELINE_ERROR.timeout); },
   }, log);
-  await parkedRun(editor, async () => log.push('git'));
+  const { outcomes } = await parkedRun(editor, async () => log.push('git'));
   assert.deepEqual(log, ['scene list_open', 'script eval', 'git', 'editor invoke_menu', 'scene open']);
+  assert.equal(outcomes[0].discarded, true);
 });
 
 // ---- failing git step -------------------------------------------------------------------
