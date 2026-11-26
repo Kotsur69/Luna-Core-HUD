@@ -182,6 +182,19 @@ test('blenderExportScript: the toon pass marks the scene before it changes it; t
   assert.match(B.blenderExportScript('/r/a.blend', '/r/a.fbx', { stylePass: B.TOON_PASS }), /^bpy\.ops\.wm\.save_as_mainfile\(/m);
 });
 
+test('blenderExportScript: with from and the guarded save, the helpers come once, then from, then the guarded save', () => {
+  const statePath = path.resolve('/r/state.txt');
+  const from = { type: 'texture', path: path.resolve('/r/hf/a.png'), target: 'Crate' };
+  const code = B.blenderExportScript(path.resolve('/r/a.blend'), path.resolve('/r/a.fbx'), { stylePass: B.TOON_PASS, from, blend: { exists: true, statePath } });
+  const helpers = code.indexOf('import json');
+  assert.ok(helpers > 0);
+  assert.equal(code.indexOf('import json', helpers + 1), -1, 'the helpers are emitted once');
+  const fromCall = code.indexOf('luna_from_texture()');
+  const guard = code.indexOf('luna_toon_marked = ');
+  assert.ok(helpers < fromCall && fromCall < guard, 'helpers, then from, then the guarded save');
+  assert.ok(guard < code.indexOf('bpy.context.scene[TOON_MARK] = STYLE_PASS'), 'the toon mark comes after the save');
+});
+
 // ---- 2. a repeated toon call through blenderModel ---------------------------------------
 
 test('blenderModel: a second toon call on the same open scene keeps the untouched .blend', async (t) => {

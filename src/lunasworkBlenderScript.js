@@ -9,7 +9,8 @@
 //               material (material and nodes made when missing), or a GLB
 //               imported (src/lunasworkBlenderFrom.js checks the file)
 //   save        the open scene is saved as a copy to art/blender/<slug>.blend
-//               (the untouched source, before any pass below). The toon pass
+//               (the untouched source, before any pass below; with `from`, it
+//               already holds the Higgsfield texture or GLB). The toon pass
 //               marks the scene it changes (custom property TOON_MARK); a
 //               marked scene never replaces a .blend that is already there,
 //               so a repeated call keeps the untouched source (blend-state
