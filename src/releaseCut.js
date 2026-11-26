@@ -67,6 +67,9 @@ const MAX_SUBJECTS = 200;
 const MAX_TITLE = 60;
 const MAX_SUBJECT = 160;
 const WRAP_AT = 76;
+// A dirty-checkout refusal names at most this many paths, each capped.
+const MAX_DIRTY_PATHS = 10;
+const MAX_DIRTY_PATH = 100;
 
 // Control characters plus Unicode format characters (zero-width, bidi
 // overrides): commit subjects reach the README, the commit and the notes.
@@ -325,12 +328,60 @@ async function headOf(git) {
 }
 
 /**
+ * `git status --porcelain` lines as "XY path" entries: the two status
+ * columns kept (a leading space is meaningful), CRs and blank lines dropped,
+ * each path capped. Paths and codes only, never file contents.
+ */
+function porcelainEntries(stdout) {
+  return String(stdout || '')
+    .split('\n')
+    .map((l) => l.replace(/\r$/, ''))
+    .filter((l) => l.trim())
+    .map((l) => `${l.slice(0, 2)} ${porcelainPath(l.slice(3))}`);
+}
+
+/** One porcelain path, redacted and capped; a rename keeps both sides, each capped. */
+function porcelainPath(raw) {
+  const cap = (p) => oneLine(redact(p), MAX_DIRTY_PATH) || '?';
+  const arrow = raw.indexOf(' -> ');
+  return arrow < 0 ? cap(raw) : `${cap(raw.slice(0, arrow))} -> ${cap(raw.slice(arrow + 4))}`;
+}
+
+/** "uncommitted changes:  M a, ?? b (+N more)" - the first MAX_DIRTY_PATHS entries, plus a failed refresh. */
+function dirtyReason(prefix, status) {
+  const { entries, refreshError } = status;
+  const shown = entries.slice(0, MAX_DIRTY_PATHS).join(', ');
+  const more = entries.length > MAX_DIRTY_PATHS ? ` (+${entries.length - MAX_DIRTY_PATHS} more)` : '';
+  // A failed refresh can itself leave stat-only changes listed: say so.
+  const refresh = refreshError ? ` (${refreshError})` : '';
+  return `${prefix}: ${shown}${more}${refresh}`;
+}
+
+/**
+ * Refreshes the index (stat-only changes, e.g. a file rewritten with the same
+ * content under core.autocrlf, stop counting), then reads the porcelain status.
+ * A failed refresh is never hidden: it is logged and named in a failure
+ * reason; the status itself still decides whether the checkout is clean.
+ * @returns {Promise<{ok:true, entries:string[], refreshError:string|null}|{ok:false, reason:string}>}
+ */
+async function checkoutStatus(git, log) {
+  const refresh = await git(['update-index', '-q', '--refresh']);
+  const refreshError = refresh.ok ? null : `git update-index --refresh failed: ${redact(lastLine(refresh.stderr || refresh.stdout)) || 'failed'}`;
+  if (refreshError) log(`release: ${refreshError}`);
+  const status = await git(['status', '--porcelain']);
+  if (!status.ok) return { ok: false, reason: refreshError ? `git status failed (${refreshError})` : 'git status failed' };
+  return { ok: true, entries: porcelainEntries(status.stdout), refreshError };
+}
+
+/**
  * The checkout is still what the preflight saw: clean, on `base`, at `head`.
  * @returns {Promise<string|null>} why not, or null
  */
-async function stillSame(git, base, head) {
-  const status = await git(['status', '--porcelain']);
-  if (!status.ok || status.stdout.trim()) return 'the checkout changed during the tests (uncommitted changes)';
+async function stillSame(git, base, head, log) {
+  const status = await checkoutStatus(git, log);
+  const changed = 'the checkout changed during the tests (uncommitted changes)';
+  if (!status.ok) return `${changed}: ${status.reason}`;
+  if (status.entries.length) return dirtyReason(changed, status);
   const branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (!branch.ok || lastLine(branch.stdout) !== base) return `the checkout left ${base} during the tests`;
   return (await headOf(git)) === head ? null : `${base} moved during the tests`;
@@ -350,9 +401,10 @@ async function preflight(opts, d, git, npm) {
   if (scriptProblem) return refuse('package', scriptProblem);
   if (!SEMVER_RE.test(String(pkg.version))) return refuse('package', 'package.json version is not x.y.z');
 
-  const status = await git(['status', '--porcelain']);
-  if (!status.ok) return refuse('status', 'git status failed');
-  if (status.stdout.trim()) return refuse('status', 'uncommitted changes');
+  const logLine = d.log || (() => {});
+  const status = await checkoutStatus(git, logLine);
+  if (!status.ok) return refuse('status', status.reason);
+  if (status.entries.length) return refuse('status', dirtyReason('uncommitted changes', status));
   const branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (!branch.ok || lastLine(branch.stdout) !== base) return refuse('branch', `not on ${base}`);
   if (typeof landedSha !== 'string' || !SHA_RE.test(landedSha)) return refuse('landed', 'run not landed on base');
@@ -378,11 +430,11 @@ async function preflight(opts, d, git, npm) {
   if (!version) return refuse('package', 'package.json version is not x.y.z');
   if ((await git(['rev-parse', '--verify', '--quiet', `refs/tags/v${version}`])).ok) return refuse('tag', `v${version} already exists`);
 
-  (d.log || (() => {}))(`release: npm test before v${version}`);
+  logLine(`release: npm test before v${version}`);
   const tests = await npm('npm test', TEST_TIMEOUT_MS);
   if (!tests.ok) return refuse('tests', tests.timedOut ? 'tests timed out' : 'tests failed');
   // The tests took minutes: the checkout must still be the one checked above.
-  const moved = await stillSame(git, base, head);
+  const moved = await stillSame(git, base, head, logLine);
   if (moved) return refuse('branch', moved);
   return { version, notes: buildNotes(subjects) };
 }

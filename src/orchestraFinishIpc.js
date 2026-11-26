@@ -39,9 +39,11 @@ const RESEND_REASONS = new Set([
   'gmail-timeout', 'gmail-auth', 'gmail-scope', 'gmail-no-client', 'gmail-failed',
 ]);
 const MAX_REASON = 300;
+// A release refusal can name up to 10 dirty paths (releaseCut.js dirtyReason).
+const MAX_RELEASE_REASON = 1200;
 
 // eslint-disable-next-line no-control-regex
-const reasonText = (v) => String(v == null ? '' : v).replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, MAX_REASON) || 'failed';
+const reasonText = (v, max = MAX_REASON) => String(v == null ? '' : v).replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, max) || 'failed';
 
 /**
  * A run id from the renderer, checked: a plain id string whose markdown
@@ -83,7 +85,7 @@ const samePath = (a, b) => typeof a === 'string' && typeof b === 'string' && !!a
 /** The report / board line for a Release now answer. */
 function releaseLine(res) {
   if (res && res.ok) return `- Released ${res.tag}: ${res.url || 'no release URL'}`;
-  if (res && res.refused) return `- Release skipped: ${reasonText(res.reason)}`;
+  if (res && res.refused) return `- Release skipped: ${reasonText(res.reason, MAX_RELEASE_REASON)}`;
   return `- Release failed: ${reasonText(res ? `${res.stage}: ${res.reason}` : 'failed')}`;
 }
 
@@ -197,7 +199,7 @@ function register(ipcMain, deps) {
       if (deps.recordRelease && deps.releaseResult) deps.recordRelease(target.planId, deps.releaseResult(res));
       if (deps.appendReport) deps.appendReport(target.planId, releaseLine(res));
       if (res && res.ok) return { ok: true, version: res.version, tag: res.tag, url: res.url || null };
-      return { ok: false, reason: reasonText(res && res.reason) };
+      return { ok: false, reason: reasonText(res && res.reason, res && res.refused ? MAX_RELEASE_REASON : undefined) };
     } catch (err) {
       console.error('[orchestra] release now failed:', err && err.message);
       return { ok: false, reason: 'failed' };

@@ -47,6 +47,14 @@ config/lmstudio-empty-mcp.json
 # God Mode worker briefs (src/orchestra.js), written per launch.
 config/tasks/
 
+# God Mode run store (src/orchestraStore.js): one <hash>.local.json per
+# project, written into the repo's own config/ when LunaCore runs from source.
+# Untracked, it made the post-merge release refuse "uncommitted changes".
+config/orchestra/
+# The renamed pre-store run file, and atomic-write temp files a crash leaves.
+config/orchestra.local.json.migrated*
+config/*.local.json.tmp
+
 # Runtime output: God Mode run snapshot and weekly HTML reports, per machine.
 config/runs/
 config/weekly/

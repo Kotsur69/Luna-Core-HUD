@@ -63,6 +63,7 @@ function fakeTools(opts = {}) {
   let head = HEAD_SHA;
   let clock = 1000;
   let verifyAttempts = 0;
+  let testsRan = false;
   const ok = (stdout = '') => ({ ok: true, code: 0, stdout, stderr: '' });
   const no = (stderr = 'failed', code = 1) => ({ ok: false, code, stdout: '', stderr });
   const fs = {
@@ -87,7 +88,13 @@ function fakeTools(opts = {}) {
   const gitAnswer = (args) => {
     const [cmd, ...rest] = args;
     const line = args.join(' ');
-    if (cmd === 'status') return ok(opts.dirty ? ' M src/main.js\n' : '');
+    if (cmd === 'update-index') return opts.refreshFails ? no('fatal: Unable to create index.lock: File exists.') : ok();
+    if (cmd === 'status') {
+      if (opts.statusFails) return no('fatal: not a git repository');
+      if (testsRan && opts.statusAfterTests !== undefined) return ok(opts.statusAfterTests);
+      if (opts.status !== undefined) return ok(opts.status);
+      return ok(opts.dirty ? ' M src/main.js\n' : '');
+    }
     if (cmd === 'symbolic-ref') return ok(`${opts.branch || 'main'}\n`);
     if (cmd === 'merge-base') return opts.notLanded ? no('') : ok();
     if (cmd === 'fetch') return opts.fetchFails ? no('fatal: unable to access https://user:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r') : ok();
@@ -151,6 +158,7 @@ function fakeTools(opts = {}) {
     calls.push(command);
     assert.equal(o.cwd, REPO);
     if (command === 'npm test') {
+      testsRan = true;
       if (opts.moved) head = MOVED_SHA;
       return { ok: !opts.redTests, output: opts.redTests ? '# fail 2' : '# pass 10', timedOut: false };
     }
@@ -338,7 +346,7 @@ test('patch release when only fixes came since the last tag', async () => {
 
 test('refusals: nothing is written, committed, tagged, pushed, built or published', async () => {
   const cases = [
-    [{ dirty: true }, {}, 'uncommitted changes'],
+    [{ dirty: true }, {}, 'uncommitted changes:  M src/main.js'],
     [{ redTests: true }, {}, 'tests failed'],
     [{ noAuth: true }, {}, 'gh not authenticated (gh auth login)'],
     [{ noGh: true }, {}, 'gh not installed'],
@@ -372,6 +380,88 @@ test('red tests are checked before any change; a dirty tree before the tests run
   const dirty = fakeTools({ dirty: true });
   await cut(dirty);
   assert.ok(!dirty.calls.includes('npm test'), 'no test run on a dirty tree');
+});
+
+test('every status check is preceded by an index refresh (stat-only changes never count)', async () => {
+  const tools = fakeTools();
+  const res = await cut(tools);
+  assert.equal(res.ok, true);
+  const statusAt = tools.calls.flatMap((c, i) => (c === 'git status --porcelain' ? [i] : []));
+  assert.equal(statusAt.length, 2, 'one status before and one after the tests');
+  for (const i of statusAt) assert.equal(tools.calls[i - 1], 'git update-index -q --refresh', `refresh right before status #${i}`);
+  assert.ok(statusAt[0] < tools.calls.indexOf('npm test') && statusAt[1] > tools.calls.indexOf('npm test'));
+});
+
+test('a dirty checkout names its paths with porcelain codes; a real change still blocks', async () => {
+  const tools = fakeTools({ status: ' M config/x.local.json\r\n?? logs/run.txt\nA  src/new.js\n' });
+  const res = await cut(tools);
+  assert.deepEqual(res, {
+    ok: false,
+    refused: true,
+    stage: 'status',
+    reason: 'uncommitted changes:  M config/x.local.json, ?? logs/run.txt, A  src/new.js',
+  });
+  assert.ok(res.reason.startsWith('uncommitted changes'), 'existing prefix kept for matchers');
+  assert.ok(!tools.calls.includes('npm test'));
+  assertNothingChanged(tools);
+  assert.deepEqual(release.releaseResult(res), { skipped: res.reason });
+});
+
+test('a rename keeps both names, each capped; token-shaped names are redacted', async () => {
+  const long = `src/${'n'.repeat(150)}.js`;
+  const token = ['ghp', 'A'.repeat(30)].join('_');
+  const res = await cut(fakeTools({ status: `R  ${long} -> src/short.js
+?? notes/${token}.txt
+` }));
+  assert.equal(res.reason, `uncommitted changes: R  ${long.slice(0, 100)} -> src/short.js, ?? notes/***.txt`);
+  assert.ok(!res.reason.includes(token));
+});
+
+test('a dirty checkout lists at most 10 paths, then "+N more"', async () => {
+  const status = Array.from({ length: 13 }, (_, i) => `?? logs/run-${i}.txt`).join('\n');
+  const res = await cut(fakeTools({ status }));
+  const shown = Array.from({ length: 10 }, (_, i) => `?? logs/run-${i}.txt`).join(', ');
+  assert.equal(res.reason, `uncommitted changes: ${shown} (+3 more)`);
+  assert.ok(!res.reason.includes('run-10'));
+});
+
+test('a checkout that turns dirty during the tests is refused with the paths', async () => {
+  const tools = fakeTools({ statusAfterTests: ' M package.json\n?? coverage/out.json\n' });
+  const res = await cut(tools);
+  assert.equal(res.refused, true);
+  assert.equal(res.stage, 'branch');
+  assert.equal(res.reason, 'the checkout changed during the tests (uncommitted changes):  M package.json, ?? coverage/out.json');
+  assertNothingChanged(tools);
+});
+
+test('a failed index refresh is logged, never hidden; status still decides', async () => {
+  const logged = [];
+  const clean = fakeTools({ refreshFails: true });
+  const ok = await release.cutRelease({ repoPath: REPO, base: 'main', landedSha: LANDED }, { ...clean.deps, log: (l) => logged.push(l) });
+  assert.equal(ok.ok, true, 'a clean status still releases');
+  assert.ok(logged.some((l) => /update-index --refresh failed: fatal: Unable to create index\.lock/.test(l)), logged.join('\n'));
+
+  const dirty = await cut(fakeTools({ refreshFails: true, dirty: true }));
+  assert.equal(dirty.reason, 'uncommitted changes:  M src/main.js (git update-index --refresh failed: fatal: Unable to create index.lock: File exists.)');
+
+  const broken = await cut(fakeTools({ refreshFails: true, statusFails: true }));
+  assert.equal(broken.stage, 'status');
+  assert.match(broken.reason, /^git status failed \(git update-index --refresh failed: fatal: Unable to create index\.lock/);
+});
+
+test('the dirty paths reach the run report and the Release now line', () => {
+  const reason = `uncommitted changes: ${Array.from({ length: 10 }, (_, i) => `?? logs/a-rather-long-folder-name/run-${i}.txt`).join(', ')} (+2 more)`;
+  assert.ok(reason.length > 300);
+  const view = { id: 'p1', repoPath: '/r', baseBranch: 'main', packages: [], integration: { state: 'done', postMerge: { release: { skipped: reason } } } };
+  assert.ok(buildReport(view, { now: 1 }).includes(`- Release skipped: ${reason}`), 'report line not cut');
+  assert.equal(finishIpc.releaseLine({ ok: false, refused: true, stage: 'status', reason }), `- Release skipped: ${reason}`);
+});
+
+test('release now answers the renderer with the whole dirty-paths reason', async () => {
+  const reason = `uncommitted changes: ${Array.from({ length: 10 }, (_, i) => `?? logs/a-rather-long-folder-name/run-${i}.txt`).join(', ')} (+2 more)`;
+  const { ipcMain, log } = releaseIpc({ cutRelease: async () => ({ ok: false, refused: true, stage: 'status', reason }) });
+  assert.deepEqual(await ipcMain.call('orchestra:release-now', 'luna'), { ok: false, reason });
+  assert.equal(log.appended[0][1], `- Release skipped: ${reason}`);
 });
 
 test('latest.yml not naming the dashed setup stops before gh release', async () => {
