@@ -7,7 +7,27 @@ center, clickable action buttons on the left, and a status monitor on the right.
 It adds control and visibility **without spending a single extra token** — it never
 injects prompts or touches the `claude` binary.
 
-> **Current release: v0.40.0 — AmbientCG/Smithsonian previews and library sound durations.**
+> **Current release: v0.41.0 — Unity editor parking and run-end cleanup.**
+> - park the Unity editor around merges and rollbacks, close editors on
+>   worktrees before removal
+> - clean up a run's worktrees and merged branches at run end
+> - recompile the Unity editor before a playtest, window its console,
+>   per-command driver fallback
+> - built-in Pipeline commands when the game has no PlaytestDriver
+> - environment-broken playtests are inconclusive, never scored or rolled back
+> - per-project reference image limit with a skipped-file warning
+> - Fix: roll back only commits still applied, no Reapply chains
+> - Fix: forbid worker live writes into another project's Unity editor
+> - Fix: codemaps refresh names its real cause and masks secrets
+> - Fix: Higgsfield model ids, CLI-priced credits and multi_image_to_3d
+>   references
+> - Fix: price casts by their primary; keep judge verdicts past the log cap
+> - Fix: cull back faces in the Blender turntable
+> - Fix: clear the shell input line before writing a tab's start command
+> - Fix: load agyFamilies as .mjs to stop MODULE_TYPELESS_PACKAGE_JSON
+> - Fix: take Meshy out of the Unity default kit (opt-in)
+>
+> **v0.40.0 — AmbientCG/Smithsonian previews and library sound durations.**
 > - Higgsfield 3D path via Blender, reference images, from provenance
 > - Higgsfield cost guard reads judge verdicts from the run record
 > - judge accepts Blender turntable sheets in design/asset-renders/
