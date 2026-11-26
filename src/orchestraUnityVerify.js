@@ -8,12 +8,16 @@
 // (`unity command ...`) failed there with "No Pipeline instance found for
 // project: ...", nothing merged, and every iteration repeated it.
 //
-// Two halves:
+// Three parts:
 //   planning    (lunasworkBuild.wrapPlanner, Unity builds only): the planner
-//               is told package verify runs without an editor, and a verify
-//               that calls the unity CLI / the editor, or is prose, is moved
-//               into the package prompt as an editor check the worker runs
-//               against its own editor. `verify` is left empty.
+//               is told `verify` is always empty, and EVERY verify a package
+//               still has is moved into its prompt as a check in its
+//               definition of done; `verify` is left empty. God Mode runs a
+//               verify through cmd.exe on Windows (no grep, no test), and
+//               workers once committed grep.cmd / unity.cmd shims to make
+//               theirs pass. The note fits the worker's role: next to a scene
+//               worker, a code / asset-prep package never opens Unity, so its
+//               check is left for the live editor after the merge.
 //   integration (orchestraIntegrate.mergeAndVerify): a verify that failed
 //               ONLY for want of an editor is deferred, not red. The merge
 //               stays; Luna's Work checks it in the live editor after the
@@ -22,6 +26,13 @@
 //               no-Pipeline error, nothing else failing, a unity call, every
 //               part before it chained with && (it ran, so they passed) and
 //               nothing but unity calls after it. Anything else stays red.
+//               It still guards manual God Mode runs on a Unity project.
+//   self-check  (orchestraFinalize -> orchestraSelfCheck, Unity builds): God
+//               Mode's default `npm test` is no check command (a Unity repo
+//               has no package.json; a fix-up worker once committed one whose
+//               test script called the editor), so the tests step is skipped;
+//               a check command that failed only for want of an editor is
+//               'deferred', never red, and starts no fix-up worker.
 //
 // Pure: nothing here runs anything.
 // ============================================================================
@@ -61,18 +72,30 @@ const PROSE_WORDS = new Set([
 ]);
 const MIN_PROSE_WORDS = 2;
 
-// The editor check moved into a package prompt (a verify is at most 300 chars
-// once validated; the raw planner value is capped here too).
+// The check moved into a package prompt (a verify is at most 300 chars once
+// validated; the raw planner value is capped here too).
 const MAX_CHECK_CHARS = 300;
 const NOTE_GAP = '\n\n';
+/** Who may run a moved check: 'editor' in its own Unity editor; 'noEditor' never opens Unity (a scene worker owns it). */
+const CHECK_ROLES = Object.freeze(['editor', 'noEditor']);
+// 'editor', for a verify that needs the editor (or is prose).
 const EDITOR_CHECK_NOTE =
   'Editor check: LunaCore cannot run this one after the merge (no Unity editor is open on its merge worktree), so run it yourself against your own Unity editor before you commit, and fix until it passes:';
+// 'editor', for any other verify (it may need no editor at all).
+const CHECK_NOTE =
+  'Check: LunaCore runs no package verify command in this Unity project, so run this one yourself before you commit, and fix until it passes:';
+// 'noEditor': a code or asset-prep package next to the scene worker.
+const NO_EDITOR_CHECK_NOTE = [
+  'Check (not run here): do not open the Unity editor for it - the scene worker owns the editor in this build.',
+  "It runs after the merge in the live Unity editor (Luna's Work's recompile, compile check and playtest).",
+  'So review your C# carefully for compile errors (usings, asmdef references, method signatures), and list this check as "not run here" in your hand-back:',
+].join(' ');
 
 /** The planner's Unity rules (handed over as extraPrompt, after the to-do list). */
 const UNITY_PLANNER_RULES = Object.freeze([
   'This is a Unity project. These rules override the "verify" rule above, a to-do\'s own verify included:',
-  '- "verify" runs through a shell in a git worktree where no Unity editor is open, after the merge. It must work without an editor: leave it empty (""), or use a static check such as `grep -q "class GameClock" Assets/Scripts/GameClock.cs`. Never a `unity ...` command, never `Unity -batchmode`, never prose.',
-  "- Editor checks (script recompile, `unity command test run ...`, play mode, a clean Console) go into the package prompt's definition of done: the worker runs them against its own Unity editor before it commits.",
+  '- "verify" is always "" (empty) in this project. LunaCore runs no package verify command here: it checks the merged build itself in the live Unity editor (script recompile, compile check, then a playtest).',
+  "- Every check a package needs goes into its prompt's definition of done instead (for example: scripts recompile with a clean Console, `unity command test run ...` passes, a behaviour seen in play mode). The worker runs the checks it can before it commits and names in its hand-back any it could not run.",
 ]);
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -168,9 +191,17 @@ function editorBoundReason(command) {
   return isProse(command) ? 'prose' : null;
 }
 
-/** The editor check a package prompt gets for an editor-bound `verify`. */
-function editorCheckNote(verify) {
-  return `${EDITOR_CHECK_NOTE} ${oneLine(verify, MAX_CHECK_CHARS)}`;
+/**
+ * The check a package prompt gets for its `verify`, worded for the worker's
+ * role: 'editor' (default) runs it itself; 'noEditor' leaves it for the live
+ * editor after the merge and reports it as not run.
+ * @param {unknown} verify
+ * @param {'editor'|'noEditor'} [role]
+ * @returns {string}
+ */
+function editorCheckNote(verify, role = 'editor') {
+  const lead = role === 'noEditor' ? NO_EDITOR_CHECK_NOTE : editorBoundReason(verify) ? EDITOR_CHECK_NOTE : CHECK_NOTE;
+  return `${lead} ${oneLine(verify, MAX_CHECK_CHARS)}`;
 }
 
 /** `prompt` with `note` after it, within `maxChars`: the prompt is never cut, the note is shortened instead. */
@@ -182,19 +213,61 @@ function appendWithin(prompt, note, maxChars) {
 }
 
 /**
- * A planned package whose verify needs an editor (or is prose), with that
- * verify moved into its prompt as an editor check (editorCheckNote; shortened
- * or left out when the prompt is at its cap - the caller can tell by
- * comparing) and `verify` emptied. Any other package is returned as it is
- * (the same object).
+ * A planned package of a Unity build with its verify - ANY non-empty one, a
+ * shell check included - moved into its prompt as a check in its definition
+ * of done (editorCheckNote for `role`; shortened or left out when the prompt
+ * is at its cap - the caller can tell by comparing) and `verify` emptied. A
+ * package without a verify is returned as it is (the same object).
  * @param {object} pkg a raw planner package
  * @param {number} maxPromptChars the planner's prompt cap
+ * @param {'editor'|'noEditor'} [role] who may run the check (CHECK_ROLES)
  * @returns {object}
  */
-function editorFreeVerify(pkg, maxPromptChars) {
-  if (!isObj(pkg) || !editorBoundReason(pkg.verify)) return pkg;
-  return { ...pkg, verify: '', prompt: appendWithin(pkg.prompt, editorCheckNote(pkg.verify), maxPromptChars) };
+function editorFreeVerify(pkg, maxPromptChars, role = 'editor') {
+  if (!isObj(pkg) || typeof pkg.verify !== 'string' || !pkg.verify.trim()) return pkg;
+  return { ...pkg, verify: '', prompt: appendWithin(pkg.prompt, editorCheckNote(pkg.verify, role), maxPromptChars) };
 }
+
+// ---- self-check (orchestraFinalize -> orchestraSelfCheck) ----------------------
+
+/**
+ * The self-check's check command, and for a Unity build the rule its tests
+ * step is read with (selfCheckDeferred). A Unity build is a Luna's Work build
+ * on the `unity` adapter (`build`) or a Unity project (`unityDir`). There,
+ * God Mode's default `fallback` (`npm test`) is no check command - unless it
+ * is the profile's own - and no command means the tests step is skipped:
+ * Luna's Work's live-editor gate after the checkout update is the real test.
+ * Any other run: the command, else `fallback`, exactly as before.
+ * @param {{command:unknown, build?:{own?:boolean}|null, unityDir?:boolean, fallback:string}} args
+ *   build.own: the command is the Luna's Work profile's own, not God Mode's 'Final check command'
+ * @returns {{checkCommand:string, unity?:{own:boolean}}}
+ */
+function selfCheckCommandOf({ command, build, unityDir, fallback }) {
+  const cmd = typeof command === 'string' ? command.trim() : '';
+  if (!isObj(build) && unityDir !== true) return { checkCommand: cmd || fallback };
+  const own = !!cmd && isObj(build) && build.own === true;
+  if (!cmd || (!own && cmd === fallback)) return { checkCommand: '', unity: { own: false } };
+  return { checkCommand: cmd, unity: { own } };
+}
+
+/**
+ * True when a Unity build's red check command failed only for want of an
+ * editor: the profile's own command by its output alone (unityEditorMissing),
+ * God Mode's by its output and its shape (deferToUnityEditor). Never outside
+ * a Unity build (`unity` null).
+ * @param {unknown} command
+ * @param {{ok?:boolean, output?:string, timedOut?:boolean}|null} result runVerify's result
+ * @param {{own?:boolean}|null|undefined} unity selfCheckCommandOf's `unity`
+ * @returns {boolean}
+ */
+function selfCheckDeferred(command, result, unity) {
+  if (!isObj(unity)) return false;
+  return unity.own === true ? unityEditorMissing(result) : deferToUnityEditor(command, result);
+}
+
+/** The self-check fix-up brief's extra rule in a Unity build: no files that only make a check pass. */
+const UNITY_FIXUP_RULE =
+  '- This is a Unity project: never add a package.json, *.cmd / *.bat shims (unity.cmd, grep.cmd) or wrapper scripts (.ps1, .sh) whose only purpose is to make the check command pass. If the check cannot run here, say so and end with `LUNA_BLOCKED selfcheck: <reason>`.';
 
 /**
  * runPlanner args with the Unity rules added to extraPrompt (after any extra
@@ -211,10 +284,14 @@ function withUnityPlannerRules(args) {
 module.exports = {
   VERIFY_DEFERRED_UNITY,
   UNITY_PLANNER_RULES,
+  UNITY_FIXUP_RULE,
+  CHECK_ROLES,
   unityEditorMissing,
   deferToUnityEditor,
   editorBoundReason,
   editorCheckNote,
   editorFreeVerify,
   withUnityPlannerRules,
+  selfCheckCommandOf,
+  selfCheckDeferred,
 };

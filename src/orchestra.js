@@ -599,6 +599,8 @@ function createOrchestra(deps) {
     pushBranch: deps.pushBranch,
     runFixup: (args) => fixup.run(args),
     checkCommand: () => workerSettings().checkCommand,
+    // A Luna's Work Unity build (lunasworkBuild.js workerSettings): its self-check rule.
+    unityBuild: () => workerSettings().unityBuild || null,
     currentBaseBranch: deps.baseBranchOf ? () => deps.baseBranchOf(plan.repoPath) : null,
     removeWorktree: deps.removeWorktree,
     closeSession,

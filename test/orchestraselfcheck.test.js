@@ -760,3 +760,200 @@ test('smoke: a real error line (even with a timeout) or a bad exit is not retrie
     }
   }
 });
+
+// ---- Unity builds: no npm test fallback, deferred to the live editor -------------
+// Blade&bullet (2026-11-26): no package.json, so God Mode's default `npm test`
+// went red, and the self-check's fix-up worker committed a package.json whose
+// test script ran a unity verify - which failed again with "No Pipeline
+// instance found" in the integration worktree, where no editor is open.
+
+const NO_PIPELINE = 'Error: No Pipeline instance found for project: C:\\repos\\.luna-worktrees\\game\\p1-integration';
+const UNITY_FILES = { 'ProjectSettings/ProjectVersion.txt': 'm_EditorVersion: 6000.0.23f1\n', 'Assets/Scripts/Clock.cs': 'class Clock {}\n' };
+
+/** A verifyImpl that records every command and answers with `answer`. */
+function spyVerify(answer) {
+  const calls = [];
+  return { calls, verifyImpl: async (cmd) => (calls.push(cmd), answer) };
+}
+
+/** finalize() in merge mode on `root`, with the gate's own result deciding the push. */
+function unityFinalizer(root, baseSha, deps) {
+  const plan = runPlan('merge');
+  const { fin } = finalizerFor(plan, {
+    pushBranch: async () => ({ ok: true }),
+    integrateMerge: async (args, extra) => {
+      const gate = await extra.beforePush(root, { merged: ['a'], skipped: [], baseSha });
+      return gate.ok ? { ok: true, merged: ['a'], skipped: [], headSha: 'h' } : { ok: false, merged: ['a'], skipped: [], stage: 'beforePush', detail: gate.reason };
+    },
+    ...deps,
+  });
+  return { plan, fin };
+}
+
+test('runSelfCheck, Unity build: no check command -> tests skipped and nothing is run', async () => {
+  const r = tempRepo(UNITY_FILES);
+  try {
+    const spy = spyVerify({ ok: false, output: 'npm ERR! enoent Could not read package.json' });
+    const res = await sc.runSelfCheck({ root: r.dir, baseSha: r.baseSha, checkCommand: '', unity: { own: false } }, { verifyImpl: spy.verifyImpl });
+    assert.equal(res.tests, 'skipped');
+    assert.deepEqual(spy.calls, [], 'npm test is never run');
+    assert.equal(sc.isGreen(res), true);
+  } finally {
+    await rm(r.dir);
+  }
+});
+
+test('runSelfCheck, Unity build: a check red only for want of an editor is deferred; any other red stays red', async () => {
+  const r = tempRepo(UNITY_FILES);
+  const tests = async (checkCommand, unity, answer) => {
+    const spy = spyVerify(answer);
+    const res = await sc.runSelfCheck({ root: r.dir, baseSha: r.baseSha, checkCommand, ...(unity ? { unity } : {}) }, { verifyImpl: spy.verifyImpl });
+    assert.deepEqual(spy.calls, [checkCommand], 'run once');
+    return res;
+  };
+  const missing = { ok: false, output: NO_PIPELINE, timedOut: false };
+  try {
+    // God Mode's command: read by its shape (deferToUnityEditor).
+    const deferred = await tests('unity command test run', { own: false }, missing);
+    assert.equal(deferred.tests, 'deferred');
+    assert.equal(deferred.tail, '', 'nothing red to show');
+    assert.equal(sc.isGreen(deferred), true);
+    assert.equal((await tests('npm test', { own: false }, missing)).tests, 'failed', '`npm test` hides the unity call');
+    // The profile's own command: read by its output (unityEditorMissing).
+    assert.equal((await tests('pwsh tools/check.ps1', { own: true }, missing)).tests, 'deferred');
+    // Genuine failures stay red, own command or not.
+    for (const output of [`not ok 1 - clock ticks\n${NO_PIPELINE}`, 'error CS0246: The type or namespace name could not be found', '']) {
+      const red = await tests('pwsh tools/check.ps1', { own: true }, { ok: false, output });
+      assert.equal(red.tests, 'failed', output);
+    }
+    assert.equal((await tests('unity command test run', { own: false }, { ...missing, timedOut: true })).tests, 'failed', 'a timeout');
+    // Not a Unity build: the same no-Pipeline output is red, exactly as before.
+    assert.equal((await tests('unity command test run', null, missing)).tests, 'failed');
+  } finally {
+    await rm(r.dir);
+  }
+});
+
+test('selfCheckGate, Unity build: skipped or deferred tests start no fix-up worker and push the base', async () => {
+  for (const tests of ['skipped', 'deferred']) {
+    const { deps, log } = gateDeps([{ tests, syntax: 'skipped', smoke: 'skipped', tail: '' }]);
+    const res = await sc.selfCheckGate({ root: '/wt', baseSha: 'abc1234', checkCommand: '', slug: 'p1', unity: { own: false } }, deps);
+    assert.equal(res.ok, true, tests);
+    assert.equal(log.fixups.length, 0, `${tests}: no fix-up worker`);
+    assert.equal(log.checks, 1);
+    assert.deepEqual(log.pushes, []);
+    assert.equal(res.selfCheck.tests, tests);
+  }
+});
+
+test('selfCheckGate, Unity build: a real red still gets the fix-up worker, whose brief forbids package.json and shims', async () => {
+  const { deps, log } = gateDeps([RED, GREEN]);
+  const seen = [];
+  const res = await sc.selfCheckGate(
+    { root: '/wt', baseSha: 'abc1234', checkCommand: 'pwsh tools/check.ps1', slug: 'p1', unity: { own: true } },
+    { ...deps, runSelfCheck: async (args) => (seen.push(args), deps.runSelfCheck(args)) },
+  );
+  assert.equal(res.ok, true);
+  assert.equal(log.fixups.length, 1);
+  const brief = log.fixups[0].brief;
+  assert.match(brief, /never add a package\.json, \*\.cmd \/ \*\.bat shims \(unity\.cmd, grep\.cmd\) or wrapper scripts/);
+  assert.match(brief, /run `pwsh tools\/check\.ps1`, commit/);
+  // The Unity rule travels to both checks.
+  assert.deepEqual(seen.map((a) => a.unity), [{ own: true }, { own: true }]);
+
+  // No check command (syntax red): the brief names none - never npm test.
+  const none = sc.fixupBrief({ tests: 'skipped', syntax: 'failed', smoke: 'skipped', tail: 'SyntaxError' }, '', { own: false });
+  assert.match(none, /- Make the minimal fix, commit\./);
+  assert.doesNotMatch(none, /npm test/);
+  assert.match(none, /package\.json/);
+});
+
+test('selfCheckGate, non-Unity: the check args carry no unity key and the brief is as before', async () => {
+  const { deps, log } = gateDeps([RED, GREEN]);
+  const seen = [];
+  const res = await sc.selfCheckGate(
+    { root: '/wt', baseSha: 'abc1234', checkCommand: '', slug: 'p1' },
+    { ...deps, runSelfCheck: async (args) => (seen.push(args), deps.runSelfCheck(args)) },
+  );
+  assert.equal(res.ok, true);
+  assert.deepEqual(seen[0], { root: '/wt', baseSha: 'abc1234', checkCommand: '' });
+  assert.match(log.fixups[0].brief, /run `npm test`, commit/, 'the default command, as before');
+  assert.doesNotMatch(log.fixups[0].brief, /package\.json|shims/);
+});
+
+test("finalize, Unity project: God Mode's default npm test is never run - tests skipped, no fix-up, base pushed", async () => {
+  const r = tempRepo(UNITY_FILES);
+  try {
+    const spy = spyVerify({ ok: false, output: 'npm ERR! enoent' });
+    const checks = [];
+    const fixups = [];
+    const { plan, fin } = unityFinalizer(r.dir, r.baseSha, {
+      checkCommand: () => 'npm test',
+      runSelfCheck: (args) => (checks.push(args), sc.runSelfCheck(args, { verifyImpl: spy.verifyImpl })),
+      runFixup: async (a) => (fixups.push(a), { ok: true }),
+    });
+    await fin.finalize();
+    assert.deepEqual(checks[0], { root: r.dir, baseSha: r.baseSha, checkCommand: '', unity: { own: false } });
+    assert.deepEqual(spy.calls, [], 'npm test never ran');
+    assert.deepEqual(fixups, []);
+    assert.equal(plan.integration.state, 'done');
+    assert.equal(plan.integration.selfCheck.tests, 'skipped');
+  } finally {
+    await rm(r.dir);
+  }
+});
+
+test("finalize, Luna's Work Unity build: a check red only for want of an editor is deferred and named in the report", async () => {
+  const r = tempRepo({ 'README.md': 'not a Unity root: the build says so\n' });
+  try {
+    const spy = spyVerify({ ok: false, output: NO_PIPELINE, timedOut: false });
+    const checks = [];
+    const fixups = [];
+    const { plan, fin } = unityFinalizer(r.dir, r.baseSha, {
+      // The profile's own check command (lunasworkBuild workerSettings: unityBuild.own).
+      checkCommand: () => 'pwsh tools/check.ps1',
+      unityBuild: () => ({ own: true }),
+      runSelfCheck: (args) => (checks.push(args), sc.runSelfCheck(args, { verifyImpl: spy.verifyImpl })),
+      runFixup: async (a) => (fixups.push(a), { ok: true }),
+    });
+    await fin.finalize();
+    assert.deepEqual(checks[0].unity, { own: true });
+    assert.deepEqual(spy.calls, ['pwsh tools/check.ps1']);
+    assert.deepEqual(fixups, [], 'no fix-up worker for a deferred check');
+    assert.equal(plan.integration.state, 'done');
+    assert.equal(plan.integration.selfCheck.tests, 'deferred');
+
+    // Stored and reported: the state survives a reload, the report names it.
+    const stored = sup.normalizeStoredPlan({ ...plan, integration: { state: 'done', selfCheck: plan.integration.selfCheck } });
+    assert.equal(stored.integration.selfCheck.tests, 'deferred');
+    const md = buildReport({ ...plan, integration: stored.integration }, { now: 0, suggestions: [] });
+    assert.match(md, /- Tests: deferred to the live Unity editor \(no editor on the merge worktree\)/);
+  } finally {
+    await rm(r.dir);
+  }
+});
+
+test('finalize, Unity build: a genuine red stays red, gets one fix-up with the Unity rule, and the base is not pushed', async () => {
+  const r = tempRepo(UNITY_FILES);
+  try {
+    const spy = spyVerify({ ok: false, output: 'error CS1002: ; expected' });
+    const fixups = [];
+    const pushes = [];
+    const { plan, fin } = unityFinalizer(r.dir, r.baseSha, {
+      checkCommand: () => 'unity command script recompile',
+      runSelfCheck: (args) => sc.runSelfCheck(args, { verifyImpl: spy.verifyImpl }),
+      runFixup: async (a) => (fixups.push(a), { ok: true }),
+      pushBranch: async (root, branch) => (pushes.push(branch), { ok: true }),
+    });
+    await fin.finalize();
+    assert.equal(spy.calls.length, 2, 'checked, fixed up, checked again');
+    assert.equal(fixups.length, 1);
+    assert.match(fixups[0].brief, /never add a package\.json/);
+    assert.equal(plan.integration.state, 'failed');
+    assert.equal(plan.integration.error, 'selfCheckFailed');
+    assert.equal(plan.integration.selfCheck.tests, 'failed');
+    assert.deepEqual(pushes, ['luna/pabc-integration']);
+  } finally {
+    await rm(r.dir);
+  }
+});

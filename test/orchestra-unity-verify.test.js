@@ -298,8 +298,10 @@ test('editorFreeVerify: an editor-bound verify becomes an editor check in the pr
   assert.deepEqual(out.files, pkg.files);
   assert.equal(pkg.verify, GAME_CLOCK_VERIFY, 'the input is not mutated');
 
-  const kept = { id: 'k', prompt: 'p', verify: 'grep -q GameClock Assets/Scripts/GameClock.cs' };
-  assert.equal(uv.editorFreeVerify(kept, 8000), kept, 'a shell check stays as it is');
+  // No verify: the same object.
+  for (const none of [{ id: 'n', prompt: 'p', verify: '' }, { id: 'n', prompt: 'p', verify: '   ' }, { id: 'n', prompt: 'p' }]) {
+    assert.equal(uv.editorFreeVerify(none, 8000), none);
+  }
 
   // No room for the note: the verify is still emptied, the prompt stays whole.
   const full = { id: 'f', prompt: 'x'.repeat(8000), verify: 'unity command test run' };
@@ -313,14 +315,105 @@ test('editorFreeVerify: an editor-bound verify becomes an editor check in the pr
   assert.ok(!near.prompt.endsWith(uv.editorCheckNote('unity command test run')));
 });
 
-test('withUnityPlannerRules: the planner is told verify runs without an editor; other args and extraPrompt stay', () => {
+// Blade&bullet (2026-11-26): God Mode runs a verify through cmd.exe, where
+// grep and test do not exist, and workers committed grep.cmd / unity.cmd /
+// wrapper .ps1 shims to make theirs pass. In a Unity build no package keeps one.
+test('editorFreeVerify: ANY verify moves into the prompt in a Unity build - a shell check too - with its text kept', () => {
+  for (const verify of ['grep -q GameClock Assets/Scripts/GameClock.cs', 'npm test', 'test -f Assets/Scripts/GameClock.cs']) {
+    const pkg = { id: 'k', prompt: 'Build it.', verify };
+    const out = uv.editorFreeVerify(pkg, 8000);
+    assert.equal(out.verify, '', verify);
+    assert.ok(out.prompt.startsWith('Build it.\n\n'), verify);
+    assert.ok(out.prompt.includes(verify), `${verify}: its former text is in the prompt`);
+    assert.ok(out.prompt.endsWith(uv.editorCheckNote(verify)), verify);
+    assert.equal(pkg.verify, verify, 'the input is not mutated');
+  }
+  // A shell check needs no editor: its note does not claim it does.
+  const shell = uv.editorCheckNote('grep -q GameClock Assets/Scripts/GameClock.cs');
+  assert.match(shell, /^Check: /);
+  assert.doesNotMatch(shell, /Unity editor/);
+  // An editor-bound one keeps the editor check's text.
+  assert.match(uv.editorCheckNote(GAME_CLOCK_VERIFY), /^Editor check: .*against your own Unity editor/);
+});
+
+test('editorCheckNote / editorFreeVerify: a noEditor package never opens Unity and lists the check as not run here', () => {
+  assert.deepEqual([...uv.CHECK_ROLES], ['editor', 'noEditor']);
+  for (const verify of [GAME_CLOCK_VERIFY, 'Open the editor and check the HUD', 'grep -q Hud Assets/Scripts/Hud.cs']) {
+    const note = uv.editorCheckNote(verify, 'noEditor');
+    assert.match(note, /do not open the Unity editor/i, verify);
+    assert.match(note, /not run here/, verify);
+    assert.match(note, /after the merge in the live Unity editor/, verify);
+    assert.match(note, /usings, asmdef references, method signatures/, verify);
+    assert.doesNotMatch(note, /run it yourself|against your own Unity editor/, verify);
+    const out = uv.editorFreeVerify({ id: 'hud', prompt: 'Build the HUD.', verify }, 8000, 'noEditor');
+    assert.equal(out.verify, '');
+    assert.ok(out.prompt.endsWith(note));
+  }
+  // The default role is today's editor check.
+  assert.equal(uv.editorCheckNote(GAME_CLOCK_VERIFY), uv.editorCheckNote(GAME_CLOCK_VERIFY, 'editor'));
+});
+
+test('withUnityPlannerRules: verify is always "" in a Unity project; no grep or shell check is suggested; other args stay', () => {
   const out = uv.withUnityPlannerRules({ cwd: '/r', extraPrompt: 'Re-size the packages.' });
   assert.equal(out.cwd, '/r');
   assert.ok(out.extraPrompt.startsWith('Re-size the packages.'));
   assert.match(out.extraPrompt, /Unity project/);
-  assert.match(out.extraPrompt, /no Unity editor is open/i);
-  assert.match(out.extraPrompt, /Never a `unity \.\.\.` command/);
-  assert.match(out.extraPrompt, /never prose/i);
+  assert.match(out.extraPrompt, /"verify" is always "" \(empty\)/);
   assert.match(out.extraPrompt, /definition of done/);
-  assert.equal(uv.withUnityPlannerRules({}).extraPrompt, uv.UNITY_PLANNER_RULES.join('\n'));
+  assert.match(out.extraPrompt, /live Unity editor/);
+  const rules = uv.UNITY_PLANNER_RULES.join('\n');
+  assert.doesNotMatch(rules, /grep|test -f|\[ -f|static check/i, 'no shell check is offered as an alternative');
+  assert.doesNotMatch(rules, /leave it empty \(""\), or/, 'empty is the only verify');
+  assert.equal(uv.withUnityPlannerRules({}).extraPrompt, rules);
+});
+
+// ---- self-check side: the gate before the push to main -------------------------
+
+test('selfCheckCommandOf: a non-Unity run keeps its command, else the npm test fallback, exactly as before', () => {
+  const plain = (command) => uv.selfCheckCommandOf({ command, build: null, unityDir: false, fallback: 'npm test' });
+  assert.deepEqual(plain('npm run check'), { checkCommand: 'npm run check' });
+  assert.deepEqual(plain('  npm run check  '), { checkCommand: 'npm run check' });
+  assert.deepEqual(plain(''), { checkCommand: 'npm test' });
+  assert.deepEqual(plain(null), { checkCommand: 'npm test' });
+  assert.deepEqual(plain('npm test'), { checkCommand: 'npm test' });
+});
+
+test('selfCheckCommandOf: a Unity build never falls back to npm test; God Mode\'s default reads as no command', () => {
+  const unity = (command, build, unityDir = false) => uv.selfCheckCommandOf({ command, build, unityDir, fallback: 'npm test' });
+  // No command at all, or God Mode's default: no check command (tests skipped).
+  for (const [cmd, build, dir] of [['', { own: false }], [null, null, true], ['npm test', { own: false }], ['npm test', null, true]]) {
+    assert.deepEqual(unity(cmd, build, dir), { checkCommand: '', unity: { own: false } }, String(cmd));
+  }
+  // God Mode's own 'Final check command' when set to something else: kept, read by its shape.
+  assert.deepEqual(unity('unity command test run', { own: false }), { checkCommand: 'unity command test run', unity: { own: false } });
+  assert.deepEqual(unity('pwsh tools/check.ps1', null, true), { checkCommand: 'pwsh tools/check.ps1', unity: { own: false } });
+  // The profile's own command - even `npm test` - is run, read by its output.
+  assert.deepEqual(unity('npm test', { own: true }), { checkCommand: 'npm test', unity: { own: true } });
+  assert.deepEqual(unity('tools\\check.cmd', { own: true }, true), { checkCommand: 'tools\\check.cmd', unity: { own: true } });
+});
+
+test('selfCheckDeferred: God Mode\'s command by shape + output, the profile\'s own by output; never outside a Unity build', () => {
+  const missing = { ok: false, output: NO_PIPELINE, timedOut: false };
+  // God Mode's command: the deferToUnityEditor rule, unchanged.
+  assert.equal(uv.selfCheckDeferred('unity command test run', missing, { own: false }), true);
+  assert.equal(uv.selfCheckDeferred('npm test', missing, { own: false }), false, '`npm test` hides what it runs');
+  assert.equal(uv.selfCheckDeferred('grep -q X f; unity command test run', missing, { own: false }), false);
+  // The profile's own command: the output decides (Mati wrote the command).
+  assert.equal(uv.selfCheckDeferred('npm test', missing, { own: true }), true);
+  assert.equal(uv.selfCheckDeferred('pwsh tools/check.ps1', missing, { own: true }), true);
+  // Any other failure, a timeout, or a green run: never deferred.
+  assert.equal(uv.selfCheckDeferred('npm test', { ok: false, output: `not ok 1 - clock\n${NO_PIPELINE}` }, { own: true }), false);
+  assert.equal(uv.selfCheckDeferred('npm test', { ok: false, output: 'Error: Cannot find module' }, { own: true }), false);
+  assert.equal(uv.selfCheckDeferred('unity command test run', { ...missing, timedOut: true }, { own: false }), false);
+  assert.equal(uv.selfCheckDeferred('unity command test run', { ok: true, output: NO_PIPELINE }, { own: true }), false);
+  // Not a Unity build.
+  assert.equal(uv.selfCheckDeferred('unity command test run', missing, null), false);
+  assert.equal(uv.selfCheckDeferred('unity command test run', missing, undefined), false);
+});
+
+test('UNITY_FIXUP_RULE forbids a package.json, *.cmd shims and wrapper scripts made to pass the check', () => {
+  assert.match(uv.UNITY_FIXUP_RULE, /package\.json/);
+  assert.match(uv.UNITY_FIXUP_RULE, /\*\.cmd/);
+  assert.match(uv.UNITY_FIXUP_RULE, /wrapper scripts/);
+  assert.match(uv.UNITY_FIXUP_RULE, /LUNA_BLOCKED selfcheck/);
 });

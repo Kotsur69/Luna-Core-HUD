@@ -21,6 +21,11 @@
 // (orchestra.js runFixup) -> check again; still red -> the base branch is not
 // pushed, luna/<slug>-integration is pushed instead for Mati to look at.
 //
+// A Unity build (args.unity, from orchestraUnityVerify.selfCheckCommandOf):
+// no check command = tests 'skipped'; a check command red only for want of a
+// Unity editor = tests 'deferred' (to the live editor). Neither is red, so
+// neither starts the fix-up worker; a real red's fix-up brief forbids shims.
+//
 // All IO is injected (execImpl, verifyImpl, fs); every function resolves a
 // typed result and never rejects. Git and node run through execFile argv.
 // ============================================================================
@@ -32,6 +37,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { runGit, firstLine, sharedVerifySemaphore } = require('./worktrees');
 const { runVerify } = require('./orchestraFinish');
+const { selfCheckDeferred, UNITY_FIXUP_RULE } = require('./orchestraUnityVerify');
 
 const TAIL_LINES = 40;
 const SMOKE_TIMEOUT_MS = 180 * 1000;
@@ -104,14 +110,21 @@ const lines = (text) =>
 
 // ---- tests ------------------------------------------------------------------
 
-async function runTests(root, checkCommand, verifyImpl, verifySemaphore = null, isCancelled = null) {
+/**
+ * The check command's step. `unity` (a Unity build): a red result that only
+ * lacked a Unity editor is 'deferred', not 'failed' (orchestraUnityVerify.js).
+ * @returns {Promise<{state:'ok'|'failed'|'skipped'|'deferred', output:string}>}
+ */
+async function runTests(root, { checkCommand, unity }, { verifyImpl, verifySemaphore = null, isCancelled = null }) {
   const cmd = typeof checkCommand === 'string' ? checkCommand.trim() : '';
   if (!cmd) return { state: 'skipped', output: '' };
   const execVerify = () => verifyImpl(cmd, root);
   try {
     const hooks = typeof isCancelled === 'function' ? { isCancelled } : undefined;
     const res = verifySemaphore && typeof verifySemaphore.run === 'function' ? await verifySemaphore.run(execVerify, hooks) : await execVerify();
-    return { state: res && res.ok ? 'ok' : 'failed', output: String((res && res.output) || '') };
+    const output = String((res && res.output) || '');
+    if (res && res.ok) return { state: 'ok', output };
+    return { state: selfCheckDeferred(cmd, res, unity) ? 'deferred' : 'failed', output };
   } catch (err) {
     return { state: 'failed', output: `check command threw: ${errText(err)}` };
   }
@@ -316,13 +329,14 @@ function dedupe(actions) {
 // ---- the check --------------------------------------------------------------
 
 /**
- * @param {{root:string, baseSha:string|null, checkCommand:string}} args
+ * @param {{root:string, baseSha:string|null, checkCommand:string, unity?:{own:boolean}|null}} args
+ *   unity: a Unity build's rule (orchestraUnityVerify.selfCheckCommandOf) - tests may come back 'deferred'
  * @param {{execImpl?:Function, verifyImpl?:Function, verifySemaphore?:object|null, isCancelled?:()=>boolean,
  *   fs?:object, sleep?:Function, smokeRetryDelayMs?:number}} [io]
  * @returns {Promise<{tests:string, syntax:string, smoke:string, smokeRetried?:true,
  *   manualActions:Array<{kind:string, what:string, from?:string}>, tail:string}>}
  */
-async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
+async function runSelfCheck({ root, baseSha, checkCommand, unity }, io = {}) {
   const execImpl = io.execImpl || execFile;
   const verifyImpl = io.verifyImpl || runVerify;
   const fsImpl = io.fs || fsDefault;
@@ -337,7 +351,7 @@ async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
     return { tests: 'failed', syntax: 'skipped', smoke: 'skipped', manualActions: [], tail: `working folder missing: ${root || ''}` };
   }
 
-  const tests = await runTests(root, checkCommand, verifyImpl, verifySemaphore, io.isCancelled);
+  const tests = await runTests(root, { checkCommand, unity }, { verifyImpl, verifySemaphore, isCancelled: io.isCancelled });
   const base = typeof baseSha === 'string' && SHA_RE.test(baseSha) ? baseSha : null;
   const changed = base ? await changedFiles(root, base, 'AM', execImpl) : null;
   const syntax = changed ? await runSyntax(root, changed, execImpl) : { state: 'skipped', output: '' };
@@ -360,14 +374,22 @@ async function runSelfCheck({ root, baseSha, checkCommand }, io = {}) {
   };
 }
 
-/** True when nothing is red (skipped counts as fine). */
+/** True when nothing is red (skipped and a Unity build's deferred tests count as fine). */
 const isGreen = (r) => !!r && ['tests', 'syntax', 'smoke'].every((k) => r[k] !== 'failed');
 
 const redChecks = (r) => ['tests', 'syntax', 'smoke'].filter((k) => !r || r[k] === 'failed');
 
-/** The fix-up worker's brief. The tail is tool output: data, not instructions. */
-function fixupBrief(result, checkCommand) {
-  const cmd = typeof checkCommand === 'string' && checkCommand.trim() ? checkCommand.trim() : 'npm test';
+/**
+ * The fix-up worker's brief. The tail is tool output: data, not instructions.
+ * A Unity build (`unity`) may have no check command - never `npm test` then -
+ * and its worker may not add shims that only make the check pass.
+ * @param {object|null} result
+ * @param {string} checkCommand
+ * @param {{own:boolean}|null} [unity]
+ */
+function fixupBrief(result, checkCommand, unity = null) {
+  const given = typeof checkCommand === 'string' ? checkCommand.trim() : '';
+  const cmd = given || (unity ? '' : 'npm test');
   return [
     '# God Mode self-check fix-up',
     '',
@@ -381,7 +403,8 @@ function fixupBrief(result, checkCommand) {
     '```',
     '',
     '## Rules',
-    `- Make the minimal fix, run \`${cmd}\`, commit.`,
+    cmd ? `- Make the minimal fix, run \`${cmd}\`, commit.` : '- Make the minimal fix, commit.',
+    ...(unity ? [UNITY_FIXUP_RULE] : []),
     '- Do not touch unrelated files. Do not push. Do not merge or rebase anything.',
     '- End your final message with the line `LUNA_DONE selfcheck`, or `LUNA_BLOCKED selfcheck: <reason>` if you cannot fix it.',
     '',
@@ -422,19 +445,22 @@ const summary = (r, fixups, pushedIntegrationBranch) => ({
 /**
  * Merge-mode push gate (integrateMerge deps.beforePush). Green -> push.
  * Red -> one fix-up worker, check again. Still red -> the base is not pushed;
- * luna/<slug>-integration is pushed instead. Never throws.
- * @param {{root:string, baseSha:string|null, checkCommand:string, slug:string, fixup?:boolean}} args
+ * luna/<slug>-integration is pushed instead. Never throws. Skipped or
+ * deferred tests are not red: no fix-up worker for them.
+ * @param {{root:string, baseSha:string|null, checkCommand:string, slug:string, fixup?:boolean,
+ *   unity?:{own:boolean}|null}} args unity: a Unity build (orchestraUnityVerify.selfCheckCommandOf)
  * @param {{runSelfCheck:Function, runFixup?:Function, pushBranch?:Function}} deps
  * @returns {Promise<{ok:boolean, reason?:string, selfCheck:object, manualActions:object[]}>}
  */
-async function selfCheckGate({ root, baseSha, checkCommand, slug }, deps) {
-  const args = { root, baseSha, checkCommand };
+async function selfCheckGate({ root, baseSha, checkCommand, slug, unity }, deps) {
+  // Only a Unity build carries the key: every other check runs exactly as before.
+  const args = { root, baseSha, checkCommand, ...(unity ? { unity } : {}) };
   let result = await safeCheck(deps, args);
   let fixups = 0;
   if (!isGreen(result) && typeof deps.runFixup === 'function') {
     fixups = 1;
     try {
-      await deps.runFixup({ root, brief: fixupBrief(result, checkCommand), packageId: 'selfcheck' });
+      await deps.runFixup({ root, brief: fixupBrief(result, checkCommand, unity || null), packageId: 'selfcheck' });
     } catch {
       /* the second check decides */
     }

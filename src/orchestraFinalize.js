@@ -33,6 +33,8 @@ const { followupCounts, entriesOf } = require('./orchestraFollowupsReport');
 const { gitDirExists } = require('./orchestraDiagnose');
 const { runEntry } = require('./godmodesnapshot');
 const { selfCheckGate } = require('./orchestraSelfCheck');
+const { selfCheckCommandOf } = require('./orchestraUnityVerify');
+const { isUnityProject } = require('./lunasworkScene');
 const { supabaseGate } = require('./orchestraApplyActions');
 const { branchFor } = require('./worktrees');
 const { MAX_DETAILS_CHARS } = require('./todorows');
@@ -188,11 +190,11 @@ function postMergeContext(plan, res, slug) {
  *   runSelfCheck?: (args:{root:string, baseSha:string|null, checkCommand:string}) => Promise<object>,
  *   runFixup?: (args:{root:string, brief:string}) => Promise<{ok:boolean}>,
  *   pushBranch?: (root:string, branch:string) => Promise<{ok:boolean}>,
- *   checkCommand?: () => string, onIdle?: () => void, gitDirExists?: (repoPath:string) => boolean|null,
+ *   checkCommand?: () => string, unityBuild?: () => {own:boolean}|null, onIdle?: () => void, gitDirExists?: (repoPath:string) => boolean|null,
  *   integrateTimeoutMs?: number|((plan:object) => number),
  *   createScope?: () => {execFile:Function, exec:Function, killAll:() => Promise<{killed:number, failed:number}>},
  *   setTimer?: Function, clearTimer?: Function, onAbort?: () => void, drainMs?: number,
- * }} deps integrateTimeoutMs: the integrate watchdog (default
+ * }} deps unityBuild: a Luna's Work Unity build runs (lunasworkBuild.js). integrateTimeoutMs: the integrate watchdog (default
  *   integrateTimeoutFor). createScope: a src/procTree.js process scope per
  *   pass; what integrate spawns through it is killed on a timeout / abort.
  *   onAbort: stops side work the scope cannot see (the fix-up tab).
@@ -246,9 +248,10 @@ function createFinalizer(deps) {
     return firstError ? { ok: false, ...firstError } : { ok: true };
   }
 
-  const checkCommand = () => {
-    const cmd = deps.checkCommand ? deps.checkCommand() : null;
-    return typeof cmd === 'string' && cmd.trim() ? cmd.trim() : DEFAULT_CHECK_COMMAND;
+  // {checkCommand}, plus `unity` in a Unity build (Luna's Work's or a Unity project): orchestraUnityVerify.js.
+  const checkArgs = (root) => {
+    const [command, build] = [deps.checkCommand ? deps.checkCommand() : null, deps.unityBuild ? deps.unityBuild() : null];
+    return selfCheckCommandOf({ command, build, unityDir: isUnityProject(root), fallback: DEFAULT_CHECK_COMMAND });
   };
   const packagesFor = (todo) => todo.map((p) => ({ id: p.id, branch: p.branch, verify: p.verify, dependsOn: p.dependsOn || [] }));
   // Self-check results travel back with the integration result.
@@ -274,7 +277,7 @@ function createFinalizer(deps) {
           ...sc.extra,
           beforePush: async (root, info) => {
             gate = await selfCheckGate(
-              { root, baseSha: (info && info.baseSha) || null, checkCommand: checkCommand(), slug },
+              { root, baseSha: (info && info.baseSha) || null, ...checkArgs(root), slug },
               { runSelfCheck: sc.runSelfCheck, runFixup: deps.runFixup, pushBranch: deps.pushBranch },
             );
             return gate.ok ? { ok: true } : { ok: false, reason: gate.reason };
@@ -328,7 +331,7 @@ function createFinalizer(deps) {
           ...sc.extra,
           beforePush: async (root, info) => {
             gate = await selfCheckGate(
-              { root, baseSha: (info && info.baseSha) || null, checkCommand: checkCommand(), slug: slugOf(plan) },
+              { root, baseSha: (info && info.baseSha) || null, ...checkArgs(root), slug: slugOf(plan) },
               { runSelfCheck: sc.runSelfCheck },
             );
             return { ok: false, reason: 'checkOnly' };

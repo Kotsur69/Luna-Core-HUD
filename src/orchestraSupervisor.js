@@ -964,7 +964,8 @@ const MAX_MANUAL_ACTIONS = 40;
 const MAX_FIXUPS = 50;
 const idList = (v) => (Array.isArray(v) ? v.filter((id) => typeof id === 'string' && SLUG_RE.test(id)).slice(0, MAX_SKIPPED) : []);
 const MAX_SELFCHECK_TAIL = 4000;
-const CHECK_STATES = new Set(['ok', 'failed', 'skipped']);
+// 'deferred': a Unity build's tests red only for want of an editor (orchestraUnityVerify.js).
+const CHECK_STATES = new Set(['ok', 'failed', 'skipped', 'deferred']);
 const MANUAL_KINDS = new Set(['migration', 'edgeFunction', 'env', 'note']);
 const SHA7_RE = /^[0-9a-f]{7,12}$/;
 const INTEGRATION_BRANCH_RE = /^luna\/[a-z0-9][a-z0-9-]{0,99}$/;
