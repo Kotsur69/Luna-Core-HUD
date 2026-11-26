@@ -33,6 +33,7 @@ const { keyFor } = require('./todo');
 const { MAX_DETAILS_CHARS, MAX_TEXT_CHARS: MAX_CARD_TEXT_CHARS } = require('./todorows');
 const { restoreQueue } = require('./lunasworkDecisions');
 const { restoreFeedback } = require('./lunasworkFeedback');
+const { cleanParkTally } = require('./lunasworkEditorPark');
 const { HANDED } = require('./lunasworkWheel');
 const { appendResult } = require('./lunasworkLighthouse');
 const { cleanLedger } = require('./lunasworkUsage');
@@ -758,6 +759,8 @@ function restoreRun(raw) {
     handBase: phase === HANDED && typeof raw.handBase === 'string' && SHA_RE.test(raw.handBase) ? raw.handBase : null,
     handBackRequested: phase === HANDED && raw.handBackRequested === true,
     wheelSeq: Number.isSafeInteger(raw.wheelSeq) && raw.wheelSeq > 0 ? raw.wheelSeq : 0,
+    // The Unity editor parked around checkout updates (src/lunasworkEditorPark.js): the report's counts.
+    editorPark: cleanParkTally(raw.editorPark),
     // LW 2.18: the milestone gates already mailed - one email per gate, across restarts.
     gatesMailed: names(raw.gatesMailed).slice(-MAX_GATES_MAILED),
     // LW 2.22a: the docs iteration SHIP waits for.

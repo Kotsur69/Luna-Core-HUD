@@ -234,6 +234,7 @@ const { createToolGuard } = require('./lunasworkToolGuard');
 const { createVariantFlow } = require('./lunasworkVariantFlow');
 const { createPrototype } = require('./lunasworkPrototype');
 const { planAfterRun, startQueued } = require('./lunasworkQueue');
+const { withParkedEditor, editorFor, addParkOutcome, PARK_SKIP } = require('./lunasworkEditorPark');
 
 const PHASE_ROLE = {
   preprod: null,
@@ -1165,12 +1166,32 @@ function createLunasWork(deps) {
    */
   async function syncCheckout() {
     if (!deps.syncCheckout) return;
+    // The only step here that rewrites the checkout's files (God Mode merges and the
+    // rollback's reverts happen in worktrees): a Unity editor is parked around the
+    // fast-forward (src/lunasworkEditorPark.js), so no "modified externally" dialog
+    // blocks it. syncCheckout calls aroundChange only when HEAD will move.
+    const aroundChange = (step) => withParkedEditor({ editor: parkedEditor(), log, onPark: recordPark }, step);
     try {
-      const res = await deps.syncCheckout(run.repoPath);
+      const res = await deps.syncCheckout(run.repoPath, { aroundChange });
       if (isObj(res) && res.ok === false) logEvent(`checkout not updated: ${String(res.detail || 'failed').slice(0, 200)}`);
     } catch (err) {
       logEvent(`checkout not updated: ${errText(err).slice(0, 200)}`);
     }
+  }
+
+  /** The run's Unity editor {park, unpark}, or null (not a Unity profile). */
+  const parkedEditor = () => editorFor({
+    profile: run.profile,
+    adapter: live.adapter,
+    createAdapter: () => deps.createAdapter(run.profile.adapter, { projectDir: run.repoPath, runId: run.id, iteration: run.iteration }),
+    log,
+  });
+
+  /** Books one park outcome for the run report. */
+  function recordPark(outcome) {
+    if (outcome.discarded) logEvent('Unity editor: unsaved editor changes were dropped before the checkout update');
+    if (outcome.skipped === PARK_SKIP.unreachable) logEvent('Unity editor not reachable: not parked before the checkout update');
+    update({ editorPark: addParkOutcome(run.editorPark, outcome) });
   }
 
   async function stepLaunching() {

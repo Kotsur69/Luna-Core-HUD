@@ -251,6 +251,18 @@ async function optionalStep(io, deadline, call, what, onFailed = () => {}) {
 }
 
 /**
+ * The asset refresh step of prepareEditor() on its own (the Assets/Refresh
+ * menu item, retried through busy answers and domain reloads until
+ * `deadline`; a refusal is a log line). src/lunasworkEditorPark.js runs it
+ * after a checkout update, before the scene is reopened.
+ * @param {{call:Function, waits:{pollUntil:Function}, log:(line:string)=>void}} io
+ * @param {number} deadline
+ */
+function refreshAssets(io, deadline) {
+  return optionalStep(io, deadline, UNITY_PIPELINE_EDITOR.refresh(), 'asset refresh');
+}
+
+/**
  * Puts the previous auto tick setting back (retried through busy answers and
  * the domain reload of leaving play mode); throws when the editor did not take it.
  * @param {{call:Function, waits:object, autoTick:{changed:boolean, previous:object|null}}} io
@@ -418,7 +430,7 @@ async function prepareEditor(io) {
     });
     const before = await editorStatus(io, deadline);
     // `script recompile` refreshes too; the menu item runs first so a new asset is imported either way.
-    await optionalStep(io, deadline, UNITY_PIPELINE_EDITOR.refresh(), 'asset refresh');
+    await refreshAssets(io, deadline);
     const trigger = await triggerRecompile(io, deadline);
     if (trigger !== 'started') watch.notes.push(`the recompile was ${trigger === 'refused' ? 'refused' : 'sent without an answer'}`);
     const compiled = await waitForCompile(io, deadline, before, watch, trigger);
@@ -444,6 +456,7 @@ module.exports = {
   createWaits,
   previousAutoTick,
   restoreAutoTick,
+  refreshAssets,
   prepareEditor,
   isEnvironmentFailure,
   environmentFailureOf,

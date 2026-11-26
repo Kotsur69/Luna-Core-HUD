@@ -132,15 +132,26 @@ function git(cwd, args) {
 /**
  * Fast-forwards the project checkout to what God Mode merged on origin.
  * Only a fast-forward: local work is never merged over or thrown away.
+ * `aroundChange` wraps the fast-forward itself, and only when it will move
+ * HEAD (the Unity editor is parked around it, src/lunasworkEditorPark.js):
+ * nothing new on origin, or a diverged checkout, never reaches it.
+ * @param {string} repoPath
+ * @param {{aroundChange?:(step:()=>Promise<object>)=>Promise<object>}} [opts]
  * @returns {Promise<{ok:boolean, detail?:string}>}
  */
-async function syncCheckout(repoPath) {
+async function syncCheckout(repoPath, opts = {}) {
   const head = await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const branch = head.ok ? head.out : '';
   if (!BRANCH_RE.test(branch) || branch === 'HEAD' || branch.includes('..')) return { ok: false, detail: 'not on a branch' };
   const fetched = await git(repoPath, ['fetch', 'origin', `refs/heads/${branch}`]);
   if (!fetched.ok) return { ok: false, detail: `fetch failed: ${fetched.err}` };
-  const merged = await git(repoPath, ['merge', '--ff-only', 'FETCH_HEAD']);
+  // Already up to date: FETCH_HEAD is HEAD or one of its ancestors.
+  if ((await git(repoPath, ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'])).ok) return { ok: true };
+  if (!(await git(repoPath, ['merge-base', '--is-ancestor', 'HEAD', 'FETCH_HEAD'])).ok) {
+    return { ok: false, detail: 'no fast-forward: the checkout has commits origin does not have' };
+  }
+  const around = typeof opts.aroundChange === 'function' ? opts.aroundChange : (step) => step();
+  const merged = await around(() => git(repoPath, ['merge', '--ff-only', 'FETCH_HEAD']));
   return merged.ok ? { ok: true } : { ok: false, detail: `no fast-forward: ${merged.err}` };
 }
 

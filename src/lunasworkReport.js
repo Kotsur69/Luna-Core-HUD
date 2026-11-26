@@ -12,6 +12,9 @@
 //                             merge + self-check, checkpoint tag or rollback
 //        ## Inconclusive playtests  iterations whose environment failed (no
 //                             score, no rollback): reason and compiler errors
+//        ## Unity editor      unsaved scene changes discarded / parks skipped
+//                             around checkout updates (lunasworkEditorPark.js;
+//                             only when there are any), English + Polish
 //        ## Scores per milestone
 //        ## Rollbacks         from / to tag, why, the reverted commits
 //        ## Model choices     every choice with its reason (the run log)
@@ -80,6 +83,7 @@ const { findDraftFiles } = require('./lunasworkLegal');
 const { assetReportLines, assetSpendUsd } = require('./lunasworkAssetPipeline');
 const { estimateLines } = require('./lunasworkAssetCost');
 const { cleanupSection } = require('./lunasworkRunCleanup');
+const { parkReportLines } = require('./lunasworkEditorPark');
 
 // The run email carries the HTML report and the return pack: room for three screenshots (gmailsend caps at 5).
 const RUN_MAIL_IMAGES = 3;
@@ -235,6 +239,12 @@ function inconclusivePlaytests(run) {
     return `Iteration ${lap.n}: inconclusive - environment failure (${oneLine(env.reason, 40)}): ${oneLine(env.detail, 200) || 'the playtest could not run'}${summary}. No score, no rollback.`;
   });
 }
+
+/**
+ * The Unity editor parked around checkout updates (src/lunasworkEditorPark.js):
+ * unsaved changes it discarded, parks skipped. English, then Polish.
+ */
+const editorParkLines = (run) => parkReportLines(run.editorPark).map((l) => `${l.en} / ${l.pl}`);
 
 function iterationCells(lap) {
   return [
@@ -410,6 +420,7 @@ function buildRunReport(run, extra = {}) {
     ...iterationTable(laps),
     '',
     ...(inconclusivePlaytests(r).length ? ['## Inconclusive playtests', '', ...bullets(inconclusivePlaytests(r)), ''] : []),
+    ...(editorParkLines(r).length ? ['## Unity editor', '', ...bullets(editorParkLines(r)), ''] : []),
     '## Scores per milestone',
     '',
     ...bullets(scoresByMilestone(r).map(([m, points]) => `${m}: ${scoreLine(points)}`)),
@@ -505,6 +516,7 @@ function renderRunReportHtml(run, extra = {}) {
     h.section('Verdict', `<p>${esc(`${VERDICT_LABEL[verdict]} - ${verdictWhy(r)}`)}</p>`),
     h.section('Iterations', h.table(ITERATION_HEAD, laps.map((l) => iterationCells(l).map((c) => esc(c))), 'No iteration finished')),
     inconclusivePlaytests(r).length ? h.section('Inconclusive playtests', h.list(inconclusivePlaytests(r), 'None')) : '',
+    editorParkLines(r).length ? h.section('Unity editor', h.list(editorParkLines(r), 'None')) : '',
     h.section('Scores per milestone', scoresHtml(r)),
     h.section('Rollbacks', rollbackHtml(r)),
     h.section('Model choices', h.list(modelChoices(r), 'No model choice logged')),

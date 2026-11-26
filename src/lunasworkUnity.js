@@ -76,6 +76,7 @@ const {
   WAIT_TIMEOUT, UNITY_ENVIRONMENT_FAILURE, ENVIRONMENT_REASON, createWaits, previousAutoTick, restoreAutoTick, prepareEditor,
   isEnvironmentFailure, environmentFailureOf,
 } = require('./lunasworkUnityEditor');
+const { createEditorPark, PARK_SKIP } = require('./lunasworkEditorPark');
 
 // HTTP statuses that mean the editor did not let LunaCore in: not the driver's fault.
 const AUTH_STATUSES = new Set([401, 403]);
@@ -513,7 +514,34 @@ function createUnityAdapter(ctx) {
    */
   const startConsole = () => startEntries.map((e) => ({ ...e }));
 
-  return { name: 'unity', evidenceDir: ctx.evidenceDir, start, stop, tools, combatFeelLog, environmentFailure, startConsole };
+  // The editor parked around a checkout update (src/lunasworkEditorPark.js); one park at a time.
+  let parker = null;
+
+  /**
+   * Parks the editor of `raw`'s project on an empty scene (Pipeline only).
+   * Never throws for the editor's sake: a skip comes back as {parked:false, skipped}.
+   * @returns {Promise<{parked:boolean, discarded:boolean, skipped:string|null, detail:string, reopen:string|null}>}
+   */
+  async function park(raw) {
+    const skip = (reason, detail = '') => ({ parked: false, discarded: false, skipped: reason, detail, reopen: null });
+    const { profile: valid, reason } = validateUnityProfile(raw);
+    if (!valid) return skip(PARK_SKIP.error, `invalid project profile: ${reason}`);
+    const parkTarget = targetFor(valid);
+    if (parkTarget.transport !== 'pipeline') return skip(PARK_SKIP.unsupported, 'legacy MCP for Unity cannot open an unsaved empty scene');
+    if (playing) return skip(PARK_SKIP.playing, 'play mode is on');
+    parker = createEditorPark({ connect: parkTarget.connect, scene: valid.scene || null, now: ctx.now, sleep: ctx.sleep, log });
+    return parker.park();
+  }
+
+  /** Refresh + reopen after park(); a no-op without a park. Never throws. */
+  async function unpark(state) {
+    const current = parker;
+    parker = null;
+    if (!current) return { reopened: false };
+    return current.unpark(state);
+  }
+
+  return { name: 'unity', evidenceDir: ctx.evidenceDir, start, stop, tools, combatFeelLog, environmentFailure, startConsole, park, unpark };
 }
 
 module.exports = {
