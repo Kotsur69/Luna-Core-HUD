@@ -65,10 +65,15 @@ const { formatLogEntry, writePack } = require('./lunasworkCriticPack');
 const { designMatchCards } = require('./lunasworkDesignMatch');
 const { ledgerCards } = require('./lunasworkLicenses');
 const { argsUseAgy, execAgy } = require('./agyexec');
+const { scrub } = require('./hostscrub');
 
 const CRITIC_EFFORT = 'high';
 const CRITIC_BUDGET_USD = 3;
 const CRITIC_TIMEOUT_MS = 10 * 60 * 1000;
+const CLAUDE_MAX_BUFFER = 20 * 1024 * 1024;
+const MAX_BUFFER_CODE = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+// stderr kept on a failed claude call (execClaude's `stderr` field).
+const MAX_STDERR_CHARS = 600;
 const FALLBACK_MODEL = 'opus';
 // Read-only: the Critic reads the code to keep ARCHITECTURE.md true, never changes it.
 const CRITIC_TOOLS = 'Read,Grep,Glob';
@@ -582,20 +587,38 @@ function execClaude({ args, prompt, cwd, env, timeoutMs, execImpl = execFile, ag
   });
 }
 
+/**
+ * What a failed claude call left behind, for the caller's note: the exit code,
+ * the signal that ended it, and its stderr (secrets masked, capped). The argv
+ * is never part of it, and the prompt went in on stdin, so neither leaks.
+ */
+function failureFacts(error, stderr) {
+  const facts = {};
+  if (Number.isInteger(error.code)) facts.exitCode = error.code;
+  if (typeof error.signal === 'string' && error.signal) facts.signal = error.signal;
+  const text = clean(scrub(String(stderr || '')), MAX_STDERR_CHARS);
+  if (text) facts.stderr = text;
+  return facts;
+}
+
 function spawnClaude(execImpl, args, { cwd, env, timeoutMs }, resolve) {
   return execImpl(
     'claude',
     args,
-    { cwd, env, timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024, windowsHide: true },
-    (error, stdout) => {
+    { cwd, env, timeout: timeoutMs, maxBuffer: CLAUDE_MAX_BUFFER, windowsHide: true },
+    (error, stdout, stderr) => {
       if (error && error.code === 'ENOENT') return resolve({ error: 'noClaude' });
-      if (error && error.killed) return resolve({ error: 'timeout' });
+      // Node kills the child on a full buffer too: that is not a timeout.
+      if (error && error.code === MAX_BUFFER_CODE) {
+        return resolve({ error: 'failed', detail: `output over the ${CLAUDE_MAX_BUFFER / (1024 * 1024)} MB buffer`, ...failureFacts(error, stderr) });
+      }
+      if (error && error.killed) return resolve({ error: 'timeout', timeoutMs, ...failureFacts(error, stderr) });
       // A non-zero exit still prints the JSON envelope (is_error: true).
       if (error && !stdout) {
         const detail = clean(error.message, 300);
-        return resolve({ error: isUsageLimitText(detail) ? 'limit' : 'failed', detail });
+        return resolve({ error: isUsageLimitText(detail) ? 'limit' : 'failed', detail, ...failureFacts(error, stderr) });
       }
-      resolve({ stdout });
+      resolve(error ? { stdout, ...failureFacts(error, stderr) } : { stdout });
     },
   );
 }
