@@ -110,6 +110,27 @@ test('report shape: Needs you first, then verdict and why, iterations, scores, r
   assert.match(md, /- Took: 3 h 0 min/);
 });
 
+test('an inconclusive iteration: no score in the table, its reason and compiler errors in the report, a Needs-you line (md and HTML)', () => {
+  const run = makeRun('plateau');
+  const inconclusive = {
+    reason: 'compile-failed',
+    detail: "Unity could not compile the game's scripts (4 compiler errors)",
+    errors: ['Assets/Player.cs(12,5): error CS0246: Hitbox not found', 'Assets/Enemy.cs(3,1): error CS1002', 'Assets/Ui.cs(9,9): error CS0103', 'Assets/Boss.cs(1,1): error CS0117'],
+  };
+  const third = { ...run.laps[0], n: 3, score: null, inconclusive, checkpoint: { tag: 'luna-work/lwrep1/iter-3', tagError: null, rollback: null, note: null } };
+  const history = [...run.history, { n: 3, milestone: 'core flows', score: null, inconclusive, cardsClosed: 0, selfCheck: 'green', coreJourneysOk: true, rolledBack: false }];
+  const md = buildRunReport({ ...run, laps: [...run.laps, third], history });
+  assert.match(md, /\| 3 \| core flows \| inconclusive \(compile-failed\) \|/);
+  assert.match(md, /## Inconclusive playtests\n\n- Iteration 3: inconclusive - environment failure \(compile-failed\): Unity could not compile the game's scripts \(4 compiler errors\); compiler errors \/ warnings: Assets\/Player\.cs\(12,5\): error CS0246: Hitbox not found; .* \(\+1 more\)\. No score, no rollback\./);
+  assert.ok(md.indexOf('## Inconclusive playtests') > md.indexOf('## Iterations') && md.indexOf('## Inconclusive playtests') < md.indexOf('## Scores per milestone'));
+  assert.match(md, /core flows: 60 -> 35 \(rolled back\)\n/, 'no score point for the inconclusive iteration');
+  assert.match(md, /Iteration\(s\) 3 could not be playtested: the environment failed/);
+  const html = renderRunReportHtml({ ...run, laps: [...run.laps, third], history });
+  assert.match(html, /Inconclusive playtests/);
+  assert.match(html, /inconclusive \(compile-failed\)/);
+  assert.ok(!buildRunReport(run).includes('## Inconclusive playtests'), 'no section without one');
+});
+
 test('loop-hook notes get their own section per iteration, after the decisions (md and HTML)', () => {
   const run = makeRun('stop');
   const laps = [{ ...run.laps[0], notes: ['graph refresh failed: index timeout', '<b>security review failed</b>'] }, run.laps[1]];

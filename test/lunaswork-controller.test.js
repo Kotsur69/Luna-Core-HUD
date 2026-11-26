@@ -35,6 +35,8 @@ const { createFinalizer } = require('../src/orchestraFinalize');
 const { selfCheckGate, fixupBrief } = require('../src/orchestraSelfCheck');
 const { DEFAULT_MODELS } = require('../src/lunasworkRules');
 const { docsCards, createReleaser } = require('../src/lunasworkShipDocs');
+const { MAX_TOOL_DOWN_PAUSES, TOOL_DOWN_REASON } = require('../src/lunasworkToolGuard');
+const { UNITY_ENVIRONMENT_FAILURE } = require('../src/lunasworkUnity');
 
 // Never touched on disk: every dep that would use it is a fake.
 const REPO = path.resolve(os.tmpdir(), 'lw-controller-repo');
@@ -193,9 +195,12 @@ function harness(opts = {}) {
         start: async (profile) => {
           adapter.started += 1;
           adapter.profile = profile;
-          if (h.launchFails) throw new Error('app did not answer');
+          // An Error instance is thrown as it is (an adapter's environment failure).
+          if (h.launchFails) throw h.launchFails instanceof Error ? h.launchFails : new Error('app did not answer');
           return { url: 'http://localhost:3000' };
         },
+        // What the console held before the playtest's own actions (the Unity adapter's).
+        startConsole: () => (h.startConsole || []).map((e) => ({ ...e })),
         stop: async () => {
           adapter.stopped += 1;
           return true;
@@ -1379,17 +1384,110 @@ test('the app is always stopped, even when the Playtester throws', async () => {
   assert.equal(h.ctl.status().phase, 'playtesting');
 });
 
-test('an app that does not start still gets a Critic pass (an empty report)', async () => {
-  const h = harness();
+// ---- inconclusive playtests (lunasworkRules.playtestEnvironment) -------------------------
+
+/** Fires the tool-down waits one by one; @returns how many there were. */
+async function fireToolDownWaits(h) {
+  let n = 0;
+  while (h.ctl.status().waitReason === TOOL_DOWN_REASON && n <= MAX_TOOL_DOWN_PAUSES) {
+    await h.fire();
+    n += 1;
+  }
+  return n;
+}
+
+/** The error the Unity adapter throws when the game's scripts do not compile (src/lunasworkUnityEditor.js). */
+const compileFailure = () => Object.assign(
+  new Error("Unity could not compile the game's scripts (1 compiler error): Assets/Player.cs(12,5): error CS0246: The type 'Hitbox' could not be found - not a playtest result"),
+  { code: UNITY_ENVIRONMENT_FAILURE, ok: false, environment: true, reason: 'compile-failed', errors: ["Assets/Player.cs(12,5): error CS0246: The type 'Hitbox' could not be found"] },
+);
+
+test('an app that does not start is inconclusive: the run pauses; past the tool-down cap the Critic runs, unscored', async () => {
+  const notices = [];
+  const h = harness({ deps: { onToolDown: [(_run, down) => notices.push(down)] } });
   h.launchFails = true;
   h.next.critic.push(shipCritic());
   h.next.director.push(DEFAULT, STOP_CARD);
   await h.start();
+  assert.equal(h.ctl.status().phase, 'playtesting');
+  assert.equal(await fireToolDownWaits(h), MAX_TOOL_DOWN_PAUSES);
+  assert.equal(notices.length, MAX_TOOL_DOWN_PAUSES, 'a desktop notification per pause');
+  assert.deepEqual([notices[0].tool, notices[0].role, notices[0].environment], ['web', 'playtester', 'adapter-start']);
   assert.equal(h.calls.playtest.length, 0);
   assert.equal(h.calls.critic[0].report.errors[0].code, 'launchFailed');
+  assert.equal(h.calls.critic[0].inconclusive.reason, 'adapter-start', 'the Critic is told');
   // The SHIP pass cannot confirm without a running app.
   assert.equal(h.ctl.status().verdict, 'stop');
   assert.ok(h.adapters.every((a) => a.stopped === 1));
+  const run = h.ended[0];
+  assert.equal(run.history[0].score, null, 'never a 0 for the milestone');
+  assert.equal(run.history[0].inconclusive.reason, 'adapter-start');
+  assert.equal(run.laps[0].inconclusive.reason, 'adapter-start');
+  assert.match(logText(h), /playtest inconclusive \(adapter-start\)/);
+});
+
+test('an environment failure (no compile) pauses with a notification, then plays and scores once the editor is healthy', async () => {
+  const notices = [];
+  const h = harness({ deps: { onToolDown: [(_run, down) => notices.push(down)] } });
+  h.launchFails = compileFailure();
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.deepEqual([h.ctl.status().phase, h.ctl.status().waitReason], ['playtesting', TOOL_DOWN_REASON]);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].environment, 'compile-failed');
+  assert.match(notices[0].detail, /could not compile/);
+  assert.equal(h.calls.playtest.length, 0, 'no Playtester on a broken environment');
+  assert.equal(h.calls.critic.length, 0, 'nothing is scored while the run waits');
+  assert.equal(h.stored.current.launch, null, 'the next try starts the app again');
+  h.launchFails = false;
+  await h.fire();
+  assert.equal(h.calls.playtest.length, 1, 'played once healthy');
+  assert.equal(h.calls.critic[0].inconclusive, undefined);
+  const run = h.ended[0];
+  assert.equal(run.history[0].score, 50);
+  assert.equal(run.history[0].inconclusive, undefined);
+  assert.equal(run.toolDownPauses, 1);
+});
+
+test('missing-script warnings before the playtest\'s own actions: the app is stopped and the run pauses until a clean start', async () => {
+  const notices = [];
+  const h = harness({ deps: { onToolDown: [(_run, down) => notices.push(down)] } });
+  h.startConsole = [
+    { level: 'error', message: 'NullReferenceException in Enemy.Update' },
+    { level: 'warn', message: "The referenced script on this Behaviour (Game Object 'Player') is missing!" },
+  ];
+  h.next.director.push(DEFAULT, STOP_CARD);
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, TOOL_DOWN_REASON);
+  assert.equal(notices[0].environment, 'missing-scripts');
+  assert.equal(h.adapters[0].stopped, 1, 'the app is stopped again');
+  assert.equal(h.calls.playtest.length, 0);
+  // A game error alone is the game's: it is played and scored.
+  h.startConsole = [{ level: 'error', message: 'NullReferenceException in Enemy.Update' }];
+  await h.fire();
+  assert.equal(h.calls.playtest.length, 1);
+  assert.equal(h.ended[0].history[0].score, 50);
+});
+
+test('an inconclusive iteration after a scored one is never rolled back and never scored 0', async () => {
+  const cp = fakeCheckpoints();
+  const todos = Array.from({ length: 4 }, (_, i) => card(i + 1));
+  // Iteration 2's Critic would score 0: an environment 0, never recorded.
+  const h = harness({ todos, scores: [60, 0], deps: { checkpoints: cp.dep } });
+  const breakEnvironment = (o) => {
+    h.launchFails = compileFailure();
+    return oneCardEach(h)(o);
+  };
+  h.next.director.push(oneCardEach(h), breakEnvironment, STOP_CARD);
+  await h.start();
+  assert.equal(await fireToolDownWaits(h), MAX_TOOL_DOWN_PAUSES);
+  assert.equal(cp.rollbacks.length, 0, 'no rollback for an environment failure');
+  const run = h.ended[0];
+  assert.deepEqual(run.history.map((r) => r.score), [60, null]);
+  assert.equal(run.history[1].inconclusive.reason, 'compile-failed');
+  assert.match(run.history[1].inconclusive.errors[0], /error CS0246/);
+  assert.equal(run.history[1].rolledBack, false);
+  assert.equal(h.todos.find((t) => t.at === 2).done, true, "the iteration's work stays");
 });
 
 test('the PC is kept awake for the run and released at its end', async () => {

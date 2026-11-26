@@ -324,6 +324,29 @@ test('PLAYTEST_LOG, ARCHITECTURE, DECISIONS and TEST_PLAN are written in design/
   assert.match(plan, /## Notes\n\nkeep/);
 });
 
+test('an inconclusive iteration: the PLAYTEST_LOG entry says so with the reason and the compiler errors; the Critic is told', async () => {
+  const claude = fakeClaude(envelope(critique()));
+  const errors = ['Assets/Player.cs(12,5): error CS0246: Hitbox not found', 'Assets/Enemy.cs(3,1): error CS1002', 'Assets/Ui.cs(9,9): error CS0103', 'Assets/Boss.cs(1,1): error CS0117'];
+  const inconclusive = { reason: 'compile-failed', detail: "Unity could not compile the game's scripts (4 compiler errors)", errors };
+  const opts = baseOpts({ runClaude: claude.run, iteration: 4, inconclusive });
+  const res = await C.runCritic(opts);
+  assert.equal(res.ok, true);
+  const log = readDesign(opts.repoDir, 'PLAYTEST_LOG.md');
+  assert.match(log, /## Iteration 4 - 2026-10-23 - CONTINUE - INCONCLUSIVE/);
+  assert.match(log, /\*\*Inconclusive:\*\* environment failure \(compile-failed\) - Unity could not compile the game's scripts \(4 compiler errors\)\. No score recorded for the milestone, no rollback\./);
+  assert.match(log, /\*\*Compiler errors \/ warnings \(4\):\*\*\n- Assets\/Player\.cs\(12,5\): error CS0246: Hitbox not found\n- Assets\/Enemy\.cs\(3,1\): error CS1002\n- Assets\/Ui\.cs\(9,9\): error CS0103\n- \.\.\. 1 more/);
+  assert.match(log, /score not recorded \(inconclusive\)|Milestone: none defined/);
+  const prompt = claude.calls[0].prompt;
+  assert.match(prompt, /INCONCLUSIVE playtest \(compile-failed\)/);
+  assert.match(prompt, /Environment failure \(JSON\):\n<<<[\s\S]*error CS0246/);
+
+  // A healthy iteration's entry and prompt carry none of it; a bad marker is ignored.
+  const plain = baseOpts({ runClaude: fakeClaude(envelope(critique())).run, iteration: 5, inconclusive: { reason: 'nope' } });
+  await C.runCritic(plain);
+  const healthy = readDesign(plain.repoDir, 'PLAYTEST_LOG.md');
+  assert.ok(!/INCONCLUSIVE|\*\*Inconclusive:\*\*/.test(healthy));
+});
+
 test('a second iteration appends a second log entry and replaces ARCHITECTURE', async () => {
   const repoDir = fakeRepo();
   const store = memStore();

@@ -101,6 +101,7 @@ const { createDemoMaker } = require('./lunasworkDemo');
 const { fileQueueStore, queueEmailNote } = require('./lunasworkQueue');
 const { createSecretStore } = require('./lunasworkErrorTracking');
 const { reserveHold } = require('./lunasworkReserveGate');
+const { toolDownNotice } = require('./lunasworkToolGuard');
 
 const GIT_LOG_COMMITS = 40;
 const GIT_TIMEOUT_MS = 15000;
@@ -485,9 +486,10 @@ function createLunasWorkRuntime(ctx) {
     onRunEnd: [...(ctx.onRunEnd || []), onRunEndGit],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: milestoneMail ? [milestoneMail] : [],
-    // Tool kit: a tool that is down pauses the run - Mati gets a desktop notification.
+    // Tool kit: a tool that is down, or an inconclusive playtest (its environment failed),
+    // pauses the run - Mati gets a desktop notification.
     onToolDown: typeof ctx.notify === 'function'
-      ? [(_run, down) => ctx.notify("Luna's Work paused", `${down.tool} is down (${down.role}). The run waits and tries again later.`)]
+      ? [(_run, down) => ctx.notify("Luna's Work paused", toolDownNotice(down))]
       : [],
     queue: ctx.queue || fileQueueStore(),
     log: ctx.log,

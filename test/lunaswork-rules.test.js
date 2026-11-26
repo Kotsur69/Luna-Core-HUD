@@ -279,6 +279,94 @@ test('rollbackDecision: nothing to do for a red latest iteration or with no good
   assert.equal(rules.rollbackDecision([]).rollback, false);
 });
 
+// ---- inconclusive playtests: the environment failed --------------------------------------
+
+const MISSING = "The referenced script on this Behaviour (Game Object 'Player') is missing!";
+const envFailure = (reason, errors = []) => ({ ok: false, error: 'start failed', environment: { reason, message: `${reason} - not a playtest result`, errors } });
+/** An inconclusive record as the controller writes it: no score. */
+const unscored = (n, reason = 'compile-failed', extra = {}) =>
+  rec(n, null, { inconclusive: { reason, detail: 'the environment failed', errors: [] }, ...extra });
+
+test('playtestEnvironment: compile failed, still compiling, editor busy, a failed start and missing scripts are inconclusive', () => {
+  const R = rules.ENVIRONMENT_REASONS;
+  const compile = rules.playtestEnvironment({ launch: envFailure('compile-failed', ['Assets/A.cs(1,1): error CS1002: ; expected']) });
+  assert.deepEqual(compile, { reason: R.compileFailed, detail: 'compile-failed - not a playtest result', errors: ['Assets/A.cs(1,1): error CS1002: ; expected'] });
+  assert.equal(rules.playtestEnvironment({ launch: envFailure('still-compiling') }).reason, R.stillCompiling);
+  assert.equal(rules.playtestEnvironment({ launch: envFailure('editor-busy') }).reason, R.editorBusy);
+  // Any other start failure: the adapter could not start.
+  assert.deepEqual(rules.playtestEnvironment({ launch: { ok: false, error: 'app did not answer' } }), { reason: R.adapterStart, detail: 'app did not answer', errors: [] });
+  assert.equal(rules.playtestEnvironment({ launch: envFailure('made-up') }).reason, R.adapterStart, 'an unknown reason is still a failed start');
+  const scripts = rules.playtestEnvironment({ launch: { ok: true }, startConsole: [{ level: 'warn', message: MISSING }] });
+  assert.equal(scripts.reason, R.missingScripts);
+  assert.deepEqual(scripts.errors, [MISSING]);
+  assert.match(scripts.detail, /before the playtest's own actions/);
+});
+
+test('playtestEnvironment: a healthy start is conclusive, game errors included', () => {
+  assert.equal(rules.playtestEnvironment({ launch: { ok: true }, startConsole: [{ level: 'error', message: 'NullReferenceException in Enemy.Update' }] }), null);
+  assert.equal(rules.playtestEnvironment({}), null);
+  assert.equal(rules.playtestEnvironment(), null);
+});
+
+test('missingScriptWarnings: Unity\'s missing-script messages only, from entries or strings, capped', () => {
+  const list = [
+    MISSING,
+    { level: 'warn', message: 'The referenced script (Unknown) on this Behaviour is missing!' },
+    { message: 'The associated script can not be loaded. Please fix any compile errors and assign a valid script.' },
+    'Missing (Mono Script)',
+    'Shader warning in Sprites/Default',
+    { level: 'warn' },
+    null,
+  ];
+  assert.equal(rules.missingScriptWarnings(list).length, 4);
+  assert.deepEqual(rules.missingScriptWarnings(Array(20).fill(MISSING)).length, 5, 'a few are enough for the report');
+  assert.deepEqual(rules.missingScriptWarnings('junk'), []);
+});
+
+test('rollbackDecision: an environment failure never rolls back, a healthy drop still does', () => {
+  // Run lwmwwnl7xf: 32 -> an environment 0 rolled back real work. Inconclusive: no rollback.
+  assert.deepEqual(rules.rollbackDecision([rec(1, 32), unscored(2)]), { rollback: false });
+  // A 0 that slipped in with the marker is still inconclusive.
+  assert.equal(rules.rollbackDecision([rec(1, 32), rec(2, 0, { inconclusive: { reason: 'editor-busy' } })]).rollback, false);
+  // Even after a failed rollback that the iteration before would trigger again.
+  assert.equal(rules.rollbackDecision([rec(1, 60), rec(2, 10), unscored(3)]).rollback, false);
+  // Never a rollback baseline: the drop is measured against the last scored good iteration.
+  assert.deepEqual(rules.rollbackDecision([rec(1, 60), unscored(2), rec(3, 30)]), { rollback: true, toIteration: 1, reason: 'scoreDrop' });
+  assert.deepEqual(rules.rollbackDecision([rec(1, 60), unscored(2, 'missing-scripts'), rec(3, 55)]), { rollback: false });
+  // A broken journey rolls back to a scored iteration, never to an inconclusive one.
+  assert.deepEqual(rules.rollbackDecision([rec(1, 40), unscored(2), rec(3, 40, { coreJourneysOk: false })]), { rollback: true, toIteration: 1, reason: 'coreJourneyBroken' });
+  // The healthy case is unchanged.
+  assert.deepEqual(rules.rollbackDecision([rec(1, 32), rec(2, 0)]), { rollback: true, toIteration: 1, reason: 'scoreDrop' });
+});
+
+test('isPlateau: an inconclusive iteration is no progress, never the best score, and ends a run whose environment stays broken', () => {
+  assert.equal(rules.isPlateau([rec(1, 40), unscored(2), unscored(3), unscored(4)]), true);
+  assert.equal(rules.isPlateau([rec(1, 40), unscored(2), unscored(3), rec(4, 50)]), false, 'a real gain still counts');
+  assert.equal(rules.isPlateau([unscored(1), unscored(2), unscored(3)]), false, 'too short');
+  assert.equal(rules.isPlateau([unscored(1), rec(2, 10), rec(3, 10), rec(4, 10)]), false, 'nothing scored before the window');
+  assert.equal(rules.isPlateau([rec(1, 40), unscored(2), unscored(3, 'compile-failed', { cardsClosed: 1 }), unscored(4)]), false);
+});
+
+test('a stored inconclusive record keeps no score (never a 0); a bad marker is dropped like any unscored record', () => {
+  const base = { id: 'lw1', repoPath: require('path').resolve('/repo') };
+  const stored = rules.normalizeStoredRun({
+    ...base,
+    history: [
+      rec(1, 32),
+      unscored(2, 'missing-scripts', { inconclusive: { reason: 'missing-scripts', detail: 'x\n'.repeat(400), errors: [MISSING, 7] } }),
+      rec(3, null, { inconclusive: { reason: 'not-a-reason' } }),
+      rec(4, 25, { inconclusive: { reason: 'editor-busy', detail: 'busy' } }),
+    ],
+  });
+  assert.deepEqual(stored.history.map((r) => [r.n, r.score]), [[1, 32], [2, null], [4, null]]);
+  assert.equal(stored.history[1].inconclusive.reason, 'missing-scripts');
+  assert.ok(stored.history[1].inconclusive.detail.length <= 300);
+  assert.deepEqual(stored.history[1].inconclusive.errors, [MISSING]);
+  assert.equal(stored.history[0].inconclusive, undefined);
+  assert.equal(rules.cleanInconclusive({ reason: 'compile-failed', detail: 5 }).detail, '');
+  assert.equal(rules.cleanInconclusive(null), null);
+});
+
 // ---- stop verdict ------------------------------------------------------------------------
 
 test('stopVerdict: SHIP needs the critic AND the second playtester', () => {

@@ -12,7 +12,7 @@ const path = require('path');
 const K = require('../src/lunasworkToolkit');
 const S = require('../src/lunasworkSettings');
 const { createToolsFor, hasLiteralSecret } = require('../src/lunasworkToolkitLaunch');
-const { createToolGuard, cleanGuardFields, TOOL_DOWN_REASON, TOOL_DOWN_WAIT_MS, MAX_TOOL_DOWN_PAUSES } = require('../src/lunasworkToolGuard');
+const { createToolGuard, cleanGuardFields, TOOL_DOWN_REASON, TOOL_DOWN_WAIT_MS, MAX_TOOL_DOWN_PAUSES, toolDownNotice } = require('../src/lunasworkToolGuard');
 const { withTaskBrief } = require('../src/launch');
 const { buildPlaytestArgs } = require('../src/lunasworkPlaytest');
 const { createGodModeBuilder } = require('../src/lunasworkBuild');
@@ -417,4 +417,28 @@ test('a tool that is down pauses the run with a notification instead of retrying
   assert.equal(h.guard.toolDown({ ok: false, error: 'planner failed' }, 'builder'), false);
   assert.equal(h.guard.toolDown({ ok: true }, 'builder'), false);
   assert.equal(h.waits.length, 2);
+});
+
+test('an inconclusive playtest (environment failure) pauses like a tool that is down: same wait, counter, cap and notification', () => {
+  const h = guardHarness();
+  const env = { reason: 'compile-failed', detail: "Unity could not compile the game's scripts", errors: ['error CS0246'] };
+  assert.equal(h.guard.environmentDown(env, 'playtester', 'unity'), true);
+  assert.deepEqual(h.waits, [{ until: 1000 + TOOL_DOWN_WAIT_MS, reason: TOOL_DOWN_REASON }]);
+  assert.deepEqual(h.notices[0], { tool: 'unity', detail: "Unity could not compile the game's scripts", environment: 'compile-failed', role: 'playtester' });
+  // One shared ceiling with the tool-down pauses.
+  const res = { ok: false, error: 'toolDown', tool: 'unity' };
+  for (let i = 1; i < MAX_TOOL_DOWN_PAUSES; i += 1) assert.equal(h.guard.toolDown(res, 'playtester'), true);
+  assert.equal(h.guard.environmentDown(env, 'playtester', 'unity'), false, 'past the cap the caller goes on without a score');
+  assert.equal(h.run().toolDownPauses, MAX_TOOL_DOWN_PAUSES);
+  assert.equal(h.guard.environmentDown(null, 'playtester', 'unity'), false);
+  assert.equal(guardHarness().guard.environmentDown({ detail: 'no reason' }, 'playtester', 'unity'), false);
+});
+
+test('toolDownNotice: an environment pause says inconclusive, no score, no rollback; a tool that is down keeps its text', () => {
+  const env = toolDownNotice({ tool: 'unity', role: 'playtester', environment: 'missing-scripts', detail: '2 missing-script warning(s)' });
+  assert.match(env, /Playtest inconclusive/);
+  assert.match(env, /unity environment is not ready \(missing-scripts: 2 missing-script warning\(s\)\)/);
+  assert.match(env, /No score, no rollback/);
+  assert.equal(toolDownNotice({ tool: 'blender', role: 'builder' }), 'blender is down (builder). The run waits and tries again later.');
+  assert.match(toolDownNotice(null), /a tool is down/);
 });

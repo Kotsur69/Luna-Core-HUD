@@ -38,6 +38,12 @@
 //                                 At most MAX_TOOL_DOWN_PAUSES per run: past
 //                                 that it returns false and the caller's usual
 //                                 failure path (retryLater -> STOP) takes over
+//   environmentDown(env, role, tool)  an inconclusive playtest (the editor did
+//                                 not compile, stayed busy, the app did not
+//                                 start, missing scripts): the same pause,
+//                                 counter and notification (down.environment =
+//                                 the reason). Past the cap false: the caller
+//                                 goes on without a score
 //
 // Never throws: a failed hook or card write is a run-log line.
 // ============================================================================
@@ -58,6 +64,22 @@ const DONE_PHASE = 'done';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const errText = (err) => (err instanceof Error ? err.message : String(err));
+
+/**
+ * The desktop notification text for one pause (the onToolDown hooks' `down`):
+ * a tool that is down, or an inconclusive playtest whose environment failed.
+ * @param {{tool?:string, role?:string, environment?:string, detail?:string}} down
+ * @returns {string}
+ */
+function toolDownNotice(down) {
+  const d = isObj(down) ? down : {};
+  const tool = typeof d.tool === 'string' && d.tool ? d.tool : 'a tool';
+  if (typeof d.environment === 'string' && d.environment) {
+    const detail = typeof d.detail === 'string' && d.detail ? `: ${d.detail.slice(0, 120)}` : '';
+    return `Playtest inconclusive - the ${tool} environment is not ready (${d.environment}${detail}). No score, no rollback. The run waits and tries again later.`;
+  }
+  return `${tool} is down (${d.role || 'run'}). The run waits and tries again later.`;
+}
 
 /**
  * What a stored run keeps of the guard: the caps pinned at start, the spend,
@@ -180,16 +202,39 @@ function createToolGuard(ctx) {
   /** @returns {boolean} true when the result meant a tool is down and the run now waits */
   function toolDown(result, role) {
     const down = toolDownOf(result);
+    if (!down || !ctx.run()) return false;
+    return pause(down, role, `${down.tool} is down (${down.detail.slice(0, 150)})`, `${down.tool} still down`);
+  }
+
+  /**
+   * An inconclusive playtest (lunasworkRules.playtestEnvironment): the tool's
+   * environment failed (compile, stale editor, no start). Same pause, cap and
+   * notification as a tool that is down; the hooks get `environment` = the
+   * reason. Past the cap false: the caller goes on without a score.
+   * @param {{reason:string, detail:string}} env
+   * @param {string} role
+   * @param {string} tool the adapter's name ('unity', 'web', ...)
+   * @returns {boolean} true when the run now waits
+   */
+  function environmentDown(env, role, tool) {
+    if (!isObj(env) || typeof env.reason !== 'string' || !ctx.run()) return false;
+    const name = typeof tool === 'string' && tool ? tool.slice(0, 40) : 'app';
+    const detail = String(env.detail || env.reason).slice(0, 300);
+    const down = { tool: name, detail, environment: env.reason };
+    return pause(down, role, `${name} environment not ready (${env.reason}: ${detail.slice(0, 150)}) - playtest inconclusive`, `${name} environment still not ready`);
+  }
+
+  /** The shared tool-down pause: counted, logged, announced, then armWait. */
+  function pause(down, role, what, still) {
     const run = ctx.run();
-    if (!down || !run) return false;
     const pauses = cleanGuardFields(run).toolDownPauses;
     if (pauses >= MAX_TOOL_DOWN_PAUSES) {
-      ctx.logEvent(`${role}: ${down.tool} still down after ${pauses} pauses - no more waiting, the usual failure path takes over`);
+      ctx.logEvent(`${role}: ${still} after ${pauses} pauses - no more waiting, the usual failure path takes over`);
       return false;
     }
     ctx.update({ toolDownPauses: pauses + 1 });
     const minutes = Math.round(TOOL_DOWN_WAIT_MS / 60000);
-    ctx.logEvent(`${role}: ${down.tool} is down (${down.detail.slice(0, 150)}) - the run pauses ${minutes} min instead of retrying (${pauses + 1} of ${MAX_TOOL_DOWN_PAUSES})`);
+    ctx.logEvent(`${role}: ${what} - the run pauses ${minutes} min instead of retrying (${pauses + 1} of ${MAX_TOOL_DOWN_PAUSES})`);
     for (const fn of hooks) {
       try {
         Promise.resolve(fn({ ...run }, { ...down, role })).catch((err) => log(`[lunaswork] onToolDown failed: ${errText(err)}`));
@@ -201,7 +246,7 @@ function createToolGuard(ctx) {
     return true;
   }
 
-  return { recordSpend, recordAsset, cappedTools, recordJudgeVerdict, judgeVerdicts, higgsfieldResults, toolDown, toolDownOf };
+  return { recordSpend, recordAsset, cappedTools, recordJudgeVerdict, judgeVerdicts, higgsfieldResults, toolDown, environmentDown, toolDownOf };
 }
 
-module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, MAX_ASSET_ENTRIES, cleanGuardFields, createToolGuard };
+module.exports = { TOOL_DOWN_WAIT_MS, TOOL_DOWN_REASON, MAX_TOOL_DOWN_PAUSES, MAX_ASSET_ENTRIES, cleanGuardFields, createToolGuard, toolDownNotice };
