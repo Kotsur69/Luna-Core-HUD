@@ -47,6 +47,8 @@ const MAX_NOTE_CHARS = 600;
 const MAX_ITEM_CHARS = 300;
 const MAX_TAIL_LINES = 15;
 const MAX_LIST = 50;
+// A release refusal can name up to 10 dirty paths (releaseCut.js dirtyReason).
+const MAX_RELEASE_REASON_CHARS = 1200;
 // Newest stall-history entries a package shows under What went wrong.
 const MAX_HISTORY_SHOWN = 10;
 // A run id as orchestra.js makes it (`p` + base-36 time): the only thing the
@@ -558,7 +560,7 @@ const POST_MERGE_LINES = {
     ];
   },
   release: (r) => {
-    if (r.skipped) return [`- Release skipped: ${oneLine(r.skipped)}`];
+    if (r.skipped) return [`- Release skipped: ${oneLine(r.skipped, MAX_RELEASE_REASON_CHARS)}`];
     if (r.error) return [`- Release failed: ${oneLine(r.error)}`];
     if (!r.released) return [];
     const url = typeof r.url === 'string' && /^https:\/\/github\.com\//.test(r.url) ? oneLine(r.url, 300) : 'no release URL';
