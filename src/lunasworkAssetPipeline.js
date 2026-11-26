@@ -173,6 +173,8 @@ function cleanAssetEntry(raw) {
     imported: raw.imported === true,
     // A paid generation whose result did not end up as files (path is then its record).
     unsaved: raw.unsaved === true,
+    // The cost is the asset catalog's price, booked because Higgsfield could not price the model.
+    ...(raw.costEstimate === 'catalog' ? { costEstimate: 'catalog' } : {}),
     ...(typeof raw.sha256 === 'string' && SHA256_RE.test(raw.sha256) ? { sha256: raw.sha256 } : {}),
   };
 }

@@ -8,14 +8,20 @@
 //
 //   cost       booked before any paid call. A refused booking stops
 //              Higgsfield for the rest of this pipeline (the guard files the
-//              card); no further Higgsfield call is made, not even an estimate
+//              card); no further Higgsfield call is made, not even an estimate.
+//              When the CLI cannot evaluate a model's validation rules
+//              (multi_image_to_3d), the catalog price is booked instead,
+//              marked costEstimate: the cap still applies to it
 //   record     art/higgsfield/<kind>/<stem>.json is written before the
 //              download, so a paid job is never lost; a result that does not
 //              end as files is still logged with its cost (unsaved). A used
 //              name gets -v2, -v3...: a paid final never overwrites another
 //   images     1-4 repo reference images (src/lunasworkHiggsfieldRefs.js),
 //              uploaded through the CLI before the estimate, passed as a
-//              repeated --image (multi_image_to_3d: object views -> GLB)
+//              repeated --image (multi_image_to_3d: its image_references
+//              array, a repeated --image-references; object views -> GLB).
+//              A character from multi_image_to_3d defaults to an a-pose and
+//              a 1.6 m rigging height
 //   forBlender a result meant for luna_asset_blender `from` is saved,
 //              recorded, ledgered and logged but NOT imported into Unity (no
 //              prefab, no material): the Blender step makes the FBX + prefab.
@@ -46,6 +52,15 @@ const RESERVED_PARAM_KEYS = Object.freeze(new Set(['json', 'wait', 'wait_timeout
 const PARAM_VALUE_RE = /^[A-Za-z0-9][\w:.-]{0,39}$/;
 const MAX_PARAMS = 8;
 const JOB_ID_RE = /^[\w-]{1,100}$/;
+// `higgsfield generate cost` cannot price some models: the cost endpoint does
+// not support their validation rules (live 2026-11-25, multi_image_to_3d, with
+// real upload ids). Only this exact CLI error, naming the requested model,
+// falls back to the catalog's credit price; any other cost failure still fails.
+const UNEVALUABLE_COST_RE = /Unsupported validation rules for ([a-z0-9][a-z0-9_.-]{0,63}): a validation rule could not be evaluated within the supported limits/;
+// A character mesh from multi_image_to_3d: posed and sized for the rig and the
+// toon pass's 1.6 m height check. The worker's own params win over these.
+const CHARACTER_3D_MODEL = 'multi_image_to_3d';
+const CHARACTER_3D_DEFAULTS = Object.freeze({ pose_mode: 'a-pose', rigging_height_meters: '1.6' });
 // What a Higgsfield result can turn out to be; a free name must be free for each.
 const RESULT_EXTS = Object.freeze(['png', 'jpg', 'webp', 'glb']);
 const GLB_MAGIC = Buffer.from('glTF', 'latin1');
@@ -88,6 +103,18 @@ function cleanParams(raw) {
   return out;
 }
 
+/** The params sent for a job: the character defaults (see CHARACTER_3D_DEFAULTS) under the worker's own. */
+function paramsFor(model, kind, params) {
+  return model === CHARACTER_3D_MODEL && kind === 'character' ? { ...CHARACTER_3D_DEFAULTS, ...params } : params;
+}
+
+/** The catalog's credits per final for `model` (config/lunaswork-asset-catalog.json), or undefined. */
+function catalogCredits(model) {
+  // Required here, not at the top: the catalog module requires the pipeline, which requires this module.
+  const { loadCatalog, higgsfieldCredits } = require('./lunasworkAssetCatalog');
+  return higgsfieldCredits(loadCatalog())[model.toLowerCase()];
+}
+
 const startsWith = (buf, magic) => Buffer.isBuffer(buf) && buf.length >= magic.length && buf.subarray(0, magic.length).equals(magic);
 
 /** The file extension a Higgsfield result's bytes prove: png / jpg / webp / glb, else null. */
@@ -110,7 +137,8 @@ function createHiggsfieldFinal(deps) {
   if (!(deps.usdPerCredit > 0 && deps.usdPerCredit <= MAX_USD_PER_CREDIT)) throw new Error('the Higgsfield final needs a credit rate');
   // Set once a booking is refused: no more Higgsfield calls from this pipeline.
   let stopped = null;
-  const cappedNow = () => (typeof d.cappedTools === 'function' ? d.cappedTools() : []);
+  const logLine = typeof d.logLine === 'function' ? d.logLine : () => {};
+  const cappedNow =() => (typeof d.cappedTools === 'function' ? d.cappedTools() : []);
 
   /** The validated job and CLI request of a Higgsfield final, or a failure. Nothing is called yet. */
   function higgsfieldRequest(raw) {
@@ -130,7 +158,7 @@ function createHiggsfieldFinal(deps) {
     const images = refs.cleanReferences(r.images, { artRoot: deps.artRoot });
     if (!images.ok) return images;
     const forBlender = typeof r.forBlender === 'boolean' ? r.forBlender : null;
-    return { ok: true, job, forBlender, references: images.rels, request: { model: r.model, prompt: job.prompt, params } };
+    return { ok: true, job, forBlender, references: images.rels, request: { model: r.model, prompt: job.prompt, params: paramsFor(r.model, job.kind, params) } };
   }
 
   /** The reference images checked on disk and uploaded; their upload ids go into the request. Nothing is booked yet. */
@@ -142,25 +170,56 @@ function createHiggsfieldFinal(deps) {
     return up.ok ? { ...req, request: { ...req.request, images: up.ids } } : up;
   }
 
-  /** Estimate -> book against the run's cap. A refused booking stops Higgsfield for this pipeline. */
-  async function bookHiggsfield(request) {
-    let credits;
+  /**
+   * The catalog price booked when the CLI cannot evaluate `model`'s cost
+   * (UNEVALUABLE_COST_RE), or null when `err` is any other failure. It is an
+   * ESTIMATE: logged as one here and marked costEstimate in the record, the
+   * asset log and the answer.
+   */
+  function catalogEstimate(model, err) {
+    const unevaluable = UNEVALUABLE_COST_RE.exec(errText(err));
+    if (!unevaluable || unevaluable[1] !== model) return null;
+    const credits = (typeof d.catalogCredits === 'function' ? d.catalogCredits : catalogCredits)(model);
+    if (typeof credits !== 'number' || !Number.isFinite(credits) || credits <= 0 || credits > MAX_CREDITS) {
+      return fail('higgsfieldFailed', `cost estimate failed: the Higgsfield CLI cannot price ${model} and the asset catalog has no usable credit price for it`);
+    }
+    logLine(`[lunaswork-assets] Higgsfield cannot price ${model} (its validation rules cannot be evaluated by the cost check): booking the asset catalog ESTIMATE of ${credits} credits against the spend cap instead`);
+    return { ok: true, credits, costEstimate: 'catalog' };
+  }
+
+  /** The credits to book: the CLI's own price, else the catalog estimate (catalogEstimate), else a failure. */
+  async function estimateCredits(request) {
     try {
       const est = await d.higgsfield.estimate(request);
-      credits = isObj(est) ? est.credits : NaN;
+      return { ok: true, credits: isObj(est) ? est.credits : NaN, costEstimate: null };
     } catch (err) {
-      return fail('higgsfieldFailed', `cost estimate failed: ${errText(err)}`);
+      return catalogEstimate(request.model, err) || fail('higgsfieldFailed', `cost estimate failed: ${errText(err)}`);
     }
+  }
+
+  /** Estimate -> book against the run's cap. A refused booking stops Higgsfield for this pipeline. */
+  async function bookHiggsfield(request) {
+    const est = await estimateCredits(request);
+    if (!est.ok) return est;
+    const { credits, costEstimate } = est;
     if (typeof credits !== 'number' || !Number.isFinite(credits) || credits < 0 || credits > MAX_CREDITS) return fail('higgsfieldFailed', 'the cost estimate is not a usable number of credits');
     const costUsd = Math.round(credits * deps.usdPerCredit * 10000) / 10000;
     const booked = d.recordSpend({ tool: 'higgsfield', costUsd });
     if (!isObj(booked) || !booked.ok) {
       const reason = (isObj(booked) && booked.reason) || 'refused';
-      stopped = `Higgsfield stopped for this run: the booking of $${costUsd.toFixed(2)} was refused (${reason})`;
+      const what = costEstimate ? `the booking of the catalog estimate $${costUsd.toFixed(2)}` : `the booking of $${costUsd.toFixed(2)}`;
+      stopped = `Higgsfield stopped for this run: ${what} was refused (${reason})`;
       return fail(reason === 'capReached' ? 'capReached' : 'spendRefused', stopped);
     }
-    return { ok: true, credits, costUsd };
+    return { ok: true, credits, costUsd, costEstimate };
   }
+
+  /** The worker's note on a booked catalog estimate, or null for a CLI-priced booking. */
+  const estimateNote = (request, paid) => (paid.costEstimate
+    ? `The booked $${paid.costUsd.toFixed(2)} (${paid.credits} credits) is the asset catalog's ESTIMATE: the Higgsfield CLI cannot price ${request.model} before generating.`
+    : null);
+  /** The costEstimate marker of a record, a log entry or an answer: present only for an estimate. */
+  const estimateField = (paid) => (paid.costEstimate ? { costEstimate: paid.costEstimate } : {});
 
   /** One downloaded result, checked: a Buffer under the cap that proves to be an image or a GLB. */
   async function fetchResult(url) {
@@ -185,10 +244,10 @@ function createHiggsfieldFinal(deps) {
         text += ` (the record could not be updated: ${errText(err)})`;
       }
     }
-    const logged = deps.log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: info.seed, costUsd: paid.costUsd, credits: paid.credits, path: info.record || info.path, sources: info.record ? [info.record] : [], imported: false, unsaved: true });
+    const logged = deps.log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: info.seed, costUsd: paid.costUsd, credits: paid.credits, ...estimateField(paid), path: info.record || info.path, sources: info.record ? [info.record] : [], imported: false, unsaved: true });
     return {
       ...fail('higgsfieldFailed', text),
-      costUsd: paid.costUsd, credits: paid.credits, jobId: info.jobId || null, urls: info.urls || [], record: info.record || null, files: info.files || [],
+      costUsd: paid.costUsd, credits: paid.credits, ...estimateField(paid), jobId: info.jobId || null, urls: info.urls || [], record: info.record || null, files: info.files || [],
       ...(logged ? {} : { note: 'The run report could not log this cost; mention it in your hand-back.' }),
     };
   }
@@ -223,13 +282,15 @@ function createHiggsfieldFinal(deps) {
     }
     // The cost is booked once; it is logged on the first file of the generation.
     for (const [i, rel] of saved.entries()) {
-      deps.log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: gen.seed, costUsd: i === 0 ? paid.costUsd : 0, credits: i === 0 ? paid.credits : 0, path: rel, sources: [record], imported: imported.get(rel) === true, sha256: hashes[i] });
+      deps.log({ tool: 'higgsfield', kind: job.kind, name: job.name, prompt: job.prompt, seed: gen.seed, costUsd: i === 0 ? paid.costUsd : 0, credits: i === 0 ? paid.credits : 0, ...(i === 0 ? estimateField(paid) : {}), path: rel, sources: [record], imported: imported.get(rel) === true, sha256: hashes[i] });
     }
     const failed = imports.find((imp) => !imp.ok);
     if (failed) notes.push(deps.importNote(failed));
     if (blenderBound.length) notes.push(blenderNote(job, blenderBound));
+    const estimated = estimateNote(req.request, paid);
+    if (estimated) notes.push(estimated);
     return {
-      ok: true, files: saved, sources: [record], costUsd: paid.costUsd, credits: paid.credits, jobId: gen.jobId, unity: imports,
+      ok: true, files: saved, sources: [record], costUsd: paid.costUsd, credits: paid.credits, ...estimateField(paid), jobId: gen.jobId, unity: imports,
       ...(blenderBound.length ? { forBlender: blenderBound } : {}),
       ledger: ledgerNote ? null : deps.ledgerFile, note: notes.length ? notes.join(' ') : null,
     };
@@ -247,7 +308,7 @@ function createHiggsfieldFinal(deps) {
     const recordData = {
       name: job.name, kind: job.kind, model: request.model, prompt: job.prompt, params: request.params,
       ...(req.references.length ? { references: req.references } : {}), seed: gen.seed, jobId: gen.jobId,
-      credits: paid.credits, costUsd: paid.costUsd, urls: gen.urls.map(recordUrl).filter(Boolean), status: 'generated', outputs: [],
+      credits: paid.credits, costUsd: paid.costUsd, ...estimateField(paid), urls: gen.urls.map(recordUrl).filter(Boolean), status: 'generated', outputs: [],
     };
     const saved = [];
     const hashes = [];
