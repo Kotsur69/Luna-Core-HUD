@@ -80,6 +80,29 @@ test('stages only design pack files, even with other dirty, staged and untracked
   assert.equal(git(origin, 'show', 'main:app.txt'), 'v1');
 });
 
+test("the Director's CONTRACTS.md and the asset step's ASSETS.md are staged, and a builder's worktree sees them", async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  write(repo, 'design/ASSETS.md', '# Assets\n| name | status |\n| hero | planned |\n');
+  git(repo, 'add', 'design/ASSETS.md');
+  git(repo, 'commit', '-m', 'assets list');
+  git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
+  // Iteration 3: the Director writes a fresh CONTRACTS.md, the asset step updates a row.
+  write(repo, 'design/CONTRACTS.md', '# Contracts\n\n- PlayerHealth.Damage(int)\n');
+  write(repo, 'design/ASSETS.md', '# Assets\n| name | status |\n| hero | queued |\n');
+  const res = await commitDesignPack({ repoPath: repo, gitTimeoutMs: LOADED_GIT_TIMEOUT_MS, label: 'iteration 3 contracts and assets' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.files, ['design/CONTRACTS.md', 'design/ASSETS.md']);
+  assert.deepEqual(git(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['design/ASSETS.md', 'design/CONTRACTS.md']);
+  assert.equal(git(repo, 'status', '--porcelain'), '', 'the checkout is clean');
+  // A God Mode worktree branched from origin's main afterwards reads this iteration's files.
+  const wt = path.join(root, 'builder');
+  git(repo, 'fetch', 'origin');
+  git(repo, 'worktree', 'add', '-b', 'luna/core-abcde', wt, 'origin/main');
+  assert.match(fs.readFileSync(path.join(wt, 'design', 'CONTRACTS.md'), 'utf8'), /PlayerHealth\.Damage/);
+  assert.match(fs.readFileSync(path.join(wt, 'design', 'ASSETS.md'), 'utf8'), /hero \| queued/);
+  assert.equal(git(origin, 'log', '-1', '--format=%s', 'main'), 'docs(luna-work): iteration 3 contracts and assets');
+});
+
 test('no commit when design/ is unchanged', async (t) => {
   const { repo } = makeRepo(t);
   write(repo, 'app.txt', 'dirty but not design\n');

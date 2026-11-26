@@ -2,7 +2,9 @@
 // LunaCore - Luna's Work: commit the design pack (docs/tbc_docs/LUNAS_WORK_PLAN.md)
 // ----------------------------------------------------------------------------
 // The Critic rewrites design/ARCHITECTURE.md and appends to DECISIONS.md,
-// PLAYTEST_LOG.md and TEST_PLAN.md; the Director may append to DESIGN.md.
+// PLAYTEST_LOG.md and TEST_PLAN.md; the Director may append to DESIGN.md and
+// writes CONTRACTS.md (the iteration's interfaces and ownership map); the
+// asset step (src/lunasworkAssets.js) updates the row statuses of ASSETS.md.
 // Those edits land in the target checkout (the base branch). Left uncommitted,
 // God Mode worktrees (branched from main) read stale docs, the docs never
 // reach the remote, and a rollback leaves them in an unclear state.
@@ -13,8 +15,10 @@
 // no commit. It never throws; a failure comes back as {ok:false, error} and
 // the controller logs it and carries on.
 //
-// Order in the loop: the controller calls it after the Director and before
-// the checkpoint tag, so iter-N tags a head that holds the design pack.
+// Order in the loop: the controller calls it twice per iteration - after the
+// Director, before the builders' worktrees are made (so they branch from a
+// main that holds this iteration's CONTRACTS.md and ASSETS.md), and after the
+// Critic, before the checkpoint tag (so iter-N tags a head with the pack).
 // lunasworkCheckpoint's rollback skips commits whose subject starts with
 // PACK_COMMIT_PREFIX, so a revert never drops the design-pack history.
 // ============================================================================
@@ -24,8 +28,16 @@
 const { execGit, guardedGit, PACK_COMMIT_PREFIX } = require('./lunasworkCheckpoint');
 
 const DESIGN_DIR = 'design';
-// The files the Critic and the Director write.
-const PACK_COMMIT_FILES = Object.freeze(['ARCHITECTURE.md', 'DECISIONS.md', 'PLAYTEST_LOG.md', 'TEST_PLAN.md', 'DESIGN.md']);
+// The files the Critic, the Director and the asset step write.
+const PACK_COMMIT_FILES = Object.freeze([
+  'ARCHITECTURE.md',
+  'DECISIONS.md',
+  'PLAYTEST_LOG.md',
+  'TEST_PLAN.md',
+  'DESIGN.md',
+  'CONTRACTS.md',
+  'ASSETS.md',
+]);
 const BRANCH_RE = /^[A-Za-z0-9._/-]{1,200}$/;
 
 // Repos whose last push failed: the next call pushes again even with nothing new.

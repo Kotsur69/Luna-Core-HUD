@@ -127,6 +127,7 @@ function createGodModeBuilder(deps) {
   async function prepareUnity(repoPath) {
     try {
       const res = await configureUnityMerge(repoPath);
+      if (res && res.legacyBlock === 'removed') log('[lunaswork-build] uncommitted UnityYAMLMerge block taken out of .gitattributes (now in .git/info/attributes)');
       if (!res || !res.ok) log(`[lunaswork-build] UnityYAMLMerge not configured: ${(res && (res.detail || res.error)) || 'failed'}`);
       else if (res.warning) log(`[lunaswork-build] ${res.warning}`);
     } catch (err) {

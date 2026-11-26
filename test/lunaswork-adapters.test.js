@@ -1904,18 +1904,19 @@ function mergeRepo({ git = true } = {}) {
   return { repo, calls, execImpl };
 }
 
-test('the merge driver config is written: .gitattributes, info/attributes and git config', async () => {
+test('the merge driver config is written: info/attributes and git config, never the tracked .gitattributes', async () => {
   const { repo, calls, execImpl } = mergeRepo();
-  fs.writeFileSync(path.join(repo, '.gitattributes'), '* text=auto\r\n*.png binary\r\n');
+  const own = '* text=auto\r\n*.png binary\r\n';
+  fs.writeFileSync(path.join(repo, '.gitattributes'), own);
 
   const res = await Scene.configureUnityMerge(repo, { mergeTool: MERGE_TOOL, execImpl });
   assert.deepEqual(res, { ok: true, attributes: true, driver: true, tool: MERGE_TOOL });
 
-  const attributes = fs.readFileSync(path.join(repo, '.gitattributes'), 'utf8');
-  assert.ok(attributes.startsWith('* text=auto\n*.png binary\n'), 'existing rules kept');
-  for (const ext of ['unity', 'prefab', 'asset']) assert.match(attributes, new RegExp(`^\\*\\.${ext} merge=unityyamlmerge eol=lf$`, 'm'));
+  assert.equal(fs.readFileSync(path.join(repo, '.gitattributes'), 'utf8'), own, 'the tracked file is untouched');
   // The common dir's info/attributes covers every worktree of the repo.
-  assert.equal(fs.readFileSync(path.join(repo, '.git', 'info', 'attributes'), 'utf8'), Scene.withAttributesBlock(''));
+  const attributes = fs.readFileSync(path.join(repo, '.git', 'info', 'attributes'), 'utf8');
+  assert.equal(attributes, Scene.withAttributesBlock(''));
+  for (const ext of ['unity', 'prefab', 'asset']) assert.match(attributes, new RegExp(`^\\*\\.${ext} merge=unityyamlmerge eol=lf$`, 'm'));
 
   const configs = calls.filter((a) => a.includes('config')).map((a) => a.slice(a.indexOf('config') + 1));
   assert.deepEqual(configs, [
@@ -1927,7 +1928,8 @@ test('the merge driver config is written: .gitattributes, info/attributes and gi
 
   // Idempotent: a second run changes nothing.
   await Scene.configureUnityMerge(repo, { mergeTool: MERGE_TOOL, execImpl });
-  assert.equal(fs.readFileSync(path.join(repo, '.gitattributes'), 'utf8'), attributes);
+  assert.equal(fs.readFileSync(path.join(repo, '.git', 'info', 'attributes'), 'utf8'), attributes);
+  assert.equal(fs.readFileSync(path.join(repo, '.gitattributes'), 'utf8'), own);
 });
 
 test("UnityYAMLMerge is found in Unity Hub for the project's editor version", async () => {
@@ -1953,7 +1955,8 @@ test('without UnityYAMLMerge the attributes are still written; unsafe or missing
   assert.equal(res.ok, true);
   assert.equal(res.driver, false);
   assert.match(res.warning, /UnityYAMLMerge not found/);
-  assert.ok(fs.existsSync(path.join(none.repo, '.gitattributes')));
+  assert.ok(fs.existsSync(path.join(none.repo, '.git', 'info', 'attributes')));
+  assert.equal(fs.existsSync(path.join(none.repo, '.gitattributes')), false);
   assert.equal(none.calls.filter((a) => a.includes('config')).length, 0);
 
   const unsafe = mergeRepo();

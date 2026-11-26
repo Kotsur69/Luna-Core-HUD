@@ -14,6 +14,8 @@
 //   checkpoints     lunasworkCheckpoint: iteration tags, revert-only rollback
 //   run report      lunasworkReport on onRunEnd: <runsDir>/lunaswork-<id>.md
 //                   + .html, and one email under "Email me when a run finishes"
+//   run-end cleanup lunasworkRunCleanup before the report: the run's worktrees
+//                   and merged luna/ branches go, kept ones are in the report
 //   decisions       every decision-queue answer appended to design/DECISIONS.md
 //   milestone email lunasworkReport onMilestone: scores, what waits, feedback (B17)
 //   launch assets   lunasworkLaunch at SHIP: the marketing agent -> marketing/ (C10)
@@ -76,6 +78,7 @@ const { createLunasWork } = require('./lunaswork');
 const { createCheckpoints } = require('./lunasworkCheckpoint');
 const { commitDesignPack } = require('./lunasworkPackCommit');
 const { createLunasWorkReporter } = require('./lunasworkReport');
+const { createRunCleanup } = require('./lunasworkRunCleanup');
 const { godmodeEmailOn } = require('./mailprefs');
 const { answersFromTodoPeers } = require('./lunasworkDecisions');
 const { feedbackFromTodoPeers } = require('./lunasworkFeedback');
@@ -271,6 +274,8 @@ function createPlaytestOn({ env, freeEnv, agyEnv, reserveUntil, now = Date.now, 
  *   confirmStart: (ctx:{projectId:string, repoPath:string, profile:object, checkCommand:string})=>Promise<boolean>,
  *   powerSaveBlocker: {start:Function, stop:Function, isStarted:Function},
  *   onRunEnd?: Array<(run:object)=>void>, log?: (line:string)=>void,
+ *   worktreeInUse?: (root:string)=>boolean (a tab is open in that folder: the run-end cleanup keeps it;
+ *     without it no worktree is removed),
  *   notify?: (title:string, body:string)=>void (a desktop notification: a kit tool is down),
  *   runsDir?: ()=>string, mail?: {sender:object, prefs:object}, secretStore?: object,
  *   queue?: {read:()=>object, write:(q:object)=>boolean},
@@ -334,6 +339,16 @@ function createLunasWorkRuntime(ctx) {
     const note = queueEmailNote(run && run.queue);
     if (!note) return reporter.onRunEnd(run);
     return createLunasWorkReporter({ ...reporterOpts, mail: mailWithNote(reporterMail, note) }).onRunEnd(run);
+  };
+  // Run-end git hygiene (src/lunasworkRunCleanup.js) goes first: the report then lists the kept branches.
+  const runCleanup = createRunCleanup({
+    inUse: ctx.worktreeInUse,
+    busy: (run) => typeof run.projectId === 'string' && godModeActive({ projectId: run.projectId }),
+    log: ctx.log,
+  });
+  const onRunEndGit = async (run) => {
+    const gitCleanup = await runCleanup.atRunEnd(run);
+    return reporter ? onRunEndReport({ ...run, gitCleanup }) : null;
   };
 
   // LW 2.17a: the run's token accounting; the controller drains it at every phase change.
@@ -467,7 +482,7 @@ function createLunasWorkRuntime(ctx) {
     usageMeter: meter,
     // C9: the error tracking DSN, kept on this PC (safeStorage, else a gitignored *.local.json).
     errorTracking: { store: ctx.secretStore || createSecretStore({ log: ctx.log }), log: ctx.log },
-    onRunEnd: [...(ctx.onRunEnd || []), ...(reporter ? [onRunEndReport] : [])],
+    onRunEnd: [...(ctx.onRunEnd || []), onRunEndGit],
     // B12 / B17: a short email per passed milestone gate, with the feedback link.
     onMilestone: milestoneMail ? [milestoneMail] : [],
     // Tool kit: a tool that is down pauses the run - Mati gets a desktop notification.
