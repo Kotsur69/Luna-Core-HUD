@@ -1490,6 +1490,29 @@ test('an inconclusive iteration after a scored one is never rolled back and neve
   assert.equal(h.todos.find((t) => t.at === 2).done, true, "the iteration's work stays");
 });
 
+test('a journey that breaks after an inconclusive iteration still rolls back to the last played one', async () => {
+  const cp = fakeCheckpoints();
+  const todos = Array.from({ length: 5 }, (_, i) => card(i + 1));
+  const h = harness({ todos, scores: [60, 0, 60], deps: { checkpoints: cp.dep } });
+  const launchFails = (fails) => (o) => {
+    h.launchFails = fails;
+    return oneCardEach(h)(o);
+  };
+  const journeyFails = () => ({
+    ok: true,
+    model: 'sonnet',
+    modelReason: 'exploratory pass',
+    report: { mode: 'explore', findings: [], scores: [], journeys: [{ name: 'j', passed: false }], screens: [] },
+  });
+  h.next.director.push(oneCardEach(h), launchFails(compileFailure()), launchFails(false), STOP_CARD);
+  // Iteration 1 plays j green; iteration 3 breaks it, and the same-code replay agrees (not flaky).
+  h.next.playtest.push(DEFAULT, journeyFails, journeyFails);
+  await h.start();
+  assert.equal(await fireToolDownWaits(h), MAX_TOOL_DOWN_PAUSES);
+  assert.equal(cp.rollbacks.length, 1, "the unplayed lap's empty journey list is not the baseline");
+  assert.deepEqual([cp.rollbacks[0].iteration, cp.rollbacks[0].toIteration, cp.rollbacks[0].reason], [3, 1, 'coreJourneyBroken']);
+});
+
 test('the PC is kept awake for the run and released at its end', async () => {
   const h = harness();
   const build = deferred();

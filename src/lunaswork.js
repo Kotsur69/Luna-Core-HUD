@@ -1186,14 +1186,16 @@ function createLunasWork(deps) {
   async function stepPlaytesting() {
     const launch = run.current.launch;
     let res = launch && launch.ok === false ? { ok: false, error: 'launchFailed', detail: launch.error } : null;
-    // A failed start is an environment failure: the playtest would be inconclusive.
-    let env = res ? launch.inconclusive || playtestEnvironment({ launch }) : null;
+    // A failed app start (startApp's environment check) makes the playtest inconclusive.
+    // A staging failure or a production hold (src/lunasworkStaging.js) is not one: its
+    // card or decision is work for the run, which a pause would only hold up.
+    let env = res ? launch.inconclusive || null : null;
     // After a restart the app from 'launching' is gone: start it again.
     if (!res && !live.adapter) {
       const started = await startApp();
       if (!started.ok) {
         res = { ok: false, error: 'launchFailed', detail: started.error };
-        env = started.inconclusive || playtestEnvironment({ launch: started });
+        env = started.inconclusive || null;
       }
     }
     // LW 2.25b: the prototype is played once, for navigation only, then Mati approves it.

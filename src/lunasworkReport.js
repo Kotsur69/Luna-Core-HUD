@@ -146,7 +146,12 @@ function verdictWhy(run) {
   const verdict = verdictOf(run);
   const milestone = run.milestone ? ` "${oneLine(run.milestone, 80)}"` : '';
   if (verdict === 'ship') return 'The Critic said every gate in SHIP_CRITERIA.md passes, and a fresh SHIP-confirmation Playtester agreed.';
-  if (verdict === 'plateau') return `No score gain and no card closed in the last ${PLATEAU_WINDOW} iterations of milestone${milestone}.`;
+  if (verdict === 'plateau') {
+    // A plateau of unplayed iterations is an environment problem, not a stuck game.
+    const unplayed = list(run.laps).slice(-PLATEAU_WINDOW).filter((l) => isObj(l.inconclusive)).length;
+    const env = unplayed ? ` ${unplayed} of them could not be playtested: the environment failed (see Inconclusive playtests).` : '';
+    return `No score gain and no card closed in the last ${PLATEAU_WINDOW} iterations of milestone${milestone}.${env}`;
+  }
   if (verdict === 'red') return `The merged result stayed red after fix-up in ${RED_STREAK} iterations in a row, so it was not pushed to the base branch.`;
   const reason = run.stopReason ? STOP_REASONS[run.stopReason] || oneLine(run.stopReason, 80) : 'stopped';
   return `Stopped: ${reason}.`;

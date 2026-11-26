@@ -202,14 +202,17 @@ function regressedJourneys(journeys, passedBefore) {
 
 /**
  * The journeys that passed in the latest green iteration that was not rolled
- * back. No earlier iteration at all: nothing passed before ([]). Earlier
- * iterations but no lap kept for them (a run from before laps): unknown (null).
+ * back and was played (an inconclusive lap ran no journey: its empty list would
+ * hide every later regression). No earlier iteration at all: nothing passed
+ * before ([]). Earlier iterations but no lap kept for them (a run from before
+ * laps, or only unplayed ones): unknown (null).
  * @param {object[]} laps run.laps, oldest first
  * @param {number} earlierRecords history records before this iteration
  * @returns {string[]|null}
  */
 function journeysPassedBefore(laps, earlierRecords) {
-  const good = [...(Array.isArray(laps) ? laps : [])].reverse().find((l) => isObj(l) && l.selfCheck === 'green' && l.rolledBack !== true);
+  const good = [...(Array.isArray(laps) ? laps : [])].reverse()
+    .find((l) => isObj(l) && l.selfCheck === 'green' && l.rolledBack !== true && !isObj(l.inconclusive));
   if (good) return Array.isArray(good.journeysPassed) ? good.journeysPassed : [];
   return earlierRecords > 0 ? null : [];
 }

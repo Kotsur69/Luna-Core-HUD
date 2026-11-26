@@ -125,6 +125,7 @@ test('an inconclusive iteration: no score in the table, its reason and compiler 
   assert.ok(md.indexOf('## Inconclusive playtests') > md.indexOf('## Iterations') && md.indexOf('## Inconclusive playtests') < md.indexOf('## Scores per milestone'));
   assert.match(md, /core flows: 60 -> 35 \(rolled back\)\n/, 'no score point for the inconclusive iteration');
   assert.match(md, /Iteration\(s\) 3 could not be playtested: the environment failed/);
+  assert.match(md, /PLATEAU - No score gain and no card closed in the last 3 iterations of milestone "core flows"\. 1 of them could not be playtested: the environment failed/);
   const html = renderRunReportHtml({ ...run, laps: [...run.laps, third], history });
   assert.match(html, /Inconclusive playtests/);
   assert.match(html, /inconclusive \(compile-failed\)/);

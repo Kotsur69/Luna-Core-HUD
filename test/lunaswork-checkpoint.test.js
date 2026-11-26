@@ -210,6 +210,11 @@ test('a core journey counts as broken only when it passed in the last good itera
     { n: 3, selfCheck: 'red', journeysPassed: [] },
   ];
   assert.deepEqual(journeysPassedBefore(laps, 3), ['login'], 'rolled-back and red laps are skipped');
+  // An inconclusive lap ran no journey: its empty list must not hide a later regression.
+  const unplayed = { n: 4, selfCheck: 'green', journeysPassed: [], inconclusive: { reason: 'compile-failed', detail: 'x', errors: [] } };
+  assert.deepEqual(journeysPassedBefore([...laps, unplayed], 4), ['login'], 'inconclusive laps are skipped');
+  assert.deepEqual(regressedJourneys(now, journeysPassedBefore([...laps, unplayed], 4)), ['login']);
+  assert.equal(journeysPassedBefore([unplayed], 1), null, 'only unplayed laps: unknown');
   assert.deepEqual(journeysPassedBefore([], 0), [], 'first iteration: nothing passed before');
   assert.equal(journeysPassedBefore([], 2), null, 'earlier iterations without laps: unknown');
 });
