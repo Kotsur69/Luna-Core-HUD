@@ -80,6 +80,12 @@ test('projectPathOf reads quoted, unquoted and = forms in any case', () => {
   assert.equal(ed.projectPathOf('Unity.exe -PROJECTPATH=C:\\a\\c'), 'C:\\a\\c');
   assert.equal(ed.projectPathOf('Unity.exe -batchmode'), null);
   assert.equal(ed.projectPathOf('Unity.exe -myprojectPath C:\\a'), null, 'only the real flag');
+  assert.equal(ed.projectPathOf(`Unity.exe -projectPath "${WT_DIR}\\a" -projectPath "${MAIN}"`), null, 'two project paths: left alone');
+});
+
+test('findEditors: an editor naming a worktree AND the main checkout is never matched', async () => {
+  const rows = [{ pid: 12, commandLine: `Unity.exe -projectPath "${WT_DIR}\\a" -projectPath "${MAIN}"` }];
+  assert.deepEqual(await ed.findEditors(WT_DIR, { platform: W, repoPath: MAIN, listProcesses: async () => rows }), []);
 });
 
 test('findEditors: only the two worktree editors, never the main checkout or another project, no worker child', async () => {
@@ -184,15 +190,15 @@ test('closeEditors: a failed kill and a failed list are reported, never thrown',
   assert.deepEqual(listFails, { closed: [], failed: [{ pid: null, projectPath: null, detail: 'CIM down' }] });
 });
 
-test('closeEditors: a pid that stopped being the editor before the kill is not killed', async () => {
+test('closeEditors: a pid reused by another process before the kill is not killed; the editor counts as gone', async () => {
   const rows = [{ pid: 700, commandLine: `Unity.exe -projectPath "${WT_DIR}\\a"` }];
   const m = fakeMachine(rows);
   let lists = 0;
-  // Second list: pid 700 is now some other process (reused).
+  // Second list: pid 700 is now some other process (still running, no longer Unity on this project).
   m.opts.listProcesses = async () => (++lists === 1 ? rows : []);
   const res = await ed.closeEditors(WT_DIR, m.opts);
   assert.deepEqual(m.calls.kill, []);
-  assert.match(res.failed[0].detail, /no longer belongs to this editor/);
+  assert.deepEqual(res, { closed: [{ pid: 700, projectPath: `${WT_DIR}\\a`, how: 'quit' }], failed: [] });
 });
 
 test('closeEditors: skip leaves an editor open', async () => {
@@ -216,6 +222,12 @@ test('quitViaPipeline: asks the editor that owns the port file to exit; skips a 
   assert.deepEqual(res, { sent: true, detail: 'script eval' });
   assert.match(sent[0].parameters.code, /EditorApplication\.Exit\(0\)/);
   assert.equal((await ed.quitViaPipeline(`${WT_DIR}\\a`, 801, { readFile, createClient })).sent, false);
+  // A port file naming another project (e.g. the main checkout) is not trusted.
+  const foreign = async () => JSON.stringify({ ...descriptor, projectPath: MAIN });
+  assert.deepEqual(await ed.quitViaPipeline(`${WT_DIR}\\a`, 800, { readFile: foreign, createClient }), { sent: false, detail: 'the Pipeline port file names another project' });
+  const same = async () => JSON.stringify({ ...descriptor, projectPath: `${WT_DIR}\\a` });
+  assert.equal((await ed.quitViaPipeline(`${WT_DIR}\\a`, 800, { readFile: same, createClient })).sent, true);
+  assert.equal(sent.length, 2);
   const missing = async () => {
     throw Object.assign(new Error('nope'), { code: 'ENOENT' });
   };
@@ -265,19 +277,26 @@ test('hasUnityProject / closeEditorsIfUnity: no process list for a folder withou
 
 // ---- removeWorktree: editors first, long-path fallback ------------------------
 
-/** Fake git: clean status, a failing `worktree remove`, a list naming main + `root` (or `listRoots`). */
-function fallbackGit(repo, root, { listRoots } = {}) {
+const TOO_LONG = 'error: cannot remove Library/Bee/artifacts/x.dll: Filename too long\n';
+
+/**
+ * Fake git: clean status (or `statuses` in order), a failing `worktree remove`
+ * (stderr `removeStderr`), a list naming main + `root` (or `listRoots`), `locked` marks root locked.
+ */
+function fallbackGit(repo, root, { listRoots, removeStderr = TOO_LONG, locked = false, statuses = [] } = {}) {
   const calls = [];
+  const pending = [...statuses];
   const execImpl = (cmd, args, opts, cb) => {
     const a = args.slice(2);
     calls.push(a.join(' '));
-    if (a[0] === 'status') return cb(null, '', '');
-    if (a[0] === 'worktree' && a[1] === 'remove') {
-      return cb(Object.assign(new Error('x'), { code: 255 }), '', 'error: cannot remove Library/Bee/artifacts/x.dll: Filename too long\n');
-    }
+    if (a[0] === 'status') return cb(null, pending.length ? pending.shift() : '', '');
+    if (a[0] === 'worktree' && a[1] === 'remove') return cb(Object.assign(new Error('x'), { code: 255 }), '', removeStderr);
     if (a[0] === 'worktree' && a[1] === 'list') {
       const roots = listRoots || [repo, root];
-      const blocks = roots.map((r, i) => `worktree ${r.replace(/\\/g, '/')}\nHEAD abc\nbranch refs/heads/${i ? 'luna/x' : 'main'}\n`);
+      const blocks = roots.map((r, i) => {
+        const lock = locked && r === root ? 'locked worker still busy\n' : '';
+        return `worktree ${r.replace(/\\/g, '/')}\nHEAD abc\nbranch refs/heads/${i ? 'luna/x' : 'main'}\n${lock}`;
+      });
       return cb(null, blocks.join('\n'), '');
     }
     return cb(null, '', '');
@@ -297,6 +316,16 @@ test('removeWorktree: a deep Library/ folder (> 260 chars) is removed by the lon
   const deepFile = path.join(deep, 'Assembly-CSharp.dll');
   fs.writeFileSync(path.toNamespacedPath(deepFile), 'x');
   assert.ok(deepFile.length > 260);
+  // A junction / symlink inside the worktree pointing outside it: only the link may go.
+  const outside = path.join(base, 'outside');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'keep.txt'), 'keep');
+  let linked = true;
+  try {
+    fs.symlinkSync(outside, path.join(root, 'Packages-link'), 'junction');
+  } catch {
+    linked = false; // no link support here (e.g. a restricted CI user): the rest still runs
+  }
 
   const git = fallbackGit(repo, root);
   const closeCalls = [];
@@ -311,8 +340,41 @@ test('removeWorktree: a deep Library/ folder (> 260 chars) is removed by the lon
   assert.deepEqual(closeCalls, [[root, repo]], 'editors closed for that root, main checkout protected');
   assert.equal(fs.existsSync(path.toNamespacedPath(root)), false, 'the deep folder is gone');
   assert.ok(fs.existsSync(repo), 'the main checkout stays');
+  if (linked) assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'keep', 'nothing deleted through a link');
   const order = git.calls.map((c) => c.split(' ').slice(0, 2).join(' '));
-  assert.deepEqual(order, ['status --porcelain', 'worktree remove', 'worktree list', 'worktree prune']);
+  // The second status: an editor was closed, so the worktree is checked again before anything is deleted.
+  assert.deepEqual(order, ['status --porcelain', 'status --porcelain', 'worktree remove', 'worktree list', 'worktree prune']);
+});
+
+test('removeWorktree: files a closing editor saved make it dirty again - refused, git never runs', async () => {
+  const repo = path.resolve('/r/game');
+  const root = path.resolve('/r/.luna-worktrees/game/x');
+  const git = fallbackGit(repo, root, { statuses: ['', '?? Assets/New.prefab.meta\n'] });
+  const closeEditors = async () => ({ closed: [{ pid: 1, projectPath: root, how: 'quit' }], failed: [] });
+  const res = await removeWorktree(repo, root, { execImpl: git.execImpl, closeEditors, rmDir: async () => assert.fail('nothing deleted') });
+  assert.equal(res.error, 'dirty');
+  assert.equal(res.editors.closed.length, 1);
+  assert.ok(!git.calls.some((c) => c.startsWith('worktree')));
+});
+
+test('removeWorktree fallback never overrides git refusing on purpose, a lock, or a folder outside .luna-worktrees', async () => {
+  const repo = path.resolve('/r/game');
+  const root = path.resolve('/r/.luna-worktrees/game/x');
+  const deleted = [];
+  const deps = { closeEditors: async () => ({ closed: [], failed: [] }), rmDir: async (d) => deleted.push(d), existsSync: () => false };
+  const cases = [
+    ['untracked files', root, { removeStderr: "fatal: '/r/.luna-worktrees/game/x' contains modified or untracked files, use --force to delete it\n" }],
+    ['a locked worktree (git)', root, { removeStderr: 'fatal: cannot remove a locked working tree, lock reason: busy\n' }],
+    ['a locked worktree (list)', root, { locked: true }],
+    ['submodules', root, { removeStderr: 'fatal: working trees containing submodules cannot be moved or removed\n' }],
+    ['outside .luna-worktrees', path.resolve('/elsewhere/feature-x'), {}],
+  ];
+  for (const [what, r, opts] of cases) {
+    const git = fallbackGit(repo, r, opts);
+    const res = await removeWorktree(repo, r, { execImpl: git.execImpl, ...deps });
+    assert.equal(res.error, 'gitFailed', what);
+  }
+  assert.deepEqual(deleted, []);
 });
 
 test('removeWorktree fallback never deletes the main checkout, an unlisted folder or a parent of the checkout', async () => {
@@ -371,17 +433,21 @@ test('atRunEnd collects closed editors, sweeps the worktree folder (never main, 
   const gone = path.join(wtDir, 'scene-a1b2c');
   const stuck = path.join(wtDir, 'hud-x9y8z');
   const tab = path.join(wtDir, 'tab-q1w2e');
+  const dirty = path.join(wtDir, 'dirty-d4f5g');
   const listed = [
     { root: repo, branch: 'main' },
     { root: gone, branch: 'luna/scene-a1b2c' },
     { root: stuck, branch: 'luna/hud-x9y8z' },
     { root: tab, branch: 'luna/tab-q1w2e' },
+    { root: dirty, branch: 'luna/dirty-d4f5g' },
   ];
   const git = {
     run: async (cwd, args) => (args[0] === 'symbolic-ref' ? { ok: true, stdout: 'main\n' } : { ok: true, stdout: '' }),
     listWorktrees: async () => listed,
     removeWorktree: async (_repo, root) =>
-      root === gone
+      root === dirty
+        ? { ok: false, error: 'dirty', detail: ' M Assets/Scene.unity' }
+        : root === gone
         ? { ok: true, editors: { closed: [{ pid: 300, projectPath: gone, how: 'quit' }], failed: [] } }
         : { ok: false, error: 'gitFailed', detail: 'Permission denied', editors: { closed: [], failed: [{ pid: 400, projectPath: stuck, detail: 'taskkill failed' }] } },
     pruneWorktrees: async () => ({ ok: true }),
@@ -396,7 +462,7 @@ test('atRunEnd collects closed editors, sweeps the worktree folder (never main, 
     return { closed: [leftover].filter((p) => !opts.skip(p)).map((p) => ({ pid: 500, projectPath: p, how: 'killed' })), failed: [] };
   };
   const cleanup = createRunCleanup({ git, closeEditors, inUse: (root) => root === tab });
-  const res = await cleanup.atRunEnd({ id: 'r1', repoPath: repo, branches: ['luna/scene-a1b2c', 'luna/hud-x9y8z', 'luna/tab-q1w2e'] });
+  const res = await cleanup.atRunEnd({ id: 'r1', repoPath: repo, branches: ['luna/scene-a1b2c', 'luna/hud-x9y8z', 'luna/tab-q1w2e', 'luna/dirty-d4f5g'] });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.deepEqual(res.editors.closed.map((e) => [e.pid, e.how]), [[300, 'quit'], [500, 'killed']]);
   assert.deepEqual(res.editors.failed.map((e) => e.pid), [400]);
@@ -404,8 +470,9 @@ test('atRunEnd collects closed editors, sweeps the worktree folder (never main, 
   assert.equal(sweeps[0].root, wtDir, 'the sweep covers .luna-worktrees/<project>');
   assert.ok(sweeps[0].opts.repoPath.includes(repo), 'the main checkout is protected');
   assert.equal(sweeps[0].opts.skip(path.join(tab, 'Game')), true, 'an editor on a worktree with an open tab stays');
+  assert.equal(sweeps[0].opts.skip(path.join(dirty, 'Game')), true, 'an editor on a worktree kept for uncommitted work stays');
   assert.equal(sweeps[0].opts.skip(stuck), false);
-  assert.deepEqual(res.worktrees.kept.map((w) => [path.basename(w.root), w.reason]).sort(), [['hud-x9y8z', 'editorOpen'], ['tab-q1w2e', 'openTab']]);
+  assert.deepEqual(res.worktrees.kept.map((w) => [path.basename(w.root), w.reason]).sort(), [['dirty-d4f5g', 'dirty'], ['hud-x9y8z', 'editorOpen'], ['tab-q1w2e', 'openTab']]);
 
   const local = cleanupSection(res);
   assert.match(local.intro, /Closed 2 Unity editor\(s\) left open on worktrees\./);

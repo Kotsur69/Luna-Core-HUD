@@ -69,6 +69,8 @@ const REMOVE_TIMEOUT_MS = 10 * 60 * 1000;
 // releases a killed editor's handles a moment after the process is gone.
 const FALLBACK_RM_RETRIES = 5;
 const FALLBACK_RM_RETRY_DELAY_MS = 500;
+// `git worktree remove` refusing on purpose: the fallback must never override these.
+const GIT_REFUSAL_RE = /modified or untracked files|is locked|locked working tree|submodule/i;
 // `git worktree add` checks out the whole tree: ~1250 files on a loaded
 // Windows PC (AV, parallel suites, other workers' installs) has run past
 // GIT_TIMEOUT_MS while still making progress, and each retry redid it all.
@@ -539,17 +541,23 @@ function pathWithin(parent, child) {
 /**
  * After `git worktree remove` failed (a long Library/ path, a handle Unity
  * just let go of): deletes the folder itself, then `git worktree prune`.
- * ONLY for a registered LINKED worktree: never the main one (the first entry
- * of `git worktree list`), never a folder holding the main checkout or
- * repoPath, never a folder git does not list.
+ * ONLY for a registered, unlocked LINKED worktree inside
+ * <parent>/.luna-worktrees/ (worktreePathFor): never the main one (the first
+ * entry of `git worktree list`), never a folder holding the main checkout or
+ * repoPath, never a folder git does not list - and never when git refused on
+ * purpose (modified / untracked files, a lock, submodules).
+ * @param {string} gitStderr what `git worktree remove` said
  * @returns {Promise<{ok:true} | {ok:false, detail:string|null}>} detail null = not attempted
  */
-async function removeFolderFallback(repoPath, root, execImpl, deps) {
+async function removeFolderFallback(repoPath, root, gitStderr, execImpl, deps) {
+  if (GIT_REFUSAL_RE.test(gitStderr)) return { ok: false, detail: null };
   const listed = await listWorktrees(repoPath, { execImpl });
   if (!Array.isArray(listed) || listed.length < 2) return { ok: false, detail: null };
   const index = listed.findIndex((w) => pathWithin(w.root, root) && pathWithin(root, w.root));
-  if (index <= 0) return { ok: false, detail: null };
-  if (pathWithin(root, listed[0].root) || pathWithin(root, repoPath)) return { ok: false, detail: null };
+  if (index <= 0 || listed[index].locked) return { ok: false, detail: null };
+  const main = listed[0].root;
+  if (pathWithin(root, main) || pathWithin(root, repoPath)) return { ok: false, detail: null };
+  if (!pathWithin(path.join(path.dirname(path.resolve(main)), WORKTREE_DIR), root)) return { ok: false, detail: null };
   const rmDir = typeof deps.rmDir === 'function' ? deps.rmDir : rmDirLongPath;
   try {
     await rmDir(root);
@@ -607,13 +615,19 @@ async function removeWorktree(repoPath, root, deps = {}) {
   if (status.stdout.trim()) return { ok: false, error: 'dirty', detail: firstLine(status.stdout) };
   const closeEditors = typeof deps.closeEditors === 'function' ? deps.closeEditors : defaultCloseEditors;
   const editors = await closeWorktreeEditors(closeEditors, root, repoPath);
+  if (editors.closed.length) {
+    // A closing editor may have saved files: check again before anything is deleted.
+    const again = await runGit(root, ['status', '--porcelain'], execImpl);
+    if (!again.ok) return { ok: false, error: 'gitFailed', detail: gitDetail(again), editors };
+    if (again.stdout.trim()) return { ok: false, error: 'dirty', detail: firstLine(again.stdout), editors };
+  }
   const links = unlinkDependencyLinks(root, fsImpl);
   if (!links.ok) return { ok: false, error: 'linkRemoveFailed', detail: links.detail, editors };
   const res = await runGit(repoPath, ['worktree', 'remove', '--', root], execImpl, { timeoutMs: REMOVE_TIMEOUT_MS });
   if (res.ok) return { ok: true, editors };
   const reason = res.broke ? '' : gitError(res.stderr);
   const detail = reason ? `${reason} (${gitDetail(res)})` : gitDetail(res);
-  const forced = await removeFolderFallback(repoPath, root, execImpl, deps);
+  const forced = await removeFolderFallback(repoPath, root, res.stderr, execImpl, deps);
   if (forced.ok) return { ok: true, editors, fallback: detail };
   return { ok: false, error: 'gitFailed', detail: forced.detail ? `${detail}; ${forced.detail}` : detail, editors };
 }
@@ -632,7 +646,8 @@ async function listWorktrees(repoPath, deps = {}) {
     const dir = lines.find((l) => l.startsWith('worktree '));
     if (!dir) continue;
     const ref = lines.find((l) => l.startsWith('branch refs/heads/'));
-    out.push({ root: dir.slice('worktree '.length), branch: ref ? ref.slice('branch refs/heads/'.length) : null });
+    const locked = lines.some((l) => l === 'locked' || l.startsWith('locked '));
+    out.push({ root: dir.slice('worktree '.length), branch: ref ? ref.slice('branch refs/heads/'.length) : null, ...(locked ? { locked: true } : {}) });
   }
   return out;
 }

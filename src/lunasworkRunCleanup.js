@@ -21,7 +21,7 @@
 //      removeWorktree closes Unity editors open on the worktree first; then
 //      any editor still open under .luna-worktrees/<project> is closed too
 //      (src/unityWorktreeEditors.js) - never one on the main checkout, never
-//      one on a worktree with an open tab
+//      one on a worktree with an open tab or kept for uncommitted changes
 //   4. deletes each recorded local and remote luna/ branch whose tip
 //      origin/<base> contains: merged, or merged and later rolled back (the
 //      revert commits come after it). A branch with unmerged work (a red
@@ -214,7 +214,7 @@ function createRunCleanup(deps = {}) {
   /**
    * Closes any Unity editor still open under the project's worktree folder
    * (.luna-worktrees/<project>) - never one on the main checkout or the run's
-   * repoPath, never one on a worktree with an open tab.
+   * repoPath, never one on a worktree with an open tab or kept as dirty.
    */
   async function sweepEditors(run, listed, out, tag) {
     const main = listed.find((w) => isObj(w) && typeof w.root === 'string');
@@ -222,7 +222,10 @@ function createRunCleanup(deps = {}) {
     const mainRoot = path.resolve(main.root);
     const sweepRoot = path.dirname(worktrees.worktreePathFor(mainRoot, 'x'));
     const openTabs = listed.filter((w) => isObj(w) && typeof w.root === 'string' && !samePath(w.root, mainRoot) && inUse(w.root)).map((w) => w.root);
-    const skip = (projectPath) => openTabs.some((root) => isWithin(root, projectPath));
+    // A worktree kept for its uncommitted work keeps its editor too: closing it could lose unsaved state.
+    const keptDirty = out.worktrees.kept.filter((w) => w.reason === 'dirty').map((w) => w.root);
+    const leaveOpen = [...openTabs, ...keptDirty];
+    const skip = (projectPath) => leaveOpen.some((root) => isWithin(root, projectPath));
     let res;
     try {
       res = await closeEditors(sweepRoot, { repoPath: [mainRoot, run.repoPath], skip });

@@ -42,7 +42,7 @@ const PROJECT_MARKER = Object.freeze(['ProjectSettings', 'ProjectVersion.txt']);
 const LIST_SCRIPT =
   "Get-CimInstance Win32_Process -Filter \"Name='Unity.exe'\" | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress";
 // -projectPath <dir>, -projectPath "<dir>" or -projectPath=<dir>, any case.
-const PROJECT_PATH_RE = /(?:^|\s)-projectpath(?:\s+|=)(?:"([^"]+)"|(\S+))/i;
+const PROJECT_PATH_RE = /(?:^|\s)-projectpath(?:\s+|=)(?:"([^"]+)"|(\S+))/gi;
 // Quit requests, tried in order. delayCall lets the HTTP reply leave before the editor exits;
 // Exit(0) never shows a save dialog. A Pipeline without `script eval` falls back to the menu.
 const QUIT_COMMANDS = Object.freeze([
@@ -69,11 +69,15 @@ function isWithin(parent, child, platform = process.platform) {
   return b === a || b.startsWith(a.endsWith(sep) ? a : a + sep);
 }
 
-/** The -projectPath of a Unity command line, or null. */
+/** Every -projectPath value of a Unity command line (normally one). */
+function projectPathsOf(commandLine) {
+  return [...String(commandLine || '').matchAll(PROJECT_PATH_RE)].map((m) => (m[1] || m[2] || '').trim()).filter(Boolean);
+}
+
+/** The -projectPath of a Unity command line, or null (also null when it names several). */
 function projectPathOf(commandLine) {
-  const m = PROJECT_PATH_RE.exec(String(commandLine || ''));
-  const value = m ? (m[1] || m[2] || '').trim() : '';
-  return value || null;
+  const all = projectPathsOf(commandLine);
+  return all.length === 1 ? all[0] : null;
 }
 
 /** Protected paths as a list (repoPath may be one path or several). */
@@ -117,6 +121,7 @@ async function findEditors(worktreeRoot, opts = {}) {
   const matches = [];
   for (const row of Array.isArray(rows) ? rows : []) {
     if (!row || !isPid(row.pid)) continue;
+    // Several -projectPath values: no telling which one Unity honours, so the editor is left alone.
     const projectPath = projectPathOf(row.commandLine);
     if (!projectPath || !api.isAbsolute(slashes(projectPath, platform))) continue;
     if (!isWithin(worktreeRoot, projectPath, platform)) continue;
@@ -138,11 +143,16 @@ async function quitViaPipeline(projectPath, pid, deps = {}) {
   const createClient = deps.createClient || createPipelineClient;
   let owner;
   try {
-    owner = JSON.parse(String(await readFile(descriptorFile(projectPath)))).pid;
+    const raw = JSON.parse(String(await readFile(descriptorFile(projectPath))));
+    owner = { pid: raw && raw.pid, projectPath: raw && raw.projectPath };
   } catch (err) {
     return { sent: false, detail: err && err.code === 'ENOENT' ? 'no Unity Pipeline port file' : 'unreadable Unity Pipeline port file' };
   }
-  if (owner !== pid) return { sent: false, detail: `the Pipeline port file belongs to pid ${String(owner).slice(0, 20)}` };
+  if (owner.pid !== pid) return { sent: false, detail: `the Pipeline port file belongs to pid ${String(owner.pid).slice(0, 20)}` };
+  // The port file sits in a folder a worker can write: it must name this very project.
+  if (typeof owner.projectPath === 'string' && pathKey(owner.projectPath) !== pathKey(projectPath)) {
+    return { sent: false, detail: 'the Pipeline port file names another project' };
+  }
   let last = null;
   try {
     const clientOpts = { projectDir: projectPath, timeoutMs: QUIT_REQUEST_TIMEOUT_MS, readFile };
@@ -195,10 +205,9 @@ async function closeOne({ pid, projectPath }, ctx) {
     if (quit && quit.sent && (await waitForExit(pid, ctx))) return done('quit');
     if (!(await ctx.running(pid))) return done('quit');
     // Re-check that the pid is still this editor before anything is killed.
+    // Not listed any more: this editor is gone (a live pid was reused by another process - never killed).
     const still = await ctx.find();
-    if (!still.some((e) => e.pid === pid)) {
-      return (await ctx.running(pid)) ? fail('the pid no longer belongs to this editor; not killed') : done('quit');
-    }
+    if (!still.some((e) => e.pid === pid)) return done('quit');
     const killed = await ctx.kill(pid);
     if ((killed && killed.ok) || !(await ctx.running(pid))) return done('killed');
     return fail(`taskkill failed: ${(killed && (killed.reason || killed.detail)) || 'failed'}`);
