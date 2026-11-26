@@ -817,7 +817,7 @@ test('removeWorktree unlinks a node_modules junction before git removes the fold
     fs.symlinkSync(shared, path.join(tree, 'node_modules'), 'junction');
     assert.deepEqual(wt.unlinkDependencyLinks(path.join(dir, 'nowhere')), { ok: true, unlinked: [] });
     const res = await wt.removeWorktree(repo, tree);
-    assert.deepEqual(res, { ok: true });
+    assert.deepEqual(res, { ok: true, editors: { closed: [], failed: [] } });
     assert.equal(fs.existsSync(tree), false);
     assert.equal(fs.readFileSync(path.join(shared, 'pkg', 'index.js'), 'utf8'), 'module.exports = 1;\n');
   } finally {

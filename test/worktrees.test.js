@@ -256,6 +256,8 @@ test('copyEnvFiles copies only missing top-level .env files', () => {
 const PATIENT = {
   execImpl: (cmd, args, opts, cb) => execFile(cmd, args, { ...opts, timeout: 0 }, cb),
 };
+// A removal with no Unity editor on the worktree (none of these temp repos is a Unity project).
+const NO_EDITORS_OK = Object.freeze({ ok: true, editors: { closed: [], failed: [] } });
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -397,7 +399,7 @@ junctionTest('removeWorktree: REAL junctions are unlinked first - their targets 
     assert.equal(fs.lstatSync(links[0]).isSymbolicLink(), true, 'a junction reads as a link');
 
     const res = await removeWorktree(repo, wt.root, PATIENT);
-    assert.deepEqual(res, { ok: true });
+    assert.deepEqual(res, NO_EDITORS_OK);
     assert.equal(fs.existsSync(wt.root), false, 'the worktree is gone');
     assert.deepEqual(fs.readdirSync(shared).sort(), ['.package-lock.json', 'left-pad']);
     assert.equal(fs.readFileSync(path.join(shared, 'left-pad', 'index.js'), 'utf8'), 'module.exports = 1;');
@@ -648,7 +650,7 @@ test('addWorktree with linkNodeModules validates main node_modules, links juncti
   assert.equal(symlinks.get(wtNm), mainNm);
 
   const removed = await removeWorktree(root, wt.root, { execImpl: fakeExec, fsImpl: fakeFs });
-  assert.deepEqual(removed, { ok: true });
+  assert.deepEqual(removed, NO_EDITORS_OK);
   assert.ok(ops.indexOf('unlink') < ops.indexOf('git:worktree-remove'), 'junction unlinked before git worktree remove');
 });
 
@@ -671,7 +673,7 @@ junctionTest('addWorktree with linkNodeModules links populated main node_modules
     assert.equal(fs.readFileSync(path.join(linkPath, 'sample-pkg', 'index.js'), 'utf8'), 'module.exports = 42;');
 
     const removed = await removeWorktree(repo, wt.root, PATIENT);
-    assert.deepEqual(removed, { ok: true });
+    assert.deepEqual(removed, NO_EDITORS_OK);
     assert.equal(fs.existsSync(wt.root), false);
     assert.equal(
       fs.readFileSync(path.join(mainNm, 'sample-pkg', 'index.js'), 'utf8'),
@@ -737,8 +739,8 @@ test('createWorktreePool warms up to maxSize, validates main node_modules, claim
     assert.equal(fallback.fromPool, undefined);
     assert.equal(fallback.branch, 'luna/fallback-beta');
 
-    assert.deepEqual(await removeWorktree(repo, claimed.root, PATIENT), { ok: true });
-    assert.deepEqual(await removeWorktree(repo, fallback.root, PATIENT), { ok: true });
+    assert.deepEqual(await removeWorktree(repo, claimed.root, PATIENT), NO_EDITORS_OK);
+    assert.deepEqual(await removeWorktree(repo, fallback.root, PATIENT), NO_EDITORS_OK);
   } finally {
     await pool.drain();
     await cleanup();

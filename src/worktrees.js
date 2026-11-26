@@ -23,7 +23,10 @@
 // runs, every junction / symlink at <root>/node_modules, <root>/<dir>/
 // node_modules and directly inside those folders is unlinked - the link
 // only, never a recursive delete. A link that cannot be unlinked stops the
-// removal before git is run.
+// removal before git is run. Unity editors a worker left open on the
+// worktree are closed first (src/unityWorktreeEditors.js); when git still
+// fails ("Filename too long" under Library/, a lock), a registered linked
+// worktree's folder is deleted with long-path support and pruned.
 //
 // Branch deletion (deleteBranch) is only for branches a failed God Mode
 // launch left behind: `luna/` names only, never the checked-out branch, and
@@ -52,6 +55,7 @@ const {
   DEFAULT_WARM_POOL_SIZE,
   MAX_WARM_POOL_SIZE,
 } = require('./worktreePool');
+const unityEditors = require('./unityWorktreeEditors');
 
 const WORKTREE_DIR = '.luna-worktrees';
 const BRANCH_PREFIX = 'luna/';
@@ -61,6 +65,10 @@ const REMOTE_TIMEOUT_MS = 60000;
 // `git worktree remove` deletes the folder's ignored files too: a real
 // node_modules on Windows can take minutes, far longer than GIT_TIMEOUT_MS.
 const REMOVE_TIMEOUT_MS = 10 * 60 * 1000;
+// The folder-delete fallback after a failed `git worktree remove`: Windows
+// releases a killed editor's handles a moment after the process is gone.
+const FALLBACK_RM_RETRIES = 5;
+const FALLBACK_RM_RETRY_DELAY_MS = 500;
 // `git worktree add` checks out the whole tree: ~1250 files on a loaded
 // Windows PC (AV, parallel suites, other workers' installs) has run past
 // GIT_TIMEOUT_MS while still making progress, and each retry redid it all.
@@ -501,15 +509,95 @@ function unlinkDependencyLinks(root, fsImpl = plainFs()) {
   return { ok: true, unlinked };
 }
 
+/** A path fs can delete past MAX_PATH: `\\?\C:\...` on Windows (absolute paths), unchanged elsewhere. */
+function longPath(p, platform = process.platform) {
+  const abs = path.resolve(p);
+  return platform === 'win32' ? path.win32.toNamespacedPath(abs) : abs;
+}
+
+/** Default folder delete for the fallback: recursive, retried while Windows still releases handles. */
+function rmDirLongPath(dir) {
+  return plainFs().promises.rm(longPath(dir), {
+    recursive: true,
+    force: true,
+    maxRetries: FALLBACK_RM_RETRIES,
+    retryDelay: FALLBACK_RM_RETRY_DELAY_MS,
+  });
+}
+
+/** True when `child` is `parent` or a folder under it (case-folded on Windows). */
+function pathWithin(parent, child) {
+  const norm = (p) => {
+    const r = path.resolve(p).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? r.toLowerCase() : r;
+  };
+  const a = norm(parent);
+  const b = norm(child);
+  return b === a || b.startsWith(a + path.sep);
+}
+
+/**
+ * After `git worktree remove` failed (a long Library/ path, a handle Unity
+ * just let go of): deletes the folder itself, then `git worktree prune`.
+ * ONLY for a registered LINKED worktree: never the main one (the first entry
+ * of `git worktree list`), never a folder holding the main checkout or
+ * repoPath, never a folder git does not list.
+ * @returns {Promise<{ok:true} | {ok:false, detail:string|null}>} detail null = not attempted
+ */
+async function removeFolderFallback(repoPath, root, execImpl, deps) {
+  const listed = await listWorktrees(repoPath, { execImpl });
+  if (!Array.isArray(listed) || listed.length < 2) return { ok: false, detail: null };
+  const index = listed.findIndex((w) => pathWithin(w.root, root) && pathWithin(root, w.root));
+  if (index <= 0) return { ok: false, detail: null };
+  if (pathWithin(root, listed[0].root) || pathWithin(root, repoPath)) return { ok: false, detail: null };
+  const rmDir = typeof deps.rmDir === 'function' ? deps.rmDir : rmDirLongPath;
+  try {
+    await rmDir(root);
+  } catch (err) {
+    const why = err && err.code ? err.code : String(err && err.message ? err.message : err).slice(0, 200);
+    return { ok: false, detail: `deleting the folder failed too: ${why}` };
+  }
+  const exists = typeof deps.existsSync === 'function' ? deps.existsSync : (p) => fs.existsSync(longPath(p));
+  if (exists(root)) return { ok: false, detail: 'deleting the folder left it in place' };
+  // A failed prune only leaves a stale registration; git prunes it later on its own.
+  await pruneWorktrees(repoPath, { execImpl });
+  return { ok: true };
+}
+
+/** Default editor closer: Unity editors on the worktree (Windows + a Unity project only). */
+const defaultCloseEditors = (root, opts) => unityEditors.closeEditorsIfUnity(root, opts);
+
+/** closeEditors' answer in a fixed shape; a rejection becomes one failed entry. */
+async function closeWorktreeEditors(closeEditors, root, repoPath) {
+  try {
+    const res = await closeEditors(root, { repoPath });
+    return {
+      closed: Array.isArray(res && res.closed) ? res.closed : [],
+      failed: Array.isArray(res && res.failed) ? res.failed : [],
+    };
+  } catch (err) {
+    const detail = String(err && err.message ? err.message : err).slice(0, 200);
+    return { closed: [], failed: [{ pid: null, projectPath: null, detail }] };
+  }
+}
+
 /**
  * Removes a worktree whose work is safe elsewhere (pushed). Refuses when it
- * has uncommitted changes; the branch itself is kept. Dependency links are
- * unlinked first, and a link that will not go stops the removal before git
- * runs. git gets REMOVE_TIMEOUT_MS: deleting a real node_modules is slow.
+ * has uncommitted changes; the branch itself is kept. Then any Unity editor
+ * open on the worktree is closed (never one on the main checkout), and
+ * dependency links are unlinked - a link that will not go stops the removal
+ * before git runs. git gets REMOVE_TIMEOUT_MS: deleting a real node_modules
+ * is slow. When git fails (e.g. "Filename too long" under Library/), a
+ * registered linked worktree's folder is deleted with long-path support and
+ * the registration pruned (removeFolderFallback).
  * @param {string} repoPath any folder of the main checkout
  * @param {string} root the worktree's top folder
- * @param {{execImpl?: Function, fsImpl?: typeof fs}} [deps]
- * @returns {Promise<{ok:true} | {ok:false, error:'dirty'|'linkRemoveFailed'|'gitFailed', detail?:string}>}
+ * @param {{execImpl?: Function, fsImpl?: typeof fs,
+ *   closeEditors?: (root:string, opts:{repoPath:string}) => Promise<{closed:object[], failed:object[]}>,
+ *   rmDir?: (dir:string) => Promise<void>, existsSync?: (p:string) => boolean}} [deps]
+ * @returns {Promise<{ok:true, editors:{closed:object[], failed:object[]}, fallback?:string}
+ *   | {ok:false, error:'dirty'|'linkRemoveFailed'|'gitFailed', detail?:string, editors?:{closed:object[], failed:object[]}}>}
+ *   fallback: git's failure, when the folder was deleted without it
  */
 async function removeWorktree(repoPath, root, deps = {}) {
   const execImpl = deps.execImpl || execFile;
@@ -517,12 +605,17 @@ async function removeWorktree(repoPath, root, deps = {}) {
   const status = await runGit(root, ['status', '--porcelain'], execImpl);
   if (!status.ok) return { ok: false, error: 'gitFailed', detail: gitDetail(status) };
   if (status.stdout.trim()) return { ok: false, error: 'dirty', detail: firstLine(status.stdout) };
+  const closeEditors = typeof deps.closeEditors === 'function' ? deps.closeEditors : defaultCloseEditors;
+  const editors = await closeWorktreeEditors(closeEditors, root, repoPath);
   const links = unlinkDependencyLinks(root, fsImpl);
-  if (!links.ok) return { ok: false, error: 'linkRemoveFailed', detail: links.detail };
+  if (!links.ok) return { ok: false, error: 'linkRemoveFailed', detail: links.detail, editors };
   const res = await runGit(repoPath, ['worktree', 'remove', '--', root], execImpl, { timeoutMs: REMOVE_TIMEOUT_MS });
-  if (res.ok) return { ok: true };
+  if (res.ok) return { ok: true, editors };
   const reason = res.broke ? '' : gitError(res.stderr);
-  return { ok: false, error: 'gitFailed', detail: reason ? `${reason} (${gitDetail(res)})` : gitDetail(res) };
+  const detail = reason ? `${reason} (${gitDetail(res)})` : gitDetail(res);
+  const forced = await removeFolderFallback(repoPath, root, execImpl, deps);
+  if (forced.ok) return { ok: true, editors, fallback: detail };
+  return { ok: false, error: 'gitFailed', detail: forced.detail ? `${detail}; ${forced.detail}` : detail, editors };
 }
 
 /**
