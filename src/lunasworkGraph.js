@@ -337,15 +337,22 @@ function createGraphRefresher(deps = {}) {
     }
   }
 
-  /** @returns {Promise<{ok:boolean, skip?:boolean, detail?:string}>} */
+  /**
+   * ran: false when claude never started (not on PATH, or held by its reserve before spawning),
+   * so nothing it wrote needs discarding.
+   * @returns {Promise<{ok:boolean, skip?:boolean, ran?:boolean, detail?:string}>}
+   */
   async function updateCodemaps(repoPath, iteration) {
     const unity = isUnityProject(repoPath);
     const call = await runClaude({ args: buildCodemapsArgs({ unity }), prompt: buildCodemapsPrompt({ iteration, unity }), cwd: repoPath, env: envOf(), timeoutMs });
-    if (!isObj(call) || call.error) return { ok: false, ...describeClaudeFailure(call) };
+    if (!isObj(call) || call.error) {
+      const ran = isObj(call) && (Number.isInteger(call.exitCode) || call.error === 'timeout' || call.stdout !== undefined);
+      return { ok: false, ran, ...describeClaudeFailure(call) };
+    }
     const parsed = parsePlannerOutput(call.stdout);
     if (parsed.ok) return { ok: true };
     // The account hit its limit mid-call: nothing is wrong with the maps step itself.
-    if (parsed.error === 'limit') return { ok: false, skip: true, detail: `Claude usage limit: ${said(parsed.detail)}` };
+    if (parsed.error === 'limit') return { ok: false, skip: true, ran: true, detail: `Claude usage limit: ${said(parsed.detail)}` };
     return { ok: false, detail: describeEnvelopeFailure(call, parsed) };
   }
 
@@ -429,11 +436,12 @@ function createGraphRefresher(deps = {}) {
     const res = updated.ok
       ? await commitCodemaps(repoPath, iteration, notes)
       : updated.skip
-        ? { codemaps: 'skipped', why: `codemaps skipped: ${updated.detail}` }
+        ? { codemaps: 'skipped', why: `codemaps skipped: ${updated.detail}`, ran: updated.ran }
         : { codemaps: 'failed', why: `codemaps update failed: ${updated.detail}` };
     if (res.codemaps === 'skipped') {
-      // A limit can hit mid-call: whatever was written goes too.
-      await discardCodemaps(repoPath);
+      // A limit can hit mid-call: whatever was written goes too. A call that never
+      // started wrote nothing, so hand edits under docs/CODEMAPS are left alone.
+      if (res.ran) await discardCodemaps(repoPath);
       notes.push(res.why);
       return { codemaps: 'skipped' };
     }

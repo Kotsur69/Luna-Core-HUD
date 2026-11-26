@@ -73,6 +73,15 @@ test('execClaude: stderr is masked and capped', async () => {
   assert.ok(!res.stderr.includes('Command failed'), 'no argv echo');
 });
 
+test('execClaude: claude missing from PATH is noClaude; a signal without a timeout is kept', async () => {
+  assert.deepEqual(await callWith(execWith(Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }))), { error: 'noClaude' });
+  const oom = Object.assign(new Error(ARGV_ECHO), { code: null, killed: false, signal: 'SIGKILL' });
+  const res = await callWith(execWith(oom));
+  assert.equal(res.error, 'failed');
+  assert.equal(res.signal, 'SIGKILL');
+  assert.equal(G.describeClaudeFailure(res).detail, 'claude failed (SIGKILL)');
+});
+
 test('execClaude: a successful call keeps its old shape', async () => {
   assert.deepEqual(await callWith(execWith(null, '{"result":"{}"}', 'warning')), { stdout: '{"result":"{}"}' });
 });
@@ -122,13 +131,15 @@ function repo(t, { unity = false } = {}) {
   return dir;
 }
 
-/** refreshGraph with a stubbed claude whose codemaps call answers `maps`. */
+/** refreshGraph with a stubbed claude whose codemaps call answers `maps` (after writing a half map, unless write is false). */
 async function refreshWith(t, maps, opts = {}) {
   const dir = repo(t, opts);
+  if (typeof opts.before === 'function') opts.before(dir);
   const calls = [];
   const runClaude = async (o) => {
     calls.push(o);
     if (!isCodemapsCall(o)) return indexOk;
+    if (opts.write === false) return maps;
     fs.mkdirSync(path.join(o.cwd, 'docs', 'CODEMAPS'), { recursive: true });
     fs.writeFileSync(path.join(o.cwd, 'docs', 'CODEMAPS', 'half.md'), '# half\n');
     return maps;
@@ -166,11 +177,36 @@ test('refresh: a key in the error JSON or the runner detail is masked in the not
   assert.ok(!detail.includes(fakeKey) && /redacted/.test(detail), detail);
 });
 
-test('refresh: no claude on PATH is a skip with that reason, not a failure', async (t) => {
-  const { res, dir } = await refreshWith(t, { error: 'noClaude' });
+/** A hand-written map nobody committed yet. */
+const handEdit = (dir) => {
+  fs.mkdirSync(path.join(dir, 'docs', 'CODEMAPS'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'docs', 'CODEMAPS', 'mine.md'), '# mine\n');
+};
+const handEditKept = (dir) => fs.existsSync(path.join(dir, 'docs', 'CODEMAPS', 'mine.md'));
+
+test('refresh: no claude on PATH is a skip with that reason, and hand edits in docs/CODEMAPS stay', async (t) => {
+  const { res, dir } = await refreshWith(t, { error: 'noClaude' }, { write: false, before: handEdit });
   assert.equal(res.codemaps, 'skipped');
   assert.deepEqual(res.notes, ['codemaps skipped: claude CLI not found on PATH']);
-  assert.equal(git(dir, 'status', '--porcelain'), '');
+  assert.ok(handEditKept(dir), 'nothing ran, so nothing is discarded');
+});
+
+test('refresh: an account held by its reserve (no spawn) is a skip that discards nothing', async (t) => {
+  const held = { error: 'limit', detail: 'account reserve held until 14:00', resumeAt: Date.now() + 60000 };
+  const { res, dir } = await refreshWith(t, held, { write: false, before: handEdit });
+  assert.equal(res.codemaps, 'skipped');
+  assert.deepEqual(res.notes, ['codemaps skipped: Claude usage limit: account reserve held until 14:00']);
+  assert.ok(handEditKept(dir));
+});
+
+test('refresh: a call that ran and failed still discards what it wrote', async (t) => {
+  const { dir } = await refreshWith(t, { error: 'failed', exitCode: 1, stderr: 'boom' }, { before: handEdit });
+  assert.equal(git(dir, 'status', '--porcelain'), '', 'the half map and the untracked folder are gone');
+});
+
+test('refresh: stdout that is not JSON names that, with the exit code and stderr', async (t) => {
+  const { res } = await refreshWith(t, { stdout: 'plain text', exitCode: 2, stderr: 'warning: odd' });
+  assert.deepEqual(res.notes, ['codemaps update failed: claude exited 2, claude answer was not JSON: warning: odd - maps discarded']);
 });
 
 test('refresh: a usage limit in the envelope is a skip too', async (t) => {
