@@ -58,6 +58,8 @@ const TAG_ID_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
 // A branch name as `git rev-parse --abbrev-ref HEAD` prints it.
 const BRANCH_RE = /^[A-Za-z0-9._/-]{1,200}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
+// Top-level design/*.md: the design-pack files a rollback keeps (touchesOnlyDesignDocs).
+const DESIGN_DOCS_EXCLUDE = ':(exclude,glob)design/*.md';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
@@ -388,8 +390,12 @@ function createCheckpoints(deps = {}) {
     await git(repoPath, ['worktree', 'prune']);
   }
 
-  /** Reverts `commits` on top of headSha in a throwaway worktree and pushes. */
-  async function revertInWorktree(repoPath, branch, headSha, commits) {
+  /**
+   * Reverts `commits` on top of headSha in a throwaway worktree and pushes.
+   * With `verify`, the result is pushed only when verify(dir, 'HEAD') holds
+   * ('treeMismatch' otherwise: the local revert commits go with the worktree).
+   */
+  async function revertInWorktree(repoPath, branch, headSha, commits, verify = null) {
     const dir = fs.mkdtempSync(path.join(tmpRoot(), 'lunaswork-revert-'));
     // mkdtemp reserved a unique name; git wants to create the folder itself.
     fs.rmdirSync(dir);
@@ -402,6 +408,7 @@ function createCheckpoints(deps = {}) {
         await git(dir, ['revert', '--abort']);
         return { ok: false, error: 'revertFailed', detail: reverted.err };
       }
+      if (verify && !(await verify(dir, 'HEAD'))) return { ok: false, error: 'treeMismatch' };
       const pushed = await git(dir, ['push', 'origin', `HEAD:refs/heads/${branch}`]);
       if (!pushed.ok) return { ok: false, error: 'pushFailed', detail: pushed.err };
       const after = await git(dir, ['rev-parse', 'HEAD']);
@@ -469,6 +476,46 @@ function createCheckpoints(deps = {}) {
     return files.length > 0 && files.every((f) => /^design\/[^/]+\.md$/.test(f));
   }
 
+  /** The code at `rev` is the good tag's; design/*.md may differ (pack commits stay through a rollback). */
+  const sameCode = async (cwd, good, rev) => (await git(cwd, ['diff', '--quiet', good, rev, '--', '.', DESIGN_DOCS_EXCLUDE])).ok;
+
+  /**
+   * Design-pack commits (src/lunasworkPackCommit.js) are docs only: a revert
+   * keeps them. The subject alone is not trusted - a commit is kept only when
+   * every file it touches is a design/*.md file.
+   */
+  async function withoutPackCommits(repoPath, list) {
+    const out = [];
+    for (const c of list) {
+      if (!c.subject.startsWith(PACK_COMMIT_PREFIX) || !(await touchesOnlyDesignDocs(repoPath, c.sha))) out.push(c);
+    }
+    return out;
+  }
+
+  /**
+   * What a rollback reverts: the first-parent commits of `range` that are
+   * still applied - an earlier rollback's reverts and the work they undid
+   * cancel out (src/lunasworkRevertPairs.js), so no "Reapply" chain is made -
+   * minus the design-pack commits. everything(): the same without netting.
+   * @returns {Promise<{applied:object[], cancelled:number, everything:()=>Promise<object[]>}|{error:string, detail?:string}>}
+   */
+  async function revertPlan(repoPath, range, toTag) {
+    const listed = await git(repoPath, ['log', '--first-parent', '--format=%H%x09%P%x09%s', range]);
+    if (!listed.ok) return { error: 'logFailed', detail: listed.err };
+    // The netting must never block the rollback: without the bodies it pairs
+    // by subject only, and the good-tree check still guards the result.
+    const bodies = await git(repoPath, revertLinkArgs(range));
+    if (!bodies.ok) log(`[lunaswork] rollback: commit bodies not read (${oneLine(bodies.err, 150)}) - revert pairs matched by subject`);
+    const all = parseLog(listed.out);
+    const net = netOfReverts(all, parseRevertLinks(bodies.ok ? bodies.out : ''));
+    if (net.cancelled.length) log(`[lunaswork] rollback: ${net.cancelled.length} commit(s) already undone by reverts since ${toTag} left out`);
+    const everything = () => {
+      log(`[lunaswork] rollback: the still-applied commits alone do not reach ${toTag} - reverting every commit since it`);
+      return withoutPackCommits(repoPath, all);
+    };
+    return { applied: await withoutPackCommits(repoPath, net.applied), cancelled: net.cancelled.length, everything };
+  }
+
   async function rollback(o) {
     const toTag = tagName(o.runId, o.toIteration);
     const fromTag = rolledBackTagName(o.runId, o.iteration);
@@ -484,25 +531,22 @@ function createCheckpoints(deps = {}) {
     // Already at the good state (a restart after the push): nothing to revert.
     const same = await git(o.repoPath, ['diff', '--quiet', good, head.sha]);
     if (same.ok) return { ...base, ok: true, nothing: true, reverted: [], cards: [] };
-    const range = `${good}..${head.sha}`;
-    const listed = await git(o.repoPath, ['log', '--first-parent', '--format=%H%x09%P%x09%s', range]);
-    if (!listed.ok) return fail('logFailed', listed.err);
-    const bodies = await git(o.repoPath, revertLinkArgs(range));
-    if (!bodies.ok) return fail('logFailed', bodies.err);
-    // An earlier rollback's reverts and the work they undid cancel out: only
-    // what is still applied is reverted, so no "Reapply" chain is made.
-    const net = netOfReverts(parseLog(listed.out), parseRevertLinks(bodies.out));
-    if (net.cancelled.length) log(`[lunaswork] rollback: ${net.cancelled.length} commit(s) already undone by reverts since ${toTag} left out`);
-    // Design-pack commits (src/lunasworkPackCommit.js) are docs only: a revert
-    // keeps them. The subject alone is not trusted - a commit is kept only when
-    // every file it touches is a design/*.md file.
-    const commits = [];
-    for (const c of net.applied) {
-      if (!c.subject.startsWith(PACK_COMMIT_PREFIX) || !(await touchesOnlyDesignDocs(o.repoPath, c.sha))) commits.push(c);
-    }
+    const plan = await revertPlan(o.repoPath, `${good}..${head.sha}`, toTag);
+    if (plan.error) return fail(plan.error, plan.detail);
+    // A cancelled pair is trusted only when the netted revert reaches the good
+    // code; an edited or forged "This reverts commit" line falls back to
+    // reverting every commit, as before netting.
+    const reachesGood = plan.cancelled ? (cwd, rev) => sameCode(cwd, good, rev) : null;
+    let commits = plan.applied;
+    if (reachesGood && !commits.length && !(await reachesGood(o.repoPath, head.sha))) commits = await plan.everything();
     if (!commits.length) return { ...base, ok: true, nothing: true, reverted: [], cards: [] };
     if (commits.length > MAX_REVERTS) return fail('tooManyCommits');
-    const res = await revertInWorktree(o.repoPath, head.branch, head.sha, commits);
+    let res = await revertInWorktree(o.repoPath, head.branch, head.sha, commits, commits === plan.applied ? reachesGood : null);
+    if (!res.ok && res.error === 'treeMismatch') {
+      commits = await plan.everything();
+      if (commits.length > MAX_REVERTS) return fail('tooManyCommits');
+      res = await revertInWorktree(o.repoPath, head.branch, head.sha, commits);
+    }
     if (!res.ok) return fail(res.error, res.detail);
     // Only once the revert is on origin: a failed rollback leaves no tag behind.
     // The broken head stays in history either way; the tag just names it.

@@ -478,7 +478,8 @@ function renderRunReportHtml(run, extra = {}) {
     mediaHtml('Asset cost estimate', estimateSection(r), 'No estimate'),
     mediaHtml('Launch assets', launchSection(extra.media), 'No files'),
     mediaHtml('Demo videos', demoSection(r, extra.media, false), 'No video'),
-    mediaHtml('Branches and worktrees', cleanupSection(r.gitCleanup), 'Nothing kept'),
+    // The HTML also goes out as the email attachment: worktree folder names only.
+    mediaHtml('Branches and worktrees', cleanupSection(r.gitCleanup, { forEmail: true }), 'Nothing kept'),
   ].filter(Boolean).join('\n');
   return h.page({
     title: `Luna's Work run ${oneLine(r.id, 64)}`,

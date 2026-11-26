@@ -167,10 +167,15 @@ function createRunCleanup(deps = {}) {
         continue;
       }
       const res = await git.removeWorktree(repoPath, w.root);
-      if (res && res.ok) out.worktrees.removed.push(w.root);
-      else out.worktrees.kept.push({ root: w.root, branch: w.branch, reason: (res && res.error) || 'failed' });
+      if (res && res.ok) {
+        out.worktrees.removed.push(w.root);
+        continue;
+      }
+      out.worktrees.kept.push({ root: w.root, branch: w.branch, reason: (res && res.error) || 'failed' });
+      log(`[lunaswork] worktree ${w.root} kept: ${(res && (res.detail || res.error)) || 'failed'}`);
     }
-    await git.pruneWorktrees(repoPath);
+    const pruned = await git.pruneWorktrees(repoPath);
+    if (pruned && pruned.ok === false) log(`[lunaswork] git worktree prune failed: ${pruned.detail || pruned.error || 'failed'}`);
     return null;
   }
 
@@ -216,8 +221,9 @@ function createRunCleanup(deps = {}) {
       log(`${tag} cleanup: ${out.worktrees.removed.length} worktree(s) removed, ${out.branches.deleted.length} local + ${out.remote.deleted.length} origin branch(es) deleted${kept.size ? `, kept ${[...kept].join(', ')}` : ''}`);
       return out;
     } catch (err) {
+      // The detail (it may hold a local path) goes to the log only, never into the report or email.
       log(`${tag} cleanup failed: ${errText(err)}`);
-      return { ...out, ok: false, error: errText(err).slice(0, 200) };
+      return { ...out, ok: false, error: 'failed' };
     }
   }
 

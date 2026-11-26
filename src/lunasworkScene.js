@@ -394,24 +394,29 @@ async function dropUncommittedBlock(repoDir, execImpl, fsImpl) {
   }
   if (!text.includes(BLOCK_BEGIN)) return 'none';
   const stripped = withoutAttributesBlock(text);
+  // A block without its end marker is not ours to cut.
+  if (stripped === text.replace(/\r\n/g, '\n')) return 'kept';
+  // Written back with the file's own line endings, so only the block shows in a diff.
+  const write = (body) => fsImpl.writeFileSync(file, text.includes('\r\n') ? body.replace(/\n/g, '\r\n') : body);
   const listed = await runGit(repoDir, ['ls-files', '--', GITATTRIBUTES], execImpl);
   if (!listed.ok) return 'kept';
   if (!listed.stdout.trim()) {
     // Never committed: LunaCore made the file, or put its block into one nobody added yet.
-    if (stripped) fsImpl.writeFileSync(file, stripped);
+    if (stripped) write(stripped);
     else fsImpl.rmSync(file, { force: true });
     return 'removed';
   }
-  const indexed = await runGit(repoDir, ['show', `:${GITATTRIBUTES}`], execImpl);
+  // `:./` - the index copy of the file in repoDir, also when repoDir is a subfolder of the repo.
+  const indexed = await runGit(repoDir, ['show', `:./${GITATTRIBUTES}`], execImpl);
   if (!indexed.ok || indexed.stdout.includes(BLOCK_BEGIN)) return 'kept';
   if (!sameAttributes(stripped, indexed.stdout)) {
     // Mati's own uncommitted rules stay; only the block goes.
-    fsImpl.writeFileSync(file, stripped);
+    write(stripped);
     return 'removed';
   }
   // The block was the only change: the index copy comes back byte for byte (line endings too).
   const restored = await runGit(repoDir, ['checkout', '--', GITATTRIBUTES], execImpl);
-  if (!restored.ok) fsImpl.writeFileSync(file, stripped);
+  if (!restored.ok) write(stripped);
   return 'removed';
 }
 

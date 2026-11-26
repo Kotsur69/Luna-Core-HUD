@@ -120,7 +120,11 @@ test('run end: worktrees removed, merged and rolled-back branches deleted, unmer
   assert.match(md, /- Worktree kept: .*open \(luna\/open-abcde\): a tab is open in it/);
   assert.match(md, /- Uncommitted in the checkout: design\/CONTRACTS\.md/);
   assert.ok(!buildRunReport(ended, { now: 0, forEmail: true }).includes(open.wt), 'no local path in the email');
-  assert.match(renderRunReportHtml(ended, { now: 0 }), /Kept luna\/red-abcde \(local \+ origin\): unmerged work/);
+  const html = renderRunReportHtml(ended, { now: 0 });
+  assert.match(html, /Kept luna\/red-abcde \(local \+ origin\): unmerged work/);
+  assert.match(html, /Worktree kept: open \(luna\/open-abcde\)/);
+  assert.ok(!html.includes(path.join(root, 'wts')), 'the HTML is an email attachment too: no local path');
+  assert.ok(logs.some((l) => /cleanup: 3 worktree\(s\) removed, 2 local \+ 2 origin branch\(es\) deleted, kept luna\//.test(l)), logs.join('\n'));
 });
 
 test('run end: nothing is removed while God Mode has a plan open on the project', async (t) => {

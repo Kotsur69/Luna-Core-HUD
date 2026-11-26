@@ -364,6 +364,50 @@ test('a rollback after an earlier rollback reverts only what is still applied: n
   assert.match(git(origin, 'show', `${after}:design/DECISIONS.md`), /iter-3-rolled-back/, 'the design pack history stays');
 });
 
+test('a "This reverts commit" line that is not a real revert does not make a rollback miss the good tree', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  const logs = [];
+  const cp = createCheckpoints({ git: recorder(), tmpDir: () => root, log: (l) => logs.push(l) });
+  assert.equal((await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 1 })).ok, true);
+  const good = originMain(origin);
+  // The broken change, then a commit whose message claims to revert it but changes something else.
+  fixupCommit(repo, 'broken change');
+  const broken = git(repo, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(repo, 'other.txt'), 'unrelated\n');
+  git(repo, 'add', 'other.txt');
+  git(repo, 'commit', '-m', 'chore: tidy', '-m', `This reverts commit ${broken}.`);
+  mergePackage(repo, 'later');
+  const head = originMain(origin);
+
+  const res = await cp.rollback({ repoPath: repo, runId: RUN, iteration: 2, toIteration: 1, reason: 'scoreDrop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.reverted.length, 3, 'every commit since the good tag, as before netting');
+  const after = originMain(origin);
+  assert.equal(git(origin, 'diff', '--stat', good, after), '', 'main is back at the good tree');
+  assert.equal(git(origin, 'rev-list', '--count', `${head}..${after}`), '3', 'only the full revert reached origin');
+  assert.ok(logs.some((l) => /do not reach luna-work\/lwrun1\/iter-1 - reverting every commit/.test(l)), logs.join('\n'));
+});
+
+test('commit bodies that cannot be read never block a rollback: pairs are matched by subject', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  const bodyLog = (args) => (args.includes('--format=%H%x1f%B%x1e') ? { ok: false, out: '', err: 'stdout maxBuffer exceeded' } : null);
+  const logs = [];
+  const cp = createCheckpoints({ git: recorder(bodyLog), tmpDir: () => root, log: (l) => logs.push(l) });
+  assert.equal((await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 1 })).ok, true);
+  const good = originMain(origin);
+  // An earlier rollback's revert of package x, then package y broke the game.
+  mergePackage(repo, 'x');
+  git(repo, 'revert', '--no-edit', '-m', '1', 'HEAD');
+  git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
+  mergePackage(repo, 'y');
+
+  const res = await cp.rollback({ repoPath: repo, runId: RUN, iteration: 2, toIteration: 1, reason: 'scoreDrop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(res.reverted.map((c) => c.subject), ['Merge package y']);
+  assert.equal(git(origin, 'diff', '--stat', good, originMain(origin)), '', 'main is back at the good tree');
+  assert.ok(logs.some((l) => /commit bodies not read \(stdout maxBuffer exceeded\)/.test(l)), logs.join('\n'));
+});
+
 test('a rejected push leaves origin as it was and makes no card', async (t) => {
   const { root, origin, repo } = makeRepo(t);
   mergePackage(repo, 'good');

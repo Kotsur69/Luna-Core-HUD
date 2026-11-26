@@ -95,6 +95,21 @@ test("Mati's own uncommitted rules stay when the block is taken out", async (t) 
   assert.equal(fs.readFileSync(path.join(repo, '.gitattributes'), 'utf8'), '* text=auto\n*.psd binary\n');
 });
 
+test('a CRLF file keeps its line endings when only the block goes; a block without its end marker is kept', async (t) => {
+  const { repo } = makeRepo(t, { '.gitattributes': '* text=auto\r\n' });
+  const file = path.join(repo, '.gitattributes');
+  fs.writeFileSync(file, `* text=auto\r\n*.psd binary\r\n\r\n${Scene.withAttributesBlock('').replace(/\n/g, '\r\n')}`);
+  const res = await Scene.configureUnityMerge(repo, { mergeTool: MERGE_TOOL });
+  assert.equal(res.legacyBlock, 'removed');
+  assert.equal(fs.readFileSync(file, 'utf8'), '* text=auto\r\n*.psd binary\r\n');
+
+  const cut = `* text=auto\n${Scene.withAttributesBlock('').split('\n')[0]}\n*.unity merge=unityyamlmerge\n`;
+  fs.writeFileSync(file, cut);
+  const half = await Scene.configureUnityMerge(repo, { mergeTool: MERGE_TOOL });
+  assert.equal(half.legacyBlock, 'kept');
+  assert.equal(fs.readFileSync(file, 'utf8'), cut, 'left exactly as it was');
+});
+
 test('a .gitattributes only LunaCore made (never committed) is deleted', async (t) => {
   const { repo } = makeRepo(t);
   fs.writeFileSync(path.join(repo, '.gitattributes'), Scene.withAttributesBlock(''));
