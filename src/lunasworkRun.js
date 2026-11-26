@@ -39,6 +39,7 @@ const { cleanLedger } = require('./lunasworkUsage');
 const { cleanTargets, cleanVariants } = require('./lunasworkVariants');
 const { cleanGuardFields } = require('./lunasworkToolGuard');
 const { cleanAssetEstimate } = require('./lunasworkAssetCost');
+const { withRunBranches } = require('./lunasworkRunCleanup');
 const { WORKER_MODEL_CHOICES, isWorkerModelChoice } = require('./claudeModels');
 
 const PREPROD = 'preprod';
@@ -760,6 +761,8 @@ function restoreRun(raw) {
     planIds: (Array.isArray(raw.planIds) ? raw.planIds : [])
       .filter((id) => typeof id === 'string' && id && id.length <= 100)
       .slice(-MAX_PLAN_IDS),
+    // The luna/ branches the run's builds used, for the run-end cleanup (src/lunasworkRunCleanup.js).
+    branches: withRunBranches(raw.branches),
   };
 }
 

@@ -1650,6 +1650,24 @@ test("design pack: the Director's CONTRACTS.md / ASSETS.md commit lands before t
   assert.ok(h.ctl.runLog().some((e) => /design pack committed \(2 file\(s\)\), pushed/.test(e.text || '')));
 });
 
+test("run-end cleanup: every build's luna/ branches are kept on the run, across a restart", async () => {
+  const h = harness({ todos: Array.from({ length: 3 }, (_, i) => card(i + 1)), scores: [60, 70] });
+  const built = (branch, integration = null) => (o) => ({
+    ok: true,
+    planId: 'p1',
+    killed: false,
+    integration: { state: integration ? 'failed' : 'done', error: null, skipped: [], selfCheck: { tests: 'passed', fixups: 0, pushedIntegrationBranch: integration } },
+    plan: { packages: [{ id: 'pk', merged: !integration, branch, todos: o.cards.map((c) => c.text) }, { id: 'x', branch: 'not-ours' }] },
+  });
+  h.next.build.push(built('luna/pk-aaaaa'), built('luna/pk-bbbbb', 'luna/run-integration'));
+  h.next.director.push(oneCardEach(h), oneCardEach(h), STOP_CARD);
+  await h.start();
+  const want = ['luna/pk-aaaaa', 'luna/pk-bbbbb', 'luna/run-integration'];
+  assert.deepEqual(h.ended[0].branches, want, 'the onRunEnd snapshot carries them');
+  assert.deepEqual(restoreRun(h.stored).branches, want);
+  assert.deepEqual(restoreRun({ ...h.stored, branches: ['luna/ok-abcde', '../bad', 5] }).branches, ['luna/ok-abcde']);
+});
+
 test('checkpoints: only a journey that passed before rolls back; one that never passed does not', async () => {
   const cp = fakeCheckpoints();
   const h = harness({ todos: Array.from({ length: 6 }, (_, i) => card(i + 1)), scores: [50, 50, 50], deps: { checkpoints: cp.dep } });

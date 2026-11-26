@@ -77,6 +77,7 @@ const { createMilestoneMailer, screenshotAttachments } = require('./lunasworkMai
 const { findDraftFiles } = require('./lunasworkLegal');
 const { assetReportLines, assetSpendUsd } = require('./lunasworkAssetPipeline');
 const { estimateLines } = require('./lunasworkAssetCost');
+const { cleanupSection } = require('./lunasworkRunCleanup');
 
 // The run email carries the HTML report and the return pack: room for three screenshots (gmailsend caps at 5).
 const RUN_MAIL_IMAGES = 3;
@@ -401,6 +402,8 @@ function buildRunReport(run, extra = {}) {
     ...sectionMarkdown('Asset cost estimate', estimateSection(r)),
     ...sectionMarkdown('Launch assets', launchSection(extra.media)),
     ...sectionMarkdown('Demo videos', demoSection(r, extra.media, forEmail)),
+    // The run-end git cleanup (src/lunasworkRunCleanup.js): every kept branch and why.
+    ...sectionMarkdown('Branches and worktrees', cleanupSection(r.gitCleanup, { forEmail })),
     '## Timeline',
     '',
     `- Started: ${fmt(r.startedAt)} UTC`,
@@ -475,6 +478,7 @@ function renderRunReportHtml(run, extra = {}) {
     mediaHtml('Asset cost estimate', estimateSection(r), 'No estimate'),
     mediaHtml('Launch assets', launchSection(extra.media), 'No files'),
     mediaHtml('Demo videos', demoSection(r, extra.media, false), 'No video'),
+    mediaHtml('Branches and worktrees', cleanupSection(r.gitCleanup), 'Nothing kept'),
   ].filter(Boolean).join('\n');
   return h.page({
     title: `Luna's Work run ${oneLine(r.id, 64)}`,

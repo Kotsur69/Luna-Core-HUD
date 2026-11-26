@@ -179,6 +179,7 @@ const {
   kindOf,
 } = require('./lunasworkRun');
 const { createShipDocs } = require('./lunasworkShipDocs');
+const { withRunBranches, runBranchesOf } = require('./lunasworkRunCleanup');
 const { withBuilderBrief } = require('./lunasworkDirector');
 const { listSkills } = require('./lunasworkSkills');
 const { createCardBook } = require('./lunasworkCards');
@@ -1070,6 +1071,9 @@ function createLunasWork(deps) {
       },
     });
     const r = isObj(res) ? res : { ok: false, error: 'failed' };
+    // The run-end cleanup (src/lunasworkRunCleanup.js) removes these branches' worktrees and the merged ones.
+    const branches = withRunBranches(run.branches, runBranchesOf(r));
+    if (branches.join('\n') !== (run.branches || []).join('\n')) update({ branches });
     if (isLimit(r)) return limited(r, 'builder');
     // No free profile to fall back to: wait for the reset after all.
     if (free && r.error === 'noFreeProfile') return armWait(run.limitedUntil, 'limit');
@@ -1673,6 +1677,7 @@ function createLunasWork(deps) {
       spendCapped: [],
       assets: [],
       planIds: [],
+      branches: [],
     });
     if (!created || !created.profile) return refuse('failed', 'Could not create the run.');
     if (scaffold && scaffold.profileSuggested) keepSuggestedProfile(project.id, profile);
