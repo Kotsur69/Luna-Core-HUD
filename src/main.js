@@ -181,7 +181,7 @@ const { registerCloudIpc } = require('./cloudipc');
 const { registerLunasworkIpc } = require('./lunasworkipc');
 const { createTabResume } = require('./tabResume');
 const { createEditorAutosave } = require('./editorAutosave');
-const { createGodModeBuilder } = require('./lunasworkBuild');
+const { createGodModeBuilder, claudeProfileIdOf } = require('./lunasworkBuild');
 const { createToolsFor: createLunasworkToolsFor } = require('./lunasworkToolkitLaunch');
 const { readSettings: readLunasworkSettings, assetToolsFor: lunasworkAssetToolsFor } = require('./lunasworkSettings');
 const { createAssetToolsFor: createLunasworkAssetTools } = require('./lunasworkAssetTools');
@@ -1541,6 +1541,8 @@ const lunasworkGodMode = godModeFacade(() => orchestraRuns);
 const lunasworkBuilder = createGodModeBuilder({
   orchestra: lunasworkGodMode,
   profileId: () => activeProfileId,
+  // A Claude build's workers: a real Claude profile, never the active tab's agy one.
+  claudeProfileId: () => claudeProfileIdOf(profiles, activeProfileId),
   env: () => orchestraToolEnv(),
   freeEnv: () => lunasworkFreeEnv(),
   // An agy build (Builder set to agy, or the agy fallback) plans in this env (src/agyprofile.js).

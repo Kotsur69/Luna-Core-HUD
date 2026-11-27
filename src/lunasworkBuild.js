@@ -15,6 +15,12 @@
 // on during a Claude usage limit) passes planner 'agy' and Workers 'agy' to
 // makePlan / launch, in the agy profile's env (deps.agyEnv).
 //
+// Every other build runs its worker tabs on a real Claude profile
+// (deps.claudeProfileId, see claudeProfileIdOf), never on the UI's active tab
+// profile: that is only the default for new tabs, and with a tab switched to
+// Antigravity a Claude build's workers ran on agy without bypassPermissions.
+// No real Claude profile: the build is refused with 'noClaudeProfile'.
+//
 // While a Luna's Work build is going, main.js routes three God Mode deps
 // through here, and ONLY then (idle = God Mode's own values, untouched):
 //
@@ -98,6 +104,38 @@ function packageModel(todoAts, cardModels, fallback) {
   }
   if (best !== null) return WORKER_MODELS.includes(best) ? best : 'sonnet';
   return agy || fallback;
+}
+
+/**
+ * True for a profile that runs Anthropic's Claude Code against Anthropic:
+ * its command is `claude` (any path, any .exe/.cmd suffix) and its env does
+ * not redirect it to another provider (ANTHROPIC_BASE_URL: LM Studio, Z.ai).
+ * @param {unknown} profile
+ * @returns {boolean}
+ */
+function isRealClaudeProfile(profile) {
+  if (!isObj(profile) || typeof profile.id !== 'string' || !profile.id) return false;
+  const command = typeof profile.command === 'string' ? profile.command.trim() : '';
+  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, '');
+  if (base !== 'claude') return false;
+  const env = isObj(profile.env) ? profile.env : {};
+  return !(typeof env.ANTHROPIC_BASE_URL === 'string' && env.ANTHROPIC_BASE_URL.trim());
+}
+
+/**
+ * The profile a Claude build's worker tabs run on: the active tab profile
+ * when it is a real Claude profile (e.g. a second-account profile Mati picked),
+ * else the first real Claude profile. Null = none configured.
+ * @param {object[]|null|undefined} profiles
+ * @param {string|null|undefined} activeId
+ * @returns {string|null}
+ */
+function claudeProfileIdOf(profiles, activeId) {
+  const list = Array.isArray(profiles) ? profiles : [];
+  const active = activeId ? list.find((p) => isObj(p) && p.id === activeId) : null;
+  if (active && isRealClaudeProfile(active)) return active.id;
+  const first = list.find(isRealClaudeProfile);
+  return first ? first.id : null;
 }
 
 /**
@@ -217,7 +255,7 @@ function createGodModeBuilder(deps) {
    *   ownPlanIds: plans this run made (replaceable); onPlan: the plan id, once made;
    *   plannerModel: God Mode's planner model (default: the strongest model of the cards)
    * @returns {Promise<object>} the onRunSettled result {planId, killed, integration, plan} plus ok,
-   *   or {ok:false, error} - 'limit' (with resumeAt), 'godModeBusy', 'noAgyProfile', or God Mode's own error
+   *   or {ok:false, error} - 'limit' (with resumeAt), 'godModeBusy', 'noAgyProfile', 'noClaudeProfile', or God Mode's own error
    */
   async function build(opts) {
     if (active) return { ok: false, error: 'godModeBusy' };
@@ -258,13 +296,16 @@ function createGodModeBuilder(deps) {
       const agy = opts.agy === true;
       const agyEnv = agy && typeof deps.agyEnv === 'function' ? deps.agyEnv() : null;
       if (agy && !agyEnv) return { ok: false, error: 'noAgyProfile' };
+      // A Claude build never inherits the UI's active tab profile (it may be agy).
+      const profileId = agy || typeof deps.claudeProfileId !== 'function' ? deps.profileId() : deps.claudeProfileId();
+      if (!agy && typeof deps.claudeProfileId === 'function' && !profileId) return { ok: false, error: 'noClaudeProfile' };
       if (unity) await prepareUnity(opts.repoPath);
       // A free or agy build does not plan on Claude: the Claude alias means nothing there.
       const plannerModel = opts.free || agy ? null : (isClaudeModel(opts.plannerModel) ? opts.plannerModel : plannerModelFor(cards));
       const made = await deps.orchestra.makePlan({
         projectId: opts.projectId,
         repoPath: opts.repoPath,
-        profileId: deps.profileId(),
+        profileId,
         // A free build (Claude is limited) plans on the free providers too.
         env: agyEnv || (opts.free && typeof deps.freeEnv === 'function' && deps.freeEnv()) || deps.env(),
         ...(agy ? { planner: AGY_MODEL, workers: AGY_MODEL } : {}),
@@ -449,4 +490,4 @@ function createGodModeBuilder(deps) {
   };
 }
 
-module.exports = { createGodModeBuilder, packageModel, planCard, plannerModelFor };
+module.exports = { createGodModeBuilder, packageModel, planCard, plannerModelFor, claudeProfileIdOf, isRealClaudeProfile };
