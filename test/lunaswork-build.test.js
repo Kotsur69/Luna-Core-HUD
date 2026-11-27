@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createGodModeBuilder, packageModel, planCard } = require('../src/lunasworkBuild');
+const { createGodModeBuilder, packageModel, planCard, claudeProfileIdOf } = require('../src/lunasworkBuild');
 const { editorBoundReason } = require('../src/orchestraUnityVerify');
 
 const tick = () => new Promise((r) => setImmediate(r));
@@ -132,6 +132,60 @@ test('an agy build wins over free: never the free providers, never both flags', 
   assert.deepEqual(orchestra.calls.launch[0], { planId: 'p1', integration: 'merge', workers: 'agy' });
   orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
   await building;
+});
+
+// Regression: the build took the UI's active tab profile (the default for new
+// tabs). With a tab switched to Antigravity, a Claude build's workers ran on agy.
+const PROFILES = [
+  { id: 'claude-cloud', command: 'claude', env: {} },
+  { id: 'lm-studio', command: 'claude', env: { ANTHROPIC_BASE_URL: 'http://localhost:1234' } },
+  { id: 'glm', command: 'claude', env: { ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic' } },
+  { id: 'bare-shell', command: '', env: {} },
+  { id: 'antigravity', command: 'agy', templateId: 'antigravity', env: {} },
+  { id: 'work-account', command: 'C:\\tools\\claude.exe', env: { CLAUDE_CONFIG_DIR: 'x' } },
+];
+
+test('claudeProfileIdOf keeps an active real Claude profile, else the first one; never agy or a redirected claude', () => {
+  assert.equal(claudeProfileIdOf(PROFILES, 'work-account'), 'work-account');
+  assert.equal(claudeProfileIdOf(PROFILES, 'antigravity'), 'claude-cloud');
+  assert.equal(claudeProfileIdOf(PROFILES, 'lm-studio'), 'claude-cloud');
+  assert.equal(claudeProfileIdOf(PROFILES, 'bare-shell'), 'claude-cloud');
+  assert.equal(claudeProfileIdOf(PROFILES, null), 'claude-cloud');
+  assert.equal(claudeProfileIdOf(PROFILES.slice(1, 5), 'antigravity'), null);
+  assert.equal(claudeProfileIdOf(null, 'x'), null);
+});
+
+test('a Claude build runs on the Claude profile even while the active tab profile is agy', async () => {
+  const orchestra = fakeOrchestra();
+  const builder = createGodModeBuilder({
+    orchestra,
+    profileId: () => 'antigravity',
+    claudeProfileId: () => 'claude-cloud',
+    env: () => ({ PAID: '1' }),
+    agyEnv: () => ({ AGY: '1' }),
+  });
+  const building = builder.build(buildOpts());
+  await tick();
+  assert.equal(orchestra.calls.makePlan[0].profileId, 'claude-cloud');
+  orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await building;
+
+  // An agy build keeps its own path (the active profile, agy env and workers).
+  const agy = builder.build(buildOpts({ agy: true, cards: CARDS.map((c) => ({ ...c, model: 'agy' })) }));
+  await tick();
+  assert.equal(orchestra.calls.makePlan[1].profileId, 'antigravity');
+  orchestra.settle({ planId: 'p1', integration: { state: 'done' } });
+  await agy;
+});
+
+test('a Claude build with no real Claude profile is refused, never run on another CLI', async () => {
+  const orchestra = fakeOrchestra();
+  const builder = createGodModeBuilder({ orchestra, profileId: () => 'antigravity', claudeProfileId: () => null, env: () => ({}) });
+  const res = await builder.build(buildOpts());
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'noClaudeProfile');
+  assert.equal(orchestra.calls.makePlan.length, 0);
+  assert.equal(builder.isBuilding(), false);
 });
 
 test('an agy build without an agy profile is refused before God Mode is asked', async () => {
