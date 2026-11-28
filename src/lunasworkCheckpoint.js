@@ -13,7 +13,13 @@
 //      --no-ff, so main's own line is merge commits plus fix-up commits) and
 //      the result is pushed as a normal fast-forward. A commit and its revert
 //      inside the range (an earlier rollback's) cancel out and are both left
-//      alone (src/lunasworkRevertPairs.js) - no "Reapply" chains
+//      alone (src/lunasworkRevertPairs.js) - no "Reapply" chains. When that
+//      sequence does not go through (a conflict: the kept design-pack commits
+//      or the skipped revert pairs leave a commit that no longer reverts
+//      cleanly), it is aborted and the good tag's tree is restored in ONE new
+//      commit on top of the broken head instead (src/lunasworkTreeRestore.js),
+//      the design-pack docs kept, pushed the same way. The result's `method`
+//      says which: 'revert' or 'tree'
 //   2. the broken head is tagged `luna-work/<runId>/iter-<N>-rolled-back`
 //      (pushed), so the reverted work is easy to find as evidence
 //   3. the rolled-back work becomes a `bug` card tagged run:<id>, with the
@@ -49,6 +55,7 @@ const { applyCards, REPRO_ACCEPTANCE } = require('./lunasworkCritic');
 const { runTag, MAX_DETAILS_CHARS, MAX_TEXT_CHARS } = require('./todorows');
 const { unlinkDependencyLinks, gitFailure } = require('./worktrees');
 const { revertLinkArgs, parseRevertLinks, netOfReverts } = require('./lunasworkRevertPairs');
+const { treeSubject, treeMessageArgs, commitGoodTree } = require('./lunasworkTreeRestore');
 
 const TAG_PREFIX = 'luna-work';
 // Subject prefix of the design-pack commits (src/lunasworkPackCommit.js).
@@ -324,7 +331,7 @@ function journeyLine(j) {
  * commits and the cards whose work went with them.
  * @returns {{kind:'bug', severity:string, text:string, details:string, acceptance:string[], files:string[], updatesCardId:null}}
  */
-function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, reverted = [], data = null }) {
+function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, reverted = [], data = null, method = 'revert' }) {
   const why = reasonText(reason, evidence);
   const journeys = (evidence.failedJourneys || []).filter(isObj).slice(0, MAX_LISTED).map(journeyLine);
   const findings = (evidence.findings || [])
@@ -337,6 +344,7 @@ function rollbackCard({ iteration, fromTag, toTag, reason, evidence = {}, revert
   if (reverted.length > MAX_LISTED) commits.push(`... and ${reverted.length - MAX_LISTED} more`);
   const details = [
     `Luna's Work rolled main back from ${fromTag} to ${toTag} after iteration ${iteration}: ${why}.`,
+    ...(method === 'tree' ? [`The revert of the commits below conflicted, so main was rolled back by restoring the tree of ${toTag} in one commit.`] : []),
     `The reverted work is still on the tag ${fromTag}.`,
     '',
     ...bulletList('Failing journeys', journeys),
@@ -431,16 +439,18 @@ function createCheckpoints(deps = {}) {
    * Throws the temporary worktree away. node_modules links go first
    * (worktrees.unlinkDependencyLinks): `git worktree remove` deletes through a
    * junction and would empty its target. A link that will not go leaves the
-   * folder where it is, logged, rather than risk that.
+   * folder where it is, logged, rather than risk that. A --no-checkout
+   * worktree (checkedOut false) skips `git worktree remove`: every file of
+   * HEAD counts as deleted there, so git refuses it; the folder holds only
+   * its .git file and goes with rmSync + prune.
    */
-  async function removeWorktree(repoPath, dir) {
+  async function removeWorktree(repoPath, dir, { checkedOut = true } = {}) {
     const links = unlinkDependencyLinks(dir);
     if (!links.ok) {
       log(`[lunaswork] kept ${dir}: ${links.detail}`);
       return;
     }
-    const removed = await git(repoPath, ['worktree', 'remove', dir]);
-    if (removed.ok) return;
+    if (checkedOut && (await git(repoPath, ['worktree', 'remove', dir])).ok) return;
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch (err) {
@@ -449,17 +459,23 @@ function createCheckpoints(deps = {}) {
     await git(repoPath, ['worktree', 'prune']);
   }
 
+  /** A detached throwaway worktree at headSha: {dir} or {error, detail}. */
+  async function addWorktree(repoPath, headSha, flags = []) {
+    const dir = fs.mkdtempSync(path.join(tmpRoot(), 'lunaswork-revert-'));
+    // mkdtemp reserved a unique name; git wants to create the folder itself.
+    fs.rmdirSync(dir);
+    const added = await git(repoPath, ['worktree', 'add', '--detach', ...flags, dir, headSha]);
+    return added.ok ? { dir } : { error: 'worktreeFailed', detail: added.err };
+  }
+
   /**
    * Reverts `commits` on top of headSha in a throwaway worktree and pushes.
    * With `verify`, the result is pushed only when verify(dir, 'HEAD') holds
    * ('treeMismatch' otherwise: the local revert commits go with the worktree).
    */
   async function revertInWorktree(repoPath, branch, headSha, commits, verify = null) {
-    const dir = fs.mkdtempSync(path.join(tmpRoot(), 'lunaswork-revert-'));
-    // mkdtemp reserved a unique name; git wants to create the folder itself.
-    fs.rmdirSync(dir);
-    const added = await git(repoPath, ['worktree', 'add', '--detach', dir, headSha]);
-    if (!added.ok) return { ok: false, error: 'worktreeFailed', detail: added.err };
+    const { dir, error, detail } = await addWorktree(repoPath, headSha);
+    if (error) return { ok: false, error, detail };
     try {
       const reverted = await git(dir, revertArgs(commits));
       if (!reverted.ok) {
@@ -478,6 +494,28 @@ function createCheckpoints(deps = {}) {
   }
 
   /**
+   * The fallback when the revert sequence did not go through: one new commit
+   * on headSha whose tree is the good tag's, with `keep` (the design-pack
+   * docs) as headSha has them, pushed as a fast-forward. The worktree is
+   * added with --no-checkout: nothing is written to disk.
+   * @param {{branch:string, headSha:string, goodSha:string, keep:string[], message:string[]}} o
+   */
+  async function restoreTreeInWorktree(repoPath, o) {
+    const { dir, error, detail } = await addWorktree(repoPath, o.headSha, ['--no-checkout']);
+    if (error) return { ok: false, error, detail };
+    try {
+      const made = await commitGoodTree(git, dir, o);
+      if (!made.ok) return { ok: false, error: 'treeRestoreFailed', detail: `${made.step}: ${made.detail}` };
+      if (!(await sameCode(dir, o.goodSha, made.sha))) return { ok: false, error: 'treeMismatch' };
+      const pushed = await git(dir, ['push', 'origin', `${made.sha}:refs/heads/${o.branch}`]);
+      if (!pushed.ok) return { ok: false, error: 'pushFailed', detail: pushed.err };
+      return { ok: true, headAfter: made.sha };
+    } finally {
+      await removeWorktree(repoPath, dir, { checkedOut: false });
+    }
+  }
+
+  /**
    * C5: the staging data restore that goes with the revert (o.restoreData,
    * src/lunasworkStaging.js). Null when there is none. Never throws.
    */
@@ -492,13 +530,13 @@ function createCheckpoints(deps = {}) {
   }
 
   /** The card and the DECISIONS.md line of a rollback that went through. */
-  function recordRollback({ repoPath, runId, iteration, fromTag, toTag, reason, evidence, reverted, todoStore, data }) {
+  function recordRollback({ repoPath, runId, iteration, fromTag, toTag, reason, evidence, reverted, todoStore, data, method }) {
     let cards = [];
     let cardError = null;
     const tag = runTag(runId);
     if (todoStore && tag) {
       try {
-        const applied = applyCards(todoStore, [rollbackCard({ iteration, fromTag, toTag, reason, evidence, reverted, data })], tag);
+        const applied = applyCards(todoStore, [rollbackCard({ iteration, fromTag, toTag, reason, evidence, reverted, data, method })], tag);
         cards = applied.created.map((c) => c.at);
         cardError = applied.error || null;
       } catch (err) {
@@ -506,8 +544,11 @@ function createCheckpoints(deps = {}) {
       }
     }
     const restored = isObj(data) && data.restored === true ? ` and restore the staging data snapshot of iteration ${data.iteration}` : '';
+    const how = method === 'tree'
+      ? `by restoring its tree in one commit (${reverted.length} commit(s) undone; the revert conflicted)`
+      : `with ${reverted.length} revert commit(s)`;
     const op = pack.appendDecision({
-      choice: `to roll main back from ${fromTag} to ${toTag} with ${reverted.length} revert commit(s)${restored}`,
+      choice: `to roll main back from ${fromTag} to ${toTag} ${how}${restored}`,
       because: `${reasonText(reason, evidence)}${isObj(data) && data.note ? `; ${oneLine(data.note, 200)}` : ''}`,
       source: `Luna's Work checkpoint, iteration ${iteration}`,
     });
@@ -523,16 +564,33 @@ function createCheckpoints(deps = {}) {
    *   evidence?:object, todoStore?:{read:Function, write:Function},
    *   restoreData?:(ctx:{repoPath:string, runId:string, iteration:number, toIteration:number})=>Promise<object|null>}} o
    * @returns {Promise<{ok:boolean, nothing?:boolean, fromTag?:string, toTag?:string,
+   *   method?:'revert'|'tree', revertDetail?:string,
    *   reverted?:Array<{sha:string, subject:string}>, cards?:number[], decision?:boolean,
    *   data?:{restored:boolean, iteration?:number, note:string, error?:string},
    *   error?:string, detail?:string}>}
    */
-  /** True when the commit changes at least one file and nothing outside design/*.md. */
-  async function touchesOnlyDesignDocs(repoPath, sha) {
+  /** The files the commit changes when that is at least one file and nothing outside design/*.md, else null. */
+  async function designDocFiles(repoPath, sha) {
     const res = await git(repoPath, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]);
-    if (!res.ok) return false;
+    if (!res.ok) return null;
     const files = res.out.split('\n').map((f) => f.trim()).filter(Boolean);
-    return files.length > 0 && files.every((f) => /^design\/[^/]+\.md$/.test(f));
+    return files.length > 0 && files.every((f) => /^design\/[^/]+\.md$/.test(f)) ? files : null;
+  }
+
+  /** True when the commit changes at least one file and nothing outside design/*.md. */
+  const touchesOnlyDesignDocs = async (repoPath, sha) => (await designDocFiles(repoPath, sha)) !== null;
+
+  /**
+   * The design docs the design-pack commits in `list` touched: what a tree
+   * restore takes from the broken head, as the revert path keeps those commits.
+   */
+  async function packDocPaths(repoPath, list) {
+    const paths = new Set();
+    for (const c of list) {
+      if (!c.subject.startsWith(PACK_COMMIT_PREFIX)) continue;
+      for (const f of (await designDocFiles(repoPath, c.sha)) || []) paths.add(f);
+    }
+    return [...paths].sort();
   }
 
   /** The code at `rev` is the good tag's; design/*.md may differ (pack commits stay through a rollback). */
@@ -556,7 +614,10 @@ function createCheckpoints(deps = {}) {
    * still applied - an earlier rollback's reverts and the work they undid
    * cancel out (src/lunasworkRevertPairs.js), so no "Reapply" chain is made -
    * minus the design-pack commits. everything(): the same without netting.
-   * @returns {Promise<{applied:object[], cancelled:number, everything:()=>Promise<object[]>}|{error:string, detail?:string}>}
+   * newest: the head commit of the range; packDocs(): the design-pack docs
+   * of the range (packDocPaths), read only when a tree restore needs them.
+   * @returns {Promise<{applied:object[], cancelled:number, everything:()=>Promise<object[]>,
+   *   newest:object|null, packDocs:()=>Promise<string[]>}|{error:string, detail?:string}>}
    */
   async function revertPlan(repoPath, range, toTag) {
     const listed = await git(repoPath, ['log', '--first-parent', '--format=%H%x09%P%x09%s', range]);
@@ -572,7 +633,13 @@ function createCheckpoints(deps = {}) {
       log(`[lunaswork] rollback: the still-applied commits alone do not reach ${toTag} - reverting every commit since it`);
       return withoutPackCommits(repoPath, all);
     };
-    return { applied: await withoutPackCommits(repoPath, net.applied), cancelled: net.cancelled.length, everything };
+    return {
+      applied: await withoutPackCommits(repoPath, net.applied),
+      cancelled: net.cancelled.length,
+      everything,
+      newest: all[0] || null,
+      packDocs: () => packDocPaths(repoPath, all),
+    };
   }
 
   async function rollback(o) {
@@ -592,6 +659,10 @@ function createCheckpoints(deps = {}) {
     if (same.ok) return { ...base, ok: true, nothing: true, reverted: [], cards: [] };
     const plan = await revertPlan(o.repoPath, `${good}..${head.sha}`, toTag);
     if (plan.error) return fail(plan.error, plan.detail);
+    // A restart after a tree restore was pushed: its commit is the head and the code is the good tag's.
+    if (plan.newest && plan.newest.subject === treeSubject(toTag) && (await sameCode(o.repoPath, good, head.sha))) {
+      return { ...base, ok: true, nothing: true, reverted: [], cards: [] };
+    }
     // A cancelled pair is trusted only when the netted revert reaches the good
     // code; an edited or forged "This reverts commit" line falls back to
     // reverting every commit, as before netting.
@@ -606,7 +677,24 @@ function createCheckpoints(deps = {}) {
       if (commits.length > MAX_REVERTS) return fail('tooManyCommits');
       res = await revertInWorktree(o.repoPath, head.branch, head.sha, commits);
     }
-    if (!res.ok) return fail(res.error, res.detail);
+    let how = { method: 'revert' };
+    if (!res.ok && res.error === 'revertFailed') {
+      // The sequence was aborted (never pushed): land the good tree in one commit instead.
+      const revertDetail = oneLine(res.detail || 'revert failed');
+      how = { method: 'tree', revertDetail };
+      log(`[lunaswork] rollback: reverting the ${commits.length} commit(s) since ${toTag} stopped (${oneLine(revertDetail, 150)}) - restoring the tree of ${toTag} in one commit`);
+      res = await restoreTreeInWorktree(o.repoPath, {
+        branch: head.branch,
+        headSha: head.sha,
+        goodSha: good,
+        keep: await plan.packDocs(),
+        message: treeMessageArgs({ toTag, goodSha: good, fromTag, undone: commits.length, revertDetail }),
+      });
+      if (res.ok) log(`[lunaswork] rollback: main is back at the tree of ${toTag} (${String(res.headAfter).slice(0, 7)}, method tree)`);
+      // Both ways failed: the detail keeps the revert's cause (a hook or identity problem fails both).
+      else res = { ...res, detail: `${res.detail || res.error} (tree restore, after the revert stopped: ${oneLine(revertDetail, 150)})` };
+    }
+    if (!res.ok) return { ...fail(res.error, res.detail), ...how };
     // Only once the revert is on origin: a failed rollback leaves no tag behind.
     // The broken head stays in history either way; the tag just names it.
     const kept = await tagAndPush(o.repoPath, fromTag, head.sha);
@@ -614,8 +702,8 @@ function createCheckpoints(deps = {}) {
     const reverted = commits.map(({ sha, subject }) => ({ sha, subject }));
     // C5: the staging data goes back with the code - only once the revert is on origin.
     const data = await restoreData(o);
-    const recorded = recordRollback({ ...o, fromTag, toTag, reverted, evidence: isObj(o.evidence) ? o.evidence : {}, data });
-    return { ...base, ok: true, reverted, headAfter: res.headAfter, ...recorded, ...(data ? { data } : {}) };
+    const recorded = recordRollback({ ...o, fromTag, toTag, reverted, evidence: isObj(o.evidence) ? o.evidence : {}, data, method: how.method });
+    return { ...base, ok: true, ...how, reverted, headAfter: res.headAfter, ...recorded, ...(data ? { data } : {}) };
   }
 
   /**
