@@ -216,6 +216,9 @@ function optionLabel(option) {
   return text === key ? option : text;
 }
 
+// Waits that end with Mati's answer or the decision's default (src/lunasworkDecisionGates.js).
+const DECISION_WAITS = new Set(['rollbackFailed', 'harnessLoop']);
+
 /**
  * The i18n key + values of the phase line while the run waits, or null when it
  * does not: a usage-limit wait (also an unknown reason), a failed step being
@@ -233,6 +236,8 @@ export function waitLine(s, timeOf = clock) {
     return { key: 'lw.run.retryingPlain', vars: { time } };
   }
   if (s.waitReason === 'godModeBusy') return { key: 'lw.run.godModeBusy', vars: { time } };
+  // A failed rollback or a harness loop (src/lunasworkDecisionGates.js): the run waits for Mati.
+  if (DECISION_WAITS.has(s.waitReason)) return { key: 'lw.run.waitDecision', vars: { time } };
   return { key: 'lw.run.waiting', vars: { time } };
 }
 

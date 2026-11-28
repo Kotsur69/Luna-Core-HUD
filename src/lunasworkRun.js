@@ -43,6 +43,8 @@ const { cleanAssetEstimate } = require('./lunasworkAssetCost');
 const { withRunBranches } = require('./lunasworkRunCleanup');
 const { cleanMerges, cleanCompileRevert } = require('./lunasworkCompileRevert');
 const { cleanCoverage } = require('./lunasworkPlaytestPlan');
+const { restoreLoop } = require('./lunasworkHarnessLoop');
+const { cleanRollbackHold } = require('./lunasworkDecisionGates');
 const { WORKER_MODEL_CHOICES, isWorkerModelChoice } = require('./claudeModels');
 
 const PREPROD = 'preprod';
@@ -397,6 +399,8 @@ function cleanRollback(raw) {
     cards: ats(raw.cards),
     reopened: ats(raw.reopened),
     decision: raw.decision === true,
+    // How main went back (src/lunasworkCheckpoint.js): revert commits, or one tree-restore commit.
+    ...(['revert', 'tree'].includes(raw.method) ? { method: raw.method } : {}),
     ...(str(raw.error, 100) ? { error: str(raw.error, 100) } : {}),
     ...(str(raw.detail, MAX_LOG_TEXT) ? { detail: str(raw.detail, MAX_LOG_TEXT) } : {}),
   };
@@ -791,6 +795,9 @@ function restoreRun(raw) {
       .slice(-MAX_PLAN_IDS),
     // The luna/ branches the run's builds used, for the run-end cleanup (src/lunasworkRunCleanup.js).
     branches: withRunBranches(raw.branches),
+    // A failed rollback waiting for Mati, and the harness-loop counts (src/lunasworkDecisionGates.js).
+    rollbackHold: phase === DONE ? null : cleanRollbackHold(raw.rollbackHold),
+    harnessLoop: restoreLoop(raw.harnessLoop),
   };
 }
 

@@ -236,6 +236,8 @@ const { togglesFor, spendCapsFor } = require('./lunasworkSettings');
 const { createToolGuard } = require('./lunasworkToolGuard');
 const { createVariantFlow } = require('./lunasworkVariantFlow');
 const { createPrototype } = require('./lunasworkPrototype');
+// A failed rollback or a harness loop asks Mati before the next iteration (src/lunasworkDecisionGates.js).
+const { createDecisionGates } = require('./lunasworkDecisionGates');
 const { planAfterRun, startQueued } = require('./lunasworkQueue');
 const { withParkedEditor, editorFor, addParkOutcome, PARK_SKIP } = require('./lunasworkEditorPark');
 const { createCompileRevert, mergesOf } = require('./lunasworkCompileRevert');
@@ -392,6 +394,19 @@ function createLunasWork(deps) {
     cardBook,
     withBuilderModel: (card) => withBuilderModel(card),
     withBrief: (card) => withBuilderBrief(card, [], listSkills(run.repoPath)),
+  });
+  const gates = createDecisionGates({
+    run: () => run,
+    update: (fields) => update(fields),
+    logEvent: (text) => logEvent(text),
+    ask: (spec) => ask(spec),
+    armWait: (until, reason) => armWait(until, reason),
+    wake: (reason) => wake(reason),
+    finish: (verdict, fields) => finish(verdict, fields),
+    cardBook,
+    syncCheckout: () => syncCheckout(),
+    writeDecisionLine: (line, decision, label) => writeDecisionLine(line, decision, label),
+    now,
   });
   // C9: error tracking at SHIP; its DSN reaches only the staging deploy env.
   const errorTracking = createErrorTracking(deps.errorTracking);
@@ -769,6 +784,8 @@ function createLunasWork(deps) {
     loopHooks.onAnswered(answered);
     // LW 2.25b: the prototype approval the run waits for.
     prototype.onAnswered(answered);
+    // A failed rollback / harness loop question the next iteration waits for.
+    gates.onAnswered(answered);
     // B17: an answered scope decision moves its feedback item on.
     refreshFeedback();
   }
@@ -1009,6 +1026,8 @@ function createLunasWork(deps) {
   async function stepDirecting() {
     // LW 2.25b: the real build waits for the prototype approval (or its deadline).
     if (prototype.gate()) return;
+    // A failed rollback or a harness loop: the next iteration waits for Mati's answer (or its default).
+    if (await gates.gate()) return;
     // Idea #14 (src/lunasworkResearch.js): new "like X" references researched first; never blocks.
     await researchStep.beforeDirecting(run);
     // LW 2.25a: a variant choice answered since the last iteration gets its cleanup card.
@@ -1452,14 +1471,15 @@ function createLunasWork(deps) {
       return { note: 'nothing to revert' };
     }
     if (!r.ok) {
-      logEvent(`rollback failed (${r.error || 'failed'}${r.detail ? `: ${String(r.detail).slice(0, 150)}` : ''}) - main keeps this iteration`);
+      logEvent(`rollback failed (${r.error || 'failed'}${r.detail ? `: ${String(r.detail).slice(0, 150)}` : ''}) - main still has iteration ${run.iteration}`);
       return { rollback: { ...r, ok: false, ...base } };
     }
     cardBook.reopen(run.projectId, closed);
     const reverted = Array.isArray(r.reverted) ? r.reverted : [];
-    logEvent(`rolled back ${r.fromTag} -> ${r.toTag}: ${reverted.length} revert commit(s), ${(r.cards || []).length} card(s)${dataNote}`);
+    const method = r.method === 'tree' ? 'tree' : 'revert';
+    logEvent(`rolled back ${r.fromTag} -> ${r.toTag} (method ${method}): ${reverted.length} revert commit(s), ${(r.cards || []).length} card(s)${dataNote}`);
     await syncCheckout();
-    return { rollback: { ...r, ...base, reopened: closed } };
+    return { rollback: { ...r, ...base, method, reopened: closed } };
   }
 
   /**
@@ -1473,12 +1493,17 @@ function createLunasWork(deps) {
     // A red iteration never reached main: nothing to tag or revert.
     if (history[history.length - 1].selfCheck !== 'green') return null;
     let checkpoint;
+    let decision = null;
     try {
-      const decision = rollbackDecision(history);
+      decision = rollbackDecision(history);
       checkpoint = decision.rollback ? await rollBack(decision, history, regressed) : await tagGreen();
     } catch (err) {
       checkpoint = { note: `checkpoint failed: ${errText(err).slice(0, 200)}` };
       logEvent(checkpoint.note);
+      // A triggered rollback that threw is a failed rollback: the decision gate asks Mati.
+      if (decision && decision.rollback) {
+        checkpoint.rollback = { ok: false, error: 'threw', detail: errText(err).slice(0, 200), reason: decision.reason, toIteration: decision.toIteration };
+      }
     }
     const clean = cleanCheckpoint(checkpoint);
     update({ current: { ...run.current, checkpoint: clean } });
@@ -1552,6 +1577,8 @@ function createLunasWork(deps) {
       finish(verdict.type, { history, lastCritic, laps });
       return;
     }
+    // A failed rollback or a harness loop: the next directing step waits for Mati.
+    gates.afterIteration({ n: record.n, milestone, passed: gate, current: c, critic, checkpoint });
     await nextIteration({
       history,
       laps,

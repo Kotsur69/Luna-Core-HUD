@@ -442,7 +442,14 @@ test('client: look / bug cards go in directly; a scope change waits with no defa
 
   // Mati says yes: the card is released and built, the item moves on.
   assert.equal(h.ctl.answer({ id: d.id, answer: 'yes' }).ok, true);
-  await h.next(5);
+  // Four iterations on one milestone without a pass: the harness-loop question
+  // (src/lunasworkDecisionGates.js) holds iteration 5 until it is answered.
+  h.gates[5] = deferred();
+  h.gates[4].resolve();
+  await until(() => h.ctl.status().pendingDecisions.some((x) => x.kind === 'harnessLoop'), 'harness-loop question');
+  const loopQuestion = h.ctl.status().pendingDecisions.find((x) => x.kind === 'harnessLoop');
+  assert.equal(h.ctl.answer({ id: loopQuestion.id, answer: 'keep-going' }).ok, true);
+  await until(() => h.directorCalls.length === 5, 'iteration 5 started');
   assert.ok(h.builds[h.builds.length - 1].includes(scope.at));
   assert.deepEqual(h.items().map((i) => i.status), ['verified']);
   await h.stopAt(5);
