@@ -172,6 +172,7 @@ function planCard(card) {
  */
 function createGodModeBuilder(deps) {
   const log = deps.log || (() => {});
+  const now = deps.now || Date.now;
   const isUnityProject = deps.isUnityProject || scene.isUnityProject;
   const configureUnityMerge = deps.configureUnityMerge || scene.configureUnityMerge;
   /** @type {null|{projectId:string, checkCommand:string, models:Map<number,string>, cards:object[], planId:string|null, settle:Function, unityVerify:boolean}} */
@@ -258,19 +259,12 @@ function createGodModeBuilder(deps) {
    *   or {ok:false, error} - 'limit' (with resumeAt), 'godModeBusy', 'noAgyProfile', 'noClaudeProfile', or God Mode's own error
    */
   async function build(opts) {
+    if (active && active.parked) return resumeParked(opts);
     if (active) return { ok: false, error: 'godModeBusy' };
+    const finished = takeParkedFinal(opts);
+    if (finished) return finished;
     const cards = Array.isArray(opts.cards) ? opts.cards.filter((c) => isObj(c) && Number.isFinite(c.at)) : [];
-    let resolveSettled;
-    const settled = new Promise((resolve) => {
-      resolveSettled = resolve;
-    });
-    let done = false;
-    const settle = (result) => {
-      if (done) return;
-      done = true;
-      resolveSettled(result);
-    };
-    active = {
+    const ctx = {
       projectId: opts.projectId,
       repoPath: opts.repoPath,
       cappedTools: opts.cappedTools,
@@ -278,10 +272,18 @@ function createGodModeBuilder(deps) {
       models: new Map(cards.map((c) => [c.at, c.model])),
       cards,
       planId: null,
-      settle,
       // Set once the build knows it is a Unity build (below).
       unityVerify: false,
+      // The run's end (onRunSettled, a kill, a discard), once; see settleRun.
+      final: undefined,
+      wake: null,
+      // Came back as a limit while its God Mode run waits for the reset.
+      parked: false,
+      // The last usage reset the whole run waited for (onChange), or null.
+      sawLimit: null,
     };
+    ctx.settle = (result) => settleRun(ctx, result);
+    active = ctx;
     try {
       // No Unity editor is open where God Mode merges: the plan's verifies and
       // the self-check (also when finishing an interrupted plan) know it.
@@ -310,7 +312,7 @@ function createGodModeBuilder(deps) {
         env: agyEnv || (opts.free && typeof deps.freeEnv === 'function' && deps.freeEnv()) || deps.env(),
         ...(agy ? { planner: AGY_MODEL, workers: AGY_MODEL } : {}),
         cards: cards.map(planCard),
-        onRunSettled: (result) => settle(result),
+        onRunSettled: (result) => ctx.settle(result),
         // God Mode allow-lists it again (orchestraPlan.plannerModelOf).
         ...(plannerModel ? { plannerModel } : {}),
         // Only a Unity build carries the key: every other plan is made exactly as before.
@@ -328,15 +330,118 @@ function createGodModeBuilder(deps) {
         ...(agy ? { workers: AGY_MODEL } : {}),
       });
       if (!isObj(launched) || !launched.ok) return { ok: false, error: (isObj(launched) && launched.error) || 'failed' };
-      const result = await settled;
-      const r = isObj(result) ? result : {};
-      return { ...r, ok: r.killed !== true && r.ok !== false };
+      return await awaitRun(ctx);
     } catch (err) {
       log(`[lunaswork-build] build failed: ${err instanceof Error ? err.message : String(err)}`);
       return { ok: false, error: 'failed' };
     } finally {
-      active = null;
+      // A parked build keeps its overlays: its run still goes on after the reset.
+      if (active === ctx && !ctx.parked) active = null;
     }
+  }
+
+  // ---- usage limit: the build comes back as a limit, its run waits ----------
+  //
+  // With every Claude account out, God Mode pauses the run until the reset and
+  // resumes it on its own (orchestra.js pauseUntil). The build reports that as
+  // {error:'limit', resumeAt}, so the controller knows it is limited
+  // (lunaswork.js limited) instead of sitting silently in 'building'. The run
+  // itself is left alone: the build stays `active` (parked, overlays and merge
+  // confirmation kept) and the controller's next build takes it up again.
+
+  /** A finished run of a parked build no build waited on: {projectId, planId, result}. */
+  let parkedFinal = null;
+
+  /** The build result of a settled run; limitedUntil = the run waited for a usage reset on the way. */
+  function finalResult(result, sawLimit = null) {
+    const r = isObj(result) ? result : {};
+    return { ...r, ok: r.killed !== true && r.ok !== false, ...(Number.isFinite(sawLimit) ? { limitedUntil: sawLimit } : {}) };
+  }
+
+  /** When the whole run waits for a usage reset (orchestra view.waitingUntil), else null. */
+  function limitUntilOf(view) {
+    const at = isObj(view) ? view.waitingUntil : null;
+    return Number.isFinite(at) && at > now() ? at : null;
+  }
+
+  function limitResult(ctx, until) {
+    ctx.parked = true;
+    log(`[lunaswork-build] plan ${ctx.planId}: every worker waits for the usage reset at ${new Date(until).toISOString()} - build reported as limited`);
+    return { ok: false, error: 'limit', resumeAt: until, planId: ctx.planId };
+  }
+
+  /** The run of `ctx` ended: wakes the build waiting on it, or keeps the result for the next build. */
+  function settleRun(ctx, result) {
+    if (ctx.final !== undefined) return;
+    ctx.final = result === undefined ? null : result;
+    if (ctx.parked) {
+      if (active === ctx) active = null;
+      parkedFinal = { projectId: ctx.projectId, planId: ctx.planId, result: ctx.final, sawLimit: ctx.sawLimit };
+      return;
+    }
+    wakeRun(ctx, { final: ctx.final });
+  }
+
+  function wakeRun(ctx, event) {
+    const wake = ctx.wake;
+    ctx.wake = null;
+    if (wake) wake(event);
+  }
+
+  /** The run's end, or a usage-limit wait of the whole run (onChange), whichever comes first. */
+  async function awaitRun(ctx) {
+    // A wait committed before this build listened (e.g. while launch ran).
+    const waiting = ctx.final === undefined && typeof deps.orchestra.view === 'function' ? deps.orchestra.view(ctx.projectId) : null;
+    const already = isObj(waiting) && waiting.id === ctx.planId ? limitUntilOf(waiting) : null;
+    if (already !== null) {
+      ctx.sawLimit = already;
+      return limitResult(ctx, already);
+    }
+    const event = await new Promise((resolve) => {
+      if (ctx.final !== undefined) resolve({ final: ctx.final });
+      else ctx.wake = resolve;
+    });
+    // The run may have ended between the limit wake and here: its end wins,
+    // a finished run is never parked (nothing would release the build).
+    if (ctx.final !== undefined) return finalResult(ctx.final, ctx.sawLimit);
+    return limitResult(ctx, event.limitUntil);
+  }
+
+  /**
+   * The controller builds again after a limit: the parked run is taken up
+   * where it is (still waiting = a limit again). Only the same project's
+   * build resuming that plan may take it; any other build waits for it.
+   */
+  async function resumeParked(opts) {
+    const ctx = active;
+    const o = isObj(opts) ? opts : {};
+    if (o.projectId !== ctx.projectId || o.resumePlanId !== ctx.planId) return { ok: false, error: 'godModeBusy' };
+    const view = typeof deps.orchestra.view === 'function' ? deps.orchestra.view(ctx.projectId) : null;
+    if (!isObj(view) || view.id !== ctx.planId) {
+      settleRun(ctx, { ok: false, error: 'discarded' });
+      return takeParkedFinal(o) || { ok: false, error: 'discarded' };
+    }
+    const until = limitUntilOf(view);
+    if (until !== null) return limitResult(ctx, until);
+    ctx.parked = false;
+    if (o.cappedTools !== undefined) ctx.cappedTools = o.cappedTools;
+    log(`[lunaswork-build] plan ${ctx.planId}: build taken up again after the usage limit`);
+    try {
+      return await awaitRun(ctx);
+    } finally {
+      if (active === ctx && !ctx.parked) active = null;
+    }
+  }
+
+  /** The result a parked run settled with, for the build resuming exactly that plan; null otherwise. */
+  function takeParkedFinal(opts) {
+    if (!parkedFinal) return null;
+    const kept = parkedFinal;
+    parkedFinal = null;
+    const o = isObj(opts) ? opts : {};
+    if (o.projectId !== kept.projectId || o.resumePlanId !== kept.planId) return null;
+    log(`[lunaswork-build] plan ${kept.planId}: finished while the build waited for the usage reset`);
+    return finalResult(kept.result, kept.sawLimit);
   }
 
   /**
@@ -355,7 +460,15 @@ function createGodModeBuilder(deps) {
     // A kill does not stop a finalize that is merging: the overlays (check
     // command, merge confirmation) stay until it is done.
     const merging = isObj(view.integration) && view.integration.running === true;
-    if (view.killed && !merging) active.settle({ planId: view.id, killed: true, integration: view.integration, plan: view });
+    if (view.killed && !merging) {
+      active.settle({ planId: view.id, killed: true, integration: view.integration, plan: view });
+      return;
+    }
+    // Every worker waits for a usage reset: the waiting build comes back as a limit.
+    const until = merging ? null : limitUntilOf(view);
+    if (until === null) return;
+    active.sawLimit = until;
+    if (active.wake) wakeRun(active, { limitUntil: until });
   }
 
   /** The paid tools past their cap right now: opts.cappedTools is a list, or a function read on every tab. */
@@ -490,4 +603,26 @@ function createGodModeBuilder(deps) {
   };
 }
 
-module.exports = { createGodModeBuilder, packageModel, planCard, plannerModelFor, claudeProfileIdOf, isRealClaudeProfile };
+/**
+ * A settled build that landed nothing because of the usage limit: no package
+ * merged, the merge did not go red, and the run settled while it still waited
+ * for a usage reset (limitedUntil, as the builder saw it, is in the future -
+ * its remaining workers stalled or were stopped at the wall). Such an
+ * iteration is limited, never 'build green, 0/N cards landed'. A run that
+ * waited, resumed after the reset and then landed nothing is an ordinary
+ * result: null, as for every other one.
+ * @param {object} result the build result
+ * @param {number} [now] epoch ms
+ * @returns {{error:'limit', resumeAt:number}|null}
+ */
+function buildLimitOf(result, now = Date.now()) {
+  const r = isObj(result) ? result : {};
+  if (r.ok === false || r.killed === true || r.nothing === true) return null;
+  if (isObj(r.integration) && r.integration.state === 'failed') return null;
+  if (!Number.isFinite(r.limitedUntil) || r.limitedUntil <= now) return null;
+  const plan = isObj(r.plan) ? r.plan : {};
+  if ((Array.isArray(plan.packages) ? plan.packages : []).some((p) => isObj(p) && p.merged === true)) return null;
+  return { error: 'limit', resumeAt: r.limitedUntil };
+}
+
+module.exports = { createGodModeBuilder, buildLimitOf, packageModel, planCard, plannerModelFor, claudeProfileIdOf, isRealClaudeProfile };
