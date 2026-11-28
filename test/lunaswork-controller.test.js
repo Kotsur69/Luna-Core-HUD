@@ -1011,6 +1011,72 @@ test('God Mode busy with another run: the build is tried again later', async () 
   assert.equal(h.ctl.status().verdict, 'ship');
 });
 
+// ---- accountFree(): a Claude limit wait ends once an account has room again ----------
+
+test('accountFree: a Claude limit wait ends at once and the limited step is retried', async () => {
+  const h = failoverHarness(false);
+  h.next.critic.push({ ok: false, error: 'limit', detail: 'Claude AI usage limit reached' }, shipCritic());
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.stored.claudeLimitWait, true, 'the wait is marked as a Claude limit');
+
+  assert.equal(h.ctl.accountFree(), true);
+  await h.settle();
+  assert.ok(h.timers.every((t) => t.cleared), 'the reset timer is cleared');
+  assert.equal(h.clock, START_CLOCK, 'no time had to pass');
+  assert.equal(h.calls.critic.length, 2);
+  assert.equal(h.ctl.status().verdict, 'ship');
+  assert.match(logText(h), /a Claude account is free again/);
+});
+
+test("accountFree: a wait for agy's own limit is left alone", async () => {
+  const h = agyHarness({ settings: { ...AGY_ON, models: { director: 'agy' } } });
+  h.next.director.push({ ok: true, error: 'limit', cards: [] });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.ctl.accountFree(), false);
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.calls.director.length, 1);
+});
+
+test("accountFree: a wait on the free providers' limit is left alone", async () => {
+  const h = harness({ settings: { models: {}, freeFallback: true, projects: {} } });
+  h.next.build.push({ ok: false, error: 'limit', resumeAt: START_CLOCK + 2 * HOUR }, { ok: false, error: 'limit', resumeAt: START_CLOCK + 3 * HOUR });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'limit');
+  assert.equal(h.ctl.accountFree(), false);
+  assert.equal(h.calls.build.length, 2);
+});
+
+test('accountFree: other waits and no run at all are left alone', async () => {
+  const idle = harness();
+  assert.equal(idle.ctl.accountFree(), false, 'no run');
+
+  const h = harness();
+  h.next.build.push({ ok: false, error: 'godModeBusy' });
+  await h.start();
+  assert.equal(h.ctl.status().waitReason, 'godModeBusy');
+  assert.equal(h.ctl.accountFree(), false);
+  assert.equal(h.ctl.status().waitReason, 'godModeBusy');
+});
+
+test('accountFree: the Claude mark survives a restart and is cleared when the wait ends', async () => {
+  const h1 = failoverHarness(false);
+  h1.next.critic.push({ ok: false, error: 'limit' });
+  await h1.start();
+  assert.equal(h1.stored.claudeLimitWait, true);
+
+  const h2 = harness({ stored: h1.stored, todos: h1.todos });
+  h2.next.critic.push(shipCritic());
+  assert.equal(h2.ctl.resume(), true);
+  await h2.settle();
+  assert.equal(h2.ctl.status().waitReason, 'limit');
+  assert.equal(h2.ctl.accountFree(), true);
+  await h2.settle();
+  assert.equal(h2.ctl.status().verdict, 'ship');
+  assert.equal(h2.stored.claudeLimitWait, false);
+});
+
 // ---- persistence and resume ---------------------------------------------------------
 
 test('every transition is persisted before it is announced', async () => {

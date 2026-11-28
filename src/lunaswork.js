@@ -608,19 +608,25 @@ function createLunasWork(deps) {
 
   // ---- waiting ----
 
-  function armWait(until, reason) {
+  /**
+   * Waits until `until`, then goes on with the current phase. `claude` marks
+   * a 'limit' wait whose limit is a Claude one (claudeLimitWait, persisted):
+   * accountFree() may end only that kind early - never agy's or the free
+   * providers' own limit.
+   */
+  function armWait(until, reason, { claude = false } = {}) {
     if (waitTimer) clearTimer(waitTimer);
     // A Stop that came in during the step: end now rather than wait first.
     if (run.stopRequested) {
       finish('stop');
       return;
     }
-    update({ waitUntil: until, waitReason: reason });
+    update({ waitUntil: until, waitReason: reason, claudeLimitWait: reason === 'limit' && claude === true });
     emit('wait');
     waitTimer = setTimer(() => {
       waitTimer = null;
       if (!active()) return;
-      update({ waitUntil: null, waitReason: null });
+      update({ waitUntil: null, waitReason: null, claudeLimitWait: false });
       emit('resume');
       kick();
     }, Math.max(0, until - now()));
@@ -703,7 +709,18 @@ function createLunasWork(deps) {
       return;
     }
     logEvent(`usage limit (${role}): waiting until ${new Date(until).toISOString()}`);
-    armWait(until, 'limit');
+    armWait(until, 'limit', { claude: limitOnClaude(role, agyBuild) });
+  }
+
+  /**
+   * The step that hit the limit ran on Claude: not on agy (the role's model,
+   * the agy fallback, or a build whose cards say agy) and not on the free
+   * providers (freeFallback covers only FREE_ROLES).
+   */
+  function limitOnClaude(role, agyBuild) {
+    const models = modelsNow();
+    if (agyBuild || (isObj(models) && isAgyModel(models[role]))) return false;
+    return !(FREE_ROLES.has(role) && onFree());
   }
 
   const isLimit = (res) => isObj(res) && res.error === 'limit';
@@ -713,9 +730,22 @@ function createLunasWork(deps) {
     if (!waitTimer || run.waitReason !== reason) return;
     clearTimer(waitTimer);
     waitTimer = null;
-    update({ waitUntil: null, waitReason: null });
+    update({ waitUntil: null, waitReason: null, claudeLimitWait: false });
     emit('resume');
     kick();
+  }
+
+  /**
+   * A Claude account has room again (main calls this on every usage reading
+   * and account change while one is free): a run waiting on a Claude usage
+   * limit goes on now instead of sleeping until the reset it armed with.
+   * @returns {boolean} whether a wait was ended
+   */
+  function accountFree() {
+    if (!active() || !waitTimer || run.waitReason !== 'limit' || run.claudeLimitWait !== true) return false;
+    logEvent('a Claude account is free again: resuming');
+    wake('limit');
+    return true;
   }
 
   /**
@@ -1159,9 +1189,9 @@ function createLunasWork(deps) {
     if (branches.join('\n') !== (run.branches || []).join('\n')) update({ branches });
     if (isLimit(r)) return limited(r, 'builder');
     // No free profile to fall back to: wait for the reset after all.
-    if (free && r.error === 'noFreeProfile') return armWait(run.limitedUntil, 'limit');
+    if (free && r.error === 'noFreeProfile') return armWait(run.limitedUntil, 'limit', { claude: true });
     // The agy profile went away during the agy fallback: wait for the Claude reset after all.
-    if (agy && onAgy() && r.error === 'noAgyProfile') return armWait(run.agyUntil, 'limit');
+    if (agy && onAgy() && r.error === 'noAgyProfile') return armWait(run.agyUntil, 'limit', { claude: true });
     if (r.error === 'godModeBusy') {
       logEvent('God Mode is busy with another run - building later');
       return armWait(now() + GODMODE_RETRY_MS, 'godModeBusy');
@@ -2059,9 +2089,9 @@ function createLunasWork(deps) {
     emit('phase');
     armDecisionTimer();
     if (Number.isFinite(run.waitUntil) && run.waitUntil > now()) {
-      armWait(run.waitUntil, run.waitReason || 'limit');
+      armWait(run.waitUntil, run.waitReason || 'limit', { claude: run.claudeLimitWait === true });
     } else {
-      update({ waitUntil: null, waitReason: null });
+      update({ waitUntil: null, waitReason: null, claudeLimitWait: false });
       kick();
     }
     // C11: a hand-back cut off by the restart is done again.
@@ -2151,6 +2181,7 @@ function createLunasWork(deps) {
     start: (payload) => start(payload),
     stop,
     resume,
+    accountFree,
     ask,
     answer,
     applyAnswers,

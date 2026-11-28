@@ -731,6 +731,8 @@ function restoreRun(raw) {
     phaseStartedAt: finite(raw.phaseStartedAt),
     waitUntil: phase === DONE ? null : finite(raw.waitUntil),
     waitReason: str(raw.waitReason, 40),
+    // The 'limit' wait is on a Claude limit: a free account may end it early (accountFree).
+    claudeLimitWait: phase !== DONE && raw.claudeLimitWait === true,
     limitedUntil: finite(raw.limitedUntil),
     // On the Antigravity CLI until then (agyFallback during a Claude usage limit).
     agyUntil: finite(raw.agyUntil),
