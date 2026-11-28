@@ -33,6 +33,8 @@ const {
   rollbackEvidence,
   rollbackCard,
   createCheckpoints,
+  mergeSubject,
+  PACK_COMMIT_PREFIX,
 } = require('../src/lunasworkCheckpoint');
 const { REPRO_ACCEPTANCE } = require('../src/lunasworkCritic');
 const { commitDesignPack } = require('../src/lunasworkPackCommit');
@@ -95,6 +97,33 @@ function mergePackage(repo, name) {
 function fixupCommit(repo, text) {
   fs.appendFileSync(path.join(repo, 'app.txt'), `${text}\n`);
   git(repo, 'commit', '-am', `fix: ${text}`);
+  git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
+}
+
+/** Writes `files` ({relPath: text}) into the checkout, creating folders. */
+function writeFiles(repo, files) {
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
+    fs.writeFileSync(path.join(repo, rel), text);
+  }
+}
+
+/** A God Mode package merge with its real merge subject, writing `files`, pushed. */
+function mergeGodModePackage(repo, branch, files) {
+  git(repo, 'checkout', '-b', branch);
+  writeFiles(repo, files);
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-m', `feat: ${branch}`);
+  git(repo, 'checkout', 'main');
+  git(repo, 'merge', '--no-ff', '-m', mergeSubject(branch), branch);
+  git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
+}
+
+/** A plain commit straight on main writing `files`, pushed. */
+function commitOnMain(repo, subject, files) {
+  writeFiles(repo, files);
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-m', subject);
   git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
 }
 
@@ -291,6 +320,7 @@ test('rollback reverts exactly the first-parent range since the good tag, histor
     todoStore: store,
   });
   assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.method, 'revert', 'a conflict-free rollback stays a revert sequence');
   assert.equal(res.fromTag, 'luna-work/lwrun1/iter-2-rolled-back');
   assert.equal(res.toTag, 'luna-work/lwrun1/iter-1');
   assert.deepEqual(res.reverted.map((c) => c.sha), expected, 'newest first, merges and the fix-up');
@@ -489,6 +519,104 @@ test('no good tag: nothing is reverted', async (t) => {
   assert.equal(res.ok, false);
   assert.equal(res.error, 'noGoodTag');
   assert.equal(originMain(origin), before);
+});
+
+// ---- the tree fallback: a revert sequence that conflicts ----------------------------------
+
+const TREE_SUBJECT = 'revert: roll back to luna-work/lwrun1/iter-1';
+// Answers the rollback's revert sequence the way a conflict does; everything else runs for real.
+const conflictingRevert = (args) =>
+  args[0] === 'revert' && args[1] === '--no-edit' ? { ok: false, out: '', err: 'error: could not revert 1234567... merge: luna/x (LunaCore God Mode)' } : null;
+
+test('a rollback whose revert sequence conflicts restores the good tag\'s tree in one new commit (method tree), design-pack docs kept', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  commitOnMain(repo, 'docs: game design', { 'design/GDD.md': '# GDD\nscene: none\n' });
+  const logs = [];
+  const cp = createCheckpoints({ git: recorder(), tmpDir: () => root, log: (l) => logs.push(l) });
+  assert.equal((await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 1 })).ok, true);
+  const good = originMain(origin);
+  // Iteration 2: two package merges on the same file (the first also notes its
+  // scene in the GDD), the Director's design-pack commit on that same GDD line,
+  // then a fix-up commit. Reverting newest-first skips the pack commit, so the
+  // first package's revert conflicts on design/GDD.md.
+  mergeGodModePackage(repo, 'luna/scene-worker-a1', { 'app.txt': 'v1\nscene\n', 'scene.txt': 'forest\n', 'design/GDD.md': '# GDD\nscene: forest\n' });
+  mergeGodModePackage(repo, 'luna/hud-worker-b2', { 'app.txt': 'v1\nscene\nhud\n' });
+  commitOnMain(repo, `${PACK_COMMIT_PREFIX} iteration 3 contracts`, { 'design/GDD.md': '# GDD\nscene: forest (approved)\n' });
+  commitOnMain(repo, 'fix: hud overlap', { 'app.txt': 'v1\nscene\nhud fixed\n' });
+  const broken = originMain(origin);
+
+  const store = memoryStore();
+  const res = await cp.rollback({ repoPath: repo, runId: RUN, iteration: 2, toIteration: 1, reason: 'coreJourneyBroken', todoStore: store });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.method, 'tree');
+  assert.ok(res.revertDetail, 'the revert failure is kept');
+  assert.deepEqual(
+    res.reverted.map((c) => c.subject),
+    ['fix: hud overlap', mergeSubject('luna/hud-worker-b2'), mergeSubject('luna/scene-worker-a1')],
+    'the work since the good tag is undone, the design-pack commit is not',
+  );
+
+  const after = originMain(origin);
+  assert.doesNotThrow(() => git(origin, 'merge-base', '--is-ancestor', broken, after), 'origin history was not rewritten');
+  assert.equal(git(origin, 'rev-list', '--count', `${broken}..${after}`), '1', 'exactly one new commit');
+  assert.equal(git(origin, 'log', '-1', '--format=%s', after), TREE_SUBJECT);
+  assert.equal(git(origin, 'rev-parse', `${after}^`), broken, 'a fast-forward on top of the broken head');
+  assert.equal(git(origin, 'diff', '--stat', good, after, '--', '.', ':(exclude)design'), '', 'the code is the good tag\'s');
+  assert.equal(git(origin, 'ls-tree', '--name-only', after, 'scene.txt'), '', 'a file added since the good tag is gone');
+  assert.equal(git(origin, 'show', `${after}:design/GDD.md`), '# GDD\nscene: forest (approved)', 'the design-pack doc stays');
+  assert.equal(git(origin, 'rev-parse', `refs/tags/${res.fromTag}^{commit}`), broken, 'the reverted work stays on a tag');
+  assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1, 'the temporary worktree is gone');
+  assert.ok(logs.some((l) => /restoring the tree of luna-work\/lwrun1\/iter-1 in one commit/.test(l)), logs.join('\n'));
+
+  assert.equal(store.list.length, 1);
+  assert.match(store.list[0].details, /restoring the tree of luna-work\/lwrun1\/iter-1/);
+  for (const c of res.reverted) assert.ok(store.list[0].details.includes(c.sha.slice(0, 7)), `card names ${c.subject}`);
+  const decisions = fs.readFileSync(path.join(repo, 'design', 'DECISIONS.md'), 'utf8');
+  assert.match(decisions, /roll main back from luna-work\/lwrun1\/iter-2-rolled-back to luna-work\/lwrun1\/iter-1 by restoring its tree in one commit \(3 commit\(s\) undone/);
+
+  // A restart after the push restores nothing more.
+  const again = await cp.rollback({ repoPath: repo, runId: RUN, iteration: 2, toIteration: 1, reason: 'coreJourneyBroken', todoStore: store });
+  assert.equal(again.ok, true, JSON.stringify(again));
+  assert.equal(again.nothing, true);
+  assert.equal(originMain(origin), after);
+  assert.equal(store.list.length, 1);
+});
+
+test('tree fallback: two merges on one file and a later fix land main on exactly the good tree', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  const cp = createCheckpoints({ git: recorder(conflictingRevert), tmpDir: () => root });
+  assert.equal((await cp.tagIteration({ repoPath: repo, runId: RUN, iteration: 1 })).ok, true);
+  const good = originMain(origin);
+  mergeGodModePackage(repo, 'luna/a', { 'app.txt': 'v1\na\n', 'a.txt': 'a\n' });
+  mergeGodModePackage(repo, 'luna/b', { 'app.txt': 'v1\na\nb\n' });
+  commitOnMain(repo, 'fix: b after a', { 'app.txt': 'v1\na fixed\nb\n' });
+  const broken = originMain(origin);
+  const res = await cp.rollback({ repoPath: repo, runId: RUN, iteration: 2, toIteration: 1, reason: 'scoreDrop' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.method, 'tree');
+  assert.match(res.revertDetail, /could not revert/);
+  const after = originMain(origin);
+  assert.equal(git(origin, 'rev-parse', `${after}^{tree}`), git(origin, 'rev-parse', `${good}^{tree}`), 'the good tag\'s tree, byte for byte');
+  assert.equal(git(origin, 'rev-parse', `${after}^`), broken);
+  assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1);
+});
+
+test('tree fallback: a rejected push leaves origin as it was, with no tag and no card', async (t) => {
+  const { root, origin, repo } = makeRepo(t);
+  await createCheckpoints({ git: recorder(), tmpDir: () => root }).tagIteration({ repoPath: repo, runId: RUN, iteration: 1 });
+  mergeGodModePackage(repo, 'luna/a', { 'app.txt': 'v1\na\n' });
+  const broken = originMain(origin);
+  const rejecting = recorder((args) =>
+    conflictingRevert(args) || (args[0] === 'push' && args.some((a) => a.endsWith(':refs/heads/main')) ? { ok: false, out: '', err: 'rejected (fetch first)' } : null));
+  const store = memoryStore();
+  const res = await createCheckpoints({ git: rejecting, tmpDir: () => root }).rollback({ repoPath: repo, runId: RUN, iteration: 2, toIteration: 1, reason: 'scoreDrop', todoStore: store });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'pushFailed', JSON.stringify(res));
+  assert.equal(res.method, 'tree');
+  assert.equal(originMain(origin), broken);
+  assert.equal(store.list.length, 0);
+  assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1);
+  assert.equal(git(origin, 'tag', '--list', 'luna-work/lwrun1/iter-2-rolled-back'), '');
 });
 
 // ---- staging data: backup before migrate, restore with the rollback (LW 3.29) -----------
