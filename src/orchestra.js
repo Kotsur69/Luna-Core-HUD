@@ -1027,6 +1027,20 @@ function createOrchestra(deps) {
     return res;
   }
 
+  /**
+   * effectivePausedUntil() for view(), which runs on every commit: its
+   * launchableReady() look rewrites kindHeld, the flag the tick reads to
+   * retry kind-capped packages - a view must not change that.
+   */
+  function waitingUntilForView() {
+    const held = kindHeld;
+    try {
+      return effectivePausedUntil();
+    } finally {
+      kindHeld = held;
+    }
+  }
+
   function view() {
     if (!plan) return null;
     return {
@@ -1060,7 +1074,7 @@ function createOrchestra(deps) {
       pausedUntil: plan.pausedUntil,
       // The whole run waits for a usage reset (no unpaused worker runs or could
       // launch), else null. Luna's Work reads it to report its build as limited.
-      waitingUntil: effectivePausedUntil(),
+      waitingUntil: waitingUntilForView(),
       // Cut by a PC shutdown or "Pause for shutdown": the board's resume banner.
       interrupted: shutdownResume.view(),
       // A machine problem holding the whole run ('noNodeModules'); Resume clears it.

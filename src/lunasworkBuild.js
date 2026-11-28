@@ -390,12 +390,21 @@ function createGodModeBuilder(deps) {
 
   /** The run's end, or a usage-limit wait of the whole run (onChange), whichever comes first. */
   async function awaitRun(ctx) {
+    // A wait committed before this build listened (e.g. while launch ran).
+    const waiting = ctx.final === undefined && typeof deps.orchestra.view === 'function' ? deps.orchestra.view(ctx.projectId) : null;
+    const already = isObj(waiting) && waiting.id === ctx.planId ? limitUntilOf(waiting) : null;
+    if (already !== null) {
+      ctx.sawLimit = already;
+      return limitResult(ctx, already);
+    }
     const event = await new Promise((resolve) => {
       if (ctx.final !== undefined) resolve({ final: ctx.final });
       else ctx.wake = resolve;
     });
-    if (event.final === undefined) return limitResult(ctx, event.limitUntil);
-    return finalResult(event.final, ctx.sawLimit);
+    // The run may have ended between the limit wake and here: its end wins,
+    // a finished run is never parked (nothing would release the build).
+    if (ctx.final !== undefined) return finalResult(ctx.final, ctx.sawLimit);
+    return limitResult(ctx, event.limitUntil);
   }
 
   /**
@@ -596,24 +605,24 @@ function createGodModeBuilder(deps) {
 
 /**
  * A settled build that landed nothing because of the usage limit: no package
- * merged, the merge did not go red, and the run waited for a usage reset on
- * the way (the builder saw it: limitedUntil) or God Mode logged a limit
- * pause with no free account. Such an iteration is limited, never 'build
- * green, 0/N cards landed'. Null for every other result.
+ * merged, the merge did not go red, and the run settled while it still waited
+ * for a usage reset (limitedUntil, as the builder saw it, is in the future -
+ * its remaining workers stalled or were stopped at the wall). Such an
+ * iteration is limited, never 'build green, 0/N cards landed'. A run that
+ * waited, resumed after the reset and then landed nothing is an ordinary
+ * result: null, as for every other one.
  * @param {object} result the build result
- * @returns {{error:'limit', resumeAt:number|null}|null}
+ * @param {number} [now] epoch ms
+ * @returns {{error:'limit', resumeAt:number}|null}
  */
-function buildLimitOf(result) {
+function buildLimitOf(result, now = Date.now()) {
   const r = isObj(result) ? result : {};
   if (r.ok === false || r.killed === true || r.nothing === true) return null;
   if (isObj(r.integration) && r.integration.state === 'failed') return null;
+  if (!Number.isFinite(r.limitedUntil) || r.limitedUntil <= now) return null;
   const plan = isObj(r.plan) ? r.plan : {};
   if ((Array.isArray(plan.packages) ? plan.packages : []).some((p) => isObj(p) && p.merged === true)) return null;
-  const recoveries = Array.isArray(plan.recoveries) ? plan.recoveries : [];
-  const paused = recoveries.some((e) => isObj(e) && e.reason === 'usageLimit' && typeof e.detail === 'string' && e.detail.includes('no free account'));
-  const seen = Number.isFinite(r.limitedUntil);
-  if (!seen && !paused) return null;
-  return { error: 'limit', resumeAt: seen ? r.limitedUntil : null };
+  return { error: 'limit', resumeAt: r.limitedUntil };
 }
 
 module.exports = { createGodModeBuilder, buildLimitOf, packageModel, planCard, plannerModelFor, claudeProfileIdOf, isRealClaudeProfile };

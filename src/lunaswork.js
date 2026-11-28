@@ -1154,7 +1154,7 @@ function createLunasWork(deps) {
     else if (!r.ok) return retryLater(`build: ${r.error || 'failed'}`);
     // Nothing landed because the builders hit the usage limit: limited, never
     // 'build green, 0/N cards landed'. Cards God Mode ticked open again.
-    const limit = r.killed ? null : buildLimitOf(r);
+    const limit = r.killed ? null : buildLimitOf(r, now());
     if (limit) {
       const ticked = cardBook.ticked(run.projectId, cards.map((c) => c.at));
       cardBook.reopen(run.projectId, ticked);

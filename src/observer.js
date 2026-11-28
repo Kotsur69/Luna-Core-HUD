@@ -1191,7 +1191,7 @@ class TranscriptWatcher {
         } else if (this.onApiError && hasApiError(complete)) {
           this.onApiError({ at: apiErrorAt(complete) ?? Date.now() });
         }
-      } else if (this.onUsageLimit && hasApiError(complete)) {
+      } else if (this.onUsageLimit && this.startedAt > 0 && hasApiError(complete)) {
         // A limit on the very first turn: the CLI writes the brief and the
         // limit banner within a second, so the watcher's first read of a
         // fresh transcript already holds both and the history rule above

@@ -204,9 +204,10 @@ function fakeOrchestra() {
 function builderOn(orchestra, clock) {
   return createGodModeBuilder({
     orchestra: {
-      makePlan: orchestra.makePlan,
-      launch: orchestra.launch,
-      cancelPlanWait: orchestra.cancelPlanWait,
+      // Read at call time, so a test may swap one in.
+      makePlan: (ctx) => orchestra.makePlan(ctx),
+      launch: (payload) => orchestra.launch(payload),
+      cancelPlanWait: () => orchestra.cancelPlanWait(),
       view: () => orchestra.viewOf(),
       planWait: () => null,
     },
@@ -282,18 +283,53 @@ test('builder: a parked run that settles before the retry hands its result to th
 
 // ---- 3. buildLimitOf ---------------------------------------------------------------
 
-test('buildLimitOf: nothing merged + a limit wait is a limit; anything else is not', () => {
+test('buildLimitOf: nothing merged while the limit wait is still on is a limit; anything else is not', () => {
+  const now = START_CLOCK;
+  const later = now + HOUR;
   const none = { ok: true, integration: { state: 'done' }, plan: { packages: [{ id: 'a', merged: false }, { id: 'b', merged: false }] } };
-  assert.deepEqual(buildLimitOf({ ...none, limitedUntil: 42 }), { error: 'limit', resumeAt: 42 });
-  const logged = { ...none, plan: { ...none.plan, recoveries: [{ reason: 'usageLimit', detail: 'a: account failover, else pause until the reset: no free account - paused until 2026-11-28 00:50 UTC, resumes on its own' }] } };
-  assert.deepEqual(buildLimitOf(logged), { error: 'limit', resumeAt: null });
+  assert.deepEqual(buildLimitOf({ ...none, limitedUntil: later }, now), { error: 'limit', resumeAt: later });
+  // The run waited, resumed after the reset and then landed nothing: an ordinary result.
+  assert.equal(buildLimitOf({ ...none, limitedUntil: now - 1 }, now), null);
   // Not limited: no limit seen, something merged, a red merge, a kill, nothing to build.
-  assert.equal(buildLimitOf(none), null);
-  assert.equal(buildLimitOf({ ...landed(), ok: true, limitedUntil: 42 }), null);
-  assert.equal(buildLimitOf({ ...none, limitedUntil: 42, integration: { state: 'failed' } }), null);
-  assert.equal(buildLimitOf({ ...none, limitedUntil: 42, killed: true }), null);
-  assert.equal(buildLimitOf({ ok: true, nothing: true, integration: { state: 'idle' }, limitedUntil: 42 }), null);
-  assert.equal(buildLimitOf({ ok: false, error: 'limit' }), null);
+  assert.equal(buildLimitOf(none, now), null);
+  assert.equal(buildLimitOf({ ...landed(), ok: true, limitedUntil: later }, now), null);
+  assert.equal(buildLimitOf({ ...none, limitedUntil: later, integration: { state: 'failed' } }, now), null);
+  assert.equal(buildLimitOf({ ...none, limitedUntil: later, killed: true }, now), null);
+  assert.equal(buildLimitOf({ ok: true, nothing: true, integration: { state: 'idle' }, limitedUntil: later }, now), null);
+  assert.equal(buildLimitOf({ ok: false, error: 'limit' }, now), null);
+});
+
+test('builder: a run that ends right after the limit wake is returned as ended, never parked', async () => {
+  const clock = { now: START_CLOCK };
+  const orchestra = fakeOrchestra();
+  const builder = builderOn(orchestra, clock);
+  const building = builder.build(buildOpts());
+  await tick();
+  orchestra.view = { ...orchestra.view, waitingUntil: START_CLOCK + HOUR };
+  // Same tick: the wake, then the run's end, before the build reads the wake.
+  builder.onChange(orchestra.view, 'game');
+  orchestra.settle(landed());
+  const res = await building;
+  assert.equal(res.ok, true);
+  assert.equal(res.planId, 'p1');
+  assert.equal(builder.isBuilding(), false, 'nothing is left active');
+});
+
+test('builder: a limit wait committed while launch ran is not missed', async () => {
+  const clock = { now: START_CLOCK };
+  const orchestra = fakeOrchestra();
+  const reset = START_CLOCK + 2 * HOUR;
+  const builder = builderOn(orchestra, clock);
+  // God Mode paused the run before launch answered: no build listened yet.
+  const launch = orchestra.launch;
+  orchestra.launch = async (payload) => {
+    const res = await launch(payload);
+    orchestra.view = { ...orchestra.view, waitingUntil: reset };
+    builder.onChange(orchestra.view, 'game');
+    return res;
+  };
+  const res = await builder.build(buildOpts());
+  assert.deepEqual(res, { ok: false, error: 'limit', resumeAt: reset, planId: 'p1' });
 });
 
 // ---- the controller ----------------------------------------------------------------
