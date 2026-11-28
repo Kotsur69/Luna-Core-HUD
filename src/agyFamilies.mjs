@@ -49,7 +49,7 @@ export const AGY_FAMILIES = Object.freeze([
   }),
   Object.freeze({
     family: 'argon', poolKey: 'agy-argon', labelKey: 'orch.agy.family.argon', name: 'Argon (agy)', plannerText: 'Gemini Argon on the Antigravity CLI',
-    tier: 'hard', strength: 2, usageRow: 'Argon', ownUsageRow: true, usageFromSummary: false, usageAlwaysListed: true, weeklyOnly: true,
+    tier: 'hard', strength: 2, usageRow: 'Argon', ownUsageRow: true, usageFromSummary: false, usageAlwaysListed: false, weeklyOnly: true,
   }),
   // Hydrogen shares the Gemini quota (every gemini-* model without its own).
   Object.freeze({

@@ -30,9 +30,9 @@ test('lookup by pool key', () => {
   assert.equal(fam.agyFamilyByPoolKey(undefined), null);
 });
 
-test('own-usage flags: Neon and Argon have their own quota row, only Argon is always listed', () => {
+test('own-usage flags: Neon and Argon have their own quota row, neither is always listed', () => {
   assert.deepEqual(fam.agyOwnUsageFamilies().map((f) => f.usageRow), ['Neon', 'Argon']);
-  assert.deepEqual(fam.agyAlwaysListedUsageRows(), ['Argon']);
+  assert.deepEqual(fam.agyAlwaysListedUsageRows(), []);
   assert.deepEqual(fam.agyUsageRowOrder(), ['Opus', 'Gemini', 'Neon', 'Argon']);
   assert.deepEqual([...fam.agyPerModelUsageRows()].sort(), ['Argon', 'Gemini', 'Neon']);
   assert.equal(fam.isWeeklyOnlyUsageRow('Argon'), true);

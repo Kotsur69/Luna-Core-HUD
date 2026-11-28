@@ -137,12 +137,12 @@ test('agy rows with a model family become Claude-style rows: Opus / Gemini / Arg
   assert.deepEqual(notices, []);
 });
 
-test('agy without an Argon reading still lists Argon, as a muted "not reported" line', () => {
-  const limits = [{ ...five(20), model: 'Opus' }];
+test('agy without an Argon reading does not list a placeholder Argon row', () => {
+  const limits = [{ ...five(20), model: 'Opus' }, { ...five(10), model: 'Gemini' }];
   const { sources } = providerSources({ account: 'x@example.com' }, limits);
-  assert.deepEqual(sources.map((s) => [s.account.label, s.account.status]), [['Opus', 'ok'], ['Argon', 'unreported']]);
+  assert.deepEqual(sources.map((s) => [s.account.label, s.account.status]), [['Opus', 'ok'], ['Gemini', 'ok']]);
   const { notices } = groupUsageRows(sources);
-  assert.deepEqual(notices.map((n) => [n.account.label, n.key]), [['Argon', 'usage.google.unreported']]);
+  assert.deepEqual(notices, []);
 });
 
 test('an agy custom-window row keeps its own name, without the group prefix', () => {

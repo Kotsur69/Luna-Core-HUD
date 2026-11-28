@@ -593,19 +593,19 @@ function modelRowLabel(limit) {
 
 /**
  * agy usage rows in name-column order (src/agyFamilies.mjs): Opus, Gemini,
- * Neon, Argon. Only the usageAlwaysListed rows (Argon) show without a
- * reading; any other family (Neon) shows only when agy reports it.
+ * Neon, Argon. Only usageAlwaysListed rows show without a reading; any other
+ * family (Neon, Argon) shows only when agy reports it.
  */
 const AGY_MODEL_ORDER = Object.freeze(agyUsageRowOrder());
 const AGY_ALWAYS_LISTED = Object.freeze(agyAlwaysListedUsageRows());
 
 /**
  * agy rows regrouped like Claude's accounts: one "account" per model family
- * (Opus / Gemini / Argon, src/providerusageparse.js agyModelName) whose short
- * name fills the name column, so the window label shows once per group and
- * each family gets a row under it. The limits drop their model group and
- * label, so they group under the plain 5h / wk windows. Argon is listed even
- * without a reading (status 'unreported': a muted line says Google sent none).
+ * (Opus / Gemini / Neon / Argon, src/providerusageparse.js agyModelName) whose
+ * short name fills the name column, so the window label shows once per group
+ * and each family gets a row under it. The limits drop their model group and
+ * label, so they group under the plain 5h / wk windows. Any row in
+ * AGY_ALWAYS_LISTED is listed even without a reading (status 'unreported').
  * @param {Array<object>} limits drawable limits carrying `model`
  * @returns {Array<{account: object, limits: Array<object>}>}
  */
