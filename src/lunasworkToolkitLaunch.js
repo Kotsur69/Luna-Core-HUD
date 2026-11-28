@@ -92,9 +92,10 @@ function createToolsFor(deps) {
   }
 
   /**
-   * @param {{projectId:string, repoPath?:string, role:string, capped?:string[]}} req
+   * @param {{projectId:string, repoPath?:string, role:string, capped?:string[], editor?:'none'|'worktree'}} req
+   *   repoPath: the main checkout; editor: a Unity build's editor mode for the package (lunasworkWorktreeEditors.js)
    * @returns {null|{role:string, tools:string[], skills:string[], fromClaudeSetup:string[], mcpConfigPath:string|null,
-   *   allowedTools:string[], disallowedTools:string[], addDirs:string[], note:string}}
+   *   allowedTools:string[], disallowedTools:string[], addDirs:string[], editor?:string, note:string}}
    */
   return function toolsFor(req) {
     try {
@@ -106,6 +107,8 @@ function createToolsFor(deps) {
         capped: r.capped,
         repoPath: r.repoPath,
         spendCaps: settingsStore.spendCapsFor(settings, r.projectId),
+        // Both editor modes launch no Unity MCP server, so one role's --mcp-config file stays the same for every package.
+        ...(r.editor !== undefined ? { editor: r.editor } : {}),
       });
       if (!launch) return null;
       const servers = Object.keys(launch.mcpConfig.mcpServers);

@@ -79,11 +79,14 @@ const MAX_PROMPT_CHARS = 8000;
 const MAX_TITLE_CHARS = 120;
 const MAX_FILES = 50;
 
+// The scene worker's editor is its OWN, on its worktree (src/lunasworkWorktreeEditors.js):
+// in run lwmwzajado it sent an open-scene request to the main checkout's editor instead.
 const SCENE_WORKER_BRIEF = [
-  'You are the SCENE WORKER of this build: the only worker allowed to open the Unity editor (through Unity MCP) and to change scenes and prefabs (*.unity, *.prefab).',
-  'One editor = one Unity MCP connection, so every scene and prefab change of this build is yours. Other packages run in parallel and change code only.',
-  'Save every scene / prefab you change in the editor and commit them with your work.',
-  'A luna_asset_* answer that says the Unity import is deferred means YOUR editor is not connected: that is a failure for you, not for an asset-prep worker. Open the Unity editor on this project and import the files with your Unity MCP before you finish.',
+  'You are the SCENE WORKER of this build: the only worker allowed to change scenes and prefabs (*.unity, *.prefab), in your OWN Unity editor opened on this worktree (the folder you run in) and driven with the `unity` CLI run inside it.',
+  'Never drive the Unity editor on the main checkout: it belongs to the playtest after the merge, and a request with your worktree path blocks it with "About to open another project!". Unity MCP tools are blocked in this build for that reason.',
+  'Every scene and prefab change of this build is yours. Other packages run in parallel and change code only.',
+  'Save every scene / prefab you change in the editor, commit them with your work, and close your editor before you finish.',
+  'A luna_asset_* answer that says the Unity import is deferred means YOUR editor is not connected: that is a failure for you, not for an asset-prep worker. Open your own Unity editor on this worktree and import the files through it before you finish.',
 ].join('\n');
 const CODE_WORKER_NOTE =
   `Do not open the Unity editor and do not edit *.unity or *.prefab files: the ${SCENE_WORKER_ID} package owns all scene and prefab work in this build.`;

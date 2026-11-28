@@ -93,6 +93,7 @@ const { createRescueWiring } = require('./orchestraRescueWiring');
 const rescueRules = require('./orchestraRescue');
 // Per-kind parallel caps of a mixed pool run (agy counted over every run).
 const kindCapRules = require('./orchestraKindCaps');
+const editorSlots = require('./orchestraEditorSlots');
 // A package's model + effort picked on the Approve board (pool runs).
 const packageModelRules = require('./orchestraPackageModel');
 const { createFreeReviewer } = require('./orchestraFreeReview');
@@ -439,6 +440,10 @@ function runPackage(p) {
  * }} deps
  *   workerTools: (pkg) => kit|null - a Luna's Work build's tool kit for one
  *   package's tab (lunasworkBuild.workerTools); null = plain God Mode.
+ *   worktreeEditors: () => {max, needs(pkg), close(root, repoPath)}|null - a
+ *   Luna's Work Unity build's packages with their own worktree editor: at most
+ *   `max` hold a slot at once, and their editors close when they settle
+ *   (src/orchestraEditorSlots.js); null = no cap, as before.
  *   repoBusy: multi God Mode (orchestraRegistry.js) - another project's run
  *   holds this repo, so makePlan refuses with 'repoBusy'.
  *   powerFlow: multi God Mode A3 - the registry's ONE sleep / shutdown flow
@@ -492,6 +497,15 @@ function createOrchestra(deps) {
   // project cannot plan the same repo meanwhile.
   let planningRepo = null;
   let pumping = false;
+  // A settled package's worktree editors are closed (src/orchestraEditorSlots.js);
+  // a package held for an editor slot may launch once that is done.
+  const editorReaper = editorSlots.createEditorReaper({
+    isSettled: (p) => sup.SETTLED_STATES.has(p.state),
+    onClosed: () => {
+      if (plan && plan.started && !plan.killed && !pumping) kick();
+    },
+    log,
+  });
   /** pkgId -> pending nudge timer (also the bounded wait on a background process) */
   const nudgeTimers = new Map();
   /** sessionId -> background processes the worker started that have not reported back */
@@ -893,7 +907,7 @@ function createOrchestra(deps) {
   });
   const isBusy = () => busy || pumping || finalizer.isRunning() || shutdownResume.isResuming();
 
-  /** Ready packages whose kind was full at the last look (the tick retries them). */
+  /** Ready packages whose kind, or worktree editor slot, was full at the last look (the tick retries them). */
   let kindHeld = false;
 
   function launchableReady() {
@@ -905,17 +919,46 @@ function createOrchestra(deps) {
     const masked = pauseRules.hasPauses(pauseRules.pausesOf(plan))
       ? plan.packages.map((p) => (p.state === 'pending' && isPackagePaused(p) ? { ...p, state: 'paused_skip' } : p))
       : plan.packages;
+    const readyOf = (pkgs) => kindCappedReady(pkgs, max);
+    // Only a Luna's Work Unity build caps its own worktree editors (src/orchestraEditorSlots.js).
+    const editors = editorPolicy();
+    if (!editors) return readyOf(masked);
+    const capped = editorSlots.capEditorLaunches(masked, { readyOf, isActive: sup.isActive, needs: editors.needs, max: editors.max, closing: editorReaper.closing() });
+    if (capped.held.length) kindHeld = true;
+    return capped.ready;
+  }
+
+  /** The ready list under the global cap, and per kind in a pool run (sets kindHeld). */
+  function kindCappedReady(pkgs, max) {
     // Every run but a pool run launches exactly as before: the global cap only.
-    if (!kindCapRules.usesKindCaps(plan)) return sup.readyToLaunch(masked, max);
-    const capped = kindCapRules.capReady(masked, {
-      readyOf: (pkgs) => sup.readyToLaunch(pkgs, max),
+    if (!kindCapRules.usesKindCaps(plan)) return sup.readyToLaunch(pkgs, max);
+    const capped = kindCapRules.capReady(pkgs, {
+      readyOf: (list) => sup.readyToLaunch(list, max),
       isActive: sup.isActive,
       kindOf: packageKind,
       caps: kindCapRules.kindCaps(workerSettings()),
       elsewhere: { agy: agyWorkersElsewhere() },
     });
-    kindHeld = capped.held.length > 0;
+    if (capped.held.length) kindHeld = true;
     return capped.ready;
+  }
+
+  /** A Luna's Work Unity build's worktree editor policy {max, needs, close} (deps.worktreeEditors), or null. */
+  function editorPolicy() {
+    if (typeof deps.worktreeEditors !== 'function') return null;
+    let policy = null;
+    try {
+      policy = editorSlots.editorPolicyOf(deps.worktreeEditors());
+    } catch (err) {
+      log(`[orchestra] worktree editor policy not read: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return policy ? { ...policy, needs: editorSlots.safeNeeds(policy.needs, log) } : null;
+  }
+
+  /** Closes the worktree editors of editor packages that settled (commit runs after every transition). */
+  function sweepWorktreeEditors() {
+    const editors = plan ? editorPolicy() : null;
+    if (editors) editorReaper.sweep(plan.packages, plan.repoPath, editors, editors.needs);
   }
 
   /** The kind of worker a package runs on: 'agy', 'free' (a hybrid free package) or 'claude'. */
@@ -1208,6 +1251,8 @@ function createOrchestra(deps) {
     if (plan && deps.transcriptIdOf) plan.packages = resumeRules.withTranscriptIds(plan.packages, deps.transcriptIdOf, log);
     // A settled package's tab loses its scoped intake token (orchestraFollowupsLaunch.js).
     if (plan && deps.revokeFollowups) revokeQuietly(() => deps.revokeFollowups(followupLaunch.settledSessions(plan, sup.SETTLED_STATES)));
+    // A settled package's own Unity editor (a Luna's Work Unity build) is closed.
+    sweepWorktreeEditors();
     saveState(plan ? sup.serializePlan(plan) : null);
     const v = view();
     onChange(v);

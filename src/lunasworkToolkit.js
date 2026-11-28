@@ -28,7 +28,11 @@
 //                `${VAR}` references, so a key comes from LunaCore's env and
 //                never sits in a file on disk
 //   launch       roleLaunch(kit, role, opts) -> mcpConfig, allowedTools,
-//                disallowedTools, addDirs, note (the worker brief's lines)
+//                disallowedTools, addDirs, note (the worker brief's lines).
+//                opts.editor (a Unity build only, src/lunasworkWorktreeEditors.js):
+//                'none' = no Unity editor tool at all, 'worktree' = the unity
+//                CLI for its own worktree editor; both deny every Unity MCP
+//                server, since its editor is never pinned to the worktree
 //   guardrails   GIT_GUARD_RULES (no force-push, no history rewrite),
 //                HOME_GUARD_RULES, isWritablePath, matchesBashRule
 //   spend        DEFAULT_SPEND_CAPS_USD, normalizeSpendCaps, validateSpendCaps,
@@ -39,6 +43,7 @@
 'use strict';
 
 const path = require('path');
+const editors = require('./lunasworkWorktreeEditors');
 
 const KIT_ROLES = Object.freeze(['builder', 'asset']);
 // Documented, never configurable: see the header.
@@ -52,7 +57,7 @@ const FIXED_ROLES = Object.freeze(['director', 'critic', 'playtester']);
  * setting or the user's own Claude config.
  */
 const TOOLS = Object.freeze({
-  unity: Object.freeze({ server: 'unity', rules: Object.freeze(['Bash(unity:*)', 'Bash(Unity:*)', 'Bash(Unity.exe:*)']) }),
+  unity: Object.freeze({ server: 'unity', rules: Object.freeze(['Bash(unity:*)', 'Bash(Unity:*)', 'Bash(Unity.exe:*)', 'Bash(unity.exe:*)']) }),
   blender: Object.freeze({ server: 'blender', rules: Object.freeze(['Bash(blender:*)', 'Bash(blender.exe:*)']) }),
   higgsfield: Object.freeze({ server: 'higgsfield-bridge', rules: Object.freeze(['Bash(higgsfield:*)']), paid: true }),
   comfyui: Object.freeze({ server: 'comfyui', rules: Object.freeze([]) }),
@@ -66,6 +71,8 @@ const TOOLS = Object.freeze({
   git: Object.freeze({ server: null, rules: Object.freeze(['Bash(git:*)']) }),
 });
 const TOOL_IDS = Object.freeze(Object.keys(TOOLS));
+// The tool whose editor access a Unity build's editor mode sets (roleLaunch opts.editor).
+const UNITY_TOOL = 'unity';
 const PAID_TOOLS = Object.freeze(TOOL_IDS.filter((id) => TOOLS[id].paid === true));
 // A God Mode worker commits its work: git can never be taken away.
 const REQUIRED_TOOLS = Object.freeze(['git']);
@@ -328,45 +335,63 @@ const toolRules = (id) => {
  * One role's launch pieces, from its kit. A tool that is out of the kit or
  * capped (its spend cap reached) is denied by name, so a server the user's own
  * Claude config loads is closed too. The guard rules are always denied.
+ *
+ * A Unity build passes the package's editor mode (src/lunasworkWorktreeEditors.js):
+ * 'none' takes the unity tool out of the kit (its MCP server and CLIs are
+ * denied); 'worktree' keeps the unity CLI for the package's own worktree editor
+ * and denies any unity command or `cd` naming the main checkout (repoPath).
+ * Both deny every Unity MCP server and launch none: which editor a server
+ * reaches is set by the Claude setup, never by the worktree. No mode = as before.
  * @param {object} kit normalizeToolkit()
  * @param {string} role a KIT_ROLES entry
- * @param {{toolServers?:object, capped?:string[], repoPath?:string, spendCaps?:object}} [opts]
+ * @param {{toolServers?:object, capped?:string[], repoPath?:string, spendCaps?:object, editor?:'none'|'worktree'}} [opts]
+ *   repoPath: the project's main checkout
  * @returns {{role:string, tools:string[], skills:string[], mcpConfig:{mcpServers:object},
  *   allowedTools:string[], disallowedTools:string[], addDirs:string[], fromClaudeSetup:string[],
- *   note:string}|null} null for a role outside the kit (the fixed roles)
+ *   editor?:'none'|'worktree', note:string}|null} null for a role outside the kit (the fixed roles)
  */
 function roleLaunch(kit, role, opts = {}) {
   if (!KIT_ROLES.includes(role) || !isObj(kit) || !isObj(kit[role])) return null;
   const servers = isObj(opts.toolServers) ? opts.toolServers : {};
   const capped = new Set((Array.isArray(opts.capped) ? opts.capped : []).filter((t) => PAID_TOOLS.includes(t)));
-  const tools = kit[role].tools.filter((t) => own(TOOLS, t) && !capped.has(t));
+  const editor = editors.EDITOR_MODES.includes(opts.editor) ? opts.editor : null;
+  const noEditor = (t) => editor === editors.EDITOR_NONE && t === UNITY_TOOL;
+  const tools = kit[role].tools.filter((t) => own(TOOLS, t) && !capped.has(t) && !noEditor(t));
   const denied = TOOL_IDS.filter((t) => !tools.includes(t));
   const mcpServers = {};
   const fromClaudeSetup = [];
   for (const id of tools) {
     const t = TOOLS[id];
-    if (!t.server) continue;
+    if (!t.server || (editor && id === UNITY_TOOL)) continue;
     const def = own(servers, id) ? servers[id] : t.launch;
     if (def) mcpServers[t.server] = { ...def };
     else fromClaudeSetup.push(id);
   }
+  const editorDeny = editors.editorDenyRules(editor, opts.repoPath);
   const artDirs = Array.isArray(kit.artDirs) ? kit.artDirs : [];
   const result = {
     role,
     tools,
     skills: [...kit[role].skills],
     mcpConfig: { mcpServers },
-    allowedTools: tools.flatMap(toolRules),
-    disallowedTools: [...GIT_GUARD_RULES, ...HOME_GUARD_RULES, ...denied.flatMap(toolRules)],
+    allowedTools: tools.flatMap(toolRules).filter((r) => !editorDeny.includes(r)),
+    disallowedTools: [...new Set([...GIT_GUARD_RULES, ...HOME_GUARD_RULES, ...denied.flatMap(toolRules), ...editorDeny])],
     addDirs: [...artDirs],
     fromClaudeSetup,
+    ...(editor ? { editor } : {}),
   };
-  return { ...result, note: kitNote({ ...result, spendCaps: normalizeSpendCaps(opts.spendCaps) }, { capped: [...capped], repoPath: opts.repoPath }) };
+  const noteOpts = { capped: [...capped], repoPath: opts.repoPath, editor };
+  return { ...result, note: kitNote({ ...result, spendCaps: normalizeSpendCaps(opts.spendCaps) }, noteOpts) };
 }
 
-/** The lines a worker's brief gets about its kit and the guardrails. */
-function kitNote(launch, { capped = [], repoPath } = {}) {
+/**
+ * The lines a worker's brief gets about its kit and the guardrails. A Unity
+ * build's editor rule comes right after the tools: a note shortened to fit the
+ * prompt cap loses its end first.
+ */
+function kitNote(launch, { capped = [], repoPath, editor = null } = {}) {
   const lines = ["## Tool kit (Luna's Work)", `Tools you may use: ${launch.tools.join(', ')}.`];
+  lines.push(...editors.editorBriefLines(editor, { mainCheckout: repoPath }));
   if (launch.skills.length) lines.push(`Skills to load when they fit: ${launch.skills.join(', ')}.`);
   if (capped.length) lines.push(`Spend cap reached, do not use: ${capped.join(', ')}.`);
   const paid = launch.tools.filter((t) => PAID_TOOLS.includes(t));

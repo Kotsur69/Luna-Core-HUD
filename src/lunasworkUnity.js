@@ -149,7 +149,7 @@ const PLAYTEST_DRIVER_CARD = Object.freeze({
     '',
     'Unity Test Framework PlayMode tests (Assets/LunaPlaytest/Tests/PlayMode): steps parse and run (a ui step clicks a test Button, a button step is visible through PlaytestInput, unknown types fail), Snapshot() is valid JSON with the scene name and registered keys, Screenshot() returns PNG bytes.',
     '',
-    'Running the tests: if you have a Unity editor with this project open, run the PlayMode tests there (Test Runner, PlayMode) and confirm `unity command playtest state` answers in play mode with a clean Console. If you have none, write "PlayMode tests not run here" in the hand-back; do not fake a run. Do NOT use `Unity -batchmode -projectPath .`: it cannot open a project the editor already has open.',
+    "Running the tests: in a Luna's Work build this package opens its OWN Unity editor on its worktree (LunaCore's brief says how, and closes it after): run the PlayMode tests there (Test Runner, PlayMode) and confirm `unity command playtest state` answers in play mode with a clean Console, and that stopping play mode brings the editor back to edit mode. Never use the editor on the main checkout: it belongs to the playtest after the merge. If no worktree editor could be opened, write \"PlayMode tests not run here\" in the hand-back; do not fake a run. Do NOT use `Unity -batchmode -projectPath .` while your editor has the worktree open: batchmode cannot open a project an editor holds.",
     'Never add files whose only purpose is making a check pass (unity.cmd, grep.cmd, wrapper scripts, package.json): only the files this card lists, plus what the game itself needs.',
   ].join('\n'),
   acceptance: [
@@ -159,7 +159,7 @@ const PLAYTEST_DRIVER_CARD = Object.freeze({
     `\`unity command ${DRIVER_GROUP} input --steps '[{"type":"ui","name":"<a Button>"}]'\` clicks that button and answers {done: 1}`,
     `\`unity command ${DRIVER_GROUP} screenshot\` returns {png, width, height} with a base64 PNG of the Game view`,
     'Outside play mode the playtest commands fail with a clear message',
-    'The Unity Test Framework PlayMode tests pass in the editor (or the hand-back says they were not run here); Console clean',
+    'The Unity Test Framework PlayMode tests pass in the worktree editor, never the main checkout\'s (or the hand-back says they were not run here); Console clean',
   ],
   files: PLAYTEST_DRIVER_FILES,
   size: 'L',
