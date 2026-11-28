@@ -13,7 +13,9 @@
 //   start(profile) -> {handle}   Pipeline: auto tick on, asset refresh, script
 //                                recompile, wait for it, compile check and the
 //                                console cursor (src/lunasworkUnityEditor.js);
-//                                then open the profile's scene (optional), enter
+//                                then open the profile's scene (optional; a
+//                                play mode left on is stopped first,
+//                                lunasworkUnityPlayMode.js), enter
 //                                play mode, wait until the editor reports it,
 //                                check the game's PlaytestDriver answers - one
 //                                short connection, closed again (one editor =
@@ -78,6 +80,7 @@ const {
   isEnvironmentFailure, environmentFailureOf,
 } = require('./lunasworkUnityEditor');
 const { createEditorPark, PARK_SKIP } = require('./lunasworkEditorPark');
+const { openSceneInEditMode } = require('./lunasworkUnityPlayMode');
 
 // HTTP statuses that mean the editor did not let LunaCore in: not the driver's fault.
 const AUTH_STATUSES = new Set([401, 403]);
@@ -281,21 +284,37 @@ function createUnityAdapter(ctx) {
    * Pipeline: brings the editor up to date (lunasworkUnityEditor.js) and
    * takes the console cursor; throws an environment failure when the code
    * does not compile or the editor never settles.
+   * @returns {Promise<object|null>} the last `editor status` it read (Pipeline), else null
    */
   async function prepare(call) {
-    if (target.transport !== 'pipeline') return;
+    if (target.transport !== 'pipeline') return null;
     autoTick.previous = previousAutoTick(target.dir, log);
     const prepared = await prepareEditor({ call, now: ctx.now, waits: { pollUntil, act }, log, autoTick });
     consoleWindow = prepared.window;
     if (!consoleWindow) log(`[lunaswork] Unity console window not opened (${prepared.windowProblem}): the console evidence covers its whole buffer`);
+    return prepared.editor || null;
   }
 
-  /** @returns {Promise<number>} the start deadline, shared with the driver check */
-  async function enterPlayMode(call) {
+  /** The profile's scene. Pipeline: in edit mode, play mode stopped first (lunasworkUnityPlayMode.js). */
+  async function openScene(call, editorStatus, deadline) {
     const { calls } = target;
     const sec = profile.readyTimeoutSec;
-    const deadline = ctx.now() + sec * 1000;
-    if (profile.scene) await act(deadline, () => call(calls.openScene(profile.scene)), `Unity could not open ${profile.scene} within ${sec}s`);
+    if (target.transport === 'pipeline') {
+      return openSceneInEditMode({ call, calls, scene: profile.scene, status: editorStatus, deadline, sec, now: ctx.now, waits: { pollUntil, act }, log });
+    }
+    await act(deadline, () => call(calls.openScene(profile.scene)), `Unity could not open ${profile.scene} within ${sec}s`);
+    return deadline;
+  }
+
+  /**
+   * @param {object|null} editorStatus prepare()'s last `editor status`
+   * @returns {Promise<number>} the start deadline, shared with the driver check
+   */
+  async function enterPlayMode(call, editorStatus) {
+    const { calls } = target;
+    const sec = profile.readyTimeoutSec;
+    let deadline = ctx.now() + sec * 1000;
+    if (profile.scene) deadline = await openScene(call, editorStatus, deadline);
     // From here on stop() leaves play mode, even when the answer to play is lost.
     playing = true;
     try {
@@ -358,8 +377,8 @@ function createUnityAdapter(ctx) {
     startEntries = [];
     try {
       await session(async (call) => {
-        await prepare(call);
-        const deadline = await enterPlayMode(call);
+        const editorStatus = await prepare(call);
+        const deadline = await enterPlayMode(call, editorStatus);
         ({ mode, fallback } = await detectMode(call, deadline));
         await checkDriver(call, deadline);
         startEntries = await readStartConsole(call);

@@ -47,6 +47,7 @@ const { createPipelineClient } = require('./pipeline-http');
 const { UNITY_TRANSPORTS, PLAYTEST_MODE, playtestActions, withCombatFeelLog } = require('./unity');
 const unityConsole = require('./unityConsole');
 const { captureBurst, buildSheet, burstSummary } = require('./burst');
+const { createInputDialect } = require('./unityDialect');
 
 const SERVER_NAME = 'lunacore-playtest';
 const SERVER_VERSION = '1.0.0';
@@ -121,6 +122,16 @@ function unityBackend({ connect, transport = 'mcp', mode = PLAYTEST_MODE.driver,
   playtestActions({ mode, transport, fallback, call: () => {}, sleep });
   const window = consoleWindow ? unityConsole.consoleWindow(consoleWindow) : null;
   const driver = (fn) => session((call) => fn(playtestActions({ mode, transport, fallback, call, sleep })));
+  // The game's own `playtest input` on the Pipeline: its answer is checked, and a
+  // driver that rejects LunaCore's step format falls back to the built-in key route.
+  const dialect = transport === 'pipeline' && mode === PLAYTEST_MODE.driver && !fallback.includes('input') ? createInputDialect() : null;
+  const sendInput = (steps) => {
+    if (!dialect) return driver((d) => d.input(steps));
+    return session((call) => dialect.run({
+      driver: (s) => playtestActions({ mode, transport, fallback, call, sleep }).input(s),
+      builtin: (s) => playtestActions({ mode: PLAYTEST_MODE.builtin, transport, call, sleep }).input(s),
+    }, steps));
+  };
   const readConsole = async () => {
     const answer = await session((call) => call(calls.console(window)));
     return window ? unityConsole.windowedConsole(answer, window) : answer;
@@ -129,7 +140,7 @@ function unityBackend({ connect, transport = 'mcp', mode = PLAYTEST_MODE.driver,
     screenshot: () => driver((d) => d.screenshot()),
     // The game's combatFeelLog is untrusted: cleaned and capped before the Playtester sees it.
     game_state: async () => withCombatFeelLog(await driver((d) => d.state())),
-    send_input: ({ steps }) => driver((d) => d.input(steps)),
+    send_input: ({ steps }) => sendInput(steps),
     console_errors: readConsole,
     wait: async ({ ms }) => {
       await sleep(ms);
