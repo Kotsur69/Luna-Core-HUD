@@ -874,3 +874,58 @@ test("LW 2.19a: an open card about the same screen is updated, not doubled; the 
   assert.equal(rewritten.list.find((c) => c.at === 77).text, 'Quote form layout off');
   assert.equal(rewritten.list.length, 1, 'no second card for the same screen');
 });
+
+// ---- exact gate criteria, not-scored reasons, coverage ---------------------------------
+
+test('gateStatus: a reworded criterion counts for nothing and is flagged; an unscored one says why', () => {
+  const gate = C.gateStatus({
+    shipCriteria: SHIP,
+    scores: [
+      score('Skeleton', 'The app starts without errors', 9),
+      // The paraphrase a Playtester gave live: never a score of "Every main screen is reachable".
+      score('Milestone 1: Skeleton', 'All screens can be reached', 10),
+    ],
+    notScored: [{ milestone: 'Milestone 1: Skeleton', criterion: 'Every main screen is reachable', reason: 'the menu did not open' }],
+  });
+  const [skeleton, core] = gate.gates;
+  assert.deepEqual([skeleton.criteria[0].score, skeleton.criteria[0].reason], [9, undefined]);
+  assert.deepEqual([skeleton.criteria[1].score, skeleton.criteria[1].reason], [null, 'the menu did not open']);
+  assert.equal(skeleton.passed, false);
+  assert.match(core.criteria[0].reason, /no evidence-backed score under its exact text/);
+  assert.deepEqual(gate.unmatched, [{ milestone: 'Milestone 1: Skeleton', criterion: 'All screens can be reached', score: 10 }]);
+});
+
+test('gateStatus: the exact text in the wrong milestone does not count either', () => {
+  const gate = C.gateStatus({ shipCriteria: SHIP, scores: [score('Core flows', 'The app starts without errors', 10)] });
+  assert.equal(gate.gates[0].criteria[0].score, null);
+  assert.equal(gate.unmatched.length, 1);
+});
+
+test('the Critic prompt shows journeys planned vs run, why criteria went unscored, and rejected scores', async () => {
+  const report = {
+    ...NOTHING_PASSED,
+    coverage: {
+      planned: 20, run: 4, cut: 0, milestone: 'Milestone 1: Skeleton', milestonePlanned: 5, milestoneRun: 1,
+      criteria: 2, criteriaScored: 1, cardsAsked: 3, cardsAnswered: 2, notRun: [{ name: 'Build the sandbox', reason: 'out of time' }],
+    },
+    notScored: [{ milestone: 'Milestone 1: Skeleton', criterion: 'Every main screen is reachable', reason: 'blocked by the crash' }],
+    unmatchedScores: [{ milestone: 'Milestone 1: Skeleton', criterion: 'state answers with scene', score: 9, reason: 'not the exact text of a gate item' }],
+  };
+  const claude = fakeClaude(envelope(critique()));
+  await C.runCritic(baseOpts({ runClaude: claude.run, report }));
+  const { prompt } = claude.calls[0];
+  assert.match(prompt, /Coverage: the Playtester ran 4 of 20 planned journeys\./);
+  assert.match(prompt, /"Milestone 1: Skeleton": 1 of 5 of its journeys run, 1 of 2 gate criteria scored\. Built cards checked: 2 of 3\./);
+  assert.match(prompt, /unknown, not broken/);
+  assert.match(prompt, /Every main screen is reachable = not scored \(blocked by the crash\)/);
+  assert.match(prompt, /1 score\(s\) named a criterion that is not word for word a gate item[^\n]*"state answers with scene"/);
+  // The report JSON carries the not-run journeys for the log entry.
+  assert.match(prompt, /"name": "Build the sandbox"/);
+});
+
+test('an older report without coverage gives the Critic prompt no coverage line', async () => {
+  const claude = fakeClaude(envelope(critique()));
+  await C.runCritic(baseOpts({ runClaude: claude.run, report: NOTHING_PASSED }));
+  assert.ok(!claude.calls[0].prompt.includes('Coverage: the Playtester ran'));
+  assert.match(claude.calls[0].prompt, /= not scored \(no evidence-backed score/);
+});

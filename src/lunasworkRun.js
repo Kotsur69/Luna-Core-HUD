@@ -42,6 +42,7 @@ const { cleanGuardFields } = require('./lunasworkToolGuard');
 const { cleanAssetEstimate } = require('./lunasworkAssetCost');
 const { withRunBranches } = require('./lunasworkRunCleanup');
 const { cleanMerges, cleanCompileRevert } = require('./lunasworkCompileRevert');
+const { cleanCoverage } = require('./lunasworkPlaytestPlan');
 const { WORKER_MODEL_CHOICES, isWorkerModelChoice } = require('./claudeModels');
 
 const PREPROD = 'preprod';
@@ -346,6 +347,12 @@ function cleanReport(raw) {
     journeys: keepList(raw.journeys),
     screens: keepList(raw.screens),
     checks: keepList(raw.checks),
+    // What was not scored / not run and why, and journeys planned vs run
+    // (src/lunasworkPlaytestPlan.js) - absent in reports from before them.
+    notScored: keepList(raw.notScored),
+    journeysNotRun: keepList(raw.journeysNotRun),
+    unmatchedScores: keepList(raw.unmatchedScores),
+    coverage: cleanCoverage(raw.coverage),
     // LW 2.25a: one screenshot per built design variant.
     variantShots: keepList(raw.variantShots),
     warnings: keepList(raw.warnings),

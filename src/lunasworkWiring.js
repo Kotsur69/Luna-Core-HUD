@@ -470,6 +470,11 @@ function createLunasWorkRuntime(ctx) {
       return null;
     }
   };
+  // The active run's milestone for its Playtester (read at call time: the controller exists by then).
+  const currentMilestone = () => {
+    const status = controller.status();
+    return status && typeof status.milestone === 'string' && status.milestone ? status.milestone : null;
+  };
   const milestoneMail = reporter
     ? (run, mctx) => reporter.onMilestone(run, { ...mctx, timeToShip: etaLine(estimateOf(run)) })
     : null;
@@ -495,7 +500,8 @@ function createLunasWorkRuntime(ctx) {
     build,
     createAdapter: (name, opts) => createAdapter(name, opts),
     // Free providers for the Playtester while Claude is limited (freeFallback).
-    playtest: playtestOn(meter),
+    // The run's current milestone is played first (src/lunasworkPlaytestPlan.js).
+    playtest: (opts) => playtestOn(meter)({ milestone: currentMilestone(), ...opts }),
     shipGate: ({ repoPath, scores }) => gateStatus({ shipCriteria: pack.readPackFile(repoPath, 'SHIP_CRITERIA.md') || '', scores }),
     critic: (opts) => runCritic({ ...opts, env: ctx.env(), runClaude: meter.runner('critic', runHeadless) }),
     // Idea #14: "like X" references in the pack researched into design/references/.

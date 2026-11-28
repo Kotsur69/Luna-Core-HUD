@@ -9,9 +9,10 @@
 //   landedToBuilt   after the build: a landed `bug` card whose work changed
 //                   no test file stays open with a note (#3); the rest are
 //                   *built* (B1)
-//   settleBuilt     after the Playtester: built cards close, reopen with the
-//                   evidence, or stay built (B1); which cards failed the
-//                   iteration (B4)
+//   settleBuilt     after the Playtester: built cards close (their check
+//                   passed, or a journey their acceptance names passed),
+//                   reopen with the evidence, or stay built with the reason
+//                   in the run log (B1); which cards failed the iteration (B4)
 //   stuckNow / askAboutStuck / askAboutScope
 //                   stuck cards for the Critic, and the decision-queue entries
 //                   for what it did not split (B4) or what is out of scope (B5)
@@ -34,6 +35,9 @@ const { BUILT_STATE } = require('./todorows');
 
 const MAX_QUESTION_CHARS = 400;
 const MAX_NAME_CHARS = 120;
+// The run log lists this many cards per verdict line, each reason cut to this length.
+const MAX_LOGGED_CARDS = 5;
+const MAX_REASON_LOG_CHARS = 120;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
@@ -91,8 +95,10 @@ function createCardFlow(ctx) {
    */
   function settleBuilt(built, report) {
     const run = ctx.run();
-    const verdicts = cardVerdicts(built, report.checks, run.iteration);
+    // A built card whose acceptance names a journey that passed is confirmed by it.
+    const verdicts = cardVerdicts(built, report.checks, run.iteration, report.journeys);
     cardBook.settle(run.projectId, verdicts);
+    logVerdictReasons(verdicts);
     const ats = [...new Set([...run.current.cards.map((c) => c.at), ...built.map((c) => c.at)])];
     const cards = cardBook.lookup(run.projectId, ats);
     const of = (fn) => cards.filter(fn).map((c) => c.at);
@@ -106,6 +112,20 @@ function createCardFlow(ctx) {
       logEvent(`${built.length} built card(s): ${verify.closed.length} confirmed in the app, ${verify.reopened.length} reopened, ${verify.waiting.length} still built`);
     }
     return verify;
+  }
+
+  /** The run log's why: cards confirmed by a journey, and why the others stay built. */
+  function logVerdictReasons(verdicts) {
+    const list = (rows, fmt) => {
+      const shown = rows.slice(0, MAX_LOGGED_CARDS).map(fmt).join('; ');
+      return rows.length > MAX_LOGGED_CARDS ? `${shown}; and ${rows.length - MAX_LOGGED_CARDS} more` : shown;
+    };
+    const viaJourney = verdicts.filter((v) => v.via === 'journey');
+    if (viaJourney.length) {
+      logEvent(`confirmed by a passing journey: ${list(viaJourney, (v) => `card ${v.at} ("${String(v.journeys[0]).slice(0, 80)}")`)}`);
+    }
+    const waiting = verdicts.filter((v) => v.outcome === 'built' && v.reason);
+    if (waiting.length) logEvent(`still built: ${list(waiting, (v) => `card ${v.at} (${v.reason.slice(0, MAX_REASON_LOG_CHARS)})`)}`);
   }
 
   /** B4: the stuck cards no decision holds. */

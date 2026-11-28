@@ -1,9 +1,11 @@
 // ============================================================================
 // LunaCore - Luna's Work Critic prompt (split out of lunasworkCritic.js)
 // ----------------------------------------------------------------------------
-// The text the headless Critic reads: the rules, the milestone gates, the
-// design pack, the open and the stuck cards, the playtest report, the score
-// history and the iteration's git log. Pure: no IO, no model call.
+// The text the headless Critic reads: the rules, the milestone gates (each
+// unscored criterion with its reason), the Playtester's coverage (journeys
+// planned vs run) and rejected scores, the design pack, the open and the
+// stuck cards, the playtest report, the score history and the iteration's
+// git log. Pure: no IO, no model call.
 //
 // On a step-back iteration the prompt OPENS with BRIEF.md and DESIGN.md and
 // "is this still that product?", before any of the iteration's details.
@@ -54,13 +56,48 @@ function reportBrief(report) {
   const feel = isObj(r.combatFeel) && typeof r.combatFeel.text === 'string'
     ? { combatFeel: r.combatFeel.text.slice(0, MAX_COMBAT_FEEL_CHARS) }
     : {};
+  // Only in reports that have them (src/lunasworkPlaytestPlan.js): older ones load without.
+  const extra = (key) => (list(key).length ? { [key]: list(key) } : {});
   return {
     findings: list('findings'),
     scores: list('scores'),
     journeys: list('journeys').map((j) => ({ name: j && j.name, passed: j && j.passed })),
+    ...(isObj(r.coverage) ? { coverage: r.coverage } : {}),
+    ...extra('notScored'),
+    ...extra('journeysNotRun'),
+    ...extra('unmatchedScores'),
     errors: list('errors'),
     ...feel,
   };
+}
+
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+
+/**
+ * Journeys planned vs run, and what it means for the verdict; [] without a
+ * coverage record (an older report, the ship pass).
+ */
+function coverageLines(coverage) {
+  if (!isObj(coverage)) return [];
+  const c = coverage;
+  const milestone = typeof c.milestone === 'string' && c.milestone
+    ? ` Current milestone "${clean(c.milestone, 200)}": ${count(c.milestoneRun)} of ${count(c.milestonePlanned)} of its journeys run, ${count(c.criteriaScored)} of ${count(c.criteria)} gate criteria scored.`
+    : '';
+  const cards = Number.isInteger(c.cardsAsked) && c.cardsAsked > 0 ? ` Built cards checked: ${count(c.cardsAnswered)} of ${count(c.cardsAsked)}.` : '';
+  const cut = count(c.cut) ? ` ${count(c.cut)} journey(s) did not fit the prompt.` : '';
+  return [
+    `- Coverage: the Playtester ran ${count(c.run)} of ${count(c.planned)} planned journeys.${milestone}${cards}${cut} A journey not run (coverage.notRun, journeysNotRun) is unknown, not broken: never file a bug card for it; when coverage is low, say so in logEntry.verdict.`,
+  ];
+}
+
+/** Scores the report boundary rejected (criterion text not a gate item), when there are any. */
+function unmatchedLines(report, gate) {
+  const r = isObj(report) ? report : {};
+  const rejected = [...(Array.isArray(r.unmatchedScores) ? r.unmatchedScores : []), ...(Array.isArray(gate.unmatched) ? gate.unmatched : [])]
+    .filter(isObj);
+  if (!rejected.length) return [];
+  const named = rejected.slice(0, MAX_LISTED_UNMATCHED).map((s) => `"${clean(s.criterion, MAX_GATE_REASON_CHARS)}"`).join(', ');
+  return [`- ${rejected.length} score(s) named a criterion that is not word for word a gate item of its milestone, so they count for nothing: ${named}. If the Playtester keeps rewording a criterion, say so in logEntry.verdict - do not file a card about the app for it.`];
 }
 
 const fileName = (p) => (typeof p === 'string' ? p.split(/[\\/]/).pop() : '');
@@ -74,11 +111,15 @@ function citesBurst(brief) {
   return shots.some((p) => fileName(p).toLowerCase().startsWith(BURST_PREFIX));
 }
 
+const MAX_GATE_REASON_CHARS = 200;
+const MAX_LISTED_UNMATCHED = 5;
+const notScoredText = (c) => (typeof c.reason === 'string' && c.reason ? `not scored (${clean(c.reason, MAX_GATE_REASON_CHARS)})` : 'not scored');
+
 function gateLines(gate) {
   if (!gate.gates.length) return ['- SHIP_CRITERIA.md has no milestones with gate items.'];
   return [
     ...gate.gates.map((g) => {
-      const items = g.criteria.map((c) => `${c.text} = ${c.score === null ? 'not scored' : `${c.score}/10`}`).join('; ');
+      const items = g.criteria.map((c) => `${c.text} = ${c.score === null ? notScoredText(c) : `${c.score}/10`}`).join('; ');
       return `- ${g.name}: ${g.passed ? 'PASSED' : 'not passed'} (${items})`;
     }),
     `- Current milestone: ${gate.current} - gate ${gate.currentPassed ? 'passed' : 'NOT passed'}.`,
@@ -127,6 +168,8 @@ function buildCriticPrompt({ iteration, docs, report, history, gitLog, openCards
     '',
     `Milestone gates (computed from the Playtester's evidence-backed scores; a criterion passes at ${GATE_PASS_SCORE}/10 or more):`,
     ...gateLines(gate),
+    ...coverageLines(isObj(report) ? report.coverage : null),
+    ...unmatchedLines(report, gate),
     '',
     'Rules:',
     '- Every card is one problem: kind bug (broken) / feel (works but looks or feels wrong) / missing (expected but absent) / idea; severity blocker/high/medium/low.',

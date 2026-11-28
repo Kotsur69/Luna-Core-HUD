@@ -1,0 +1,34 @@
+{
+  "_comment": "A Unity explore pass as the run stores it (lunasworkRun.cleanReport): no card checks answered, the way the live lwmwzajado reports looked, but two journeys that passed with evidence and one that failed.",
+  "mode": "explore",
+  "findings": [],
+  "scores": [
+    {
+      "milestone": "Milestone 1: Skeleton",
+      "criterion": "Scripted keyboard input moves, jumps and dashes the player (position changes in the state snapshot)",
+      "score": 9,
+      "evidence": { "screenshot": "C:/runs/lunaswork-lwfixture/iter-4/move-1.png", "steps": ["send_input D holdMs 500", "game_state"] }
+    }
+  ],
+  "journeys": [
+    {
+      "name": "Move through the sandbox",
+      "passed": true,
+      "evidence": { "screenshot": "C:/runs/lunaswork-lwfixture/iter-4/move-1.png", "steps": ["send_input D holdMs 500", "game_state"] }
+    },
+    {
+      "name": "Slow motion through the button step",
+      "passed": true,
+      "evidence": { "screenshot": "C:/runs/lunaswork-lwfixture/iter-4/burst-slowmo.png", "steps": ["send_input SlowMotion", "game_state x2"] }
+    },
+    {
+      "name": "Wall jump off the shaft wall",
+      "passed": false,
+      "evidence": { "screenshot": "C:/runs/lunaswork-lwfixture/iter-4/wall-1.png", "steps": ["send_input A + Space"] }
+    }
+  ],
+  "screens": [],
+  "checks": [],
+  "warnings": [],
+  "errors": []
+}
