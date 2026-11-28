@@ -18,6 +18,9 @@
 //                free library / free local / paid counts, credits, USD, gate
 //   shipEstimate time to SHIP in ms, and `ship` = {iterations, low, high}
 //                (hours) - lunasworkRules.timeToShip via lunasworkEta (LW 2.22b)
+//   loop         the harness-loop guard (src/lunasworkHarnessLoop.js): iterations
+//                on this milestone without a pass, the harness share of the
+//                last iterations' cards in percent (null before a full window)
 //
 // screenshotFile() is the one check before a file is read for the renderer:
 // a run id of the right shape, a relative image path, inside
@@ -35,6 +38,7 @@ const { trend } = require('./lunasworkLighthouse');
 const { cleanLedger, cardsSeries, phaseTotals } = require('./lunasworkUsage');
 const { RUN_ID_RE } = require('./lunasworkWheel');
 const { cleanAssetEstimate } = require('./lunasworkAssetCost');
+const { loopCounts } = require('./lunasworkHarnessLoop');
 
 const VERDICTS = ['ship', 'plateau', 'red', 'stop'];
 const MAX_TEXT = 200;
@@ -144,6 +148,7 @@ function dashboardView(run, { runsRoot, isKnownProject, shipEstimate = null }) {
     // LW 2.22b: time to SHIP (ms) for the KPI, with its range in `ship`.
     shipEstimate: ship && ship.hours !== null ? Math.round(ship.hours * MS_PER_HOUR) : null,
     ship,
+    loop: loopCounts(run.harnessLoop),
   };
 }
 

@@ -14,6 +14,8 @@
 //   - the time-to-SHIP estimate with its range (LW 2.22b, lunasworkEta)
 //   - the Asset Manifest Estimate: free imports, free local, paid finals
 //     with credits / USD and the spend gate (lunasworkAssetCost)
+//   - the harness-loop guard: iterations on this milestone without a pass
+//     and the harness share of the last iterations' cards (lunasworkHarnessLoop)
 // While open it refreshes on every lunaswork:event - no polling, no email.
 // Every value from main is painted through textContent / SVG attributes only.
 // ============================================================================
@@ -194,6 +196,20 @@ function kpi(labelKey, value, sub) {
   return box;
 }
 
+/**
+ * The harness-loop KPI (tested): "3 / 4" iterations on this milestone without
+ * a pass, and the harness share of the last iterations' cards as its sub line.
+ * @param {{iterations?:number, stallLimit?:number, harnessPercent?:number|null, window?:number}|null} loop
+ * @returns {{value:string, subKey:string, subVars:object}}
+ */
+export function loopKpi(loop) {
+  const n = loop && Number.isInteger(loop.iterations) ? loop.iterations : 0;
+  const limit = loop && Number.isInteger(loop.stallLimit) ? ` / ${loop.stallLimit}` : '';
+  const pct = loop && Number.isFinite(loop.harnessPercent) ? loop.harnessPercent : null;
+  if (pct === null) return { value: `${n}${limit}`, subKey: 'lw.dash.loopSubNone', subVars: {} };
+  return { value: `${n}${limit}`, subKey: 'lw.dash.loopSub', subVars: { pct, n: loop.window } };
+}
+
 /** The KPI's sub line: "3-7 h, ~6 iterations", or why there is no estimate yet. */
 export function etaSub(ship) {
   if (!ship || !Number.isInteger(ship.iterations)) return t('lw.dash.etaSoon');
@@ -206,6 +222,7 @@ export function etaSub(ship) {
 function kpis(d) {
   const row = el('div', 'lw-dash__kpis');
   const total = d.usage.total;
+  const loop = loopKpi(d.loop);
   row.append(
     kpi('lw.run.iteration', String(d.iteration), d.phase ? t(`lw.phase.${d.phase}`) : ''),
     kpi('lw.dash.tokens', formatTokens(tokensOf(total)), t('lw.dash.calls', { n: total.calls })),
@@ -213,6 +230,7 @@ function kpis(d) {
     kpi('lw.dash.cards', `${d.cards.closed} / ${d.cards.opened}`, t('lw.dash.cardsSub')),
     // LW 2.22b: time to SHIP (ms) and its range in hours / iterations.
     kpi('lw.dash.eta', Number.isFinite(d.shipEstimate) ? elapsed(d.shipEstimate) : '-', etaSub(d.ship)),
+    kpi('lw.dash.loop', loop.value, t(loop.subKey, loop.subVars)),
   );
   return row;
 }

@@ -499,6 +499,10 @@ test('no PLATEAU while cards keep closing', async () => {
   }
   h.next.director.push(STOP_CARD);
   await h.start();
+  // Four iterations on one milestone without a pass: the harness-loop question
+  // (src/lunasworkDecisionGates.js) holds iteration 5; its default keeps going.
+  assert.equal(h.ctl.status().waitReason, 'harnessLoop');
+  await h.fire();
   assert.equal(h.ctl.status().verdict, 'stop');
   assert.equal(h.ctl.status().iteration, 5);
 });
@@ -1970,6 +1974,9 @@ test('checkpoints: a failed rollback keeps the iteration and its cards, and is r
   const h = harness({ todos, scores: [60, 30], deps: { checkpoints: cp.dep } });
   h.next.director.push(oneCardEach(h), oneCardEach(h), STOP_CARD);
   await h.start();
+  // The next iteration waits for Mati (src/lunasworkDecisionGates.js); the default keeps the iteration.
+  assert.equal(h.ctl.status().waitReason, 'rollbackFailed');
+  await h.fire();
   const run = h.ended[0];
   assert.deepEqual(run.history.map((r) => r.rolledBack), [false, false]);
   assert.equal(run.laps[1].checkpoint.rollback.ok, false);

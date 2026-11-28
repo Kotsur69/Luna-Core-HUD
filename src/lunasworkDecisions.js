@@ -47,9 +47,11 @@
 // production: an iteration diff that touches production
 // (src/lunasworkStaging.js), default reject.
 // secret: a key Mati types in (C9), no default, no deadline.
+// rollbackFailed / harnessLoop: the run waits for them before its next
+// iteration (src/lunasworkDecisionGates.js), default keep going.
 const KINDS = [
   'dependency', 'migration', 'featureDelete', 'designChange', 'stuckCard', 'outOfScope', 'feedbackScope', 'clientScope',
-  'designVariant', 'prototype', 'production', 'secret', 'other',
+  'designVariant', 'prototype', 'production', 'secret', 'rollbackFailed', 'harnessLoop', 'other',
 ];
 // Kinds that wait for Mati however long: no default answer, no deadline.
 const NO_DEFAULT_KINDS = new Set(['clientScope', 'secret']);

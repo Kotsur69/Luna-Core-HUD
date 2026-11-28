@@ -112,6 +112,8 @@ const STOP_REASONS = {
   godModeKilled: 'God Mode was killed during a build',
   lowDisk: 'the disk was almost full (under 5 GB free on the project drive)',
   updatesNotPaused: 'Windows Update could not be paused and Mati chose to stop',
+  rollbackFailed: 'a rollback failed and Mati chose to stop',
+  harnessLoop: 'the loop drifted into playtest-harness work and Mati chose to stop',
 };
 // Stop reasons that leave work for Mati (the others were his own choice).
 const STOP_NEEDS = {
