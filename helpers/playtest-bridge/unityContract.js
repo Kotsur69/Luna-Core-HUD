@@ -72,7 +72,7 @@ const PLAYTEST_CONTRACT = [
   `  Steps run in order; LunaCore checks them before sending (1 to ${MAX_INPUT_STEPS} steps, only these shapes):`,
   ...INPUT_TYPES.map((type) => `    ${STEP_SHAPES[type]}`),
   `    ${GAME_STEP_SHAPE}`,
-  `  Field names and the "type" key exactly as above (LunaCore's step format: when a driver with a format of its own fails every step, LunaCore runs key and wait steps on the editor's built-in key route instead and reports a mismatch warning).`,
+  `  Field names and the "type" key exactly as above (LunaCore's step format: when a driver with a format of its own fails every step and even a {"type":"wait", "ms":0} probe, LunaCore runs key and wait steps on the editor's built-in key route instead and reports a mismatch warning).`,
   `  Game step types: the driver may implement its own step types beyond the six above, e.g. ${SLOW_MOTION_EXAMPLE}; clamp every field to a range that is safe for the game and restore what the step changed (Time.timeScale...) when it ends. List them in the state answer as "stepTypes": ["slowMotion", ...] so the Playtester knows them.`,
   '  A step of a type the driver does not implement or with a bad field fails the whole command before any step runs, never guessed.',
   `- \`${command('screenshot')}\`   parameters {}`,

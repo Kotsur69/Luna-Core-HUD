@@ -39,12 +39,15 @@ const MODIFIERS = ['shift', 'control', 'ctrl', 'alt', 'meta', 'command', 'cmd', 
 const UNITY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 _./-]{0,63}$/;
 const INPUT_TYPES = ['key', 'button', 'axis', 'click', 'ui', 'wait'];
 // Game-declared steps (e.g. slowMotion): any other type name the game's
-// PlaytestDriver implements, passed through with numeric fields only. Every
-// number stays within +-GAME_STEP_MAX_ABS, so no duration runs past MAX_WAIT_MS.
+// PlaytestDriver implements, passed through with numeric fields only. Each
+// number stays within +-GAME_STEP_MAX_ABS (no single duration field past
+// MAX_WAIT_MS); the driver clamps them to what is sane for the game (contract).
 const GAME_STEP_TYPE_RE = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
 const GAME_STEP_FIELD_RE = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
 const GAME_STEP_MAX_FIELDS = 8;
 const GAME_STEP_MAX_ABS = MAX_WAIT_MS;
+// Field names that shadow an Object.prototype member (toString, constructor...) are refused.
+const RESERVED_FIELDS = new Set(Object.getOwnPropertyNames(Object.prototype));
 // burst: N screenshots at even intervals, stitched into one labeled contact
 // sheet (burst.js). Out-of-range values are clamped, not refused.
 const BURST_MIN_FRAMES = 4;
@@ -97,7 +100,7 @@ const TOOL_DEFS = {
     { name: 'game_state', description: "The game's JSON state snapshot from the PlaytestDriver (scene, player, score, UI...). A game without the driver answers with source \"unity-builtin\": the scene and the Player's Transform only.", inputSchema: obj({}) },
     {
       name: 'send_input',
-      description: `Scripted inputs through the PlaytestDriver, run in order. Step types: key {key, holdMs}, button {name, holdMs}, axis {name, value -1..1, holdMs}, click {x, y} (0..1 of the screen), ui {name} (click a UI element by its GameObject name), wait {ms}. Game step types: any other type the game's driver declares (game_state "stepTypes"), with number fields only, each within -${GAME_STEP_MAX_ABS}..${GAME_STEP_MAX_ABS}, e.g. {"type":"slowMotion", "scale":0.25, "durationMs":2000}. A game without the driver runs only key (Input System key names: Space, D, LeftArrow, Digit1) and wait steps. When the result lists warnings, quote them in your report.`,
+      description: `Scripted inputs through the PlaytestDriver, run in order. Step types: key {key, holdMs}, button {name, holdMs}, axis {name, value -1..1, holdMs}, click {x, y} (0..1 of the screen), ui {name} (click a UI element by its GameObject name), wait {ms}. Game step types: any other type the game's driver declares (game_state "stepTypes"), with number fields only, each within -${GAME_STEP_MAX_ABS}..${GAME_STEP_MAX_ABS}, e.g. {"type":"slowMotion", "scale":0.25, "durationMs":2000}. A game without the driver runs only key (Input System key names: Space, D, LeftArrow, Digit1) and wait steps. When the result lists warnings, mention them in your report.`,
       inputSchema: obj({
         steps: {
           type: 'array',
@@ -217,7 +220,7 @@ function gameStep(raw, at) {
   if (fields.length > GAME_STEP_MAX_FIELDS) throw new ArgError(`${at}: a game step takes at most ${GAME_STEP_MAX_FIELDS} fields`);
   const out = { type: raw.type };
   for (const [field, value] of fields) {
-    if (!GAME_STEP_FIELD_RE.test(field)) throw new ArgError(`${at}: field '${field.slice(0, 40)}' is not a plain name`);
+    if (!GAME_STEP_FIELD_RE.test(field) || RESERVED_FIELDS.has(field)) throw new ArgError(`${at}: field '${field.slice(0, 40)}' is not a plain name`);
     out[field] = num(value, `${at} ${field}`, -GAME_STEP_MAX_ABS, GAME_STEP_MAX_ABS);
   }
   return out;

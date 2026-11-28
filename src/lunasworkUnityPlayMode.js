@@ -94,7 +94,8 @@ async function stopPlayMode({ call, calls, now, waits, log }) {
     await waits.act(deadline, () => call(calls.stop()), `Unity could not leave play mode within ${sec}s`);
   } catch (err) {
     // Sent, but the answer was lost (the domain reload of leaving play mode): the poll tells.
-    if (!isTransientPipelineError(err)) throw err;
+    // A refused stop is fine only when the editor is in edit mode by now (it left on its own).
+    if (!isTransientPipelineError(err) && playModeOn(await call(calls.state()))) throw err;
   }
   await waits.pollUntil(deadline, async () => !playModeOn(await call(calls.state())), `Unity did not return to edit mode within ${sec}s`);
   log(PLAY_MODE_STOPPED_LINE);
