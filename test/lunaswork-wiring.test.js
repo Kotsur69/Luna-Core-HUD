@@ -55,7 +55,16 @@ function setupRepos() {
     git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
     return git(other, 'rev-parse', 'HEAD');
   };
-  return { dir, checkout, pushFromElsewhere, done: () => removeDir(dir) };
+  /** God Mode's merge adding a new file `rel` (e.g. a committed Unity .meta). */
+  const pushNewFileFromElsewhere = (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(other, rel)), { recursive: true });
+    fs.writeFileSync(path.join(other, rel), text);
+    git(other, 'add', '--', rel);
+    git(other, 'commit', '-q', '-m', `add ${rel}`);
+    git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+    return git(other, 'rev-parse', 'HEAD');
+  };
+  return { dir, checkout, pushFromElsewhere, pushNewFileFromElsewhere, done: () => removeDir(dir) };
 }
 
 test('syncCheckout fast-forwards the checkout to the merged origin branch', async () => {
@@ -128,6 +137,52 @@ test('syncCheckout wraps only a fast-forward that moves HEAD in aroundChange (th
     assert.equal(res.ok, false);
     assert.match(res.detail, /no fast-forward/);
     assert.equal(wrapped.length, 0);
+  } finally {
+    await r.done();
+  }
+});
+
+test('syncCheckout moves an editor-generated untracked .meta that the merge adds out of the way, then fast-forwards', async () => {
+  const r = setupRepos();
+  try {
+    // A builder committed Tests/Foo.cs without its .meta; the live editor made its own.
+    const rel = 'Assets/Tests/Foo.cs.meta';
+    fs.mkdirSync(path.join(r.checkout, 'Assets', 'Tests'), { recursive: true });
+    fs.writeFileSync(path.join(r.checkout, rel), 'guid: local\n');
+    const merged = r.pushNewFileFromElsewhere(rel, 'guid: committed\n');
+    const wrapped = [];
+    const aroundChange = async (step) => {
+      // The local .meta is moved only inside the wrap (the editor is parked).
+      wrapped.push(read(path.join(r.checkout, rel)));
+      return step();
+    };
+    const res = await syncCheckout(r.checkout, { aroundChange });
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.displaced, [rel]);
+    assert.deepEqual(wrapped, ['guid: local\n']);
+    assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), merged);
+    assert.equal(read(path.join(r.checkout, rel)), 'guid: committed\n');
+    // The local copy is kept inside .git, never deleted.
+    const kept = path.join(r.checkout, '.git', 'lunacore-displaced');
+    const stamps = fs.readdirSync(kept);
+    assert.equal(stamps.length, 1);
+    assert.equal(read(path.join(kept, stamps[0], rel)), 'guid: local\n');
+  } finally {
+    await r.done();
+  }
+});
+
+test('syncCheckout never moves an untracked non-.meta file the merge adds: it reports it and leaves the checkout', async () => {
+  const r = setupRepos();
+  try {
+    fs.writeFileSync(path.join(r.checkout, 'notes.txt'), 'mine\n');
+    r.pushNewFileFromElsewhere('notes.txt', 'theirs\n');
+    const before = git(r.checkout, 'rev-parse', 'HEAD');
+    const res = await syncCheckout(r.checkout);
+    assert.equal(res.ok, false);
+    assert.match(res.detail, /no fast-forward: untracked files in the way: notes\.txt/);
+    assert.equal(git(r.checkout, 'rev-parse', 'HEAD'), before);
+    assert.equal(read(path.join(r.checkout, 'notes.txt')), 'mine\n');
   } finally {
     await r.done();
   }
