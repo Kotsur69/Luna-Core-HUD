@@ -2899,6 +2899,13 @@ function startUsageWatcher() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('usage:update', usage);
     }
+    // A Claude account with room again ends a Luna's Work limit wait early.
+    // Last, so a failure here never blocks the usage display.
+    try {
+      if (claudeAccounts.freeAccount()) lunaswork.accountFree();
+    } catch (err) {
+      console.warn(`[lunaswork] free-account wake failed: ${(err && err.message) || err}`);
+    }
   });
   usageWatcher.accountUsage = accountUsage;
   usageWatcher.start();
