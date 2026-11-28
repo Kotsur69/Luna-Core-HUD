@@ -57,7 +57,7 @@ const FIXED_ROLES = Object.freeze(['director', 'critic', 'playtester']);
  * setting or the user's own Claude config.
  */
 const TOOLS = Object.freeze({
-  unity: Object.freeze({ server: 'unity', rules: Object.freeze(['Bash(unity:*)', 'Bash(Unity:*)', 'Bash(Unity.exe:*)', 'Bash(unity.exe:*)']) }),
+  unity: Object.freeze({ server: 'unity', rules: Object.freeze(['Bash(unity:*)', 'Bash(Unity:*)', 'Bash(Unity.exe:*)']) }),
   blender: Object.freeze({ server: 'blender', rules: Object.freeze(['Bash(blender:*)', 'Bash(blender.exe:*)']) }),
   higgsfield: Object.freeze({ server: 'higgsfield-bridge', rules: Object.freeze(['Bash(higgsfield:*)']), paid: true }),
   comfyui: Object.freeze({ server: 'comfyui', rules: Object.freeze([]) }),
@@ -375,7 +375,9 @@ function roleLaunch(kit, role, opts = {}) {
     skills: [...kit[role].skills],
     mcpConfig: { mcpServers },
     allowedTools: tools.flatMap(toolRules).filter((r) => !editorDeny.includes(r)),
-    disallowedTools: [...new Set([...GIT_GUARD_RULES, ...HOME_GUARD_RULES, ...denied.flatMap(toolRules), ...editorDeny])],
+    disallowedTools: editor
+      ? [...new Set([...GIT_GUARD_RULES, ...HOME_GUARD_RULES, ...denied.flatMap(toolRules), ...editorDeny])]
+      : [...GIT_GUARD_RULES, ...HOME_GUARD_RULES, ...denied.flatMap(toolRules)],
     addDirs: [...artDirs],
     fromClaudeSetup,
     ...(editor ? { editor } : {}),

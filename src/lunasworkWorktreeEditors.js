@@ -64,9 +64,12 @@ const EDITOR_MODES = Object.freeze([EDITOR_NONE, EDITOR_WORKTREE]);
 // for Unity in Mati's gamedev Claude profile) and the usual spellings. A deny
 // rule for a server that is not configured does nothing.
 const UNITY_MCP_SERVERS = Object.freeze(['unity', 'unityMCP', 'UnityMCP', 'unity-mcp', 'mcp-unity', 'unity_mcp', 'mcpforunity']);
-// The unity CLI and the editor binary, as a command word (Windows does not tell their case apart).
-const UNITY_BINS = Object.freeze(['unity', 'Unity', 'unity.exe', 'Unity.exe']);
-// Commands that move a shell into another folder.
+// 'none' on top of the kit's unity CLI rules: the editor binary anywhere in a
+// command, e.g. by its full path in Unity Hub's Editor folder.
+const NO_EDITOR_RULES = Object.freeze(['Bash(unity.exe:*)', 'Bash(*Unity.exe*)', 'Bash(*unity.exe*)', 'Bash(*UNITY.EXE*)', 'Bash(*Unity.app*)']);
+// 'worktree': a command naming the main checkout together with any of these
+// (the CLI, the binary by any path) is denied, as is moving a shell there.
+const UNITY_WORDS = Object.freeze(['unity', 'Unity', 'UNITY']);
 const CD_BINS = Object.freeze(['cd', 'pushd']);
 // A rule body cannot hold these (the permission syntax is Tool(body)).
 // eslint-disable-next-line no-control-regex
@@ -118,15 +121,20 @@ function editorModeOf(pkg) {
 
 // ---- deny rules --------------------------------------------------------------------
 
-/** The spellings a shell command may use for `dir`: as given, forward slashes, backslashes, Git Bash's /c/... */
+/**
+ * The spellings a shell command may use for `dir`: as given, forward slashes,
+ * backslashes, Git Bash's /c/..., and doubled backslashes (in case the
+ * permission matcher reads `\` in a rule as an escape).
+ */
 function pathForms(dir) {
   if (typeof dir !== 'string' || !dir.trim()) return [];
   const raw = dir.trim().replace(/[\\/]+$/, '');
   const forward = raw.replace(/\\/g, '/');
   const drive = /^([A-Za-z]):\//.exec(forward);
   const back = drive ? forward.replace(/\//g, '\\') : null;
+  const doubled = back ? back.replace(/\\/g, '\\\\') : null;
   const gitBash = drive ? `/${drive[1].toLowerCase()}/${forward.slice(3)}` : null;
-  return [...new Set([raw, forward, back, gitBash].filter((p) => p && p.length >= MIN_GUARDED_PATH_CHARS && !RULE_UNSAFE.test(p)))];
+  return [...new Set([raw, forward, back, doubled, gitBash].filter((p) => p && p.length >= MIN_GUARDED_PATH_CHARS && !RULE_UNSAFE.test(p)))];
 }
 
 /** Every Unity MCP server, denied by name. */
@@ -135,35 +143,46 @@ function unityMcpDenyRules() {
 }
 
 /**
- * Bash deny rules for a unity command or a `cd` that names the main checkout.
- * LunaCore's worktrees live in <parent>/.luna-worktrees/, never under the main
- * checkout, so no rule matches a package's own worktree path.
+ * Bash deny rules for a command that names the main checkout together with
+ * unity (the CLI, or the editor binary by any path), and for a `cd` / `pushd`
+ * there. LunaCore's worktrees live in <parent>/.luna-worktrees/, never under
+ * the main checkout, so no rule matches a package's own worktree path.
+ * Empty when the path cannot go into a rule (relative, a root, parentheses).
  * @param {string} mainCheckout absolute
  */
 function mainCheckoutDenyRules(mainCheckout) {
   // Either platform's absolute form: the rules are strings, read the same on every OS.
   const absolute = (p) => path.win32.isAbsolute(p) || path.posix.isAbsolute(p);
   if (typeof mainCheckout !== 'string' || !absolute(mainCheckout.trim())) return [];
-  return pathForms(mainCheckout).flatMap((p) => [...UNITY_BINS, ...CD_BINS].map((bin) => `Bash(${bin} *${p}*)`));
+  return pathForms(mainCheckout).flatMap((p) => [
+    ...UNITY_WORDS.map((word) => `Bash(*${word}*${p}*)`),
+    ...CD_BINS.map((bin) => `Bash(${bin} *${p}*)`),
+  ]);
 }
 
 /**
  * The deny rules of one editor mode on top of the kit's: every Unity MCP
- * server always; in 'worktree' mode also any unity command or `cd` naming the
- * main checkout. ('none' takes the unity tool out of the kit, so roleLaunch
- * denies its CLI rules with the other tools out of the kit.)
+ * server always; in 'none' mode the editor binary anywhere in a command (the
+ * kit's unity CLI rules are denied with the tool, which roleLaunch takes out);
+ * in 'worktree' mode any unity command or `cd` naming the main checkout.
  * @param {'none'|'worktree'} mode
  * @param {string} [mainCheckout]
  * @returns {string[]}
  */
 function editorDenyRules(mode, mainCheckout) {
   if (!EDITOR_MODES.includes(mode)) return [];
-  return [...unityMcpDenyRules(), ...(mode === EDITOR_WORKTREE ? mainCheckoutDenyRules(mainCheckout) : [])];
+  const own = mode === EDITOR_WORKTREE ? mainCheckoutDenyRules(mainCheckout) : NO_EDITOR_RULES;
+  return [...unityMcpDenyRules(), ...own];
 }
 
 // ---- brief ---------------------------------------------------------------------------
 
-const where = (mainCheckout) => (typeof mainCheckout === 'string' && mainCheckout.trim() ? ` (${mainCheckout.trim()})` : '');
+// eslint-disable-next-line no-control-regex
+const CONTROL_RE = /[\u0000-\u001f\u007f]+/g;
+const where = (mainCheckout) => {
+  const shown = typeof mainCheckout === 'string' ? mainCheckout.replace(CONTROL_RE, ' ').trim() : '';
+  return shown ? ` (${shown})` : '';
+};
 
 /** The rule every package of a Unity build gets, whatever its mode. */
 function mainEditorRule(mainCheckout) {
@@ -182,6 +201,8 @@ const NO_EDITOR_LINES = Object.freeze([
 function worktreeEditorLines(max) {
   return [
     'This package gets its OWN Unity editor on this worktree (it changes scenes / prefabs or editor code: editor scripts, play-mode commands, the playtest driver). The worktree is your own copy of the project: tests and play mode there are allowed.',
+    // The planner's moved check may say "not run here / do not open the Unity editor" (orchestraUnityVerify NO_EDITOR_CHECK_NOTE).
+    'This overrides any line above that tells you not to open the Unity editor or to leave a check "not run here": run those checks in this worktree editor. Scenes and prefabs stay the scene worker\'s.',
     `LunaCore runs at most ${max} worktree editors at once and holds the next package back until one closes, so keep yours open only while you need it.`,
     '1. Open it on this worktree, the folder you run in: the Unity editor of the project\'s version (ProjectSettings/ProjectVersion.txt, in Unity Hub\'s Editor folder) with -projectPath "<this worktree>". Drive it with the `unity` CLI run inside this worktree; Unity MCP tools are blocked in this build (they can reach the main checkout\'s editor). The first open imports the whole project: wait for it.',
     '2. EditMode tests: run them in this editor (Test Runner, or `unity command test run ...`), or in batchmode before you open it (-batchmode -projectPath "<this worktree>" -runTests -testPlatform EditMode -testResults <a file in the OS temp folder>). Fix until they pass.',
@@ -208,7 +229,7 @@ module.exports = {
   EDITOR_WORKTREE,
   EDITOR_MODES,
   UNITY_MCP_SERVERS,
-  UNITY_BINS,
+  NO_EDITOR_RULES,
   isEditorCodeFile,
   needsWorktreeEditor,
   editorModeOf,

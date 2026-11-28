@@ -205,14 +205,40 @@ test('a package with its own worktree editor may drive only that one: the unity 
   }
 });
 
-test('the rules cover the path as given, with forward slashes, backslashes and the Git Bash form; a root is never guarded', () => {
-  assert.deepEqual(W.pathForms('C:/a/game/'), ['C:/a/game', 'C:\\a\\game', '/c/a/game']);
+test('the rules cover the path as given, with forward slashes, backslashes (single and doubled) and the Git Bash form; a root is never guarded', () => {
+  assert.deepEqual(W.pathForms('C:/a/game/'), ['C:/a/game', 'C:\\a\\game', 'C:\\\\a\\\\game', '/c/a/game']);
   assert.deepEqual(W.pathForms('/home/mati/game'), ['/home/mati/game']);
   assert.deepEqual(W.pathForms('C:\\'), []);
   assert.deepEqual(W.pathForms('C:\\Program Files (x86)\\game'), [], 'a rule body cannot hold parentheses');
   assert.deepEqual(W.mainCheckoutDenyRules('relative/game'), []);
   assert.deepEqual(W.editorDenyRules('unknown', MAIN), []);
-  assert.deepEqual(W.editorDenyRules('none', MAIN), W.UNITY_MCP_SERVERS.map((s) => `mcp__${s}`), 'none: the MCP servers (its CLI goes with the kit)');
+  assert.deepEqual(W.editorDenyRules('none', MAIN), [...W.UNITY_MCP_SERVERS.map((s) => `mcp__${s}`), ...W.NO_EDITOR_RULES], 'none: MCP servers + the binary anywhere');
+});
+
+test('the Unity binary by its full path is caught too: anywhere for a package without an editor, at the main checkout for one with its own', async (t) => {
+  const { kits } = await unityBuild(t);
+  const hub = '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.6.4f1\\Editor\\Unity.exe"';
+  assert.ok(denied(kits.hud, `${hub} -batchmode -projectPath .`), 'none: no batchmode either');
+  assert.ok(denied(kits.hud, `& ${hub} -projectPath "${WT}"`), 'none: not even on its own worktree');
+  assert.ok(denied(kits.sandbox, `${hub} -projectPath "${MAIN}"`), 'worktree: never on the main checkout');
+  assert.ok(denied(kits.sandbox, `${hub} -projectPath C:/Users/mati/source/repos/blade&bullet`));
+  assert.ok(!denied(kits.sandbox, `${hub} -projectPath "${WT}"`), 'worktree: its own worktree editor opens');
+  assert.ok(!denied(kits.sandbox, 'grep -rn UnityEngine Assets/Game'), 'a plain mention of Unity in the worktree is fine');
+});
+
+test('the launch line keeps every main-checkout rule for blade&bullet (`&`, backslashes): none is dropped', async (t) => {
+  const { withTaskBrief, isPassableDenyRule } = require('../src/launch');
+  const { kits } = await unityBuild(t);
+  for (const [id, kit] of Object.entries(kits)) {
+    const dropped = kit.disallowedTools.filter((r) => !isPassableDenyRule(r));
+    assert.deepEqual(dropped, [], `${id}: every deny rule reaches the CLI`);
+  }
+  const line = withTaskBrief('claude', { briefPath: '.luna-brief/sandbox.md', permissionMode: 'bypassPermissions', allowedTools: [], ...kits.sandbox });
+  assert.ok(line.includes(`'Bash(*unity*${MAIN}*)'`), 'the backslash form, single-quoted');
+  assert.ok(line.includes("'Bash(cd *C:/Users/mati/source/repos/blade&bullet*)'"));
+  assert.ok(line.includes("'mcp__unityMCP'"));
+  // Still nothing a single-quoted argument would let through.
+  for (const bad of ["Bash(unity 'x')", 'Bash(unity $(x))', 'Bash(unity `x`)', `Bash(${'u'.repeat(301)})`]) assert.equal(isPassableDenyRule(bad), false, bad);
 });
 
 test('a non-Unity build asks for no editor mode: its kit is exactly as before', async (t) => {
@@ -256,6 +282,10 @@ test('a package touching editor / play-mode code is briefed to verify in its own
   assert.match(prompt, /3\. Play-mode smoke: enter play mode in this editor[^\n]*back in edit mode/);
   assert.match(prompt, /4\. Close the editor before you finish/);
   assert.match(prompt, /5\. Report both in your final message[^\n]*"EditMode tests: [^"]+" and "Play-mode smoke: [^"]+"/);
+  // Next to the scene worker, the code-worker note no longer forbids its own editor outright,
+  // and the kit note says it wins over any "do not open / not run here" line above it.
+  assert.match(prompt, /Do not open the Unity editor for scene or prefab work/);
+  assert.match(prompt, /This overrides any line above that tells you not to open the Unity editor/);
   // The editor rule sits right after the tools line: a shortened note loses the generic lines first.
   const note = prompt.slice(prompt.indexOf("## Tool kit (Luna's Work)"));
   assert.ok(note.indexOf('Unity editors:') < note.indexOf('Write only inside'), 'editor rule before the generic guardrails');
@@ -297,6 +327,42 @@ test('capEditorLaunches: at most N editor packages hold a slot; others take the 
   assert.deepEqual(closing.held.sort(), ['e2', 'e3']);
   assert.equal(slots.editorPolicyOf({ max: 0, needs }), null);
   assert.equal(slots.editorPolicyOf({ max: 2 }), null);
+});
+
+test('reaper: only a launch seen running is closed - a package already settled at a restore keeps a hand-opened editor', async () => {
+  const closes = [];
+  const reaper = slots.createEditorReaper({ isSettled: (p) => p.state === 'pushed' });
+  const policy = { max: 2, needs: () => true, close: async (root) => (closes.push(root), { closed: [], failed: [] }) };
+  const restored = { id: 'old', state: 'pushed', root: '/wt/old-1', startedAt: 1 };
+  const live = { id: 'new', state: 'launched', root: '/wt/new-1', startedAt: 2 };
+  await Promise.all(reaper.sweep([restored, live], MAIN, policy, policy.needs));
+  assert.deepEqual(closes, [], 'nothing settled after being seen live');
+  await Promise.all(reaper.sweep([restored, { ...live, state: 'pushed' }], MAIN, policy, policy.needs));
+  assert.deepEqual(closes, ['/wt/new-1']);
+});
+
+test('reaper: a close that never answers frees its slot after the timeout; a throwing callback is logged', async () => {
+  const lines = [];
+  let fire = null;
+  const reaper = slots.createEditorReaper({
+    isSettled: (p) => p.state === 'pushed',
+    onClosed: () => {
+      throw new Error('kick failed');
+    },
+    log: (l) => lines.push(l),
+    setTimer: (fn) => ((fire = fn), 1),
+    clearTimer: () => {},
+  });
+  const policy = { max: 2, needs: () => true, close: () => new Promise(() => {}) };
+  const pkg = { id: 'e1', state: 'launched', root: '/wt/e1-1', startedAt: 1 };
+  reaper.sweep([pkg], MAIN, policy, policy.needs);
+  const [closing] = reaper.sweep([{ ...pkg, state: 'pushed' }], MAIN, policy, policy.needs);
+  assert.equal(reaper.closing(), 1);
+  fire();
+  await closing;
+  assert.equal(reaper.closing(), 0, 'the slot is free again');
+  assert.ok(lines.some((l) => /did not close: no answer within 120 s/.test(l)));
+  assert.ok(lines.some((l) => /kick failed/.test(l)));
 });
 
 // ---- through the God Mode controller ------------------------------------------------

@@ -88,8 +88,10 @@ const SCENE_WORKER_BRIEF = [
   'Save every scene / prefab you change in the editor, commit them with your work, and close your editor before you finish.',
   'A luna_asset_* answer that says the Unity import is deferred means YOUR editor is not connected: that is a failure for you, not for an asset-prep worker. Open your own Unity editor on this worktree and import the files through it before you finish.',
 ].join('\n');
+// "for scene or prefab work": an editor-code package still opens its OWN worktree editor
+// for its checks (src/lunasworkWorktreeEditors.js); every other one gets no editor at all.
 const CODE_WORKER_NOTE =
-  `Do not open the Unity editor and do not edit *.unity or *.prefab files: the ${SCENE_WORKER_ID} package owns all scene and prefab work in this build.`;
+  `Do not open the Unity editor for scene or prefab work and do not edit *.unity or *.prefab files: the ${SCENE_WORKER_ID} package owns all scene and prefab work in this build.`;
 const ASSET_PREP_NOTE = [
   'This package prepares raw asset files only and runs in parallel, without the Unity editor: do not open Unity and do not create or edit *.unity or *.prefab files.',
   `The Unity import / prefab step is deferred to the ${SCENE_WORKER_ID} package, which runs after this one. A luna_asset_* answer that says the Unity import is deferred is expected, not a failure: the files are saved and ledgered.`,

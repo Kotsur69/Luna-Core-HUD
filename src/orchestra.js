@@ -505,6 +505,8 @@ function createOrchestra(deps) {
       if (plan && plan.started && !plan.killed && !pumping) kick();
     },
     log,
+    setTimer,
+    clearTimer,
   });
   /** pkgId -> pending nudge timer (also the bounded wait on a background process) */
   const nudgeTimers = new Map();
@@ -923,7 +925,9 @@ function createOrchestra(deps) {
     // Only a Luna's Work Unity build caps its own worktree editors (src/orchestraEditorSlots.js).
     const editors = editorPolicy();
     if (!editors) return readyOf(masked);
-    const capped = editorSlots.capEditorLaunches(masked, { readyOf, isActive: sup.isActive, needs: editors.needs, max: editors.max, closing: editorReaper.closing() });
+    // A parked A/B variant holds no slot here either (as in readyToLaunch): its twin must be able to run.
+    const holdsSlot = (p) => sup.isActive(p) && !variantRules.isParked(p);
+    const capped = editorSlots.capEditorLaunches(masked, { readyOf, isActive: holdsSlot, needs: editors.needs, max: editors.max, closing: editorReaper.closing() });
     if (capped.held.length) kindHeld = true;
     return capped.ready;
   }

@@ -11,10 +11,14 @@
 //           package without an editor takes the free slot instead; the held
 //           one launches once a slot frees up (the tick retries). Editors
 //           still being closed count as open.
-//   reaper  a package that settles (pushed, stalled, failed, closed, killed)
-//           gets the editors on its worktree closed once per launch - the
-//           brief tells the worker to close it, this is the safety net.
-//           Worktree removal closes editors on its own (src/worktrees.js).
+//   reaper  a package seen running that settles (pushed, stalled, failed,
+//           closed, killed) gets the editors on its worktree closed once per
+//           launch - the brief tells the worker to close it, this is the
+//           safety net. One already settled when a run is restored is left
+//           alone. Worktree removal closes editors on its own (src/worktrees.js).
+//
+// A parked A/B variant holds no worker slot (orchestraSupervisor.readyToLaunch)
+// and no editor slot either: counting it could hold its twin back for good.
 //
 // God Mode only gets the policy {max, needs, close} through deps.worktreeEditors
 // while such a build runs (src/orchestraWiring.js); every other run launches
@@ -90,12 +94,20 @@ function capEditorLaunches(packages, { readyOf, isActive, needs, max, closing = 
 /** One launch of a package on one worktree: a relaunch (new worktree or start) is a new key. */
 const launchKey = (pkg) => [pkg.id, pkg.root, pkg.startedAt || ''].join('\u0000');
 
+/** closeEditors is bounded (process list, quit wait, taskkill); this bounds a close that hangs anyway, so its slot frees. */
+const CLOSE_TIMEOUT_MS = 2 * 60 * 1000;
+
 /**
- * Closes the worktree editors of settled editor packages, once per launch.
- * @param {{isSettled:(pkg:object)=>boolean, onClosed?:()=>void, log?:(line:string)=>void}} deps
+ * Closes the worktree editors of settled editor packages, once per launch -
+ * only a launch this controller saw running (live, then settled). A package
+ * that was already settled when the run was restored is left alone: an
+ * editor open on its worktree may be one Mati opened by hand to look at it.
+ * @param {{isSettled:(pkg:object)=>boolean, onClosed?:()=>void, log?:(line:string)=>void,
+ *   setTimer?:Function, clearTimer?:Function, timeoutMs?:number}} deps
  *   onClosed: an editor close finished (a held package may launch now)
  */
-function createEditorReaper({ isSettled, onClosed = () => {}, log = () => {} }) {
+function createEditorReaper({ isSettled, onClosed = () => {}, log = () => {}, setTimer = setTimeout, clearTimer = clearTimeout, timeoutMs = CLOSE_TIMEOUT_MS }) {
+  const seenLive = new Set();
   const done = new Set();
   let closing = 0;
 
@@ -106,15 +118,27 @@ function createEditorReaper({ isSettled, onClosed = () => {}, log = () => {} }) 
     for (const f of failed) log(`[orchestra] ${pkg.id} settled: a Unity editor on its worktree did not close: ${errText(isObj(f) ? f.detail : f)}`);
   }
 
+  function bounded(promise) {
+    let timer = null;
+    const timeout = new Promise((resolve) => {
+      timer = setTimer(() => resolve({ closed: [], failed: [{ detail: `no answer within ${Math.round(timeoutMs / 1000)} s` }] }), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimer(timer));
+  }
+
   async function closeOne(policy, pkg, repoPath) {
     closing += 1;
     try {
-      report(pkg, await policy.close(pkg.root, repoPath));
+      report(pkg, await bounded(Promise.resolve().then(() => policy.close(pkg.root, repoPath))));
     } catch (err) {
       log(`[orchestra] ${pkg.id} settled: closing its Unity editor failed: ${errText(err)}`);
     } finally {
       closing -= 1;
-      onClosed();
+      try {
+        onClosed();
+      } catch (err) {
+        log(`[orchestra] after closing ${pkg.id}'s Unity editor: ${errText(err)}`);
+      }
     }
   }
 
@@ -130,9 +154,13 @@ function createEditorReaper({ isSettled, onClosed = () => {}, log = () => {} }) 
     if (!policy || !policy.close) return [];
     const started = [];
     for (const pkg of Array.isArray(packages) ? packages : []) {
-      if (!isObj(pkg) || typeof pkg.root !== 'string' || !pkg.root || !isSettled(pkg) || !needs(pkg)) continue;
+      if (!isObj(pkg) || typeof pkg.root !== 'string' || !pkg.root) continue;
       const key = launchKey(pkg);
-      if (done.has(key)) continue;
+      if (!isSettled(pkg)) {
+        seenLive.add(key);
+        continue;
+      }
+      if (!seenLive.has(key) || done.has(key) || !needs(pkg)) continue;
       done.add(key);
       started.push(closeOne(policy, pkg, repoPath));
     }
@@ -142,4 +170,4 @@ function createEditorReaper({ isSettled, onClosed = () => {}, log = () => {} }) 
   return { sweep, closing: () => closing };
 }
 
-module.exports = { EDITOR_HELD_STATE, editorPolicyOf, safeNeeds, capEditorLaunches, createEditorReaper };
+module.exports = { EDITOR_HELD_STATE, CLOSE_TIMEOUT_MS, editorPolicyOf, safeNeeds, capEditorLaunches, createEditorReaper };
