@@ -439,16 +439,18 @@ function createCheckpoints(deps = {}) {
    * Throws the temporary worktree away. node_modules links go first
    * (worktrees.unlinkDependencyLinks): `git worktree remove` deletes through a
    * junction and would empty its target. A link that will not go leaves the
-   * folder where it is, logged, rather than risk that.
+   * folder where it is, logged, rather than risk that. A --no-checkout
+   * worktree (checkedOut false) skips `git worktree remove`: every file of
+   * HEAD counts as deleted there, so git refuses it; the folder holds only
+   * its .git file and goes with rmSync + prune.
    */
-  async function removeWorktree(repoPath, dir) {
+  async function removeWorktree(repoPath, dir, { checkedOut = true } = {}) {
     const links = unlinkDependencyLinks(dir);
     if (!links.ok) {
       log(`[lunaswork] kept ${dir}: ${links.detail}`);
       return;
     }
-    const removed = await git(repoPath, ['worktree', 'remove', dir]);
-    if (removed.ok) return;
+    if (checkedOut && (await git(repoPath, ['worktree', 'remove', dir])).ok) return;
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch (err) {
@@ -457,11 +459,6 @@ function createCheckpoints(deps = {}) {
     await git(repoPath, ['worktree', 'prune']);
   }
 
-  /**
-   * Reverts `commits` on top of headSha in a throwaway worktree and pushes.
-   * With `verify`, the result is pushed only when verify(dir, 'HEAD') holds
-   * ('treeMismatch' otherwise: the local revert commits go with the worktree).
-   */
   /** A detached throwaway worktree at headSha: {dir} or {error, detail}. */
   async function addWorktree(repoPath, headSha, flags = []) {
     const dir = fs.mkdtempSync(path.join(tmpRoot(), 'lunaswork-revert-'));
@@ -471,6 +468,11 @@ function createCheckpoints(deps = {}) {
     return added.ok ? { dir } : { error: 'worktreeFailed', detail: added.err };
   }
 
+  /**
+   * Reverts `commits` on top of headSha in a throwaway worktree and pushes.
+   * With `verify`, the result is pushed only when verify(dir, 'HEAD') holds
+   * ('treeMismatch' otherwise: the local revert commits go with the worktree).
+   */
   async function revertInWorktree(repoPath, branch, headSha, commits, verify = null) {
     const { dir, error, detail } = await addWorktree(repoPath, headSha);
     if (error) return { ok: false, error, detail };
@@ -509,7 +511,7 @@ function createCheckpoints(deps = {}) {
       if (!pushed.ok) return { ok: false, error: 'pushFailed', detail: pushed.err };
       return { ok: true, headAfter: made.sha };
     } finally {
-      await removeWorktree(repoPath, dir);
+      await removeWorktree(repoPath, dir, { checkedOut: false });
     }
   }
 
@@ -689,6 +691,8 @@ function createCheckpoints(deps = {}) {
         message: treeMessageArgs({ toTag, goodSha: good, fromTag, undone: commits.length, revertDetail }),
       });
       if (res.ok) log(`[lunaswork] rollback: main is back at the tree of ${toTag} (${String(res.headAfter).slice(0, 7)}, method tree)`);
+      // Both ways failed: the detail keeps the revert's cause (a hook or identity problem fails both).
+      else res = { ...res, detail: `${res.detail || res.error} (tree restore, after the revert stopped: ${oneLine(revertDetail, 150)})` };
     }
     if (!res.ok) return { ...fail(res.error, res.detail), ...how };
     // Only once the revert is on origin: a failed rollback leaves no tag behind.

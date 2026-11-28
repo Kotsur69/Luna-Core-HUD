@@ -36,6 +36,7 @@ const {
   mergeSubject,
   PACK_COMMIT_PREFIX,
 } = require('../src/lunasworkCheckpoint');
+const { treeSubject, treeMessageArgs, commitGoodTree } = require('../src/lunasworkTreeRestore');
 const { REPRO_ACCEPTANCE } = require('../src/lunasworkCritic');
 const { commitDesignPack } = require('../src/lunasworkPackCommit');
 const { createStaging, backupDirFor, MANIFEST_FILE } = require('../src/lunasworkStaging');
@@ -566,7 +567,9 @@ test('a rollback whose revert sequence conflicts restores the good tag\'s tree i
   assert.equal(git(origin, 'show', `${after}:design/GDD.md`), '# GDD\nscene: forest (approved)', 'the design-pack doc stays');
   assert.equal(git(origin, 'rev-parse', `refs/tags/${res.fromTag}^{commit}`), broken, 'the reverted work stays on a tag');
   assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1, 'the temporary worktree is gone');
+  assert.deepEqual(fs.readdirSync(root).filter((n) => n.startsWith('lunaswork-revert-')), [], 'no temporary folder left behind');
   assert.ok(logs.some((l) => /restoring the tree of luna-work\/lwrun1\/iter-1 in one commit/.test(l)), logs.join('\n'));
+  assert.ok(!logs.some((l) => /could not remove|kept .*lunaswork-revert-/.test(l)), logs.join('\n'));
 
   assert.equal(store.list.length, 1);
   assert.match(store.list[0].details, /restoring the tree of luna-work\/lwrun1\/iter-1/);
@@ -613,10 +616,39 @@ test('tree fallback: a rejected push leaves origin as it was, with no tag and no
   assert.equal(res.ok, false);
   assert.equal(res.error, 'pushFailed', JSON.stringify(res));
   assert.equal(res.method, 'tree');
+  assert.match(res.detail, /^rejected \(fetch first\) \(tree restore, after the revert stopped: error: could not revert/, 'both causes are named');
   assert.equal(originMain(origin), broken);
   assert.equal(store.list.length, 0);
   assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1);
   assert.equal(git(origin, 'tag', '--list', 'luna-work/lwrun1/iter-2-rolled-back'), '');
+});
+
+test('commitGoodTree: kept docs come from the head in calls of at most 100 paths; absent ones are dropped', async () => {
+  const head = 'a'.repeat(40);
+  const good = 'b'.repeat(40);
+  const keep = Array.from({ length: 250 }, (_, i) => `design/doc${i}.md`);
+  const atHead = new Set(keep.slice(0, 240));
+  const calls = [];
+  const fake = async (cwd, args) => {
+    calls.push(args);
+    if (args[0] === 'ls-tree') {
+      const paths = args.slice(args.indexOf('--') + 1).filter((p) => atHead.has(p));
+      return { ok: true, out: paths.map((p) => `100644 blob ${'c'.repeat(40)}\t${p}`).join('\0'), err: '' };
+    }
+    if (args[0] === 'write-tree') return { ok: true, out: 'd'.repeat(40), err: '' };
+    if (args[0] === 'commit-tree') return { ok: true, out: 'e'.repeat(40), err: '' };
+    return { ok: true, out: '', err: '' };
+  };
+  const res = await commitGoodTree(guardedGit(fake), 'dir', { headSha: head, goodSha: good, keep, message: treeMessageArgs({ toTag: 't', goodSha: good, fromTag: 'f', undone: 2 }) });
+  assert.deepEqual(res, { ok: true, sha: 'e'.repeat(40) });
+  assert.deepEqual(calls[0], ['read-tree', good]);
+  const pathsIn = (args) => (args[0] === 'ls-tree' || args.includes('--remove') ? args.slice(args.indexOf('--') + 1).length : args.filter((a) => a === '--cacheinfo').length);
+  const batched = calls.filter((a) => a[0] === 'ls-tree' || a[0] === 'update-index');
+  assert.ok(batched.every((a) => pathsIn(a) <= 100), batched.map(pathsIn).join(','));
+  assert.equal(batched.filter((a) => a.includes('--add')).reduce((n, a) => n + pathsIn(a), 0), 240);
+  assert.deepEqual(batched.filter((a) => a.includes('--remove')).flatMap((a) => a.slice(a.indexOf('--') + 1)), keep.slice(240));
+  assert.deepEqual(calls.at(-1).slice(0, 4), ['commit-tree', 'd'.repeat(40), '-p', head]);
+  assert.ok(calls.at(-1).includes(treeSubject('t')));
 });
 
 // ---- staging data: backup before migrate, restore with the rollback (LW 3.29) -----------

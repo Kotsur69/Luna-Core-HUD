@@ -18,6 +18,7 @@
 //
 // The worktree's own index is the scratch index: the checkpoint module's git
 // runner takes no env, so src/gitScratchIndex.js (GIT_INDEX_FILE) does not fit.
+// The caller throws the --no-checkout worktree away with rmSync + prune.
 // No reset, no force-push, no history rewrite: the caller pushes the commit
 // the same way it pushes its revert commits, through its guarded runner.
 // ============================================================================
@@ -28,6 +29,8 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 // `git ls-tree -z` entry: "<mode> <type> <sha>\t<path>".
 const LS_TREE_RE = /^([0-7]{6}) [a-z]+ ([0-9a-f]{40})\t(.+)$/;
 const MAX_DETAIL = 300;
+// Paths per ls-tree / update-index call: keeps every command line far below Windows' ~32k limit.
+const MAX_PATHS_PER_CALL = 100;
 
 /** The subject of the one commit that restores a good tag's tree. */
 const treeSubject = (toTag) => `revert: roll back to ${toTag}`;
@@ -52,27 +55,40 @@ function treeMessageArgs({ toTag, goodSha, fromTag, undone, revertDetail }) {
   return ['-m', treeSubject(toTag), '-m', body.join('\n')];
 }
 
+/** `list` in slices of `size`. */
+const chunks = (list, size) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
+
+/** Runs one git step per slice of `list` (args built by `argsFor`), stopping at the first failure. */
+async function inChunks(step, name, list, argsFor) {
+  const outs = [];
+  for (const part of chunks(list, MAX_PATHS_PER_CALL)) {
+    const res = await step(name, argsFor(part));
+    if (!res.ok) return res;
+    outs.push(res.out);
+  }
+  return { ok: true, out: outs.join('\0') };
+}
+
 /** Puts headSha's version of every kept path into the index (or drops the path when headSha has none). */
 async function keepFromHead(step, headSha, keep) {
   if (!keep.length) return { ok: true };
-  const listed = await step('ls-tree', ['ls-tree', '-z', headSha, '--', ...keep]);
+  const listed = await inChunks(step, 'ls-tree', keep, (part) => ['ls-tree', '-z', headSha, '--', ...part]);
   if (!listed.ok) return listed;
   const entries = parseLsTree(listed.out);
-  if (entries.length) {
-    const added = await step('update-index', ['update-index', '--add', ...entries.flatMap((e) => ['--cacheinfo', `${e.mode},${e.sha},${e.path}`])]);
-    if (!added.ok) return added;
-  }
+  const added = await inChunks(step, 'update-index', entries, (part) =>
+    ['update-index', '--add', ...part.flatMap((e) => ['--cacheinfo', `${e.mode},${e.sha},${e.path}`])]);
+  if (!added.ok) return added;
   const atHead = new Set(entries.map((e) => e.path));
   const gone = keep.filter((p) => !atHead.has(p));
   // --no-checkout: the file is missing on disk, so --remove drops it from the index.
-  if (gone.length) return step('update-index', ['update-index', '--remove', '--', ...gone]);
-  return { ok: true };
+  return inChunks(step, 'update-index', gone, (part) => ['update-index', '--remove', '--', ...part]);
 }
 
 /**
  * Builds the restore commit inside `dir` (a worktree added with --detach
- * --no-checkout at headSha). Leaves the worktree's index empty again, so the
- * worktree removes cleanly.
+ * --no-checkout at headSha). Nothing is written to the folder; the caller
+ * removes it without `git worktree remove` (which refuses a --no-checkout
+ * worktree: every file of HEAD counts as deleted there).
  * @param {(cwd:string, args:string[])=>Promise<{ok:boolean, out:string, err:string}>} git guarded runner
  * @param {string} dir
  * @param {{headSha:string, goodSha:string, keep?:string[], message:string[]}} o
@@ -84,22 +100,17 @@ async function commitGoodTree(git, dir, { headSha, goodSha, keep, message }) {
     const res = await git(dir, args);
     return res.ok ? { ok: true, out: String(res.out || '').trim() } : { ok: false, step: name, detail: res.err };
   };
-  try {
-    const read = await step('read-tree', ['read-tree', goodSha]);
-    if (!read.ok) return read;
-    const kept = await keepFromHead(step, headSha, Array.isArray(keep) ? keep : []);
-    if (!kept.ok) return kept;
-    const tree = await step('write-tree', ['write-tree']);
-    if (!tree.ok) return tree;
-    if (!SHA_RE.test(tree.out)) return { ok: false, step: 'write-tree', detail: `not a tree sha: ${tree.out.slice(0, 80) || '(empty)'}` };
-    const made = await step('commit-tree', ['commit-tree', tree.out, '-p', headSha, ...message]);
-    if (!made.ok) return made;
-    if (!SHA_RE.test(made.out)) return { ok: false, step: 'commit-tree', detail: `not a commit sha: ${made.out.slice(0, 80) || '(empty)'}` };
-    return { ok: true, sha: made.out };
-  } finally {
-    // An empty index matches the empty --no-checkout folder: `worktree remove` takes it.
-    await git(dir, ['read-tree', '--empty']);
-  }
+  const read = await step('read-tree', ['read-tree', goodSha]);
+  if (!read.ok) return read;
+  const kept = await keepFromHead(step, headSha, Array.isArray(keep) ? keep : []);
+  if (!kept.ok) return kept;
+  const tree = await step('write-tree', ['write-tree']);
+  if (!tree.ok) return tree;
+  if (!SHA_RE.test(tree.out)) return { ok: false, step: 'write-tree', detail: `not a tree sha: ${tree.out.slice(0, 80) || '(empty)'}` };
+  const made = await step('commit-tree', ['commit-tree', tree.out, '-p', headSha, ...message]);
+  if (!made.ok) return made;
+  if (!SHA_RE.test(made.out)) return { ok: false, step: 'commit-tree', detail: `not a commit sha: ${made.out.slice(0, 80) || '(empty)'}` };
+  return { ok: true, sha: made.out };
 }
 
 module.exports = { treeSubject, parseLsTree, treeMessageArgs, commitGoodTree };
