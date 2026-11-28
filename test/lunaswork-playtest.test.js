@@ -1162,6 +1162,32 @@ test('a plan too long for the prompt drops whole journeys from its end, never th
   assert.deepEqual(fenced.journeys.map((j) => j.name), ['Real']);
 });
 
+test('a milestone is named only as a whole: never by "Milestone 10", a bare word or a number in another title', () => {
+  const gates = [{ name: 'Milestone 1 - Skeleton', criteria: ['Player can move'] }, { name: 'Milestone 2 - 1 boss', criteria: ['Boss dies'] }];
+  for (const label of ['Milestone 1 - Skeleton', 'milestone 1', 'M1', '1', 'Skeleton', 'M1 Skeleton']) {
+    assert.ok(Plan.milestoneMatches(gates[0].name, label), label);
+  }
+  for (const label of ['Milestone 10', 'Milestone', '2', 'boss', '']) assert.ok(!Plan.milestoneMatches(gates[0].name, label), label);
+  assert.equal(Plan.matchCriterion(gates, '1', 'Boss dies'), null);
+  assert.deepEqual(Plan.matchCriterion(gates, '2', 'Boss dies'), { milestone: 'Milestone 2 - 1 boss', criterion: 'Boss dies' });
+  const plan = Plan.buildPlan({
+    testPlan: '## Journeys\n\n### Walk\nMilestone: 1\n\n### Fight\n- Scores: "Player can move", "Boss dies"\n\n### Other <!-- old name -->\n1. x\n',
+    shipCriteria: '## Milestone 1 - Skeleton\n- [ ] Player can move\n\n## Milestone 2 - 1 boss\n- [ ] Boss dies\n',
+    milestone: 'Milestone 2 - 1 boss',
+  });
+  assert.deepEqual(plan.first, ['Fight'], '"Milestone: 1" is no Milestone 2 journey; a two-criteria Scores line is read per criterion');
+  assert.ok(plan.planned.includes('Other'), 'a comment on the heading line is not part of the name');
+});
+
+test('a run milestone that names no gate puts nothing first; the plan keeps its file order', () => {
+  const plan = Plan.buildPlan({ testPlan: longPlan(), shipCriteria: LADDER, milestone: 'Final polish' });
+  assert.equal(plan.milestone, null);
+  assert.deepEqual(plan.first, []);
+  assert.equal(plan.planned[0], 'Hit the dummy');
+  const prompt = P.buildPlaytestPrompt({ mode: 'explore', target: 'unity', testPlan: longPlan(), shipCriteria: LADDER, milestone: 'Final polish' });
+  assert.ok(!prompt.includes('CURRENT MILESTONE FIRST'));
+});
+
 test('a score under reworded criterion text is rejected and flagged; the exact text counts', () => {
   const { evidenceDir } = evidenceWorld();
   const gates = Plan.gatesOf(LADDER);

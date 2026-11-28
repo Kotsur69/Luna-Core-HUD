@@ -25,7 +25,9 @@
 //
 // A journey belongs to a milestone when a "Scores:" line under it quotes one
 // of that milestone's gate items, a "Milestone:" line names it, or its
-// heading names it ("Milestone 1 regression sweep", "M1 ...").
+// heading names it ("Milestone 1 regression sweep", "M1 ..."). A label names
+// a milestone only as a whole (milestoneMatches): "Milestone 1", "M1", "1"
+// or its title - never "Milestone 10" or a number inside another title.
 // ============================================================================
 
 'use strict';
@@ -43,6 +45,7 @@ const MAX_NOT_SCORED = 100;
 const MAX_NOT_RUN = 100;
 const MAX_UNMATCHED = 20;
 const MAX_LISTED_NAMES = 40;
+const MAX_NOTE_CHARS = 2000;
 const MAX_COUNT = 1000;
 // A "Scores:" / "Milestone:" line under a journey (optionally bold, optionally a list item).
 const SCORES_LINE_RE = /^\s*(?:[-*]\s+)?(?:\*\*)?Scores?(?:\*\*)?\s*:\s*(?:\*\*)?\s*(.+?)\s*$/i;
@@ -62,12 +65,26 @@ function norm(s) {
   return String(s == null ? '' : s).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
+/** A gate name's parts: its norm() form, its short keys ("milestone 1", "m1"), number and title. */
+function gateParts(name) {
+  const full = norm(name);
+  const m = full.match(GATE_KEY_RE);
+  if (!m) return { full, keys: [], number: null, title: full };
+  const keys = [`${m[1]} ${m[2]}`, `${m[1][0]}${m[2]}`];
+  return { full, keys, number: m[2], title: full.slice(keys[0].length).trim() };
+}
+
 /**
- * Whole words only, on norm()ed names: "milestone 1 skeleton" matches
- * "skeleton" and "milestone 1", never "milestone 10".
+ * Whether a label names this milestone: "Milestone 1: Skeleton" is named by
+ * itself, "Milestone 1", "M1", "1", "Skeleton" or "M1 Skeleton" - never by
+ * "Milestone 10", a bare "Milestone", or a number inside another title.
  */
-function sameMilestone(a, b) {
-  return !!a && !!b && (` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `));
+function milestoneMatches(gateName, label) {
+  const l = norm(label);
+  if (!l) return false;
+  const g = gateParts(gateName);
+  if (l === g.full || (g.title && l === g.title) || l === g.number || g.keys.includes(l)) return true;
+  return g.keys.some((k) => !!g.title && l === `${k} ${g.title}`);
 }
 
 /** The milestones of SHIP_CRITERIA.md that have gate items, as {name, criteria:string[]}. */
@@ -85,10 +102,9 @@ function gatesOf(shipCriteria) {
  */
 function matchCriterion(gates, milestone, criterion) {
   const key = norm(criterion);
-  const m = norm(milestone);
-  if (!key || !m || !Array.isArray(gates)) return null;
+  if (!key || !norm(milestone) || !Array.isArray(gates)) return null;
   for (const gate of gates) {
-    if (!sameMilestone(norm(gate.name), m)) continue;
+    if (!milestoneMatches(gate.name, milestone)) continue;
     const hit = gate.criteria.find((c) => norm(c) === key);
     if (hit) return { milestone: gate.name, criterion: hit };
   }
@@ -102,11 +118,16 @@ function mismatchReason(gates, criterion) {
   return elsewhere ? 'that milestone has no such gate item' : 'not the exact text of a gate item';
 }
 
-/** The run's current milestone among the gates: the one named, else the first rung. */
+/**
+ * The run's current milestone among the gates: the one named; none named
+ * (a run's first iteration) = the first rung. A name that is no gate (a
+ * renamed heading) resolves to null: the plan keeps its file order rather
+ * than putting a guessed milestone first.
+ */
 function resolveMilestone(gates, milestone) {
   if (!gates.length) return null;
-  const m = norm(milestone);
-  return (m && gates.find((g) => sameMilestone(norm(g.name), m))) || gates[0];
+  if (!norm(milestone)) return gates[0];
+  return gates.find((g) => milestoneMatches(g.name, milestone)) || null;
 }
 
 // ---- TEST_PLAN.md -------------------------------------------------------------------
@@ -160,7 +181,9 @@ function parseTestPlan(md) {
     }
     if (h2 && section === 'journeys') section = 'tail';
     if (section === 'journeys' && h3) {
-      out.journeys.push({ name: oneLine(h3[1], MAX_NAME_CHARS), lines: [line] });
+      // A comment on the heading line is not part of the journey's name.
+      const name = oneLine(h3[1].replace(/<!--.*?(?:-->|$)/g, ''), MAX_NAME_CHARS);
+      out.journeys.push({ name: name || oneLine(h3[1], MAX_NAME_CHARS), lines: [line] });
     } else if (section === 'journeys') {
       (out.journeys.length ? out.journeys[out.journeys.length - 1].lines : out.intro).push(line);
     } else {
@@ -170,21 +193,24 @@ function parseTestPlan(md) {
   return out;
 }
 
-/** The short form of a gate name ("milestone 1", "m1"); [] when it has none. */
-function gateKeys(gate) {
-  const name = norm(gate.name);
-  const m = name.match(GATE_KEY_RE);
-  return m ? [name, `${m[1]} ${m[2]}`, `${m[1][0]}${m[2]}`] : [name];
+/**
+ * The criteria one "Scores:" value may name: the whole value, else its parts
+ * ("A"; "B" or "A", "B") - a criterion text may hold commas of its own.
+ */
+function scoredTexts(value) {
+  const parts = value.split(/\s*;\s*|["”]\s*,\s*["“]/).map((p) => p.replace(QUOTES_RE, '').trim()).filter(Boolean);
+  return [value, ...(parts.length > 1 ? parts : [])];
 }
 
 /** The milestones one journey belongs to (see the header). */
 function journeyGates(journey, gates) {
   const tags = journeyTags(journey.lines.slice(1));
+  const scored = new Set(tags.scores.flatMap(scoredTexts).map(norm));
   const heading = ` ${norm(journey.name)} `;
   return gates
-    .filter((g) => tags.scores.some((s) => g.criteria.some((c) => norm(c) === norm(s)))
-      || tags.milestones.some((m) => sameMilestone(norm(g.name), norm(m)))
-      || gateKeys(g).some((k) => heading.includes(` ${k} `)))
+    .filter((g) => g.criteria.some((c) => scored.has(norm(c)))
+      || tags.milestones.some((m) => milestoneMatches(g.name, m))
+      || [gateParts(g.name).full, ...gateParts(g.name).keys].some((k) => heading.includes(` ${k} `)))
     .map((g) => g.name);
 }
 
@@ -213,18 +239,22 @@ function renderPlan(parsed, ordered, maxChars) {
     size += block.length + 2;
   }
   const tail = parsed.tail.join('\n').trim();
-  if (tail && size + tail.length + 2 <= maxChars) parts.push(tail);
-  if (cut.length) {
-    const names = cut.slice(0, MAX_LISTED_NAMES).map(quoted).join(', ');
-    parts.push(`(${cut.length} journey(s) left out of this pass for length: ${names})`);
-  }
+  const tailFits = !tail || size + tail.length + 2 <= maxChars;
+  if (tail && tailFits) parts.push(tail);
+  // The note comes on top of maxChars, capped on its own.
+  const notes = [
+    ...(cut.length ? [`${cut.length} journey(s) left out of this pass for length: ${cut.slice(0, MAX_LISTED_NAMES).map(quoted).join(', ')}`] : []),
+    ...(tailFits ? [] : ['the sections after the journeys were left out for length']),
+  ];
+  if (notes.length) parts.push(`(${notes.join('; ')})`.slice(0, MAX_NOTE_CHARS));
   return { text: parts.filter(Boolean).join('\n\n'), cut };
 }
 
 /**
  * The plan of one pass.
  * @param {{testPlan:string, shipCriteria:string, milestone?:string|null, maxChars?:number}} input
- *   milestone = the run's current milestone (null: the first rung of the ladder)
+ *   milestone = the run's current milestone (null: the first rung of the ladder; a name
+ *   that is no gate: no milestone, file order)
  * @returns {{milestone:{name:string, criteria:string[]}|null, planned:string[], first:string[],
  *   cut:string[], text:string}} planned = every journey of the file, current milestone first;
  *   first = the current milestone's journeys; cut = journeys left out of `text` for length
@@ -270,6 +300,17 @@ function planPromptLines(plan) {
 }
 
 // ---- the report boundary ------------------------------------------------------------
+
+const reasonItem = (keys) => ({
+  type: 'object',
+  additionalProperties: false,
+  required: [...keys, 'reason'],
+  properties: { ...Object.fromEntries(keys.map((k) => [k, { type: 'string' }])), reason: { type: 'string' } },
+});
+// The report's `notScored`: a gate criterion the pass did not score, by its exact text, and why.
+const NOT_SCORED_SCHEMA = { type: 'array', maxItems: MAX_NOT_SCORED, items: reasonItem(['milestone', 'criterion']) };
+// The report's `journeysNotRun`: a test-plan journey the pass did not run, by its exact name, and why.
+const NOT_RUN_SCHEMA = { type: 'array', maxItems: MAX_NOT_RUN, items: reasonItem(['name']) };
 
 /**
  * Scores rewritten to their gate item's texts; the rest rejected. No gates
@@ -394,8 +435,10 @@ function cleanCoverage(raw) {
 
 module.exports = {
   MAX_PLAN_CHARS,
+  NOT_SCORED_SCHEMA,
+  NOT_RUN_SCHEMA,
   norm,
-  sameMilestone,
+  milestoneMatches,
   gatesOf,
   matchCriterion,
   resolveMilestone,

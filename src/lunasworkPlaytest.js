@@ -202,13 +202,6 @@ const EVIDENCE_SCHEMA = {
   properties: { screenshot: { type: 'string' }, steps: stringList },
 };
 
-const reasonItem = (key) => ({
-  type: 'object',
-  additionalProperties: false,
-  required: [...key, 'reason'],
-  properties: { ...Object.fromEntries(key.map((k) => [k, { type: 'string' }])), reason: { type: 'string' } },
-});
-
 /**
  * JSON schema handed to `--json-schema`. Mirrors validateReport() below.
  * notScored / journeysNotRun / checks are required answers (an empty list is
@@ -281,10 +274,8 @@ const PLAYTEST_SCHEMA = {
         properties: { name: { type: 'string' }, screenshot: { type: 'string' } },
       },
     },
-    // A gate criterion the pass did not score, by its exact text, and why.
-    notScored: { type: 'array', maxItems: MAX_SCORES, items: reasonItem(['milestone', 'criterion']) },
-    // A test-plan journey the pass did not run, by its exact name, and why.
-    journeysNotRun: { type: 'array', maxItems: MAX_SCORES, items: reasonItem(['name']) },
+    notScored: playPlan.NOT_SCORED_SCHEMA,
+    journeysNotRun: playPlan.NOT_RUN_SCHEMA,
     // One entry per built card the pass was given ([] when none was listed).
     checks: checksSchema(EVIDENCE_SCHEMA),
     // Optional: only an explore pass with mapped mockups answers it (LW 2.19a).

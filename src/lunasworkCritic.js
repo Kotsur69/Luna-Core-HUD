@@ -66,7 +66,7 @@ const {
 } = require('./lunasworkCriticPrompt');
 const { formatLogEntry, writePack } = require('./lunasworkCriticPack');
 const { designMatchCards } = require('./lunasworkDesignMatch');
-const { norm, sameMilestone, matchCriterion } = require('./lunasworkPlaytestPlan');
+const { milestoneMatches, matchCriterion } = require('./lunasworkPlaytestPlan');
 const { ledgerCards } = require('./lunasworkLicenses');
 const { argsUseAgy, execAgy } = require('./agyexec');
 const { scrub } = require('./hostscrub');
@@ -241,7 +241,7 @@ function gateStatus({ shipCriteria, scores, milestone = null, notScored = [] }) 
       .map((s) => ({ milestone: clean(s.milestone, MAX_ENTRY_CHARS), criterion: clean(s.criterion, MAX_ENTRY_CHARS), score: s.score }))
     : [];
   const firstOpen = gates.find((g) => !g.passed) || null;
-  const named = milestone ? gates.find((g) => sameMilestone(norm(g.name), norm(milestone))) : null;
+  const named = milestone ? gates.find((g) => milestoneMatches(g.name, milestone)) : null;
   const current = named || firstOpen || gates[gates.length - 1] || null;
   const scored = current ? current.criteria : [];
   const score = scored.length

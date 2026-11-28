@@ -14,10 +14,11 @@
 //   cleanChecks     THE TRUST BOUNDARY: only a listed card counts; a pass
 //                   without evidence is "not run", never a pass. The older
 //                   per-check shape {card, check, passed} is still read.
-//   cardVerdicts    per card: pass closes, fail reopens with the evidence,
-//                   not run stays built with the reason - unless every app
-//                   check names a test-plan journey that passed in the same
-//                   report, which confirms the card from that journey
+//   cardVerdicts    per card: any fail reopens with the evidence, a pass
+//                   closes, not run stays built with the reason - unless
+//                   every app check left is a plain "the X journey passes"
+//                   line (one journey, nothing else asked) and X passed in
+//                   the same report, which confirms the card from it
 //
 // The Playtester still never sees code or scores: a check is card text the
 // Critic wrote for exactly this pass, like a TEST_PLAN.md journey.
@@ -40,6 +41,16 @@ const RESULTS = Object.freeze(['pass', 'fail', 'notRun']);
 // A journey name shorter than this (in norm() form) is too generic to match card text.
 const MIN_JOURNEY_KEY_CHARS = 4;
 const JOURNEY_WORD_RE = /\bjourneys?\b/i;
+// The only words an acceptance line may hold besides one journey's name for
+// that journey's pass to confirm it ('The "X" journey completes end to end at
+// both widths'). Anything else - another subject, a condition, a negation -
+// means the line asks more than the journey proved: the card stays built.
+const PASS_VERBS = new Set(['pass', 'passes', 'passed', 'complete', 'completes', 'completed', 'succeeds', 'succeeded', 'works']);
+const JOURNEY_LINE_WORDS = new Set([
+  ...PASS_VERBS,
+  ...('the a an this journey test plan end to at in on both every all each width widths browser browsers engine engines '
+    + 'window windows size sizes and fully cleanly again still now with no console errors error warnings').split(' '),
+]);
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
@@ -149,6 +160,9 @@ function legacyResult(r, card, count, cleanEvidence, warnings) {
 function cleanChecks(raw, list, cleanEvidence, warnings) {
   if (!Array.isArray(raw)) return [];
   const asked = new Map((Array.isArray(list) ? list : []).map((c) => [c.card, c.checks.length]));
+  // One answer shape per card, the first one given: mixing them could let a
+  // per-card pass hide a per-check failure.
+  const shapeOf = new Map();
   const seen = new Set();
   const out = [];
   for (const r of raw.slice(0, MAX_RESULTS)) {
@@ -159,11 +173,13 @@ function cleanChecks(raw, list, cleanEvidence, warnings) {
       warnings.push({ code: 'badCheck', card: isObj(r) ? oneLine(r.card, 40) : null });
       continue;
     }
+    const shape = perCard ? 'card' : 'check';
     const key = perCard ? `${card}` : `${card}:${r.check}`;
-    if (seen.has(key) || (!perCard && seen.has(`${card}`))) continue;
+    if (seen.has(key) || (shapeOf.has(card) && shapeOf.get(card) !== shape)) continue;
     const res = perCard ? cardResult(r, card, cleanEvidence, warnings) : legacyResult(r, card, count, cleanEvidence, warnings);
     if (!res) continue;
     seen.add(key);
+    shapeOf.set(card, shape);
     out.push(res);
   }
   return out;
@@ -191,59 +207,76 @@ function failNote(result, iteration) {
   ].join('\n').slice(0, MAX_NOTE_CHARS);
 }
 
-/** The journeys that passed in a report, as {name, key}. */
-function passedJourneys(journeys) {
-  return (Array.isArray(journeys) ? journeys : [])
-    .filter((j) => isObj(j) && j.passed === true && typeof j.name === 'string')
-    .map((j) => ({ name: j.name, key: norm(j.name) }))
-    .filter((j) => j.key.length >= MIN_JOURNEY_KEY_CHARS);
+/**
+ * Every journey of a report by name, as {name, key, passed}: passed only
+ * when every entry of that name passed (a pass needs evidence upstream).
+ */
+function reportJourneys(journeys) {
+  const byKey = new Map();
+  for (const j of Array.isArray(journeys) ? journeys : []) {
+    if (!isObj(j) || typeof j.name !== 'string') continue;
+    const key = norm(j.name);
+    if (key.length < MIN_JOURNEY_KEY_CHARS) continue;
+    const seen = byKey.get(key);
+    byKey.set(key, { name: seen ? seen.name : j.name, key, passed: (seen ? seen.passed : true) && j.passed === true });
+  }
+  return [...byKey.values()];
 }
 
-/** The passed journey an acceptance line names ("The "X" journey passes"), longest name first. */
-function namedJourney(text, passed) {
+/**
+ * The passed journey that confirms one acceptance line, or null: the line
+ * names exactly one journey of the report (longest name), says it passes,
+ * and holds no other words than JOURNEY_LINE_WORDS.
+ */
+function confirmingJourney(text, known) {
   if (!JOURNEY_WORD_RE.test(text)) return null;
   const line = ` ${norm(text)} `;
-  const hits = passed.filter((j) => line.includes(` ${j.key} `));
-  return hits.length ? hits.reduce((a, b) => (b.key.length > a.key.length ? b : a)).name : null;
+  const hits = known.filter((j) => line.includes(` ${j.key} `)).sort((a, b) => b.key.length - a.key.length);
+  if (!hits.length) return null;
+  const top = hits[0];
+  const rest = line.split(` ${top.key} `).join(' ');
+  if (known.some((j) => j !== top && rest.includes(` ${j.key} `))) return null;
+  const words = rest.trim().split(' ').filter(Boolean);
+  if (!words.some((w) => PASS_VERBS.has(w)) || !words.every((w) => JOURNEY_LINE_WORDS.has(w))) return null;
+  return top.passed ? top.name : null;
 }
 
 /**
  * The journeys that confirm a card: every app check not already confirmed
- * names a journey that passed. null when one does not.
+ * is confirmed by a journey that passed. null when one is not.
  */
-function journeyConfirmation(card, passed, confirmed = new Set()) {
-  if (!passed.length) return null;
+function journeyConfirmation(card, known, confirmed = new Set()) {
+  if (!known.some((j) => j.passed)) return null;
   const names = [];
   for (const [i, text] of appChecks(card).entries()) {
     if (confirmed.has(i)) continue;
-    const name = namedJourney(text, passed);
+    const name = confirmingJourney(text, known);
     if (!name) return null;
     if (!names.includes(name)) names.push(name);
   }
   return names.length ? names : null;
 }
 
-/** One built card's verdict from its answers and the report's journeys. */
-function verdictOf(card, results, iteration, passed) {
+/**
+ * One built card's verdict from its answers and the report's journeys. Any
+ * failure wins (a per-card fail or a per-check one), then a pass; a journey
+ * only fills in what no answer confirmed.
+ */
+function verdictOf(card, results, iteration, known) {
   const at = card.at;
   // Nothing to confirm in the app (only code checks): it closes, as it always did.
   if (!appChecks(card).length) return { at, outcome: 'done' };
   const own = results.find((r) => RESULTS.includes(r.result));
-  if (own && own.result === 'pass') return { at, outcome: 'done' };
+  const legacy = results.filter((r) => Number.isInteger(r.check));
+  const v = legacy.length ? builtVerdict(card, legacy) : null;
   if (own && own.result === 'fail') return { at, outcome: 'reopen', note: failNote(own, iteration) };
-  let confirmed = new Set();
-  let reason = own ? `not run: ${own.reason}` : 'the Playtester returned no check for it';
-  const legacy = own ? [] : results.filter((r) => Number.isInteger(r.check));
-  if (legacy.length) {
-    const v = builtVerdict(card, legacy);
-    if (v.outcome === 'reopen') return { at, outcome: 'reopen', note: evidenceNote(v.failed, iteration) };
-    if (v.outcome === 'done') return { at, outcome: 'done' };
-    confirmed = new Set(legacy.filter((r) => r.passed === true).map((r) => r.check));
-    reason = `${v.missing.length} acceptance check(s) not confirmed`;
-  }
-  const journeys = journeyConfirmation(card, passed, confirmed);
+  if (v && v.outcome === 'reopen') return { at, outcome: 'reopen', note: evidenceNote(v.failed, iteration) };
+  if ((own && own.result === 'pass') || (v && v.outcome === 'done')) return { at, outcome: 'done' };
+  const confirmed = new Set(legacy.filter((r) => r.passed === true).map((r) => r.check));
+  const journeys = journeyConfirmation(card, known, confirmed);
   if (journeys) return { at, outcome: 'done', via: 'journey', journeys };
-  return { at, outcome: 'built', reason };
+  if (own) return { at, outcome: 'built', reason: `not run: ${own.reason}` };
+  return { at, outcome: 'built', reason: v ? `${v.missing.length} acceptance check(s) not confirmed` : 'the Playtester returned no check for it' };
 }
 
 /**
@@ -257,10 +290,10 @@ function verdictOf(card, results, iteration, passed) {
  */
 function cardVerdicts(cards, results, iteration, journeys = []) {
   const list = (Array.isArray(results) ? results : []).filter(isObj);
-  const passed = passedJourneys(journeys);
+  const known = reportJourneys(journeys);
   return (Array.isArray(cards) ? cards : [])
     .filter((c) => isObj(c) && Number.isFinite(c.at))
-    .map((c) => verdictOf(c, list.filter((r) => r.card === c.at), iteration, passed));
+    .map((c) => verdictOf(c, list.filter((r) => r.card === c.at), iteration, known));
 }
 
 module.exports = {

@@ -193,6 +193,50 @@ test('a journey confirms what the Playtester left unchecked, never over its own 
   assert.equal(none[0].outcome, 'built');
 });
 
+test('a journey never confirms a line that asks more than its pass, names two journeys or negates it', () => {
+  const journeys = [
+    { name: 'Login', passed: true, evidence },
+    { name: 'Checkout', passed: false, evidence },
+    { name: 'Combat round', passed: true, evidence },
+  ];
+  const verdict = (line) => Checks.cardVerdicts([builtCard(41, [line])], [], 7, journeys)[0];
+  for (const line of [
+    'The "Login" journey and the "Checkout" journey both pass',
+    'The "Combat round" journey must still fail when the player has no weapon',
+    'Hit flash shows during the Combat round journey at both widths',
+    'The "Combat round" journey does not pass',
+    'The "Checkout" journey passes',
+    'The "Login" journey passes and the cart keeps its items',
+  ]) {
+    assert.equal(verdict(line).outcome, 'built', line);
+  }
+  for (const line of [
+    'The "Login" journey passes',
+    'The Combat round journey completes end to end at both widths with no console errors',
+  ]) {
+    assert.equal(verdict(line).outcome, 'done', line);
+  }
+  // Two entries of one journey, one failed: not a pass.
+  const twice = Checks.cardVerdicts([builtCard(42, ['The "Login" journey passes'])], [], 7, [...journeys, { name: 'login', passed: false }]);
+  assert.equal(twice[0].outcome, 'built');
+});
+
+test('mixed answer shapes for one card: the first shape counts, and any failure wins', () => {
+  const list = Checks.checkList([builtCard(51, ['Totals show', 'Date saves'])]);
+  const out = Checks.cleanChecks([
+    { card: 51, check: 1, passed: false, evidence },
+    { card: 51, result: 'pass', reason: '', evidence },
+  ], list, cleanEvidence, []);
+  assert.deepEqual(out.map((r) => r.check), [1], 'the later per-card pass is dropped');
+  // Both shapes in a stored report: the per-check failure still reopens the card.
+  const mixed = Checks.cardVerdicts([builtCard(51, ['Totals show', 'Date saves'])], [
+    { card: 51, result: 'pass', reason: '', evidence },
+    { card: 51, check: 1, passed: false, evidence },
+  ], 7);
+  assert.equal(mixed[0].outcome, 'reopen');
+  assert.match(mixed[0].note, /"Date saves" failed/);
+});
+
 test('a card with only code checks still closes; the older per-check answers still settle', () => {
   const verdicts = Checks.cardVerdicts(
     [builtCard(31, ['A test reproduces the bug']), builtCard(32, ['Totals show', 'Date saves'])],
