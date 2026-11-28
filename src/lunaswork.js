@@ -191,6 +191,7 @@ const {
 } = require('./lunasworkRun');
 const { createShipDocs } = require('./lunasworkShipDocs');
 const { withRunBranches, runBranchesOf } = require('./lunasworkRunCleanup');
+const { buildLimitOf } = require('./lunasworkBuild');
 const { withBuilderBrief } = require('./lunasworkDirector');
 const { listSkills } = require('./lunasworkSkills');
 const { createCardBook } = require('./lunasworkCards');
@@ -661,9 +662,13 @@ function createLunasWork(deps) {
   function limited(res, role) {
     const at = Number.isFinite(res && res.resumeAt) ? res.resumeAt : deps.limitResumeAt ? deps.limitResumeAt(res) : null;
     const until = Number.isFinite(at) && at > now() ? at : now() + FALLBACK_WAIT_MS;
+    // A build whose God Mode run waits for the reset (lunasworkBuild.js): its
+    // workers' tabs found no free account, and a retry only finds the run
+    // still waiting - so no 3 s account-switch loop, the run waits.
+    const runWaits = role === 'builder' && isObj(res) && typeof res.planId === 'string' && res.planId;
     // A second Claude subscription is free: no waiting, the next step's env
     // already runs on it (the account layer in src/sessionenv.js).
-    if (deps.accountFailover && deps.accountFailover(Number.isFinite(at) ? at : null)) {
+    if (!runWaits && deps.accountFailover && deps.accountFailover(Number.isFinite(at) ? at : null)) {
       logEvent(`usage limit (${role}): switched to another Claude account, retrying`);
       armWait(now() + ACCOUNT_SWITCH_RETRY_MS, 'limit');
       return;
@@ -1147,6 +1152,15 @@ function createLunasWork(deps) {
     else if (!r.ok && toolGuard.toolDown(r, 'builder')) return;
     // God Mode's own error (planner, launch, a discarded plan): try the build again.
     else if (!r.ok) return retryLater(`build: ${r.error || 'failed'}`);
+    // Nothing landed because the builders hit the usage limit: limited, never
+    // 'build green, 0/N cards landed'. Cards God Mode ticked open again.
+    const limit = r.killed ? null : buildLimitOf(r, now());
+    if (limit) {
+      const ticked = cardBook.ticked(run.projectId, cards.map((c) => c.at));
+      cardBook.reopen(run.projectId, ticked);
+      logEvent(`build limited: 0/${cards.length} cards landed, the builders hit the usage limit${ticked.length ? `; ${ticked.length} card(s) reopened` : ''}`);
+      return limited(limit, 'builder');
+    }
     const files = conflictedPaths(r);
     const build = buildRecord(r, cards, free ? 'free providers' : agy ? 'Antigravity (agy)' : null);
     refreshFeedback();
