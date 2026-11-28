@@ -1058,6 +1058,9 @@ function createOrchestra(deps) {
       killed: plan.killed,
       settled: plan.settled,
       pausedUntil: plan.pausedUntil,
+      // The whole run waits for a usage reset (no unpaused worker runs or could
+      // launch), else null. Luna's Work reads it to report its build as limited.
+      waitingUntil: effectivePausedUntil(),
       // Cut by a PC shutdown or "Pause for shutdown": the board's resume banner.
       interrupted: shutdownResume.view(),
       // A machine problem holding the whole run ('noNodeModules'); Resume clears it.

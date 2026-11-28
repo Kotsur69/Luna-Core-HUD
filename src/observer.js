@@ -789,11 +789,16 @@ function entryText(obj) {
  * just hits the wall again until the reset. Telling them apart is what lets
  * God Mode wait the limit out instead of burning its connection retries and
  * stalling.
+ *
+ * `since` (epoch ms) keeps only entries written at or after it: an entry
+ * whose timestamp is older, missing or unparseable is history then. The
+ * watcher's first read of a transcript uses it (see accumulate()).
  * @param {string} text fragment of the JSONL file (whole lines)
  * @param {number} [now] epoch ms
+ * @param {number|null} [since] epoch ms
  * @returns {{resetsAt:number|null}|null}
  */
-function usageLimitFrom(text, now = Date.now()) {
+function usageLimitFrom(text, now = Date.now(), since = null) {
   let found = null;
   for (const raw of String(text || '').split('\n')) {
     const line = raw.trim();
@@ -801,6 +806,10 @@ function usageLimitFrom(text, now = Date.now()) {
     try {
       const obj = JSON.parse(line);
       if (!isApiErrorEntry(obj)) continue;
+      if (Number.isFinite(since)) {
+        const at = Date.parse(obj.timestamp);
+        if (!Number.isFinite(at) || at < since) continue;
+      }
       const body = entryText(obj);
       if (obj.apiErrorStatus !== 429 && !LIMIT_TEXT.test(body)) continue;
       found = { resetsAt: parseResetAt(body, now) };
@@ -1182,6 +1191,15 @@ class TranscriptWatcher {
         } else if (this.onApiError && hasApiError(complete)) {
           this.onApiError({ at: apiErrorAt(complete) ?? Date.now() });
         }
+      } else if (this.onUsageLimit && hasApiError(complete)) {
+        // A limit on the very first turn: the CLI writes the brief and the
+        // limit banner within a second, so the watcher's first read of a
+        // fresh transcript already holds both and the history rule above
+        // would swallow the wall - the God Mode worker then sat idle on it.
+        // Only an entry written after this watcher started is live; a
+        // resumed conversation's old banner (an account move) is history.
+        const limit = usageLimitFrom(complete, Date.now(), this.startedAt);
+        if (limit) this.onUsageLimit(limit);
       }
     } catch {
       /* file vanished / no access - the cost simply does not get updated */
