@@ -1493,12 +1493,17 @@ function createLunasWork(deps) {
     // A red iteration never reached main: nothing to tag or revert.
     if (history[history.length - 1].selfCheck !== 'green') return null;
     let checkpoint;
+    let decision = null;
     try {
-      const decision = rollbackDecision(history);
+      decision = rollbackDecision(history);
       checkpoint = decision.rollback ? await rollBack(decision, history, regressed) : await tagGreen();
     } catch (err) {
       checkpoint = { note: `checkpoint failed: ${errText(err).slice(0, 200)}` };
       logEvent(checkpoint.note);
+      // A triggered rollback that threw is a failed rollback: the decision gate asks Mati.
+      if (decision && decision.rollback) {
+        checkpoint.rollback = { ok: false, error: 'threw', detail: errText(err).slice(0, 200), reason: decision.reason, toIteration: decision.toIteration };
+      }
     }
     const clean = cleanCheckpoint(checkpoint);
     update({ current: { ...run.current, checkpoint: clean } });

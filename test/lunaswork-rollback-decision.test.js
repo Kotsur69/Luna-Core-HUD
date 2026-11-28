@@ -323,3 +323,18 @@ test('a successful rollback without a method in the result logs the revert metho
   await h.start();
   assert.ok(h.log().some((t) => /^rolled back a -> luna-work\/lwtest1\/iter-1 \(method revert\)/.test(t)));
 });
+
+test('a rollback that throws counts as a failed rollback: the next iteration waits for Mati', async () => {
+  const cp = fakeCheckpoints(() => {
+    throw new Error('git spawn EPERM');
+  });
+  const h = harness({ scores: [76, 4, 80], checkpoints: cp });
+  await h.start();
+  const s = h.ctl.status();
+  assert.equal(s.waitReason, 'rollbackFailed');
+  assert.equal(h.directorCalls, 2);
+  assert.equal(s.pendingDecisions[0].kind, 'rollbackFailed');
+  assert.match(s.pendingDecisions[0].question, /failed \(threw\)/);
+  assert.equal(h.stored.laps[1].checkpoint.rollback.ok, false);
+  assert.ok(h.log().some((t) => /checkpoint failed: git spawn EPERM/.test(t)));
+});
