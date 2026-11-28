@@ -1191,6 +1191,9 @@ function createLunasWork(deps) {
     try {
       const res = await deps.syncCheckout(run.repoPath, { aroundChange });
       if (isObj(res) && res.ok === false) logEvent(`checkout not updated: ${String(res.detail || 'failed').slice(0, 200)}`);
+      if (isObj(res) && res.ok === true && Array.isArray(res.displaced) && res.displaced.length) {
+        logEvent(`checkout updated; moved the editor's own untracked .meta aside (kept in .git/lunacore-displaced): ${res.displaced.slice(0, 5).join(', ').slice(0, 200)}`);
+      }
     } catch (err) {
       logEvent(`checkout not updated: ${errText(err).slice(0, 200)}`);
     }

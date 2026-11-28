@@ -61,6 +61,8 @@
 
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { execFile } = require('child_process');
 const lunasworkStore = require('./lunasworkStore');
 const settingsStore = require('./lunasworkSettings');
@@ -150,9 +152,78 @@ async function syncCheckout(repoPath, opts = {}) {
   if (!(await git(repoPath, ['merge-base', '--is-ancestor', 'HEAD', 'FETCH_HEAD'])).ok) {
     return { ok: false, detail: 'no fast-forward: the checkout has commits origin does not have' };
   }
+  const inTheWay = await untrackedInTheWay(repoPath);
+  if (!inTheWay.ok) return { ok: false, detail: `no fast-forward: ${inTheWay.err}` };
+  const notMeta = inTheWay.paths.filter((p) => !isUnityMeta(p));
+  if (notMeta.length) {
+    return { ok: false, detail: `no fast-forward: untracked files in the way: ${notMeta.slice(0, MAX_LISTED_PATHS).join(', ')}` };
+  }
   const around = typeof opts.aroundChange === 'function' ? opts.aroundChange : (step) => step();
-  const merged = await around(() => git(repoPath, ['merge', '--ff-only', 'FETCH_HEAD']));
-  return merged.ok ? { ok: true } : { ok: false, detail: `no fast-forward: ${merged.err}` };
+  let displaced = [];
+  const merged = await around(async () => {
+    // Inside the wrap: the parked editor cannot regenerate the .meta between the move and the merge.
+    const moved = await displaceFiles(repoPath, inTheWay.paths);
+    if (!moved.ok) return moved;
+    displaced = moved.paths;
+    return git(repoPath, ['merge', '--ff-only', 'FETCH_HEAD']);
+  });
+  if (!merged.ok) return { ok: false, detail: `no fast-forward: ${merged.err}` };
+  return displaced.length ? { ok: true, displaced } : { ok: true };
+}
+
+// How many blocking paths a refusal names (the run log line is capped anyway).
+const MAX_LISTED_PATHS = 5;
+
+/**
+ * A Unity .meta file. A live editor writes one for every asset that lacks it,
+ * so a builder that commits a script without its .meta leaves the editor's
+ * checkout with an untracked .meta that the merge then adds: it blocks every
+ * later fast-forward. Its local GUID is the editor's own guess; the committed
+ * one wins.
+ */
+const isUnityMeta = (rel) => rel.endsWith('.meta');
+
+/**
+ * Untracked, not ignored files in the checkout that FETCH_HEAD adds, the ones
+ * `git merge --ff-only` refuses to overwrite.
+ * @returns {Promise<{ok:true, paths:string[]}|{ok:false, err:string}>}
+ */
+async function untrackedInTheWay(repoPath) {
+  const added = await git(repoPath, ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=A', 'HEAD', 'FETCH_HEAD']);
+  if (!added.ok) return { ok: false, err: `diff failed: ${added.err}` };
+  const addedSet = new Set(added.out.split('\0').filter(Boolean));
+  if (!addedSet.size) return { ok: true, paths: [] };
+  const untracked = await git(repoPath, ['ls-files', '-z', '--others', '--exclude-standard']);
+  if (!untracked.ok) return { ok: false, err: `ls-files failed: ${untracked.err}` };
+  return { ok: true, paths: untracked.out.split('\0').filter((p) => addedSet.has(p)) };
+}
+
+/**
+ * Moves repo-relative files into <git dir>/lunacore-displaced/<stamp>/, so the
+ * local copies are kept (never tracked, never deleted) and the merge can write.
+ * @returns {Promise<{ok:true, paths:string[]}|{ok:false, err:string}>}
+ */
+async function displaceFiles(repoPath, paths) {
+  if (!paths.length) return { ok: true, paths: [] };
+  const gitDir = await git(repoPath, ['rev-parse', '--absolute-git-dir']);
+  if (!gitDir.ok || !gitDir.out) return { ok: false, err: `git dir not found: ${gitDir.err}` };
+  const target = path.join(gitDir.out, 'lunacore-displaced', String(Date.now()));
+  const root = path.resolve(repoPath);
+  const moved = [];
+  for (const rel of paths) {
+    const from = path.resolve(root, rel);
+    // Paths come from git, but never move anything outside the checkout.
+    if (!from.startsWith(root + path.sep)) return { ok: false, err: `refused path outside the checkout: ${rel}` };
+    try {
+      const to = path.join(target, rel);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync(from, to);
+      moved.push(rel);
+    } catch (err) {
+      return { ok: false, err: `could not move ${rel} aside: ${err.message}` };
+    }
+  }
+  return { ok: true, paths: moved };
 }
 
 /**
