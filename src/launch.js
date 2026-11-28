@@ -372,7 +372,7 @@ const quotablePath = (p) =>
  */
 function kitFlags(task) {
   const out = [];
-  const denied = Array.isArray(task.disallowedTools) ? task.disallowedTools.filter((r) => TOOL_RULE_RE.test(r)) : [];
+  const denied = Array.isArray(task.disallowedTools) ? task.disallowedTools.filter(isPassableDenyRule) : [];
   if (denied.length) out.push('--disallowedTools', ...denied.map((r) => `'${r}'`));
   const config = quotablePath(task.mcpConfigPath);
   if (config) out.push('--mcp-config', config);
@@ -467,6 +467,17 @@ const PERMISSION_DECIDED = /(^|\s)(--permission-mode|--dangerously-skip-permissi
 // names with a hyphen (mcp__higgsfield-bridge). Nothing a single-quoted
 // argument treats specially in PowerShell or a POSIX shell.
 const TOOL_RULE_RE = /^(?:[A-Za-z][A-Za-z0-9_]{0,63}(\([A-Za-z0-9 _.:*/@=~+-]{1,100}\))?|mcp__[A-Za-z0-9_-]{1,64}(__[A-Za-z0-9_-]{1,64})?)$/;
+// A deny rule only ever takes a tool away, so it may also hold `&` and `\` and
+// run longer: the Unity editor guard names the main checkout's path
+// (blade&bullet, C:\...) in it (src/lunasworkWorktreeEditors.js). Both are
+// literal inside single quotes in PowerShell and a POSIX shell alike; a quote,
+// `$`, a backtick and control characters stay out.
+const DENY_RULE_RE = /^(?:[A-Za-z][A-Za-z0-9_]{0,63}(\([A-Za-z0-9 _.:*/@=~+&\\-]{1,300}\))?|mcp__[A-Za-z0-9_-]{1,64}(__[A-Za-z0-9_-]{1,64})?)$/;
+
+/** True for a deny rule kitFlags passes on to the CLI (every other one is dropped). */
+function isPassableDenyRule(rule) {
+  return typeof rule === 'string' && DENY_RULE_RE.test(rule);
+}
 
 // Extensions Windows will actually execute for a bare name. The empty string is
 // last on purpose: `claude` with no extension is the POSIX case and also catches
@@ -526,6 +537,7 @@ module.exports = {
   ACCOUNT_RESUME_MESSAGE,
   AGY_RESUME_MESSAGE,
   WORKER_PERMISSION_MODES,
+  isPassableDenyRule,
   isClaudeCommand,
   isAgyCommand,
   SESSION_ID_DECIDED,

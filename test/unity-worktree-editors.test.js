@@ -208,6 +208,38 @@ test('closeEditors: skip leaves an editor open', async () => {
   assert.ok(m.alive.has(400));
 });
 
+test('a settled worktree-editor package: God Mode closes the editor on its worktree once, never the main checkout', async () => {
+  const { worktreeEditorPolicy } = require('../src/orchestraWiring');
+  const { createEditorReaper, safeNeeds } = require('../src/orchestraEditorSlots');
+  const m = fakeMachine(incidentProcesses(), { quits: [300] });
+  // The wiring's closer over the fake machine: the protected main checkout comes from the policy alone.
+  const policy = worktreeEditorPolicy({ worktreeEditors: 2 }, (root, opts) => ed.closeEditors(root, { ...m.opts, repoPath: undefined, ...opts }));
+  const reaper = createEditorReaper({ isSettled: (p) => p.state === 'pushed' });
+  const needs = safeNeeds(policy.needs, () => {});
+  const scene = { id: 'scene-worker', state: 'pushed', root: `${WT_DIR}\\scene-a1b2c`, files: ['Assets/Scenes/Main.unity'], startedAt: 1 };
+  // A package without its own editor is not swept here (worktree removal still closes what it left).
+  const hud = { id: 'hud', state: 'pushed', root: `${WT_DIR}\\hud-x9y8z`, files: ['Assets/Scripts/Hud.cs'], startedAt: 1 };
+  const running = { id: 'tools', state: 'launched', root: `${WT_DIR}\\tools-q1w2e`, files: ['Assets/Editor/Tools.cs'], startedAt: 1 };
+
+  // Seen running first (a package already settled when a run is restored is never reaped).
+  const live = (p) => ({ ...p, state: 'launched' });
+  assert.deepEqual(reaper.sweep([live(scene), live(hud), running], MAIN, policy, needs), []);
+  await Promise.all(reaper.sweep([scene, hud, running], MAIN, policy, needs));
+  assert.deepEqual(m.calls.quit, [300], "only the finished scene worker's editor");
+  assert.ok(!m.alive.has(300), 'its editor is gone');
+  assert.ok(m.alive.has(100), 'the main checkout editor is never touched');
+  assert.ok(!m.calls.quit.includes(100) && !m.calls.kill.includes(100));
+  assert.ok(m.alive.has(400), 'not an editor package');
+  assert.equal(reaper.closing(), 0);
+
+  // Once per launch: the next commit sweeps nothing; a relaunch (new start) is swept again.
+  const lists = m.calls.lists;
+  assert.deepEqual(reaper.sweep([scene, hud, running], MAIN, policy, needs), []);
+  assert.equal(m.calls.lists, lists, 'no process list for an already closed launch');
+  reaper.sweep([live({ ...scene, startedAt: 2 })], MAIN, policy, needs);
+  assert.equal(reaper.sweep([{ ...scene, startedAt: 2 }], MAIN, policy, needs).length, 1);
+});
+
 test('quitViaPipeline: asks the editor that owns the port file to exit; skips a port file of another pid', async () => {
   const sent = [];
   const descriptor = { pid: 800, port: 5000, evalToken: 'abc', lastHeartbeat: new Date().toISOString() };

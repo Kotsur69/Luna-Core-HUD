@@ -484,12 +484,20 @@ function createGodModeBuilder(deps) {
     return pkg.id === scene.SCENE_WORKER_ID || scene.isAssetPrepPackageOf(pkg, active.cards) ? 'asset' : 'builder';
   }
 
-  /** The kit of one package's role during a build; null when idle, without toolsFor or on a failure. */
+  /**
+   * The kit of one package's role during a build; null when idle, without toolsFor or on a failure.
+   * A Unity build adds the package's editor mode (src/lunasworkWorktreeEditors.js): its own
+   * worktree editor for the scene worker and editor-code packages, none for every other one -
+   * never the editor on the main checkout (repoPath).
+   */
   function kitOf(pkg) {
     if (!active || typeof deps.toolsFor !== 'function') return null;
     const role = kitRole(pkg);
+    // Required here, not at the top: this package keeps its changes inside the kit / settings hooks.
+    const worktreeEditors = require('./lunasworkWorktreeEditors');
+    const editor = active.unityVerify ? { editor: worktreeEditors.editorModeOf(pkg) } : {};
     try {
-      return deps.toolsFor({ projectId: active.projectId, repoPath: active.repoPath, role, capped: cappedNow() });
+      return deps.toolsFor({ projectId: active.projectId, repoPath: active.repoPath, role, capped: cappedNow(), ...editor });
     } catch (err) {
       log(`[lunaswork-build] tool kit (${role}) not applied: ${err instanceof Error ? err.message : String(err)}`);
       return null;
@@ -505,12 +513,18 @@ function createGodModeBuilder(deps) {
   /**
    * God Mode's worker settings while a Luna's Work build runs; `base` untouched
    * otherwise. A Unity build adds `unityBuild` for the self-check
-   * (orchestraUnityVerify.selfCheckCommandOf); every other build has no such key.
+   * (orchestraUnityVerify.selfCheckCommandOf) and `worktreeEditors`, the cap on
+   * packages with their own worktree editor running at once
+   * (src/orchestraEditorSlots.js); every other build has neither key.
    */
   function workerSettings(base) {
     if (!active) return base;
     const b = isObj(base) ? base : {};
-    const unityBuild = active.unityVerify ? { unityBuild: { own: ownCheckCommand(b) } } : {};
+    // Required here, not at the top: this package keeps its changes inside the kit / settings hooks.
+    const worktreeEditors = require('./lunasworkWorktreeEditors');
+    const unityBuild = active.unityVerify
+      ? { unityBuild: { own: ownCheckCommand(b) }, worktreeEditors: worktreeEditors.MAX_WORKTREE_EDITORS }
+      : {};
     return { ...b, model: 'plan', integration: 'merge', checkCommand: active.checkCommand || b.checkCommand, ...unityBuild };
   }
 

@@ -215,6 +215,33 @@ guardrails) is appended to every package prompt. Launch definitions come from
 the PC's `toolServers` setting (command/args or url per tool id); a tool
 without one still gets its allow rule and comes from the Claude setup.
 
+**Unity editors in a Unity build** (`src/lunasworkWorktreeEditors.js`, run
+lwmwzajado: a builder sent an open-scene request with its worktree path to the
+live editor on the main checkout, which blocked it with "About to open another
+project!"). The editor on the main checkout belongs to the playtest after the
+merge; no builder drives it. Every package gets an editor mode:
+
+- `none` (the default): the unity tool is out of the kit (`unity` / `Unity` /
+  `Unity.exe` / `unity.exe` denied). Scene work is file edits; editor checks
+  are listed as "not run here" and run in the live editor after the merge.
+- `worktree`: the scene worker and every package whose files are editor code
+  (`Assets/**/Editor/**`, `**/Scripts/Dev/**`, `Assets/LunaPlaytest/**`, a
+  `*playtest*` C# file or asmdef). It opens its OWN editor on its worktree,
+  drives it with the `unity` CLI run there (the CLI reaches the editor of its
+  own folder), runs the EditMode tests and a short play-mode smoke, reports
+  both, and closes the editor. Any unity command or `cd` naming the main
+  checkout is denied.
+
+Both modes deny every Unity MCP server by name (`unity`, `unityMCP`, ...) and
+launch none: which editor a server reaches is set by the Claude setup, not by
+the worktree. The kit note states the rule right after the tools line. God Mode
+runs at most `MAX_WORKTREE_EDITORS` (2, for RAM) `worktree` packages at once and
+holds the rest (`src/orchestraEditorSlots.js`); an editor still closing keeps
+its slot. When such a package settles, the editors on its worktree are closed
+(`unityWorktreeEditors.closeEditorsIfUnity`, never the main checkout's);
+worktree removal closes them too. Not covered by the deny rules: a script,
+`bash -c`, another shell, a relative path to the main checkout - the brief alone.
+
 ### Guardrails (always on)
 
 - **Spend caps**: `spendCaps` per project, defaults `DEFAULT_SPEND_CAPS_USD`

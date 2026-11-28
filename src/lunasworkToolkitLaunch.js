@@ -29,6 +29,8 @@ const crypto = require('crypto');
 const path = require('path');
 const settingsStore = require('./lunasworkSettings');
 const { roleLaunch, hasSecretShape } = require('./lunasworkToolkit');
+const worktreeEditors = require('./lunasworkWorktreeEditors');
+const { isPassableDenyRule } = require('./launch');
 
 const TOOLS_DIR = 'lunaswork-tools';
 const ENV_REF_RE = /^\$\{[A-Z_][A-Z0-9_]{0,63}\}$/;
@@ -92,9 +94,23 @@ function createToolsFor(deps) {
   }
 
   /**
-   * @param {{projectId:string, repoPath?:string, role:string, capped?:string[]}} req
+   * A guard that will not reach the worker is never silent: a deny rule the
+   * launch line cannot carry (src/launch.js kitFlags drops it), or a main
+   * checkout whose path cannot go into a rule at all (worktreeEditors.mainCheckoutDenyRules).
+   */
+  function logGuardGaps(req, launch) {
+    const dropped = launch.disallowedTools.filter((rule) => !isPassableDenyRule(rule));
+    if (dropped.length) log(`[lunaswork-tools] ${req.role}: ${dropped.length} deny rule(s) cannot be passed to the CLI and are dropped: ${dropped.slice(0, 3).join(', ')}`);
+    if (launch.editor === worktreeEditors.EDITOR_WORKTREE && !worktreeEditors.mainCheckoutDenyRules(req.repoPath).length) {
+      log(`[lunaswork-tools] ${req.role}: the main checkout's path cannot go into a deny rule - its Unity editor is guarded by the brief alone`);
+    }
+  }
+
+  /**
+   * @param {{projectId:string, repoPath?:string, role:string, capped?:string[], editor?:'none'|'worktree'}} req
+   *   repoPath: the main checkout; editor: a Unity build's editor mode for the package (lunasworkWorktreeEditors.js)
    * @returns {null|{role:string, tools:string[], skills:string[], fromClaudeSetup:string[], mcpConfigPath:string|null,
-   *   allowedTools:string[], disallowedTools:string[], addDirs:string[], note:string}}
+   *   allowedTools:string[], disallowedTools:string[], addDirs:string[], editor?:string, note:string}}
    */
   return function toolsFor(req) {
     try {
@@ -106,8 +122,11 @@ function createToolsFor(deps) {
         capped: r.capped,
         repoPath: r.repoPath,
         spendCaps: settingsStore.spendCapsFor(settings, r.projectId),
+        // Both editor modes launch no Unity MCP server, so one role's --mcp-config file stays the same for every package.
+        ...(r.editor !== undefined ? { editor: r.editor } : {}),
       });
       if (!launch) return null;
+      logGuardGaps(r, launch);
       const servers = Object.keys(launch.mcpConfig.mcpServers);
       const mcpConfigPath = servers.length ? writeConfig(r.projectId, r.role, launch.mcpConfig) : null;
       if (launch.fromClaudeSetup.length) {

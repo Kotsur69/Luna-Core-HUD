@@ -63,6 +63,8 @@ const { validateRunSlug, planPath: planDocPath } = require('./orchestraPlanRun')
 const { sizePackages } = require('./orchestraPlanBuild');
 const orchestraReview = require('./orchestraReview');
 const { cleanName } = require('./agymodels');
+const unityEditors = require('./unityWorktreeEditors');
+const worktreeEditorRules = require('./lunasworkWorktreeEditors');
 
 /** Longest agy model name a package card gets from a transcript. */
 const MAX_AGY_MODEL_SHOWN = 80;
@@ -814,6 +816,21 @@ function sharedPowerDeps(ctx) {
 }
 
 /**
+ * The worktree editor policy of a Luna's Work build's worker settings: its cap
+ * (`worktreeEditors`, a Unity build only), which packages open their own editor
+ * (lunasworkWorktreeEditors.needsWorktreeEditor, the same rule as their brief)
+ * and how a settled package's editors close. Null for every other build.
+ * @param {object} settings lunasworkBuild workerSettings()
+ * @param {(root:string, opts:{repoPath:string})=>Promise<object>} [closeEditors]
+ */
+function worktreeEditorPolicy(settings, closeEditors = unityEditors.closeEditorsIfUnity) {
+  const max = settings && typeof settings === 'object' ? settings.worktreeEditors : null;
+  if (!Number.isInteger(max) || max < 1) return null;
+  // repoPath is protected: closeEditors never matches an editor on the main checkout.
+  return { max, needs: worktreeEditorRules.needsWorktreeEditor, close: (root, repoPath) => closeEditors(root, { repoPath }) };
+}
+
+/**
  * Luna's Work's overlays for this project's run: package models in the plan,
  * the build's worker settings and its own merge confirmation. They apply only
  * while Luna's Work builds on THIS project.
@@ -849,6 +866,9 @@ function builderDeps(projectId, ctx, self) {
     },
     // The build's tool kit for one package's tab (lunasworkToolkit.js).
     workerTools: (pkg) => (building() && typeof ctx.builder.workerTools === 'function' ? ctx.builder.workerTools(pkg) : null),
+    // A Unity build's packages with their own worktree editor: capped, and closed once
+    // they settle (orchestraEditorSlots.js); never the editor on the main checkout.
+    worktreeEditors: () => (building() ? worktreeEditorPolicy(ctx.builder.workerSettings({})) : null),
     // The Approve screen's / phone's worker model becomes the saved pref
     // (orchestra.js validates it first; writeUiPrefs allow-lists it again).
     saveWorkerModel: (model) => {
@@ -933,6 +953,7 @@ function makeOrchestraDeps(projectId, ctx, shared = {}) {
 
 module.exports = {
   makeOrchestraDeps,
+  worktreeEditorPolicy,
   writeReviewDoc,
   sharedPowerDeps,
   projectForStoredRepo,

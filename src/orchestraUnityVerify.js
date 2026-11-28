@@ -79,8 +79,10 @@ const NOTE_GAP = '\n\n';
 /** Who may run a moved check: 'editor' in its own Unity editor; 'noEditor' never opens Unity (a scene worker owns it). */
 const CHECK_ROLES = Object.freeze(['editor', 'noEditor']);
 // 'editor', for a verify that needs the editor (or is prose).
+// "Your own" is an editor on the worker's worktree, never the main checkout's
+// (src/lunasworkWorktreeEditors.js: a package without one is told so in its kit note).
 const EDITOR_CHECK_NOTE =
-  'Editor check: LunaCore cannot run this one after the merge (no Unity editor is open on its merge worktree), so run it yourself against your own Unity editor before you commit, and fix until it passes:';
+  'Editor check: LunaCore cannot run this one after the merge (no Unity editor is open on its merge worktree), so run it yourself against your own Unity editor before you commit (one on this worktree, never the editor on the main checkout), and fix until it passes:';
 // 'editor', for any other verify (it may need no editor at all).
 const CHECK_NOTE =
   'Check: LunaCore runs no package verify command in this Unity project, so run this one yourself before you commit, and fix until it passes:';

@@ -152,7 +152,7 @@ const NO_HIGGSFIELD_KINDS = Object.freeze(['animation', 'audio', 'material']);
 // An import error that means no Unity editor in this worktree (pipeline-http.js /
 // lunasworkAssetPipeline.importToUnity texts), not a failed import.
 const UNITY_UNAVAILABLE_RE = /unity not connected|Unity editor not open|Unity Pipeline port file/i;
-const UNITY_DEFERRED_NOTE = 'No Unity editor in this worktree: the Unity import / prefab step is deferred to the scene-worker package, which imports these files after this package is merged. For an asset-prep worker this is expected; the files are saved and ledgered. For the scene-worker itself it is a FAILURE: open the Unity editor on this project and import the files with your Unity MCP.';
+const UNITY_DEFERRED_NOTE = 'No Unity editor in this worktree: the Unity import / prefab step is deferred to the scene-worker package, which imports these files after this package is merged. For an asset-prep worker this is expected; the files are saved and ledgered. For the scene-worker itself it is a FAILURE: open your own Unity editor on this worktree (never the one on the main checkout) and import the files through it.';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 // eslint-disable-next-line no-control-regex
