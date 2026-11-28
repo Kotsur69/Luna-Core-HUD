@@ -24,8 +24,11 @@
 //
 // The milestone gate is computed HERE from the Playtester's evidence-backed
 // scores, never taken from the model: a criterion passes at GATE_PASS_SCORE
-// or more in this iteration's report. A SHIP verdict before every gate passes
-// is downgraded to CONTINUE.
+// or more in this iteration's report. A score counts only under the gate
+// item's exact text in its own milestone (lunasworkPlaytestPlan.matchCriterion,
+// the report boundary's rule too); any other is listed as `unmatched`, and an
+// unscored criterion carries the reason. A SHIP verdict before every gate
+// passes is downgraded to CONTINUE.
 //
 // THE TRUST BOUNDARY IS validateCritique(). Kind (`kind:<x>`) and severity
 // (`sev:<x>`) are stored as card tags next to the run tag, since a to-do card
@@ -63,6 +66,7 @@ const {
 } = require('./lunasworkCriticPrompt');
 const { formatLogEntry, writePack } = require('./lunasworkCriticPack');
 const { designMatchCards } = require('./lunasworkDesignMatch');
+const { norm, sameMilestone, matchCriterion } = require('./lunasworkPlaytestPlan');
 const { ledgerCards } = require('./lunasworkLicenses');
 const { argsUseAgy, execAgy } = require('./agyexec');
 const { scrub } = require('./hostscrub');
@@ -181,41 +185,61 @@ function strings(raw, maxItems, maxChars) {
   return raw.map((s) => clean(s, maxChars)).filter(Boolean).slice(0, maxItems);
 }
 
-const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-// Whole words only: "milestone 1 skeleton" matches "skeleton" and
-// "milestone 1", never "milestone 10".
-const sameMilestone = (a, b) => !!a && !!b && (` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `));
 const rank = (table, key) => (Object.prototype.hasOwnProperty.call(table, key) ? table[key] : 99);
 
 // ---- milestone gate -----------------------------------------------------------------
 
-/** Lowest evidence-backed score the report gives one criterion, or null. */
+const MAX_UNMATCHED_SCORES = 20;
+const NOT_SCORED_REASON = 'no evidence-backed score under its exact text in this report';
+const validScore = (s) => isObj(s) && Number.isFinite(s.score) && s.score >= 0 && s.score <= 10;
+
+/**
+ * Lowest evidence-backed score the report gives one criterion, or null. The
+ * score must name it exactly, in its own milestone (matchCriterion - the same
+ * rule the Playtester's report boundary applies).
+ */
 function criterionScore(milestone, text, scores) {
-  const hits = scores.filter(
-    (s) => isObj(s) && Number.isFinite(s.score) && s.score >= 0 && s.score <= 10 && norm(s.criterion) === norm(text)
-      && sameMilestone(norm(milestone), norm(s.milestone)),
-  );
+  const gate = [{ name: milestone, criteria: [text] }];
+  const hits = scores.filter((s) => validScore(s) && matchCriterion(gate, s.milestone, s.criterion));
   return hits.length ? Math.min(...hits.map((s) => s.score)) : null;
+}
+
+/** Why a criterion has no score: the Playtester's own reason, else the rule's. */
+function notScoredReason(milestone, text, notScored) {
+  const gate = [{ name: milestone, criteria: [text] }];
+  const hit = notScored.find((n) => isObj(n) && matchCriterion(gate, n.milestone, n.criterion));
+  return hit && typeof hit.reason === 'string' && hit.reason ? clean(hit.reason, MAX_ENTRY_CHARS) : NOT_SCORED_REASON;
 }
 
 /**
  * Gate status per milestone of SHIP_CRITERIA.md, from this iteration's
  * playtest scores only. An unscored criterion did not pass: the Playtester
- * checks every criterion every pass, and a gate must still hold.
- * @param {{shipCriteria:string, scores?:object[], milestone?:string|null}} input
- *   milestone = the run's current milestone; defaults to the first gate not passed
- * @returns {{gates:{name:string, passed:boolean, criteria:{text:string, score:number|null, passed:boolean}[]}[],
- *   current:string|null, currentPassed:boolean, next:string|null, allPassed:boolean, score:number|null}}
+ * checks every criterion every pass, and a gate must still hold. It carries
+ * the reason it was not scored; a score whose criterion text is no gate item
+ * of its milestone counts for nothing and is listed in `unmatched`.
+ * @param {{shipCriteria:string, scores?:object[], milestone?:string|null, notScored?:object[]}} input
+ *   milestone = the run's current milestone; defaults to the first gate not passed;
+ *   notScored = the report's {milestone, criterion, reason} entries
+ * @returns {{gates:{name:string, passed:boolean, criteria:{text:string, score:number|null, passed:boolean,
+ *   reason?:string}[]}[], current:string|null, currentPassed:boolean, next:string|null, allPassed:boolean,
+ *   score:number|null, unmatched:{milestone:string, criterion:string, score:number}[]}}
  */
-function gateStatus({ shipCriteria, scores, milestone = null }) {
+function gateStatus({ shipCriteria, scores, milestone = null, notScored = [] }) {
   const list = Array.isArray(scores) ? scores : [];
+  const skipped = Array.isArray(notScored) ? notScored : [];
   const gates = pack.parseShipCriteria(shipCriteria).map((m) => {
     const criteria = m.criteria.map((c) => {
       const score = criterionScore(m.name, c.text, list);
-      return { text: c.text, score, passed: score !== null && score >= GATE_PASS_SCORE };
+      const reason = score === null ? { reason: notScoredReason(m.name, c.text, skipped) } : {};
+      return { text: c.text, score, passed: score !== null && score >= GATE_PASS_SCORE, ...reason };
     });
     return { name: m.name, passed: gatePassed({ criteria }), criteria };
   });
+  const items = gates.map((g) => ({ name: g.name, criteria: g.criteria.map((c) => c.text) }));
+  const unmatched = items.length
+    ? list.filter((s) => validScore(s) && !matchCriterion(items, s.milestone, s.criterion)).slice(0, MAX_UNMATCHED_SCORES)
+      .map((s) => ({ milestone: clean(s.milestone, MAX_ENTRY_CHARS), criterion: clean(s.criterion, MAX_ENTRY_CHARS), score: s.score }))
+    : [];
   const firstOpen = gates.find((g) => !g.passed) || null;
   const named = milestone ? gates.find((g) => sameMilestone(norm(g.name), norm(milestone))) : null;
   const current = named || firstOpen || gates[gates.length - 1] || null;
@@ -230,6 +254,7 @@ function gateStatus({ shipCriteria, scores, milestone = null }) {
     next: firstOpen ? firstOpen.name : null,
     allPassed: gates.length > 0 && !firstOpen,
     score,
+    unmatched,
   };
 }
 
@@ -717,7 +742,9 @@ async function runCritic(opts) {
     const report = isObj(o.report) ? o.report : {};
     // The playtest's environment failed (lunasworkRules.playtestEnvironment): no score this iteration.
     const inconclusive = cleanInconclusive(o.inconclusive);
-    const gate = gateStatus({ shipCriteria: docs.shipCriteria, scores: report.scores, milestone: o.milestone || null });
+    const gate = gateStatus({
+      shipCriteria: docs.shipCriteria, scores: report.scores, milestone: o.milestone || null, notScored: report.notScored,
+    });
     const pick = pickModel('critic', o.models, { gate: gate.currentPassed, stepBack: base.stepBack })
       || { model: FALLBACK_MODEL, reason: 'default' };
     state = {

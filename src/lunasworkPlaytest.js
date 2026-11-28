@@ -63,6 +63,15 @@
 // of this pass. Navigation (LW 2.25b): mode 'navigation' clicks through the
 // clickable prototype under <url>/prototype/ once - links and buttons only,
 // no journeys, scores, screen diff or design match.
+//
+// Current milestone first (src/lunasworkPlaytestPlan.js): the explore pass
+// gets TEST_PLAN.md reordered - the run's current milestone's journeys on
+// top - and that milestone's gate criteria to score by their exact text. At
+// the boundary a score under any other criterion text is rejected
+// (report.unmatchedScores), the Playtester's own "not scored" / "not run"
+// reasons are kept (notScored, journeysNotRun), and report.coverage counts
+// the journeys planned vs run. Every built card gets one check (B1,
+// src/lunasworkChecks.js); `checks` is a required answer.
 // ============================================================================
 
 'use strict';
@@ -77,6 +86,7 @@ const { pickModel, personasFor, matrixFor, CORE_PERSONA, PERSONAS, ENGINES, WIDT
 const { DESIGN_DIR, readPackFile } = require('./lunasworkPack');
 const { killTree } = require('./lunasworkAdapters');
 const { checksSchema, checksPrompt, cleanChecks } = require('./lunasworkChecks');
+const playPlan = require('./lunasworkPlaytestPlan');
 const designMatch = require('./lunasworkDesignMatch');
 const {
   BURST_MIN_FRAMES, BURST_MAX_FRAMES, BURST_MIN_DURATION_MS, BURST_MAX_DURATION_MS, BURST_PREFIX,
@@ -143,6 +153,10 @@ const PERSONA_IDS = [CORE_PERSONA.id, ...PERSONAS.map((p) => p.id)];
 const WIDTH_VALUES = [...new Set(Object.values(WIDTHS).map((w) => w.width))];
 
 const MAX_DOC_CHARS = 20000;
+// TEST_PLAN.md as read; the plan that reaches the prompt is capped by whole
+// journeys (lunasworkPlaytestPlan.MAX_PLAN_CHARS), never mid-file - a fixed
+// cut here used to hide the journeys at the end of a long plan.
+const MAX_TEST_PLAN_CHARS = 200000;
 const MAX_FINDINGS = 100;
 const MAX_SCORES = 100;
 const MAX_JOURNEYS = 50;
@@ -188,11 +202,23 @@ const EVIDENCE_SCHEMA = {
   properties: { screenshot: { type: 'string' }, steps: stringList },
 };
 
-/** JSON schema handed to `--json-schema`. Mirrors validateReport() below. */
+const reasonItem = (key) => ({
+  type: 'object',
+  additionalProperties: false,
+  required: [...key, 'reason'],
+  properties: { ...Object.fromEntries(key.map((k) => [k, { type: 'string' }])), reason: { type: 'string' } },
+});
+
+/**
+ * JSON schema handed to `--json-schema`. Mirrors validateReport() below.
+ * notScored / journeysNotRun / checks are required answers (an empty list is
+ * an answer): an optional list was simply left out. validateReport still
+ * loads a reply or a stored report without them.
+ */
 const PLAYTEST_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['findings', 'scores', 'journeys', 'screens'],
+  required: ['findings', 'scores', 'journeys', 'screens', 'notScored', 'journeysNotRun', 'checks'],
   properties: {
     findings: {
       type: 'array',
@@ -255,7 +281,11 @@ const PLAYTEST_SCHEMA = {
         properties: { name: { type: 'string' }, screenshot: { type: 'string' } },
       },
     },
-    // Optional: only a pass that was given built cards' checks answers it.
+    // A gate criterion the pass did not score, by its exact text, and why.
+    notScored: { type: 'array', maxItems: MAX_SCORES, items: reasonItem(['milestone', 'criterion']) },
+    // A test-plan journey the pass did not run, by its exact name, and why.
+    journeysNotRun: { type: 'array', maxItems: MAX_SCORES, items: reasonItem(['name']) },
+    // One entry per built card the pass was given ([] when none was listed).
     checks: checksSchema(EVIDENCE_SCHEMA),
     // Optional: only an explore pass with mapped mockups answers it (LW 2.19a).
     designShots: designMatch.DESIGN_SHOTS_SCHEMA,
@@ -360,9 +390,12 @@ function isRealPackFile(projectDir, file) {
  * @returns {{testPlan:string, shipCriteria:string}} '' for a missing file
  */
 function loadPlaytestInputs(projectDir) {
-  const read = (file) =>
-    isRealPackFile(projectDir, file) ? clean(readPackFile(projectDir, file) || '', MAX_DOC_CHARS) : '';
-  return { testPlan: read('TEST_PLAN.md'), shipCriteria: clearVerdicts(read('SHIP_CRITERIA.md')) };
+  const read = (file, max) =>
+    isRealPackFile(projectDir, file) ? clean(readPackFile(projectDir, file) || '', max) : '';
+  return {
+    testPlan: read('TEST_PLAN.md', MAX_TEST_PLAN_CHARS),
+    shipCriteria: clearVerdicts(read('SHIP_CRITERIA.md', MAX_DOC_CHARS)),
+  };
 }
 
 const fence = (title, body) => [`${title}:`, '<<<', body || '(empty)', '>>>'];
@@ -418,7 +451,10 @@ const REPORT_RULES = [
   '',
   'Report:',
   '- findings: kind "bug" (broken), "feel" (works but looks or feels wrong, slow, confusing), "missing" (expected but absent), "idea"; severity blocker/high/medium/low; steps = exact steps to reproduce, one action each.',
-  '- scores: score each ship criterion you checked from 0 to 10, with its milestone. evidence = a screenshot filename you took in THIS session plus the steps that show it. A score without evidence is thrown away.',
+  '- scores: score each ship criterion you checked from 0 to 10. criterion = its exact text from the ship criteria, copied word for word (never reworded or shortened); milestone = its "## " heading. evidence = a screenshot filename you took in THIS session plus the steps that show it. A score without evidence, or under a criterion text that is not in the ship criteria, is thrown away.',
+  '- notScored: every ship criterion you were asked to score but did not, with its exact text, its milestone and why.',
+  '- journeysNotRun: every test-plan journey you did not run, by its exact name, with why. A journey you did not run is never reported as failed.',
+  '- checks: one entry per built card listed below; an empty list when none is listed.',
 ];
 
 // A desktop app or a game has no browser matrix, but the finding schema still
@@ -477,8 +513,11 @@ const TARGET_PROMPTS = {
   },
 };
 
+// The first step of an explore pass, for every target.
+const RUN_EVERY_JOURNEY = '1. Run every journey in the test plan below, end to end, step by step - the current milestone\'s journeys first (see below). Do not stop early: every journey ends up in journeys or, with the reason, in journeysNotRun.';
+
 /** The prompt for a desktop app or a game; same report contract as the web prompt. */
-function targetPrompt(t, { mode, testPlan, shipCriteria, checks }) {
+function targetPrompt(t, { mode, plan, shipCriteria, checks }) {
   if (mode === 'shipConfirm') {
     return [
       `You are an independent SHIP confirmation tester for ${t.what}. Nobody has told you whether it passes - find out yourself.`,
@@ -499,16 +538,17 @@ function targetPrompt(t, { mode, testPlan, shipCriteria, checks }) {
     t.reach,
     '',
     'What to do:',
-    '1. Run every journey in the test plan below, end to end, step by step.',
+    RUN_EVERY_JOURNEY,
     `2. ${t.explore}`,
     ...t.rules,
-    `- journeys: one entry per test-plan journey (its exact name); ${t.shipJourneys}.`,
+    `- journeys: one entry per test-plan journey you ran (its exact name); ${t.shipJourneys}.`,
     t.screens,
+    ...playPlan.planPromptLines(plan),
+    ...checksPrompt(checks),
     '',
-    ...fence('Test plan (design/TEST_PLAN.md)', testPlan),
+    ...fence('Test plan (design/TEST_PLAN.md, current milestone first)', plan.text),
     '',
     ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
-    ...checksPrompt(checks),
   ].join('\n');
 }
 
@@ -521,16 +561,19 @@ function targetPrompt(t, { mode, testPlan, shipCriteria, checks }) {
  *   designTargets = lunasworkDesignMatch.designTargets (explore pass only);
  *   target = the adapter's name ('web' when absent). electron / unity need no
  *   url and get their own prompt: no browser matrix, personas or mockups.
+ *   milestone = the run's current milestone (default: the first rung); plan =
+ *   lunasworkPlaytestPlan.buildPlan of these inputs (built here when absent)
  * @returns {string}
  */
 function buildPlaytestPrompt({
   mode, url, testPlan, shipCriteria, checks = [], personas = personasFor(0, false), matrix = matrixFor(0, false), tools,
-  designTargets = [], variantTargets = [], target = 'web',
+  designTargets = [], variantTargets = [], target = 'web', milestone = null, plan = null,
 }) {
-  if (TARGET_PROMPTS[target]) return targetPrompt(TARGET_PROMPTS[target], { mode, testPlan, shipCriteria, checks });
+  const thePlan = plan || playPlan.buildPlan({ testPlan, shipCriteria, milestone });
+  if (TARGET_PROMPTS[target]) return targetPrompt(TARGET_PROMPTS[target], { mode, plan: thePlan, shipCriteria, checks });
   const SHARED_RULES = sharedRules(matrix, enginesToServers(tools));
   const lenses = ['', 'Personas for this pass - test through each one in turn:', ...personaLines(personas)];
-  if (mode === 'navigation') return navigationPrompt(url, testPlan, SHARED_RULES);
+  if (mode === 'navigation') return navigationPrompt(url, clean(testPlan, MAX_DOC_CHARS), SHARED_RULES);
   if (mode === 'shipConfirm') {
     return [
       'You are an independent SHIP confirmation tester for a web app. Nobody has told you whether it passes - find out yourself.',
@@ -552,17 +595,18 @@ function buildPlaytestPrompt({
     `The app is running at ${url}. You have only a browser (Playwright tools).`,
     '',
     'What to do:',
-    '1. Run every journey in the test plan below, end to end, step by step.',
+    RUN_EVERY_JOURNEY,
     '2. Then explore freely: empty and invalid input, edge cases, back/forward, reload, double clicks, long text.',
     ...SHARED_RULES,
-    '- journeys: one entry per test-plan journey (its exact name); passed true only if it completed end to end in every browser and width.',
+    '- journeys: one entry per test-plan journey you ran (its exact name); passed true only if it completed end to end in every browser and width.',
     `- screens: in chromium only, the start screen and the main screen of every journey at ${DESKTOP.width}x${DESKTOP.height} and ${MOBILE.width}x${MOBILE.height}, named "<screen>-desktop" / "<screen>-mobile", each with a viewport screenshot (not full page). Use the same names every run - they are compared with the previous run.`,
     ...lenses,
+    ...playPlan.planPromptLines(thePlan),
+    ...checksPrompt(checks),
     '',
-    ...fence('Test plan (design/TEST_PLAN.md)', testPlan),
+    ...fence('Test plan (design/TEST_PLAN.md, current milestone first)', thePlan.text),
     '',
     ...fence('Ship criteria (design/SHIP_CRITERIA.md)', shipCriteria),
-    ...checksPrompt(checks),
     ...designMatch.designMatchPrompt(designTargets),
     ...variants.variantShotsPrompt(variantTargets),
   ].join('\n');
@@ -790,6 +834,10 @@ function emptyReport(mode, error, { personas = [], matrix = [] } = {}) {
     journeys: [],
     screens: [],
     checks: [],
+    notScored: [],
+    journeysNotRun: [],
+    unmatchedScores: [],
+    coverage: null,
     designShots: [],
     designMatch: [],
     variantShots: [],
@@ -805,13 +853,18 @@ function emptyReport(mode, error, { personas = [], matrix = [] } = {}) {
  * "nothing found".
  * @param {unknown} raw model output
  * @param {{evidenceDir:string, since?:number, mode?:string, checks?:object[],
- *   personas?:object[], matrix?:object[]}} opts since = ms; screenshots older than this
- *   are not evidence of this run; checks / personas / matrix = what was asked
+ *   personas?:object[], matrix?:object[], gates?:object[], plan?:object|null}} opts since = ms;
+ *   screenshots older than this are not evidence of this run; checks / personas / matrix =
+ *   what was asked; gates = lunasworkPlaytestPlan.gatesOf(SHIP_CRITERIA.md) - a score must
+ *   name one of their items exactly (absent = not checked); plan = the pass's buildPlan
+ *   (absent = no coverage)
  * @returns {{mode:string, findings:object[], scores:object[], journeys:object[],
- *   screens:object[], checks:object[], warnings:object[], errors:object[]}}
+ *   screens:object[], checks:object[], notScored:object[], journeysNotRun:object[],
+ *   unmatchedScores:object[], coverage:object|null, warnings:object[], errors:object[]}}
  */
 function validateReport(raw, {
   evidenceDir, since = 0, mode = 'explore', checks = [], personas = [], matrix = [], designTargets = [], variantTargets = [],
+  gates, plan = null,
 }) {
   const ran = { personas, matrix };
   if (!isObj(raw) || !REPORT_KEYS.every((key) => Array.isArray(raw[key]))) {
@@ -823,15 +876,28 @@ function validateReport(raw, {
   const ctx = { evidenceDir, since, personaIds };
   const warnings = [];
   const keep = (key, max, fn) => raw[key].slice(0, max).map((x) => fn(x, ctx, warnings)).filter(Boolean);
+  // The criterion rule: a score counts only under a gate item's exact text.
+  const scored = playPlan.cleanScoredList(keep('scores', MAX_SCORES, cleanScore), gates, warnings);
+  const journeys = keep('journeys', MAX_JOURNEYS, cleanJourney);
+  const journeysNotRun = playPlan.cleanNotRun(raw.journeysNotRun, plan);
+  if (checks.length && !Array.isArray(raw.checks)) warnings.push({ code: 'noChecks', detail: `${checks.length} built card(s) asked, no checks answered` });
+  const checked = cleanChecks(raw.checks, checks, (e) => cleanEvidence(e, ctx), warnings);
+  const answered = new Set(checked.map((c) => c.card)).size;
   return {
     mode,
     personas: ranPersonas,
     matrix: matrixSummary(matrix),
     findings: keep('findings', MAX_FINDINGS, cleanFinding),
-    scores: keep('scores', MAX_SCORES, cleanScore),
-    journeys: keep('journeys', MAX_JOURNEYS, cleanJourney),
+    scores: scored.scores,
+    journeys,
     screens: cleanScreens(raw.screens.slice(0, MAX_SCREENS), ctx, warnings),
-    checks: cleanChecks(raw.checks, checks, (e) => cleanEvidence(e, ctx), warnings),
+    checks: checked,
+    notScored: playPlan.cleanNotScored(raw.notScored, gates, scored.scores, warnings),
+    journeysNotRun,
+    unmatchedScores: scored.unmatched,
+    coverage: playPlan.planCoverage(plan, {
+      journeys, notRun: journeysNotRun, scores: scored.scores, checks: { asked: checks.length, answered },
+    }),
     designShots: designMatch.cleanDesignShots(raw.designShots, designTargets, (p) => evidenceFile(p, ctx), warnings),
     // Filled by runPlaytest after the vision comparison (lunasworkDesignMatch.runDesignMatch).
     designMatch: [],
@@ -1064,12 +1130,13 @@ async function readCombatFeel(adapter, timeoutMs = COMBAT_FEEL_TIMEOUT_MS) {
  *
  * @param {{projectDir:string, adapter:{evidenceDir:string, tools:Function, iteration?:number,
  *   ensureBrowsers?:Function}, url:string, mode?:'explore'|'shipConfirm'|'navigation', checks?:object[],
- *   variants?:object[],
+ *   variants?:object[], milestone?:string|null,
  *   iteration?:number, isGate?:boolean, models?:object, env?:object, agyEnv?:object|null,
  *   execImpl?:Function, timeoutMs?:number, budgetUsd?:number,
  *   gate?:(env:object)=>({error:string, detail?:string, resumeAt?:number}|null),
  *   threshold?:number, now?:()=>number, killTreeImpl?:(pid:number)=>void}} opts
- *   gate: checked right before a Claude call is spawned; an answer fails the pass with it
+ *   gate: checked right before a Claude call is spawned; an answer fails the pass with it;
+ *   milestone: the run's current milestone, played first (default: SHIP_CRITERIA.md's first rung)
  * @returns {Promise<{ok:boolean, mode:string, model:string|null, modelReason:string|null,
  *   report:object, screenDiff:object|null, costUsd:number|null, durationMs:number,
  *   error?:string, detail?:string, resumeAt?:number}>}
@@ -1114,6 +1181,10 @@ async function runPlaytest(opts) {
     const checks = mode === 'explore' && Array.isArray(opts.checks) ? opts.checks : [];
     if (mode === 'shipConfirm' && !inputs.shipCriteria) return fail('noShipCriteria');
     if (!inputs.testPlan && !inputs.shipCriteria) return fail('noDesignPack');
+    // Current milestone first; the gate items every score must name exactly.
+    const milestone = typeof opts.milestone === 'string' ? opts.milestone : null;
+    const plan = playPlan.buildPlan({ ...inputs, milestone });
+    const gates = playPlan.gatesOf(inputs.shipCriteria);
     const args = buildPlaytestArgs({ model: pick.model, tools, budgetUsd: opts.budgetUsd });
     // The account reserve gate (src/lunasworkReserveGate.js): a Claude call on
     // an account held by its reserve is never spawned. agy has no Claude account.
@@ -1140,7 +1211,7 @@ async function runPlaytest(opts) {
     const call = await callClaude({
       args,
       prompt: buildPlaytestPrompt({
-        mode, target, url: appUrl ? appUrl.href : '', ...inputs, checks, ...ran, tools, designTargets, variantTargets,
+        mode, target, url: appUrl ? appUrl.href : '', ...inputs, checks, ...ran, tools, designTargets, variantTargets, plan,
       }),
       cwd: evidenceDir, // never the repo: the Playtester must not see the code
       env,
@@ -1153,7 +1224,10 @@ async function runPlaytest(opts) {
     const parsed = parsePlannerOutput(call.stdout);
     if (!parsed.ok) return fail(parsed.error, parsed.detail);
 
-    const checked = validateReport(parsed.raw, { evidenceDir, since, mode, checks, ...ran, designTargets, variantTargets });
+    // Coverage is the explore pass's: the ship pass checks criteria, not the test plan.
+    const checked = validateReport(parsed.raw, {
+      evidenceDir, since, mode, checks, ...ran, designTargets, variantTargets, gates, plan: mode === 'explore' ? plan : null,
+    });
     if (checked.errors.length) return fail(checked.errors[0].code);
     // A failed install is not fatal: Playwright may still find the browsers.
     const validated = browsers && browsers.ok === false

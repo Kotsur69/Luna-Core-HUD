@@ -612,15 +612,16 @@ test('a screenshot from before this pass started is not evidence of it', async (
 
   const fake = fakeClaude({
     onCall: (cwd) => writePng(path.join(cwd, 'ship-1.png'), 4, 4, red),
+    // Real gate items of SHIP: a score under any other text is rejected before evidence matters.
     raw: full({
       scores: [
-        { milestone: 'Core flows', criterion: 'fresh', score: 9, evidence: ev('ship-1.png') },
-        { milestone: 'Core flows', criterion: 'reused', score: 9, evidence: ev('explore-pass.png') },
+        { milestone: 'Core flows', criterion: 'Totals are correct', score: 9, evidence: ev('ship-1.png') },
+        { milestone: 'Core flows', criterion: 'A quote can be made end to end', score: 9, evidence: ev('explore-pass.png') },
       ],
     }),
   });
   const res = await P.runPlaytest({ projectDir: fakeProject(), adapter, url: URL_, mode: 'shipConfirm', execImpl: fake.execImpl });
-  assert.deepEqual(res.report.scores.map((s) => s.criterion), ['fresh']);
+  assert.deepEqual(res.report.scores.map((s) => s.criterion), ['Totals are correct']);
 });
 
 // ---- screen comparison ----------------------------------------------------------
@@ -1070,4 +1071,191 @@ test('a gate that lets the account through plays as before; an agy Playtester is
   });
   assert.equal(asked, 0, 'a Claude account reserve does not gate agy');
   assert.equal(agy.error, 'noAgyProfile');
+});
+
+// ---- current milestone first, exact criteria, coverage, one check per built card ----
+
+const Plan = require('../src/lunasworkPlaytestPlan.js');
+const Checks = require('../src/lunasworkChecks.js');
+const { cleanReport } = require('../src/lunasworkRun.js');
+
+const LADDER = [
+  '# Ship criteria',
+  '',
+  '## Milestone 1: Skeleton',
+  '',
+  '- [ ] The game starts with a clean Console',
+  '- [ ] Scripted input moves the player',
+  '',
+  '## Milestone 2: Core flows',
+  '',
+  '- [ ] Hits show feedback',
+  '',
+].join('\n');
+
+/**
+ * Like the game plan that was played 4 journeys deep: a Milestone 2 journey
+ * first, 25 harness journeys (over 20000 characters), the Milestone 1
+ * journeys last - one by its "Scores:" line, one by its heading.
+ */
+function longPlan() {
+  const filler = Array.from({ length: 25 }, (_, i) => `### Harness check ${i + 1}\n\n${'Step. '.repeat(170)}\n`);
+  return [
+    '# Test plan', '', '## Journeys', '',
+    '### Hit the dummy', '', 'Scores: Hits show feedback', '', '1. Attack', '',
+    ...filler,
+    '### Start clean', '', 'Scores: The game starts with a clean Console', '', '1. Enter play mode', '',
+    '### Milestone 1 regression sweep', '', '1. Move, jump, dash', '',
+  ].join('\n');
+}
+
+function ladderProject() {
+  const dir = fakeProject();
+  fs.writeFileSync(path.join(dir, 'design', 'TEST_PLAN.md'), longPlan());
+  fs.writeFileSync(path.join(dir, 'design', 'SHIP_CRITERIA.md'), LADDER);
+  return dir;
+}
+
+const planOf = (prompt) => prompt.slice(prompt.indexOf('Test plan (design/TEST_PLAN.md'));
+
+test('the current milestone\'s journeys and gate criteria come first, even from the end of a long plan', () => {
+  const testPlan = longPlan();
+  assert.ok(testPlan.length > 20000, 'longer than the old fixed cut');
+  const prompt = P.buildPlaytestPrompt({ mode: 'explore', target: 'unity', testPlan, shipCriteria: LADDER, milestone: 'Milestone 1: Skeleton' });
+  const plan = planOf(prompt);
+  assert.ok(plan.indexOf('### Start clean') < plan.indexOf('### Hit the dummy'));
+  assert.ok(plan.indexOf('### Milestone 1 regression sweep') < plan.indexOf('### Harness check 1\n'));
+  for (let i = 1; i <= 25; i += 1) assert.ok(plan.includes(`### Harness check ${i}\n`), `journey ${i} is in the prompt`);
+  // The order and the exact criteria are spelled out before the plan itself.
+  const first = prompt.indexOf('CURRENT MILESTONE FIRST - "Milestone 1: Skeleton"');
+  assert.ok(first > 0 && first < prompt.indexOf('Test plan (design/TEST_PLAN.md'));
+  assert.match(prompt, /in this order \(they open the test plan below\): "Start clean", "Milestone 1 regression sweep"\./);
+  assert.ok(prompt.indexOf('  - The game starts with a clean Console') > first);
+  assert.ok(prompt.indexOf('  - Scripted input moves the player') > first);
+  assert.match(prompt, /copy the text below word for word/);
+  assert.match(prompt, /notScored/);
+  assert.match(prompt, /journeysNotRun/);
+});
+
+test('the run\'s milestone picks what goes first; without one the first rung does', () => {
+  const m2 = P.buildPlaytestPrompt({ mode: 'explore', url: URL_, testPlan: longPlan(), shipCriteria: LADDER, milestone: 'Core flows' });
+  assert.match(m2, /CURRENT MILESTONE FIRST - "Milestone 2: Core flows"/);
+  assert.match(m2, /in this order \(they open the test plan below\): "Hit the dummy"\./);
+  assert.match(m2, / {2}- Hits show feedback/);
+  const plain = P.buildPlaytestPrompt({ mode: 'explore', url: URL_, testPlan: longPlan(), shipCriteria: LADDER });
+  assert.match(plain, /CURRENT MILESTONE FIRST - "Milestone 1: Skeleton"/);
+  const plan = planOf(plain);
+  assert.ok(plan.indexOf('### Start clean') < plan.indexOf('### Hit the dummy'));
+});
+
+test('a plan too long for the prompt drops whole journeys from its end, never the current milestone\'s', () => {
+  const plan = Plan.buildPlan({ testPlan: longPlan(), shipCriteria: LADDER, milestone: 'Skeleton', maxChars: 8000 });
+  assert.deepEqual(plan.first, ['Start clean', 'Milestone 1 regression sweep']);
+  assert.equal(plan.planned.length, 28);
+  assert.deepEqual(plan.planned.slice(0, 2), plan.first);
+  assert.ok(plan.cut.length > 0);
+  assert.ok(!plan.cut.some((name) => plan.first.includes(name)));
+  assert.match(plan.text, /journey\(s\) left out of this pass for length/);
+  for (const name of plan.cut) assert.ok(!plan.text.includes(`### ${name}\n`), `${name} is cut whole`);
+  // A heading inside a comment or a code fence is no journey.
+  const fenced = Plan.parseTestPlan('## Journeys\n\n### Real\n<!-- ### Not one -->\n```\n### Nor this\n```\n## Notes\n');
+  assert.deepEqual(fenced.journeys.map((j) => j.name), ['Real']);
+});
+
+test('a score under reworded criterion text is rejected and flagged; the exact text counts', () => {
+  const { evidenceDir } = evidenceWorld();
+  const gates = Plan.gatesOf(LADDER);
+  const raw = full({
+    scores: [
+      // Case and punctuation aside, word for word: kept, rewritten to the gate's own text.
+      { milestone: 'Skeleton', criterion: 'the game starts with a clean console.', score: 9, evidence: ev('f1.png') },
+      { milestone: 'Milestone 1: Skeleton', criterion: 'Game starts cleanly', score: 9, evidence: ev('f1.png') },
+      { milestone: 'Milestone 1: Skeleton', criterion: 'Hits show feedback', score: 9, evidence: ev('f1.png') },
+    ],
+    notScored: [
+      { milestone: 'Skeleton', criterion: 'Scripted input moves the player', reason: 'send_input failed' },
+      { milestone: 'Skeleton', criterion: 'Input works', reason: 'reworded' },
+      { milestone: 'Skeleton', criterion: 'The game starts with a clean Console', reason: 'scored after all' },
+    ],
+  });
+  const report = P.validateReport(raw, { evidenceDir, gates });
+  assert.deepEqual(report.scores.map((s) => [s.milestone, s.criterion]), [['Milestone 1: Skeleton', 'The game starts with a clean Console']]);
+  assert.deepEqual(report.unmatchedScores.map((s) => [s.criterion, s.reason]), [
+    ['Game starts cleanly', 'not the exact text of a gate item'],
+    ['Hits show feedback', 'that milestone has no such gate item'],
+  ]);
+  assert.equal(report.warnings.filter((w) => w.code === 'unknownCriterion').length, 3);
+  assert.deepEqual(report.notScored, [{ milestone: 'Milestone 1: Skeleton', criterion: 'Scripted input moves the player', reason: 'send_input failed' }]);
+});
+
+test('end to end: the report carries journeys planned vs run and one check per built card', async () => {
+  const adapter = await fakeAdapter();
+  const checks = Checks.checkList([
+    { at: 101, text: 'Dash trail', acceptance: ['The dash leaves a trail', 'A test reproduces the bug'] },
+    { at: 102, text: 'Pause menu', acceptance: ['Escape opens the pause menu'] },
+  ]);
+  const fake = fakeClaude({
+    onCall: (cwd) => writePng(path.join(cwd, 'f1.png'), 4, 4, red),
+    raw: full({
+      scores: [{ milestone: 'Milestone 1: Skeleton', criterion: 'The game starts with a clean Console', score: 9, evidence: ev('f1.png') }],
+      journeys: [
+        { name: 'Start clean', passed: true, evidence: ev('f1.png') },
+        { name: 'Hit the dummy', passed: false, evidence: ev('f1.png') },
+      ],
+      journeysNotRun: [{ name: 'Milestone 1 regression sweep', reason: 'out of time' }, { name: 'Not in the plan', reason: 'x' }],
+      notScored: [{ milestone: 'Milestone 1: Skeleton', criterion: 'Scripted input moves the player', reason: 'not reached' }],
+      checks: [
+        { card: 101, result: 'pass', reason: '', evidence: ev('f1.png') },
+        { card: '102', result: 'notRun', reason: 'no pause key in the tools', evidence: ev('') },
+      ],
+    }),
+  });
+  const res = await P.runPlaytest({
+    projectDir: ladderProject(), adapter, url: URL_, checks, milestone: 'Milestone 1: Skeleton', execImpl: fake.execImpl,
+  });
+  assert.equal(res.ok, true);
+  const c = res.report.coverage;
+  assert.deepEqual(
+    [c.planned, c.run, c.milestone, c.milestonePlanned, c.milestoneRun, c.criteria, c.criteriaScored, c.cardsAsked, c.cardsAnswered],
+    [28, 2, 'Milestone 1: Skeleton', 2, 1, 2, 1, 2, 2],
+  );
+  assert.deepEqual(c.notRun.find((r) => r.name === 'Milestone 1 regression sweep'), { name: 'Milestone 1 regression sweep', reason: 'out of time' });
+  assert.equal(c.notRun.find((r) => r.name === 'Harness check 1').reason, 'not reported');
+  assert.deepEqual(res.report.journeysNotRun.map((r) => r.name), ['Milestone 1 regression sweep']);
+  assert.deepEqual(res.report.checks.map((r) => [r.card, r.result, r.reason]), [[101, 'pass', ''], [102, 'notRun', 'no pause key in the tools']]);
+  // Every built card with its acceptance, and one check asked of each.
+  const { prompt, args } = fake.calls[0];
+  assert.match(prompt, /exactly ONE entry per card below, 2 in all/);
+  assert.match(prompt, /card 101: Dash trail\n {2}- The dash leaves a trail/);
+  assert.match(prompt, /card 102: Pause menu\n {2}- Escape opens the pause menu/);
+  assert.ok(!prompt.includes('A test reproduces the bug'), 'code checks are not the Playtester\'s');
+  assert.ok(prompt.indexOf('Built cards to confirm') < prompt.indexOf('Test plan (design/TEST_PLAN.md'), 'asked before the long plan');
+  const schema = JSON.parse(argAfter(args, '--json-schema'));
+  for (const key of ['checks', 'notScored', 'journeysNotRun']) assert.ok(schema.required.includes(key), `${key} is a required answer`);
+  assert.deepEqual(schema.properties.checks.items.required, ['card', 'result', 'reason', 'evidence']);
+  assert.deepEqual(schema.properties.checks.items.properties.result.enum, ['pass', 'fail', 'notRun']);
+});
+
+test('asked built cards with no checks answered is a warning; the ship pass has no coverage', async () => {
+  const { evidenceDir } = evidenceWorld();
+  const checks = [{ card: 7, text: 'x', checks: ['y'] }];
+  const report = P.validateReport(full(), { evidenceDir, checks, plan: Plan.buildPlan({ testPlan: TEST_PLAN, shipCriteria: SHIP }) });
+  assert.ok(report.warnings.some((w) => w.code === 'noChecks'));
+  assert.deepEqual([report.coverage.planned, report.coverage.run, report.coverage.cardsAsked, report.coverage.cardsAnswered], [1, 0, 1, 0]);
+
+  const adapter = await fakeAdapter();
+  const fake = fakeClaude({ raw: full() });
+  const ship = await P.runPlaytest({ projectDir: fakeProject(), adapter, url: URL_, mode: 'shipConfirm', execImpl: fake.execImpl });
+  assert.equal(ship.report.coverage, null);
+});
+
+test('a report from before coverage and per-card checks still validates and loads', () => {
+  const { evidenceDir } = evidenceWorld();
+  const report = P.validateReport(full({ journeys: [{ name: 'Make a quote', passed: true, evidence: ev('f1.png') }] }), { evidenceDir });
+  assert.deepEqual([report.checks, report.notScored, report.journeysNotRun, report.unmatchedScores, report.coverage], [[], [], [], [], null]);
+  const stored = cleanReport({ mode: 'explore', findings: [], scores: [], journeys: [{ name: 'a', passed: true }], screens: [] });
+  assert.deepEqual([stored.checks, stored.notScored, stored.coverage], [[], [], null]);
+  const kept = cleanReport({ coverage: { planned: 20, run: 4, milestone: 'M1', notRun: [{ name: 'b', reason: 'c' }, 'junk'], cardsAsked: 3, cardsAnswered: 1 } });
+  assert.deepEqual([kept.coverage.planned, kept.coverage.run, kept.coverage.notRun, kept.coverage.cardsAsked], [20, 4, [{ name: 'b', reason: 'c' }], 3]);
+  assert.equal(cleanReport({ coverage: { planned: -1, run: 'x' } }).coverage.planned, 0);
 });
