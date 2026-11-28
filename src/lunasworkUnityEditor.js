@@ -333,7 +333,7 @@ function statusText(rs) {
  * what the editor last said (compiling or busy). A recompile whose answer
  * was lost and whose status still reads idle never ran: it is sent once more.
  * @param {'started'|'refused'|'lost'} trigger how `script recompile` went
- * @returns {Promise<{failed:boolean, errors:string[], status:string}>}
+ * @returns {Promise<{failed:boolean, errors:string[], status:string, editor?:object|null}>}
  */
 async function waitForCompile(io, deadline, before, watch, trigger) {
   let result = null;
@@ -372,7 +372,8 @@ async function waitForCompile(io, deadline, before, watch, trigger) {
       once('compiled, waiting for the script reload');
       return false;
     }
-    result = { failed: false, errors: [], status };
+    // The settled editor status: the adapter reads its play mode before opening the scene.
+    result = { failed: false, errors: [], status, editor: isObj(es) ? es : null };
     return true;
   };
   await io.waits.pollUntil(deadline, probe, `Unity did not finish compiling within ${seconds(COMPILE_WAIT_MS)}s`);
@@ -415,7 +416,8 @@ async function readCompileCheck(io, deadline, watch, requireTruth) {
  * compile or the editor does not settle within COMPILE_WAIT_MS.
  * @param {{call:Function, now:()=>number, waits:{pollUntil:Function, act:Function}, log:(line:string)=>void,
  *   autoTick:{changed:boolean, previous:object|null}}} io
- * @returns {Promise<{window:{session:string, cursor:number, startedAt:string}|null, groundTruth:object|null}>}
+ * @returns {Promise<{window:{session:string, cursor:number, startedAt:string}|null, groundTruth:object|null,
+ *   editor:object|null}>} editor = the last `editor status` answer (its playMode included)
  */
 async function prepareEditor(io) {
   const deadline = io.now() + COMPILE_WAIT_MS;
@@ -438,7 +440,7 @@ async function prepareEditor(io) {
     const truth = isObj(check) && isObj(check.groundTruth) ? check.groundTruth : null;
     if (compiled.failed || (truth && truth.compilationFailed === true)) throw compileFailure(compileErrors(compiled.errors, check));
     const { window, reason } = consoleWindowOf(check, new Date(io.now()).toISOString());
-    return { window, windowProblem: reason, groundTruth: truth };
+    return { window, windowProblem: reason, groundTruth: truth, editor: compiled.editor || null };
   } catch (err) {
     if (err && err.code === WAIT_TIMEOUT) throw timeoutFailure(err, watch);
     throw err;

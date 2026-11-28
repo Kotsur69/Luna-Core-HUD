@@ -15,7 +15,9 @@
 'use strict';
 
 const { DRIVER_GROUP, DRIVER_ACTIONS, UNITY_PIPELINE_BUILTIN } = require('./unityBuiltin');
-const { MAX_INPUT_STEPS, MAX_HOLD_MS, MAX_WAIT_MS, INPUT_TYPES } = require('./tools');
+const {
+  MAX_INPUT_STEPS, MAX_HOLD_MS, MAX_WAIT_MS, INPUT_TYPES, GAME_STEP_TYPE_RE, GAME_STEP_MAX_FIELDS, GAME_STEP_MAX_ABS,
+} = require('./tools');
 const { MAX_COMBAT_FEEL_ENTRIES, COMBAT_FEEL_LIMITS: F } = require('./combatFeelLog');
 
 // What the bridge shows the Playtester of one answer (bridge.js MAX_RESULT_CHARS).
@@ -34,6 +36,10 @@ const STEP_SHAPES = Object.freeze({
   ui: '{"type":"ui", "name":<GameObject name of an active UI Button>}',
   wait: `{"type":"wait", "ms": 0..${MAX_WAIT_MS}}`,
 });
+
+/** Game-declared steps (tools.js gameStep): the game's own type names, number fields only. */
+const GAME_STEP_SHAPE = `{"type":<game step type, /${GAME_STEP_TYPE_RE.source}/>, <up to ${GAME_STEP_MAX_FIELDS} number fields, each -${GAME_STEP_MAX_ABS}..${GAME_STEP_MAX_ABS}>}`;
+const SLOW_MOTION_EXAMPLE = `{"type":"slowMotion", "scale": 0.05..1, "durationMs": 0..${MAX_WAIT_MS}}`;
 
 // Where the [CliGroupCommand] / [CliArg] attributes come from. Not confirmed from a
 // com.unity.pipeline package on the machine that wrote this, so no namespace or
@@ -63,13 +69,16 @@ const PLAYTEST_CONTRACT = [
   'Requests (Unity Pipeline POST /api/exec {command, parameters}):',
   `- \`${command('state')}\`        parameters {}`,
   `- \`${command('input')}\`        parameters {"steps": "<JSON array text>"} - ONE string parameter named steps; parse it as JSON.`,
-  `  Steps run in order; LunaCore checks them before sending (1 to ${MAX_INPUT_STEPS} steps, only these types):`,
+  `  Steps run in order; LunaCore checks them before sending (1 to ${MAX_INPUT_STEPS} steps, only these shapes):`,
   ...INPUT_TYPES.map((type) => `    ${STEP_SHAPES[type]}`),
-  '  A step of another type or with a bad field fails the whole command, never guessed.',
+  `    ${GAME_STEP_SHAPE}`,
+  `  Field names and the "type" key exactly as above (LunaCore's step format: when a driver with a format of its own fails every step and even a {"type":"wait", "ms":0} probe, LunaCore runs key and wait steps on the editor's built-in key route instead and reports a mismatch warning).`,
+  `  Game step types: the driver may implement its own step types beyond the six above, e.g. ${SLOW_MOTION_EXAMPLE}; clamp every field to a range that is safe for the game and restore what the step changed (Time.timeScale...) when it ends. List them in the state answer as "stepTypes": ["slowMotion", ...] so the Playtester knows them.`,
+  '  A step of a type the driver does not implement or with a bad field fails the whole command before any step runs, never guessed.',
   `- \`${command('screenshot')}\`   parameters {}`,
   '',
   'Answers: ONE cmd.Result.Write(<object>), then ExitCode.Success. LunaCore reads the reply\'s `result`: a plain object (JSON text that parses to an object is accepted too).',
-  `- state       {"scene": <active scene name>, ...the game's own keys, "combatFeelLog"?: [entry, ...]}`,
+  `- state       {"scene": <active scene name>, ...the game's own keys, "stepTypes"?: [<game step type>, ...], "combatFeelLog"?: [entry, ...]}`,
   `              The Playtester sees it as JSON (cut at ${SHOWN_RESULT_CHARS} characters); it is saved as unity-state.json.`,
   `              combatFeelLog entry, every field optional (an entry with a bad field is dropped whole, unknown keys are dropped, the newest ${MAX_COMBAT_FEEL_ENTRIES} are kept):`,
   `                hitStopFrames int 0..${F.maxFrames}, hitStopMs 0..${F.maxDurationMs}, hitStopIntendedFrames int 0..${F.maxFrames},`,
